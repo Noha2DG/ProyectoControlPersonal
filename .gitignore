@@ -1,0 +1,11 @@
+node_modules/
+
+# Contiene la cadena de conexión real de MySQL (ver backend/.env en su lugar)
+CLAUDE.md
+
+# Config local de Claude Code, no se comparte
+.claude/settings.local.json
+
+# Fotos reales de empleados — nunca al historial de git
+backend/uploads/fotos/*
+!backend/uploads/fotos/.gitkeep

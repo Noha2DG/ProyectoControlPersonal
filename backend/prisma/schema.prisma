@@ -1,0 +1,51 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model ApiSofia {
+  uuid              Int       @id
+  typeName          String?   @db.VarChar(80)
+  operatorCode      String?   @db.VarChar(80)
+  operatorName      String?   @db.VarChar(80)
+  scaleName         String?   @db.VarChar(80)
+  supplyName        String?   @db.VarChar(80)
+  packagingName     String?   @db.VarChar(100)
+  productName       String?   @db.VarChar(100)
+  varietyName       String?   @db.VarChar(100)
+  sourceName        String?   @db.VarChar(100)
+  savedGrossWeight  Int?
+  savedNetWeight    Int?
+  targetGrossWeight Int?
+  targetNetWeight   Int?
+  upperLimit        Int?
+  lowerLimit        Int?
+  tareWeight        Int?
+  headQtrName       String?   @db.VarChar(50)
+  roomName          String?   @db.VarChar(50)
+  lineName          String?   @db.VarChar(50)
+  scheduleName      String?   @db.VarChar(50)
+  processDate       DateTime? @db.Date
+  createdAt         DateTime? @db.Timestamp(0)
+}
+
+model Empleados {
+  Codigo         String   @id @db.VarChar(50)
+  FechaIngreso   DateTime @default(dbgenerated("('0000-00-00')")) @db.Date
+  FechaBaja      DateTime @default(dbgenerated("('0000-00-00')")) @db.Date
+  Sexo           String   @default("0") @db.VarChar(50)
+  EstadoCivil    String?  @default("0") @db.VarChar(50)
+  Estado         String   @default("0") @db.VarChar(50)
+  CodigoEtalent  String?  @default("0") @db.VarChar(50)
+}
+
+model clientes {
+  id        Int      @id @default(autoincrement())
+  timestamp DateTime @default(now()) @db.Timestamp(0)
+  cliente   String   @db.VarChar(50)
+  estado    String   @default("activo") @db.VarChar(50)
+}
