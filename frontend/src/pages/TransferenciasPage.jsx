@@ -95,9 +95,16 @@ export default function TransferenciasPage() {
   const [fotoError, setFotoError]     = useState(false);
   const [escaneando, setEscaneando]   = useState(false);
   const [errorMsg, setErrorMsg]       = useState("");
+  const [avisoAreas, setAvisoAreas]       = useState("");
+  const [avisoRegistros, setAvisoRegistros] = useState("");
 
   const areaRef   = useRef(null);
   const carnetRef = useRef(null);
+
+  function mensajeError(res) {
+    if (res.status === 401) return "Sesión expirada o sin permiso — vuelva a iniciar sesión";
+    return `Error del servidor (${res.status})`;
+  }
 
   useEffect(() => {
     const id = setInterval(() => setFecha(fechaLarga()), 60000);
@@ -106,10 +113,15 @@ export default function TransferenciasPage() {
 
   const fetchAreas = useCallback(async () => {
     try {
-      const res = await fetch("/api/planificacion/kiosco");
+      const token = localStorage.getItem("cp_token");
+      const headers = token ? { Authorization: `Bearer ${token}` } : {};
+      const res = await fetch("/api/planificacion/kiosco", { headers });
+      if (!res.ok) throw new Error(mensajeError(res));
       const data = await res.json();
-      if (Array.isArray(data)) setAreas(data);
-    } catch { /* sin conexión */ }
+      if (Array.isArray(data)) { setAreas(data); setAvisoAreas(""); }
+    } catch (err) {
+      setAvisoAreas(`No se pudo cargar la planificación de áreas: ${err.message || "sin conexión"}`);
+    }
   }, []);
 
   useEffect(() => { fetchAreas(); }, [fetchAreas]);
@@ -126,9 +138,12 @@ export default function TransferenciasPage() {
       const token = localStorage.getItem("cp_token");
       const headers = token ? { Authorization: `Bearer ${token}` } : {};
       const res = await fetch("/api/transferencias/hoy", { headers });
+      if (!res.ok) throw new Error(mensajeError(res));
       const data = await res.json();
-      if (Array.isArray(data)) setRegistros(data);
-    } catch { /* sin conexión */ }
+      if (Array.isArray(data)) { setRegistros(data); setAvisoRegistros(""); }
+    } catch (err) {
+      setAvisoRegistros(`No se pudo cargar las transferencias de hoy: ${err.message || "sin conexión"}`);
+    }
     finally { setCargando(false); }
   }, []);
 
@@ -272,6 +287,14 @@ export default function TransferenciasPage() {
           </a>
         </div>
       </div>
+
+      {/* Aviso de conexión/sesión — visible para no ocultar fallas como listas vacías silenciosas */}
+      {(avisoAreas || avisoRegistros) && (
+        <div className="bg-red-600 text-white text-sm font-semibold px-6 py-2 flex flex-col gap-0.5 shrink-0">
+          {avisoAreas && <span>⚠ {avisoAreas}</span>}
+          {avisoRegistros && <span>⚠ {avisoRegistros}</span>}
+        </div>
+      )}
 
       {/* Cuerpo */}
       <div className="flex gap-4 px-6 py-4 shrink-1 overflow-x-auto">
