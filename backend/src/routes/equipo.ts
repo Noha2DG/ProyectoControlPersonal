@@ -1,5 +1,6 @@
 import { Router, Request, Response } from "express";
 import jwt from "jsonwebtoken";
+import { Prisma } from "@prisma/client";
 import prisma from "../lib/prisma.ts";
 import { nowGT } from "../lib/dateGT.ts";
 import { requireAuth } from "../middleware/auth.ts";
@@ -103,11 +104,10 @@ router.post("/entrega", async (req: Request, res: Response) => {
     `;
     const entregaId = creada[0].id;
 
-    for (const codigoTipo of items) {
-      await prisma.$executeRaw`
-        INSERT INTO EntregaEquipoDetalle (EntregaId, CodigoTipoEquipo) VALUES (${entregaId}, ${codigoTipo})
-      `;
-    }
+    const valores = Prisma.join(items.map((codigoTipo: string) => Prisma.sql`(${entregaId}, ${codigoTipo})`));
+    await prisma.$executeRaw`
+      INSERT INTO EntregaEquipoDetalle (EntregaId, CodigoTipoEquipo) VALUES ${valores}
+    `;
 
     res.status(201).json({
       empleado: { Codigo: empleados[0].Codigo, NombreCompleto: empleados[0].NombreCompleto },
@@ -130,11 +130,10 @@ router.put("/entrega/:id/agregar", async (req: Request, res: Response) => {
     if (!entregas.length) { res.status(404).json({ error: "Entrega no encontrada" }); return; }
     if (entregas[0].FechaHoraDevolucion) { res.status(400).json({ error: "Esta entrega ya fue cerrada, no se puede agregar equipo" }); return; }
 
-    for (const codigoTipo of items) {
-      await prisma.$executeRaw`
-        INSERT IGNORE INTO EntregaEquipoDetalle (EntregaId, CodigoTipoEquipo) VALUES (${id}, ${codigoTipo})
-      `;
-    }
+    const valores = Prisma.join(items.map((codigoTipo: string) => Prisma.sql`(${id}, ${codigoTipo})`));
+    await prisma.$executeRaw`
+      INSERT IGNORE INTO EntregaEquipoDetalle (EntregaId, CodigoTipoEquipo) VALUES ${valores}
+    `;
 
     res.json({ ok: true, items: await obtenerDetalle(id) });
   } catch (err: any) {
@@ -159,10 +158,11 @@ router.put("/entrega/:id/devolucion", async (req: Request, res: Response) => {
     await prisma.$executeRaw`
       UPDATE EntregaEquipoDetalle SET Devuelto = 0, FechaHoraDevolucion = NULL WHERE EntregaId = ${id}
     `;
-    for (const codigoTipo of devueltos) {
+    if (devueltos.length) {
+      const lista = Prisma.join(devueltos.map((c: string) => Prisma.sql`${c}`));
       await prisma.$executeRaw`
         UPDATE EntregaEquipoDetalle SET Devuelto = 1, FechaHoraDevolucion = ${ahora}
-        WHERE EntregaId = ${id} AND CodigoTipoEquipo = ${codigoTipo}
+        WHERE EntregaId = ${id} AND CodigoTipoEquipo IN (${lista})
       `;
     }
 
@@ -199,11 +199,24 @@ router.get("/hoy", async (_req: Request, res: Response) => {
     `;
     if (!entregas.length) { res.json([]); return; }
 
-    const resultado = [];
-    for (const e of entregas) {
-      resultado.push({ ...e, items: await obtenerDetalle(e.id) });
+    // Una sola consulta para el detalle de todas las entregas del día (evita N+1)
+    const ids = Prisma.join(entregas.map((e: any) => Prisma.sql`${e.id}`));
+    const detalle: any[] = await prisma.$queryRaw`
+      SELECT d.EntregaId, d.CodigoTipoEquipo, t.Nombre, d.Devuelto
+      FROM EntregaEquipoDetalle d
+      JOIN TiposEquipo t ON d.CodigoTipoEquipo = t.Codigo
+      WHERE d.EntregaId IN (${ids})
+      ORDER BY t.Nombre ASC
+    `;
+
+    const porEntrega = new Map<number, any[]>();
+    for (const d of detalle) {
+      const lista = porEntrega.get(d.EntregaId) ?? [];
+      lista.push({ CodigoTipoEquipo: d.CodigoTipoEquipo, Nombre: d.Nombre, Devuelto: !!d.Devuelto });
+      porEntrega.set(d.EntregaId, lista);
     }
-    res.json(resultado);
+
+    res.json(entregas.map((e: any) => ({ ...e, items: porEntrega.get(e.id) ?? [] })));
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

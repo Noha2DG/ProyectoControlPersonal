@@ -1,7 +1,7 @@
 import { Router, Request, Response } from "express";
 import bcrypt from "bcryptjs";
 import prisma from "../lib/prisma.ts";
-import { requireAuth, requireAdmin, requirePerm, AuthRequest } from "../middleware/auth.ts";
+import { requireAuth, requirePerm, AuthRequest } from "../middleware/auth.ts";
 
 const router = Router();
 

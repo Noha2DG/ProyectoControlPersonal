@@ -1,8 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { authHeader } from "../context/AuthContext.jsx";
 
-const FOTO_URL = (codigo) => `/uploads/fotos/${codigo}.jpg?t=${Date.now()}`;
-
 const EMPTY = {
   Codigo: "",
   FechaIngreso: "",

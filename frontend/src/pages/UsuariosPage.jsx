@@ -23,6 +23,7 @@ const MODULOS = [
   { key: "permisos",       label: "Permisos",                       acciones: ["ver","crear","editar","eliminar"], bajaElimKey: "eliminar", grupo: "Config"   },
   { key: "tipos_permiso",  label: "Tipos de Permiso",                acciones: ["ver","crear","editar","eliminar"], bajaElimKey: "eliminar", grupo: "Config"   },
   { key: "usuarios",       label: "Usuarios",                       acciones: ["ver","crear","editar","eliminar"], bajaElimKey: "eliminar", grupo: "Config"   },
+  { key: "catalogos",      label: "Catálogos de Producción",        acciones: ["ver","crear","editar","eliminar"], bajaElimKey: "eliminar", grupo: "Config"   },
 ];
 
 const EMPTY_PERMISOS = {
@@ -37,6 +38,7 @@ const EMPTY_PERMISOS = {
   permisos:       { ver: false, crear: false, editar: false, eliminar: false },
   tipos_permiso:  { ver: false, crear: false, editar: false, eliminar: false },
   usuarios:       { ver: false, crear: false, editar: false, eliminar: false },
+  catalogos:      { ver: false, crear: false, editar: false, eliminar: false },
 };
 
 const PRESETS = {
@@ -52,6 +54,7 @@ const PRESETS = {
     permisos:       { ver: true,  crear: true,  editar: true,  eliminar: true  },
     tipos_permiso:  { ver: true,  crear: true,  editar: true,  eliminar: true  },
     usuarios:       { ver: true,  crear: true,  editar: true,  eliminar: true  },
+    catalogos:      { ver: true,  crear: true,  editar: true,  eliminar: true  },
   },
   readonly: {
     empleados:      { ver: true,  crear: false, editar: false, baja: false },
@@ -65,6 +68,7 @@ const PRESETS = {
     permisos:       { ver: false, crear: false, editar: false, eliminar: false },
     tipos_permiso:  { ver: false, crear: false, editar: false, eliminar: false },
     usuarios:       { ver: false, crear: false, editar: false, eliminar: false },
+    catalogos:      { ver: false, crear: false, editar: false, eliminar: false },
   },
   kiosco: {
     empleados:      { ver: false, crear: false, editar: false, baja: false },
@@ -78,6 +82,7 @@ const PRESETS = {
     permisos:       { ver: false, crear: false, editar: false, eliminar: false },
     tipos_permiso:  { ver: false, crear: false, editar: false, eliminar: false },
     usuarios:       { ver: false, crear: false, editar: false, eliminar: false },
+    catalogos:      { ver: false, crear: false, editar: false, eliminar: false },
   },
   kiosco_areas: {
     empleados:      { ver: false, crear: false, editar: false, baja: false },
@@ -91,6 +96,7 @@ const PRESETS = {
     permisos:       { ver: false, crear: false, editar: false, eliminar: false },
     tipos_permiso:  { ver: false, crear: false, editar: false, eliminar: false },
     usuarios:       { ver: false, crear: false, editar: false, eliminar: false },
+    catalogos:      { ver: false, crear: false, editar: false, eliminar: false },
   },
   equipo: {
     empleados:      { ver: false, crear: false, editar: false, baja: false },
@@ -104,6 +110,7 @@ const PRESETS = {
     permisos:       { ver: false, crear: false, editar: false, eliminar: false },
     tipos_permiso:  { ver: false, crear: false, editar: false, eliminar: false },
     usuarios:       { ver: false, crear: false, editar: false, eliminar: false },
+    catalogos:      { ver: false, crear: false, editar: false, eliminar: false },
   },
 };
 
@@ -120,11 +127,12 @@ function mergePermisos(stored) {
     permisos:       { ...EMPTY_PERMISOS.permisos,       ...(stored?.permisos       || {}) },
     tipos_permiso:  { ...EMPTY_PERMISOS.tipos_permiso,  ...(stored?.tipos_permiso  || {}) },
     usuarios:       { ...EMPTY_PERMISOS.usuarios,       ...(stored?.usuarios       || {}) },
+    catalogos:      { ...EMPTY_PERMISOS.catalogos,      ...(stored?.catalogos      || {}) },
   };
 }
 
 function derivarRol(p) {
-  const soloPantallas = !p?.empleados?.ver && !p?.movimientos?.ver && !p?.transferencias?.ver && !p?.areas?.ver && !p?.permisos?.ver && !p?.tipos_permiso?.ver && !p?.usuarios?.ver;
+  const soloPantallas = !p?.empleados?.ver && !p?.movimientos?.ver && !p?.transferencias?.ver && !p?.areas?.ver && !p?.permisos?.ver && !p?.tipos_permiso?.ver && !p?.usuarios?.ver && !p?.catalogos?.ver;
   if (soloPantallas && (p?.kiosco?.ver || p?.kiosco_areas?.ver || p?.equipo?.ver)) return "kiosco";
   return "readonly";
 }

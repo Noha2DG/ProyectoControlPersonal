@@ -40,17 +40,37 @@ export default function EquipoUniformesPage() {
   const [agregando, setAgregando]     = useState(false);
   const [errorMsg, setErrorMsg]       = useState("");
   const [exito, setExito]             = useState("");
+  const [avisoTipos, setAvisoTipos]       = useState("");
+  const [avisoRegistros, setAvisoRegistros] = useState("");
 
   const codigoRef = useRef(null);
+
+  function mensajeError(res) {
+    if (res.status === 401) return "Sesión expirada o sin permiso — vuelva a iniciar sesión";
+    return `Error del servidor (${res.status})`;
+  }
 
   useEffect(() => {
     const id = setInterval(() => setFecha(fechaLarga()), 60000);
     return () => clearInterval(id);
   }, []);
 
-  useEffect(() => {
-    fetch("/api/equipo/tipos").then(r => r.json()).then(d => { if (Array.isArray(d)) setTipos(d); }).catch(() => {});
+  const fetchTipos = useCallback(async () => {
+    try {
+      const res = await fetch("/api/equipo/tipos", { headers: authHeader() });
+      if (!res.ok) throw new Error(mensajeError(res));
+      const data = await res.json();
+      if (Array.isArray(data)) { setTipos(data); setAvisoTipos(""); }
+    } catch (err) {
+      setAvisoTipos(`No se pudo cargar el catálogo de equipo: ${err.message || "sin conexión"}`);
+    }
   }, []);
+
+  useEffect(() => { fetchTipos(); }, [fetchTipos]);
+  useEffect(() => {
+    const id = setInterval(fetchTipos, 30000);
+    return () => clearInterval(id);
+  }, [fetchTipos]);
 
   useEffect(() => {
     fetch("/api/empleados", { headers: authHeader() })
@@ -62,10 +82,13 @@ export default function EquipoUniformesPage() {
   const fetchRegistros = useCallback(async () => {
     setCargando(true);
     try {
-      const res = await fetch("/api/equipo/hoy");
+      const res = await fetch("/api/equipo/hoy", { headers: authHeader() });
+      if (!res.ok) throw new Error(mensajeError(res));
       const data = await res.json();
-      if (Array.isArray(data)) setRegistros(data);
-    } catch { /* sin conexión */ }
+      if (Array.isArray(data)) { setRegistros(data); setAvisoRegistros(""); }
+    } catch (err) {
+      setAvisoRegistros(`No se pudo cargar las entregas de hoy: ${err.message || "sin conexión"}`);
+    }
     finally { setCargando(false); }
   }, []);
 
@@ -229,7 +252,7 @@ export default function EquipoUniformesPage() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <button onClick={fetchRegistros}
+          <button onClick={() => { fetchTipos(); fetchRegistros(); }}
             className="bg-gray-100 border border-gray-400 rounded px-3 py-1.5 text-xs font-semibold text-gray-700 hover:bg-white transition flex items-center gap-1">
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
@@ -250,6 +273,14 @@ export default function EquipoUniformesPage() {
           </button>
         </div>
       </div>
+
+      {/* Aviso de conexión/sesión — visible para no ocultar fallas como listas vacías silenciosas */}
+      {(avisoTipos || avisoRegistros) && (
+        <div className="bg-red-600 text-white text-sm font-semibold px-6 py-2 flex flex-col gap-0.5 shrink-0">
+          {avisoTipos && <span>⚠ {avisoTipos}</span>}
+          {avisoRegistros && <span>⚠ {avisoRegistros}</span>}
+        </div>
+      )}
 
       {/* Cuerpo */}
       <div className="flex gap-4 px-6 py-4 shrink-1 overflow-x-auto">
@@ -299,16 +330,22 @@ export default function EquipoUniformesPage() {
             {modo === "asignar" && (
               <div className="px-4 py-3">
                 <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Equipo a asignar</p>
-                <div className="grid grid-cols-2 gap-2">
-                  {tipos.map(t => (
-                    <label key={t.Codigo} className="flex items-center gap-2 border border-gray-200 rounded-lg px-3 py-2 text-sm cursor-pointer hover:bg-blue-50">
-                      <input type="checkbox" checked={!!seleccion[t.Codigo]} onChange={() => toggleItem(t.Codigo)}
-                        className="w-4 h-4 accent-blue-600 cursor-pointer" />
-                      {t.Nombre}
-                    </label>
-                  ))}
-                </div>
-                <button onClick={handleAsignar} disabled={guardando}
+                {tipos.length === 0 ? (
+                  <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg px-3 py-2">
+                    No se pudo cargar el catálogo de equipo. Presione "Actualizar" arriba o recargue la página.
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-2 gap-2">
+                    {tipos.map(t => (
+                      <label key={t.Codigo} className="flex items-center gap-2 border border-gray-200 rounded-lg px-3 py-2 text-sm cursor-pointer hover:bg-blue-50">
+                        <input type="checkbox" checked={!!seleccion[t.Codigo]} onChange={() => toggleItem(t.Codigo)}
+                          className="w-4 h-4 accent-blue-600 cursor-pointer" />
+                        {t.Nombre}
+                      </label>
+                    ))}
+                  </div>
+                )}
+                <button onClick={handleAsignar} disabled={guardando || tipos.length === 0}
                   className="mt-3 w-full bg-blue-600 text-white font-semibold py-2 rounded-lg hover:bg-blue-700 transition disabled:opacity-50">
                   {guardando ? "Guardando..." : "Guardar asignación"}
                 </button>

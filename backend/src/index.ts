@@ -1,6 +1,7 @@
 import "dotenv/config";
 import express from "express";
 import cors from "cors";
+import compression from "compression";
 import path from "path";
 import authRouter from "./routes/auth.ts";
 import empleadosRouter from "./routes/empleados.ts";
@@ -13,12 +14,22 @@ import planificacionRouter from "./routes/planificacion.ts";
 import tiposPermisoRouter from "./routes/tiposPermiso.ts";
 import permisosRouter from "./routes/permisos.ts";
 import equipoRouter from "./routes/equipo.ts";
+import { familiaRouter, procesosRouter, tallasRouter, empaquesRouter, fincaRouter } from "./routes/catalogosProduccion.ts";
+import claseRouter from "./routes/clase.ts";
+import presentacionRouter from "./routes/presentacion.ts";
+import piscinaRouter from "./routes/piscina.ts";
+import cicloRouter from "./routes/ciclo.ts";
+import clientesRouter from "./routes/clientes.ts";
+import subclienteRouter from "./routes/subcliente.ts";
+import pedidosRouter from "./routes/pedidos.ts";
+import detallePedidoRouter from "./routes/detallePedido.ts";
 import { requireAuth } from "./middleware/auth.ts";
 
 const app = express();
 const PORT = process.env.PORT || 3001;
 
 app.use(cors());
+app.use(compression());
 app.use(express.json());
 app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
 
@@ -33,6 +44,19 @@ app.use("/api/planificacion", planificacionRouter);
 app.use("/api/tipos-permiso", tiposPermisoRouter);
 app.use("/api/permisos", permisosRouter);
 app.use("/api/equipo", equipoRouter);
+app.use("/api/familia", familiaRouter);
+app.use("/api/procesos", procesosRouter);
+app.use("/api/tallas", tallasRouter);
+app.use("/api/empaques", empaquesRouter);
+app.use("/api/clase", claseRouter);
+app.use("/api/presentacion", presentacionRouter);
+app.use("/api/finca", fincaRouter);
+app.use("/api/piscina", piscinaRouter);
+app.use("/api/ciclo", cicloRouter);
+app.use("/api/clientes", clientesRouter);
+app.use("/api/subcliente", subclienteRouter);
+app.use("/api/pedidos", pedidosRouter);
+app.use("/api/detalle-pedido", detallePedidoRouter);
 
 app.listen(PORT, () => {
   console.log(`Servidor corriendo en http://localhost:${PORT}`);

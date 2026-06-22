@@ -93,20 +93,6 @@ router.get("/siguiente-codigo", requirePerm("empleados", "crear"), async (req: R
   }
 });
 
-// GET /api/empleados/:codigo
-router.get("/:codigo", async (req: Request, res: Response) => {
-  try {
-    const codigo = req.params.codigo;
-    const rows: any[] = await prisma.$queryRawUnsafe(`
-      SELECT ${SELECT_CAMPOS} FROM Empleados WHERE Codigo = ?
-    `, codigo);
-    if (!rows.length) { res.status(404).json({ error: "No encontrado" }); return; }
-    res.json(mapRow(rows[0]));
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
 // POST /api/empleados
 router.post("/", requirePerm("empleados", "crear"), async (req: Request, res: Response) => {
   try {

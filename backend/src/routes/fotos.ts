@@ -1,7 +1,6 @@
 import { Router, Request, Response } from "express";
 import multer from "multer";
 import path from "path";
-import fs from "fs";
 import { requireAuth, requireAdmin } from "../middleware/auth.ts";
 
 const router = Router();
@@ -24,13 +23,6 @@ const upload = multer({
 
 // POST /api/fotos/:codigo  (admin only)
 router.post("/:codigo", requireAuth, requireAdmin, upload.single("foto"), (_req: Request, res: Response) => {
-  res.json({ ok: true });
-});
-
-// DELETE /api/fotos/:codigo  (admin only)
-router.delete("/:codigo", requireAuth, requireAdmin, (req: Request, res: Response) => {
-  const filePath = path.join(FOTOS_DIR, `${req.params.codigo}.jpg`);
-  if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
   res.json({ ok: true });
 });
 

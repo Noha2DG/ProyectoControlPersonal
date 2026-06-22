@@ -2,7 +2,6 @@ import { Router, Request, Response } from "express";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import prisma from "../lib/prisma.ts";
-import { requireAuth, AuthRequest } from "../middleware/auth.ts";
 
 const router = Router();
 const SECRET = process.env.JWT_SECRET!;
@@ -36,11 +35,6 @@ router.post("/login", async (req: Request, res: Response) => {
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
-});
-
-// GET /api/auth/me
-router.get("/me", requireAuth, (req: AuthRequest, res: Response) => {
-  res.json(req.user);
 });
 
 export default router;
