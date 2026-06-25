@@ -16,6 +16,15 @@ function getOperador(req: Request): string {
 
 const router = Router();
 
+// Verifica si un DPI (distinto de 0) ya está en uso por otro empleado
+async function dpiEnUso(dpi: number, excluirCodigo?: string): Promise<boolean> {
+  if (!dpi) return false;
+  const rows: any[] = excluirCodigo
+    ? await prisma.$queryRaw`SELECT Codigo FROM Empleados WHERE DPI = ${dpi} AND Codigo != ${excluirCodigo} LIMIT 1`
+    : await prisma.$queryRaw`SELECT Codigo FROM Empleados WHERE DPI = ${dpi} LIMIT 1`;
+  return rows.length > 0;
+}
+
 // Convierte fechas MySQL (incluyendo 0000-00-00) a string legible o null
 function safeDate(val: any): string | null {
   if (!val) return null;
@@ -98,10 +107,15 @@ router.post("/", requirePerm("empleados", "crear"), async (req: Request, res: Re
   try {
     const { Codigo, FechaIngreso, Sexo, EstadoCivil, CodigoEtalent, DPI } = req.body;
     const body = req.body as Record<string, any>;
+    const dpiNum = Number(DPI) || 0;
+    if (await dpiEnUso(dpiNum)) {
+      res.status(400).json({ error: "El número de DPI ya está registrado para otro empleado" });
+      return;
+    }
     const fi = FechaIngreso || new Date().toISOString().split("T")[0];
     const operador = getOperador(req);
     const cols = ["Codigo", "FechaIngreso", "FechaBaja", "Sexo", "EstadoCivil", "Estado", "CodigoEtalent", "DPI", ...DETALLE_CAMPOS];
-    const vals = [Codigo, fi, "1970-01-01", Sexo || "", EstadoCivil || "", "Activo", CodigoEtalent || null, Number(DPI) || 0,
+    const vals = [Codigo, fi, "1970-01-01", Sexo || "", EstadoCivil || "", "Activo", CodigoEtalent || null, dpiNum,
       ...DETALLE_CAMPOS.map(c => body[c] === "" || body[c] === undefined ? null : body[c])];
     await prisma.$executeRawUnsafe(
       `INSERT INTO Empleados (${cols.join(", ")}) VALUES (${cols.map(() => "?").join(", ")})`,
@@ -151,10 +165,15 @@ router.put("/:codigo", requirePerm("empleados", "editar"), async (req: Request, 
         VALUES (${codigo}, ${hoy}, 'Reingreso', ${operador})
       `;
     } else {
+      const dpiNum = Number(DPI) || 0;
+      if (await dpiEnUso(dpiNum, codigo)) {
+        res.status(400).json({ error: "El número de DPI ya está registrado para otro empleado" });
+        return;
+      }
       const fi = FechaIngreso || "1970-01-01";
       const setSql = ["FechaIngreso = ?", "Sexo = ?", "EstadoCivil = ?", "CodigoEtalent = ?", "DPI = ?",
         ...DETALLE_CAMPOS.map(c => `${c} = ?`)].join(", ");
-      const vals = [fi, Sexo || "", EstadoCivil || "", CodigoEtalent || null, Number(DPI) || 0,
+      const vals = [fi, Sexo || "", EstadoCivil || "", CodigoEtalent || null, dpiNum,
         ...DETALLE_CAMPOS.map(c => body[c] === "" || body[c] === undefined ? null : body[c])];
       await prisma.$executeRawUnsafe(
         `UPDATE Empleados SET ${setSql} WHERE Codigo = ?`,
