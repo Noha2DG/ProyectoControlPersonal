@@ -14,7 +14,7 @@ import planificacionRouter from "./routes/planificacion.ts";
 import tiposPermisoRouter from "./routes/tiposPermiso.ts";
 import permisosRouter from "./routes/permisos.ts";
 import equipoRouter from "./routes/equipo.ts";
-import { familiaRouter, procesosRouter, tallasRouter, empaquesRouter, fincaRouter } from "./routes/catalogosProduccion.ts";
+import { familiaRouter, procesosRouter, tallasRouter, empaquesRouter, fincaRouter, almacenesRouter } from "./routes/catalogosProduccion.ts";
 import claseRouter from "./routes/clase.ts";
 import presentacionRouter from "./routes/presentacion.ts";
 import piscinaRouter from "./routes/piscina.ts";
@@ -23,6 +23,11 @@ import clientesRouter from "./routes/clientes.ts";
 import subclienteRouter from "./routes/subcliente.ts";
 import pedidosRouter from "./routes/pedidos.ts";
 import detallePedidoRouter from "./routes/detallePedido.ts";
+import lotesRouter from "./routes/lotes.ts";
+import transaccionesProduccionRouter from "./routes/transaccionesProduccion.ts";
+import termosRouter from "./routes/termos.ts";
+import pesajeDetalleRouter from "./routes/pesajeDetalle.ts";
+import reportesRouter from "./routes/reportes.ts";
 import { requireAuth } from "./middleware/auth.ts";
 
 const app = express();
@@ -57,6 +62,21 @@ app.use("/api/clientes", clientesRouter);
 app.use("/api/subcliente", subclienteRouter);
 app.use("/api/pedidos", pedidosRouter);
 app.use("/api/detalle-pedido", detallePedidoRouter);
+app.use("/api/almacenes", almacenesRouter);
+app.use("/api/lotes", lotesRouter);
+app.use("/api/transacciones-produccion", transaccionesProduccionRouter);
+app.use("/api/termos", termosRouter);
+app.use("/api/pesaje", pesajeDetalleRouter);
+app.use("/api/reportes", reportesRouter);
+
+// Sirve el frontend ya compilado (frontend/dist) para no necesitar un segundo servicio en Railway.
+// Si esa carpeta no existe (ej. en desarrollo local con `vite`), simplemente no hace nada.
+const frontendDist = path.join(process.cwd(), "..", "frontend", "dist");
+app.use(express.static(frontendDist));
+app.use((req, res, next) => {
+  if (req.method !== "GET" || req.path.startsWith("/api") || req.path.startsWith("/uploads")) { next(); return; }
+  res.sendFile(path.join(frontendDist, "index.html"), (err) => { if (err) next(); });
+});
 
 app.listen(PORT, () => {
   console.log(`Servidor corriendo en http://localhost:${PORT}`);

@@ -24,37 +24,52 @@ router.post("/", requireAuth, async (req: Request, res: Response) => {
     res.status(400).json({ error: "Código y CodigoArea son requeridos" }); return;
   }
   try {
-    const areas: any[] = await prisma.$queryRaw`
-      SELECT Codigo, Nombre FROM Areas WHERE Codigo = ${CodigoArea} AND Activa = 1 LIMIT 1
-    `;
-    if (!areas.length) { res.status(404).json({ error: "Área no encontrada o inactiva" }); return; }
+    const hoyInicio = hoyInicioGT();
+    const hoyFecha = hoyInicio.slice(0, 10);
+    // Área General (TT) está exenta de planificación — siempre libre
+    const AREAS_LIBRES = ["TT"];
+    const necesitaPlan = !AREAS_LIBRES.includes(CodigoArea);
 
-    const empleados: any[] = await prisma.$queryRaw`
-      SELECT Codigo, CONCAT_WS(' ', PrimerNombre, SegundoNombre, PrimerApellido, SegundoApellido) AS NombreCompleto
-      FROM Empleados WHERE Codigo = ${Codigo} AND Estado = 'Activo' LIMIT 1
-    `;
+    // Las siguientes 6 lecturas son independientes entre sí (ninguna depende del resultado de otra),
+    // así que se piden en paralelo en vez de una por una — contra una base remota cada round-trip
+    // pesa ~100ms, y antes esto eran hasta 6 viajes secuenciales solo para validar.
+    const [areas, empleados, prevTransf, movHoy, plan, ocupRows] = await Promise.all([
+      prisma.$queryRaw`SELECT Codigo, Nombre FROM Areas WHERE Codigo = ${CodigoArea} AND Activa = 1 LIMIT 1`,
+      prisma.$queryRaw`
+        SELECT Codigo, CONCAT_WS(' ', PrimerNombre, SegundoNombre, PrimerApellido, SegundoApellido) AS NombreCompleto
+        FROM Empleados WHERE Codigo = ${Codigo} AND Estado = 'Activo' LIMIT 1
+      `,
+      prisma.$queryRaw`
+        SELECT t.CodigoArea, a.Nombre AS NombreArea
+        FROM Transferencias t
+        JOIN Areas a ON t.CodigoArea = a.Codigo
+        WHERE t.Codigo = ${Codigo} AND t.FechaSalida IS NULL
+        ORDER BY t.FechaHora DESC
+        LIMIT 1
+      `,
+      prisma.$queryRaw`
+        SELECT Tipo FROM Movimientos
+        WHERE Codigo = ${Codigo} AND FechaHora >= ${hoyInicio}
+        ORDER BY FechaHora ASC
+      `,
+      necesitaPlan
+        ? prisma.$queryRaw`SELECT Cantidad FROM PlanificacionAreas WHERE Fecha = ${hoyFecha} AND CodigoArea = ${CodigoArea} LIMIT 1`
+        : Promise.resolve([]),
+      necesitaPlan
+        ? prisma.$queryRaw`
+            SELECT COUNT(*) AS cnt FROM Transferencias
+            WHERE CodigoArea = ${CodigoArea} AND DATE(FechaHora) = ${hoyFecha} AND FechaSalida IS NULL
+          `
+        : Promise.resolve([]),
+    ]) as any[][];
+
+    if (!areas.length) { res.status(404).json({ error: "Área no encontrada o inactiva" }); return; }
     if (!empleados.length) { res.status(404).json({ error: "Empleado no encontrado o inactivo" }); return; }
 
-    // Última área abierta (para mostrar Area Salida en el formulario)
-    const prevTransf: any[] = await prisma.$queryRaw`
-      SELECT t.CodigoArea, a.Nombre AS NombreArea
-      FROM Transferencias t
-      JOIN Areas a ON t.CodigoArea = a.Codigo
-      WHERE t.Codigo = ${Codigo} AND t.FechaSalida IS NULL
-      ORDER BY t.FechaHora DESC
-      LIMIT 1
-    `;
     const ultimaArea = prevTransf.length
       ? { Codigo: prevTransf[0].CodigoArea, Nombre: prevTransf[0].NombreArea }
       : null;
 
-    // Verificar estado de movimientos del día
-    const hoyInicio = hoyInicioGT();
-    const movHoy: any[] = await prisma.$queryRaw`
-      SELECT Tipo FROM Movimientos
-      WHERE Codigo = ${Codigo} AND FechaHora >= ${hoyInicio}
-      ORDER BY FechaHora ASC
-    `;
     const tieneEntrada = movHoy.some((m: any) => m.Tipo === "Entrada");
     const tieneSalida  = movHoy.some((m: any) => m.Tipo === "Salida");
 
@@ -67,23 +82,10 @@ router.post("/", requireAuth, async (req: Request, res: Response) => {
       return;
     }
 
-    // Área General (TT) está exenta de planificación — siempre libre
-    const AREAS_LIBRES = ["TT"];
-    if (!AREAS_LIBRES.includes(CodigoArea)) {
-      const hoyFecha = hoyInicio.slice(0, 10);
-      const plan: any[] = await prisma.$queryRaw`
-        SELECT Cantidad FROM PlanificacionAreas
-        WHERE Fecha = ${hoyFecha} AND CodigoArea = ${CodigoArea} LIMIT 1
-      `;
+    if (necesitaPlan) {
       if (!plan.length || Number(plan[0].Cantidad) === 0) {
         res.status(400).json({ error: "Área no programada para hoy" }); return;
       }
-      const ocupRows: any[] = await prisma.$queryRaw`
-        SELECT COUNT(*) AS cnt FROM Transferencias
-        WHERE CodigoArea = ${CodigoArea}
-          AND DATE(FechaHora) = ${hoyFecha}
-          AND FechaSalida IS NULL
-      `;
       const ocupacion = Number(ocupRows[0].cnt);
       if (ocupacion >= Number(plan[0].Cantidad)) {
         res.status(400).json({ error: `Área llena (${ocupacion}/${Number(plan[0].Cantidad)} personas)` }); return;

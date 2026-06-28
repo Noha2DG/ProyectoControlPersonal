@@ -30,7 +30,7 @@ export default function LoginPage() {
         <div className="text-center mb-8">
           <img src={pacificGoldLogo} alt="Pacific Gold" className="h-20 mx-auto mb-4 object-contain" />
           <h1 className="text-xl font-bold text-gray-900">Planta Oro del Pacifico</h1>
-          <p className="text-sm text-gray-500 mt-1">Oropsa</p>
+          
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
@@ -67,7 +67,10 @@ export default function LoginPage() {
           <button
             type="submit"
             disabled={loading}
-            className="w-full bg-blue-700 text-white font-semibold py-2.5 rounded-lg hover:bg-blue-800 transition disabled:opacity-60 text-sm"
+            className="w-full bg-blue-700 text-white font-semibold py-2.5 rounded-lg transition disabled:opacity-60 text-sm
+              shadow-[0_0_16px_rgba(37,99,235,0.55)]
+              hover:bg-blue-800 hover:shadow-[0_0_26px_rgba(37,99,235,0.85)]
+              focus:outline-none focus:ring-2 focus:ring-blue-400 focus:shadow-[0_0_26px_rgba(37,99,235,0.85)]"
           >
             {loading ? "Verificando..." : "Iniciar sesión"}
           </button>

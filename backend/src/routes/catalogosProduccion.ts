@@ -13,3 +13,4 @@ export const fincaRouter = crearCatalogoRouter({
   pk: "Codigo",
   camposExtra: [{ columna: "Grupo" }, { columna: "Abreviatura", requerido: true }],
 });
+export const almacenesRouter = crearCatalogoRouter({ tabla: "Almacenes", pk: "Codigo" });

@@ -16,6 +16,7 @@ const TABS = [
   { key: "clase", label: "Clase" },
   { key: "presentacion", label: "Presentaciones" },
   { key: "finca", label: "Fincas" },
+  { key: "almacenes", label: "Almacenes" },
   { key: "piscina", label: "Piscinas y Ciclos" },
   { key: "clientes", label: "Clientes" },
   { key: "pedidos", label: "Pedidos" },
@@ -55,6 +56,9 @@ export default function CatalogosPage() {
       {tab === "finca" && (
         <CatalogoSimpleTable api="/api/finca" pk="Codigo" pkLabel="Código" nuevoLabel="+ Nueva Finca"
           camposExtra={[{ campo: "Grupo", label: "Grupo", requerido: false }, { campo: "Abreviatura", label: "Abreviatura" }]} />
+      )}
+      {tab === "almacenes" && (
+        <CatalogoSimpleTable api="/api/almacenes" pk="Codigo" pkLabel="Código" nuevoLabel="+ Nuevo Almacén" />
       )}
       {tab === "piscina" && <PiscinaCicloPage />}
       {tab === "clientes" && <ClientesPage />}

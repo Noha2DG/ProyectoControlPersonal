@@ -78,6 +78,40 @@ export function exportarMovimientos(registros, fecha) {
   XLSX.writeFile(wb, `MovimientosPersonal_${fecha}.xlsx`);
 }
 
+export function exportarReporteProduccion(porLote, porTalla, desde, hasta) {
+  const lotes = porLote.map(l => ({
+    "Lote":            l.Lote,
+    "Finca":           l.NombreFinca,
+    "Clase MP":        l.Clase,
+    "Descripción MP":  l.DescripcionClase,
+    "Fecha Ingreso":   l.Fecha?.slice(0, 10),
+    "Peso Ingreso":    l.PesoIngreso,
+    "UM":              l.UM,
+    "Procesado":       +l.Procesado.toFixed(2),
+    "Pendiente":       +l.Pendiente.toFixed(2),
+    "Rendimiento %":   +l.Rendimiento.toFixed(1),
+    "Transacciones":   l.NumTransacciones,
+  }));
+
+  const tallas = porTalla.map(t => ({
+    "Talla":         t.Talla,
+    "Descripción":   t.DescripcionTalla,
+    "Procesado":     +t.Procesado.toFixed(2),
+    "Pesajes":       t.NumPesajes,
+  }));
+
+  const wb = XLSX.utils.book_new();
+  const wsLotes = XLSX.utils.json_to_sheet(lotes);
+  autoWidth(wsLotes, lotes);
+  XLSX.utils.book_append_sheet(wb, wsLotes, "Por Lote");
+
+  const wsTallas = XLSX.utils.json_to_sheet(tallas);
+  autoWidth(wsTallas, tallas);
+  XLSX.utils.book_append_sheet(wb, wsTallas, "Por Talla");
+
+  XLSX.writeFile(wb, `ReporteProduccion_${desde}_a_${hasta}.xlsx`);
+}
+
 function autoWidth(ws, data) {
   if (!data.length) return;
   const cols = Object.keys(data[0]).map(key => ({

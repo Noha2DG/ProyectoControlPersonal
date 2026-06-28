@@ -7,6 +7,9 @@
     "start": "tsx src/index.ts",
     "dev": "tsx watch src/index.ts"
   },
+  "engines": {
+    "node": ">=20"
+  },
   "keywords": [],
   "author": "",
   "license": "ISC",
