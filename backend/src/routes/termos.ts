@@ -23,7 +23,13 @@ router.get("/", requireAuth, requirePerm("destajo", "ver"), async (req: Request,
     if (!transaccionId) { res.status(400).json({ error: "transaccion es requerido" }); return; }
     const rows: any[] = await prisma.$queryRaw`
       SELECT t.TermoId, t.TransaccionId, t.NumeroTermo, t.Capacidad, t.AlmacenActual, t.FechaCreacion,
-             COALESCE((SELECT SUM(Peso) FROM PesajeDetalle WHERE TermoId = t.TermoId), 0) AS PesoAcumulado
+             COALESCE((
+               SELECT SUM(pd2.Peso)
+               FROM PesajeDetalle pd2
+               JOIN Termos t2 ON pd2.TermoId = t2.TermoId
+               WHERE t2.NumeroTermo = t.NumeroTermo
+                 AND DATE(pd2.FechaHora) = CURDATE()
+             ), 0) AS PesoAcumulado
       FROM Termos t
       WHERE t.TransaccionId = ${transaccionId}
       ORDER BY t.NumeroTermo ASC

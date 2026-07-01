@@ -37,14 +37,19 @@ function segmentoFecha(fecha: string) {
   return `${letra}${diaSemanaISO}${String(semana).padStart(2, "0")}`;
 }
 
-// Formato: <letraAño><díaSemanaISO><semanaISO><primeraParteDePiscina>-<segundaParteDePiscina>-<secuencial>
-// ej. piscina "EM07-E01", jueves (4) de la semana ISO 26 de 2026 (G), 1er lote del día → G426EM07-E01-1
-async function generarCodigoLote(piscinaId: number, fecha: string) {
+// Formato: <letraAño><díaSemanaISO><semanaISO><primeraParteDePiscina>-<segundaParteDePiscina>-<ciclo>
+// ej. piscina "EM07-E01", martes (2) semana 27 de 2026 (G), ciclo 5 → G227EM07-E01-5
+async function generarCodigoLote(piscinaId: number, fecha: string, cicloNumero?: number) {
   const piscinas: any[] = await prisma.$queryRaw`SELECT Nombre FROM Piscina WHERE PiscinaId = ${piscinaId} LIMIT 1`;
   if (!piscinas.length) return null;
   const [parte1, parte2] = String(piscinas[0].Nombre).split("-");
-  const countRows: any[] = await prisma.$queryRaw`SELECT COUNT(*) AS n FROM Lotes WHERE Fecha = ${fecha}`;
-  const secuencial = String(Number(countRows[0].n) + 1);
+  let secuencial: string;
+  if (cicloNumero) {
+    secuencial = String(cicloNumero);
+  } else {
+    const countRows: any[] = await prisma.$queryRaw`SELECT COUNT(*) AS n FROM Lotes WHERE Fecha = ${fecha}`;
+    secuencial = String(Number(countRows[0].n) + 1);
+  }
   return [`${segmentoFecha(fecha)}${parte1}`, parte2, secuencial].filter(Boolean).join("-");
 }
 
@@ -93,28 +98,44 @@ router.get("/", requireAuth, requirePerm("destajo", "ver"), async (req: Request,
   }
 });
 
-// POST /api/lotes  { PiscinaId, CicloId?, Clase, Fecha, PesoIngreso, UM, AlmacenCodigo }
+// POST /api/lotes  { PiscinaId, CicloNumero?, Clase, Fecha, PesoIngreso, UM, AlmacenCodigo }
 // El código de Lote se genera automáticamente: AñoLetra+DíaSemana+Semana - Piscina - secuencial del día.
-// CicloId es opcional: Maquila, Importación y Proveedores de Pescado no manejan ciclo de cosecha.
+// CicloNumero es el número de ciclo (ej. 6). Si no existe para esa piscina+año, se crea automáticamente.
 router.post("/", requireAuth, requirePerm("destajo", "crear"), async (req: Request, res: Response) => {
   try {
-    const { PiscinaId, CicloId, Clase, Fecha, PesoIngreso, UM, AlmacenCodigo } = req.body;
+    const { PiscinaId, CicloNumero, Clase, Fecha, PesoIngreso, UM, AlmacenCodigo } = req.body;
     if (!PiscinaId || !Clase || !Fecha || !PesoIngreso || !AlmacenCodigo) {
       res.status(400).json({ error: "Piscina, Clase, Fecha, Peso de ingreso y Almacén son requeridos" });
       return;
     }
-    const lote = await generarCodigoLote(Number(PiscinaId), Fecha);
+    const cicloNum = CicloNumero ? Number(CicloNumero) : undefined;
+    const lote = await generarCodigoLote(Number(PiscinaId), Fecha, cicloNum);
     if (!lote) { res.status(404).json({ error: "Piscina no encontrada" }); return; }
+
+    let resolvedCicloId: number | null = null;
+    if (cicloNum) {
+      const anio = Number(Fecha.split("-")[0]);
+      await prisma.$executeRaw`
+        INSERT IGNORE INTO Ciclo (PiscinaId, Anio, Ciclo)
+        VALUES (${Number(PiscinaId)}, ${anio}, ${cicloNum})
+      `;
+      const rows: any[] = await prisma.$queryRaw`
+        SELECT CicloId FROM Ciclo
+        WHERE PiscinaId = ${Number(PiscinaId)} AND Anio = ${anio} AND Ciclo = ${cicloNum}
+        LIMIT 1
+      `;
+      resolvedCicloId = rows[0]?.CicloId ? Number(rows[0].CicloId) : null;
+    }
 
     const operador = getOperador(req);
     await prisma.$executeRaw`
       INSERT INTO Lotes (Lote, CicloId, PiscinaId, Clase, Fecha, PesoIngreso, UM, AlmacenCodigo, RegistradoPor)
-      VALUES (${lote}, ${CicloId ? Number(CicloId) : null}, ${Number(PiscinaId)}, ${Clase}, ${Fecha}, ${Number(PesoIngreso)}, ${UM || "KG"}, ${AlmacenCodigo}, ${operador})
+      VALUES (${lote}, ${resolvedCicloId}, ${Number(PiscinaId)}, ${Clase}, ${Fecha}, ${Number(PesoIngreso)}, ${UM || "KG"}, ${AlmacenCodigo}, ${operador})
     `;
     res.status(201).json({ ok: true, Lote: lote });
   } catch (err: any) {
-    if (err.message?.includes("Duplicate")) res.status(400).json({ error: "Ya existe un lote con ese código generado, intente nuevamente" });
-    else if (err.message?.includes("foreign key")) res.status(400).json({ error: "Piscina, Ciclo, Clase o Almacén no existen" });
+    if (err.message?.includes("Duplicate")) res.status(400).json({ error: "Ya existe un lote para esta piscina con ese ciclo en esta fecha" });
+    else if (err.message?.includes("foreign key")) res.status(400).json({ error: "Piscina, Clase o Almacén no válidos" });
     else res.status(500).json({ error: err.message });
   }
 });

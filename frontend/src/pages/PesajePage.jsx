@@ -91,8 +91,6 @@ export default function PesajePage() {
   const [areaActualError, setAreaActualError] = useState(undefined);
   const [guardando, setGuardando] = useState(false);
   const [modalEditar, setModalEditar] = useState(null);
-  const [editandoCapacidad, setEditandoCapacidad] = useState(false);
-  const [capacidadInput, setCapacidadInput] = useState("");
 
   const termoRef = useRef(null);
   const codigoRef = useRef(null);
@@ -140,8 +138,6 @@ export default function PesajePage() {
     setUltimoEmpleado(null);
     setErrorMsg("");
     setAreaActualError(undefined);
-    setEditandoCapacidad(false);
-    setCapacidadInput("");
     fetchLote(t.Lote);
     fetchTermos(t.TransaccionId);
     fetchPesajes(t.TransaccionId);
@@ -206,21 +202,6 @@ export default function PesajePage() {
     refrescarTodo();
   };
 
-  const handleGuardarCapacidad = async () => {
-    if (!termoActual) return;
-    try {
-      await fetch(`/api/termos/${termoActual.TermoId}`, {
-        method: "PUT", headers: { "Content-Type": "application/json", ...authHeader() },
-        body: JSON.stringify({ Capacidad: capacidadInput }),
-      });
-      setEditandoCapacidad(false);
-      setCapacidadInput("");
-      await fetchTermos(transSel.TransaccionId);
-    } catch (err) {
-      console.error("Error al guardar la capacidad del termo:", err);
-    }
-  };
-
   const handleGuardarEdicionPesaje = async (form) => {
     try {
       const res = await fetch(`/api/pesaje/${modalEditar.PesajeId}`, {
@@ -269,19 +250,23 @@ export default function PesajePage() {
           <div className="bg-white border border-gray-300 rounded-xl shadow-sm p-3 space-y-3">
             <div className="grid grid-cols-4 gap-2">
               <div className="text-center">
-                <p className="text-xs text-gray-400">Ingreso</p>
+                <p className="text-xs text-gray-400">Ingreso MP</p>
+                <p className="text-xs font-mono font-semibold text-blue-600 truncate">{lote.Clase}</p>
                 <p className="text-sm font-bold text-gray-800">{lote.PesoIngreso.toFixed(1)}</p>
               </div>
               <div className="text-center">
                 <p className="text-xs text-gray-400">Procesado</p>
+                <p className="text-xs font-mono font-semibold text-blue-600 truncate">&nbsp;</p>
                 <p className="text-sm font-bold text-blue-700">{lote.Procesado.toFixed(1)}</p>
               </div>
               <div className="text-center">
-                <p className="text-xs text-gray-400">Pendiente</p>
+                <p className="text-xs text-gray-400">Pendiente MP</p>
+                <p className="text-xs font-mono font-semibold text-blue-600 truncate">{lote.Clase}</p>
                 <p className={`text-sm font-bold ${lote.Pendiente < 0 ? "text-red-600" : "text-amber-600"}`}>{lote.Pendiente.toFixed(1)}</p>
               </div>
               <div className="text-center">
                 <p className="text-xs text-gray-400">Rendimiento</p>
+                <p className="text-xs font-mono font-semibold text-blue-600 truncate">&nbsp;</p>
                 <p className="text-sm font-bold text-gray-700">{rendimiento.toFixed(1)}%</p>
               </div>
             </div>
@@ -304,40 +289,26 @@ export default function PesajePage() {
           )}
           {termoActual && (
             <div className="mt-2">
-              <p className="text-xs text-gray-500">
-                Acumulado en este termo: <span className="font-semibold text-gray-700">{termoActual.PesoAcumulado.toFixed(2)} kg</span>
-                {termoActual.Capacidad != null && <span className="text-gray-400"> / {termoActual.Capacidad.toFixed(2)} kg</span>}
-              </p>
-              {termoActual.Capacidad != null ? (
-                <>
-                  {(() => {
-                    const pct = (termoActual.PesoAcumulado / termoActual.Capacidad) * 100;
-                    const falta = termoActual.Capacidad - termoActual.PesoAcumulado;
-                    return (
-                      <>
-                        <div className="w-full bg-gray-200 rounded-full h-4 overflow-hidden mt-1.5">
-                          <div className={`h-full transition-all ${pct >= 100 ? "bg-red-600" : pct >= 80 ? "bg-amber-500" : "bg-green-500"}`}
-                            style={{ width: `${Math.min(pct, 100)}%` }} />
-                        </div>
-                        <p className={`text-xs font-semibold mt-1 ${pct >= 100 ? "text-red-600" : pct >= 80 ? "text-amber-600" : "text-gray-500"}`}>
-                          {falta > 0 ? `Faltan ${falta.toFixed(2)} kg para llenarse` : `Termo lleno — excedido por ${Math.abs(falta).toFixed(2)} kg`}
-                        </p>
-                      </>
-                    );
-                  })()}
-                </>
-              ) : editandoCapacidad ? (
-                <div className="flex gap-2 mt-1.5">
-                  <input type="number" step="0.01" autoFocus value={capacidadInput} onChange={e => setCapacidadInput(e.target.value)}
-                    placeholder="Capacidad en kg"
-                    className="flex-1 border border-gray-300 rounded-lg px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
-                  <button onClick={handleGuardarCapacidad} className="text-xs bg-blue-600 text-white font-semibold px-3 py-1 rounded-lg hover:bg-blue-700 transition">Guardar</button>
-                </div>
-              ) : (
-                <button onClick={() => setEditandoCapacidad(true)} className="text-xs text-blue-600 hover:text-blue-800 font-medium mt-1.5">
-                  + Definir capacidad máxima
-                </button>
-              )}
+              {(() => {
+                const cap = termoActual.Capacidad ?? 150;
+                const pct = (termoActual.PesoAcumulado / cap) * 100;
+                const falta = cap - termoActual.PesoAcumulado;
+                return (
+                  <>
+                    <p className="text-xs text-gray-500">
+                      Acumulado: <span className="font-semibold text-gray-700">{termoActual.PesoAcumulado.toFixed(2)} kg</span>
+                      <span className="text-gray-400"> / {cap} kg</span>
+                    </p>
+                    <div className="w-full bg-gray-200 rounded-full h-4 overflow-hidden mt-1.5">
+                      <div className={`h-full transition-all ${pct >= 100 ? "bg-red-600" : pct >= 80 ? "bg-amber-500" : "bg-green-500"}`}
+                        style={{ width: `${Math.min(pct, 100)}%` }} />
+                    </div>
+                    <p className={`text-xs font-semibold mt-1 ${pct >= 100 ? "text-red-600" : pct >= 80 ? "text-amber-600" : "text-gray-500"}`}>
+                      {falta > 0 ? `Faltan ${falta.toFixed(2)} kg` : `Termo lleno — excedido ${Math.abs(falta).toFixed(2)} kg`}
+                    </p>
+                  </>
+                );
+              })()}
             </div>
           )}
         </div>
@@ -379,7 +350,10 @@ export default function PesajePage() {
 
       {/* Columna detalle de pesadas */}
       <div className="flex-1 min-w-0">
-        <h3 className="text-sm font-medium text-gray-600 mb-4">Pesajes registrados {transSel ? <span className="font-mono font-bold text-gray-800">— {transSel.Lote}</span> : ""}</h3>
+        <h3 className="text-sm font-medium text-gray-600 mb-2">Pesajes registrados {transSel ? <span className="font-mono font-bold text-gray-800">— {transSel.Lote}</span> : ""}</h3>
+
+
+
         {!transSel ? (
           <div className="bg-white rounded-xl shadow px-4 py-8 text-center text-gray-400 text-sm">Seleccione una transacción para ver sus pesajes</div>
         ) : loadingPesajes ? (
@@ -428,6 +402,8 @@ export default function PesajePage() {
       {modalEditar && (
         <EditarPesajeModal item={modalEditar} onSave={handleGuardarEdicionPesaje} onClose={() => setModalEditar(null)} />
       )}
+
+
     </div>
   );
 }

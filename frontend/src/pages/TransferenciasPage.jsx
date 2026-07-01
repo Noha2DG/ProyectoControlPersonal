@@ -92,7 +92,6 @@ export default function TransferenciasPage() {
   // Carnet + empleado
   const [carnetInput, setCarnetInput] = useState("");
   const [empleado, setEmpleado]       = useState(null);
-  const [fotoError, setFotoError]     = useState(false);
   const [escaneando, setEscaneando]   = useState(false);
   const [errorMsg, setErrorMsg]       = useState("");
   const [avisoAreas, setAvisoAreas]       = useState("");
@@ -100,6 +99,18 @@ export default function TransferenciasPage() {
 
   const areaRef   = useRef(null);
   const carnetRef = useRef(null);
+
+  // Mantener el foco en el input de Carnet (lector de código de barras),
+  // salvo cuando el usuario está escribiendo en Área Entrada o hay un modal abierto.
+  useEffect(() => {
+    if (modalAreas) return;
+    const refocus = () => {
+      if (document.activeElement === areaRef.current) return;
+      carnetRef.current?.focus();
+    };
+    document.addEventListener("click", refocus);
+    return () => document.removeEventListener("click", refocus);
+  }, [modalAreas]);
 
   function mensajeError(res) {
     if (res.status === 401) return "Sesión expirada o sin permiso — vuelva a iniciar sesión";
@@ -172,7 +183,6 @@ export default function TransferenciasPage() {
       setAreaEntrada(found);
       setAreaSalida(null);
       setEmpleado(null);
-      setFotoError(false);
       setErrorMsg("");
       carnetRef.current?.focus();
     }
@@ -190,7 +200,6 @@ export default function TransferenciasPage() {
     setAreaEntrada(area);
     setAreaSalida(null);
     setEmpleado(null);
-    setFotoError(false);
     setErrorMsg("");
     setModalAreas(false);
     carnetRef.current?.focus();
@@ -212,7 +221,6 @@ export default function TransferenciasPage() {
     setErrorMsg("");
     setEmpleado(null);
     setAreaSalida(null);
-    setFotoError(false);
 
     try {
       const token = localStorage.getItem("cp_token");
@@ -245,7 +253,6 @@ export default function TransferenciasPage() {
     setAreaEntradaInput(""); setAreaEntrada(null);
     setAreaSalida(null); setEmpleado(null);
     setCarnetInput(""); setErrorMsg("");
-    setFotoError(false);
     fetchRegistros();
     areaRef.current?.focus();
   };
@@ -315,7 +322,6 @@ export default function TransferenciasPage() {
                 title="Escriba el código o doble clic para seleccionar"
                 placeholder="Código"
                 maxLength={10}
-                autoFocus
                 className="w-24 border border-gray-400 rounded px-2 py-1 text-sm font-mono text-center uppercase focus:outline-none focus:ring-2 focus:ring-blue-400 cursor-text"
               />
               <div className={`flex-1 border rounded px-3 py-1 text-sm min-h-[32px] flex items-center ${
@@ -358,6 +364,7 @@ export default function TransferenciasPage() {
                 onKeyDown={handleCarnetKey}
                 placeholder="Escanear..."
                 autoComplete="off"
+                autoFocus
                 disabled={escaneando}
                 className="w-24 border border-gray-400 rounded px-2 py-1 text-sm font-mono text-center uppercase focus:outline-none focus:ring-2 focus:ring-blue-400 disabled:opacity-50"
               />
@@ -380,33 +387,6 @@ export default function TransferenciasPage() {
               </svg>
               {errorMsg}
             </div>
-          )}
-        </div>
-
-        {/* Foto empleado */}
-        <div className="shrink-0 w-36">
-          <div className={`w-36 h-44 rounded-xl overflow-hidden border-4 bg-gray-100 flex items-center justify-center transition-all ${
-            empleado ? "border-green-600 shadow-[0_0_0_3px_rgba(59,130,246,0.25)]" : "border-gray-300"
-          }`}>
-            {empleado && !fotoError ? (
-              <img
-                src={`/uploads/fotos/${empleado.Codigo}.jpg`}
-                alt={empleado.NombreCompleto}
-                className="w-full h-full object-cover"
-                onError={() => setFotoError(true)}
-              />
-            ) : (
-              <div className="flex flex-col items-center justify-center gap-2 text-gray-300">
-                <svg className="w-14 h-14 opacity-40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
-                    d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-                </svg>
-                {empleado && <span className="text-xs text-gray-400 text-center px-1">{empleado.Codigo}</span>}
-              </div>
-            )}
-          </div>
-          {empleado && (
-            <p className="text-center text-xs text-gray-600 mt-1 font-mono">{empleado.Codigo}</p>
           )}
         </div>
       </div>

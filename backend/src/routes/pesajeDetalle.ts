@@ -24,7 +24,7 @@ async function resolverTermo(tx: any, transaccionId: number, numeroTermo: number
   if (!termos.length) {
     try {
       await tx.$executeRaw`
-        INSERT INTO Termos (TransaccionId, NumeroTermo, AlmacenActual) VALUES (${transaccionId}, ${numeroTermo}, ${almacenOrigen})
+        INSERT INTO Termos (TransaccionId, NumeroTermo, AlmacenActual, Capacidad) VALUES (${transaccionId}, ${numeroTermo}, ${almacenOrigen}, 150)
       `;
     } catch (err: any) {
       if (!err.message?.includes("Duplicate")) throw err; // creado en paralelo por otra estación justo ahora — se recupera abajo

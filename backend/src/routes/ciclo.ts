@@ -15,17 +15,17 @@ function formatear(rows: any[]) {
   }));
 }
 
-// GET /api/ciclo?piscinaId=123  (público — filtra por piscina para drill-down)
+// GET /api/ciclo?piscinaId=123
 router.get("/", async (req: Request, res: Response) => {
   try {
     const piscinaId = req.query.piscinaId ? Number(req.query.piscinaId) : undefined;
     const rows: any[] = piscinaId
       ? await prisma.$queryRaw`
-          SELECT CicloId, PiscinaId, Anio, Ciclo, FechaInicio, FechaCierre, Activo
+          SELECT CicloId, PiscinaId, Anio, Ciclo, Activo
           FROM Ciclo WHERE PiscinaId = ${piscinaId} ORDER BY Anio DESC, Ciclo DESC
         `
       : await prisma.$queryRaw`
-          SELECT CicloId, PiscinaId, Anio, Ciclo, FechaInicio, FechaCierre, Activo
+          SELECT CicloId, PiscinaId, Anio, Ciclo, Activo
           FROM Ciclo ORDER BY Anio DESC, Ciclo DESC
         `;
     res.json(formatear(rows));
@@ -37,11 +37,11 @@ router.get("/", async (req: Request, res: Response) => {
 // POST /api/ciclo  { PiscinaId, Anio, Ciclo, FechaInicio, FechaCierre }
 router.post("/", requireAuth, requirePerm("catalogos", "crear"), async (req: Request, res: Response) => {
   try {
-    const { PiscinaId, Anio, Ciclo, FechaInicio, FechaCierre } = req.body;
+    const { PiscinaId, Anio, Ciclo } = req.body;
     if (!PiscinaId || !Anio || !Ciclo) { res.status(400).json({ error: "PiscinaId, Anio y Ciclo son requeridos" }); return; }
     await prisma.$executeRaw`
-      INSERT INTO Ciclo (PiscinaId, Anio, Ciclo, FechaInicio, FechaCierre)
-      VALUES (${Number(PiscinaId)}, ${Number(Anio)}, ${Number(Ciclo)}, ${FechaInicio || null}, ${FechaCierre || null})
+      INSERT INTO Ciclo (PiscinaId, Anio, Ciclo)
+      VALUES (${Number(PiscinaId)}, ${Number(Anio)}, ${Number(Ciclo)})
     `;
     res.status(201).json({ ok: true });
   } catch (err: any) {
@@ -51,16 +51,13 @@ router.post("/", requireAuth, requirePerm("catalogos", "crear"), async (req: Req
   }
 });
 
-// PUT /api/ciclo/:id
+// PUT /api/ciclo/:id  { Activo }
 router.put("/:id", requireAuth, requirePerm("catalogos", "editar"), async (req: Request, res: Response) => {
   try {
     const id = Number(req.params.id);
-    const { FechaInicio, FechaCierre, Activo } = req.body;
+    const { Activo } = req.body;
     const activo = Activo === false || Activo === 0 ? 0 : 1;
-    await prisma.$executeRaw`
-      UPDATE Ciclo SET FechaInicio = ${FechaInicio || null}, FechaCierre = ${FechaCierre || null}, Activo = ${activo}
-      WHERE CicloId = ${id}
-    `;
+    await prisma.$executeRaw`UPDATE Ciclo SET Activo = ${activo} WHERE CicloId = ${id}`;
     res.json({ ok: true });
   } catch (err: any) {
     res.status(500).json({ error: err.message });

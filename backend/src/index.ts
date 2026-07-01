@@ -1,4 +1,4 @@
-import "dotenv/config";
+import "dotenv/config"; // v2
 import express from "express";
 import cors from "cors";
 import compression from "compression";

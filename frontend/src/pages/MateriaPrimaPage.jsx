@@ -45,7 +45,7 @@ function LoteModal({ item, fincas, clases, almacenes, onSave, onClose }) {
   const [form, setForm] = useState({
     CodigoFinca: item?.CodigoFinca || (fincas[0]?.Codigo ?? ""),
     PiscinaId: item?.PiscinaId || "",
-    CicloId: item?.CicloId || "",
+    CicloNumero: item?.Ciclo ? String(item.Ciclo) : "",
     Clase: item?.Clase || "",
     Fecha: item?.Fecha?.slice(0, 10) || hoy(),
     PesoIngreso: item?.PesoIngreso ?? "",
@@ -53,7 +53,7 @@ function LoteModal({ item, fincas, clases, almacenes, onSave, onClose }) {
     AlmacenCodigo: item?.AlmacenCodigo || (almacenes[0]?.Codigo ?? ""),
   });
   const [piscinas, setPiscinas] = useState([]);
-  const [ciclos, setCiclos] = useState([]);
+  const [ultimoCiclo, setUltimoCiclo] = useState(null);
   const set = f => e => setForm(p => ({ ...p, [f]: e.target.value }));
   const setVal = f => val => setForm(p => ({ ...p, [f]: val }));
 
@@ -64,23 +64,19 @@ function LoteModal({ item, fincas, clases, almacenes, onSave, onClose }) {
   }, [form.CodigoFinca]);
 
   useEffect(() => {
-    if (!form.PiscinaId) { setCiclos([]); return; }
+    if (!form.PiscinaId) { setUltimoCiclo(null); return; }
     fetch(`/api/ciclo?piscinaId=${form.PiscinaId}`, { headers: authHeader() })
-      .then(r => r.json()).then(d => { if (Array.isArray(d)) setCiclos(d.filter(c => c.Activo)); });
+      .then(r => r.json()).then(d => {
+        if (Array.isArray(d) && d.length > 0) setUltimoCiclo(d[0]); // ya viene Anio DESC, Ciclo DESC
+        else setUltimoCiclo(null);
+      });
   }, [form.PiscinaId]);
 
-  // El ciclo no se elige a mano: se determina por la fecha de ingreso contra el rango FechaInicio/FechaCierre del ciclo.
-  const cicloVigente = ciclos.find(c => {
-    const inicio = c.FechaInicio?.slice(0, 10);
-    const cierre = c.FechaCierre?.slice(0, 10);
-    if (inicio && form.Fecha < inicio) return false;
-    if (cierre && form.Fecha > cierre) return false;
-    return true;
-  });
-
+  // Al cargar la piscina, pre-llenar con el último ciclo registrado (solo si es lote nuevo)
   useEffect(() => {
-    setForm(p => ({ ...p, CicloId: cicloVigente?.CicloId ?? "" }));
-  }, [cicloVigente?.CicloId]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (isEdit) return;
+    setForm(p => ({ ...p, CicloNumero: ultimoCiclo ? String(ultimoCiclo.Ciclo) : "" }));
+  }, [ultimoCiclo?.CicloId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSubmit = e => { e.preventDefault(); onSave(form); };
 
@@ -104,7 +100,7 @@ function LoteModal({ item, fincas, clases, almacenes, onSave, onClose }) {
     const { diaSemanaISO, semana } = isoSemana(form.Fecha);
     const segFecha = `${letra}${diaSemanaISO}${String(semana).padStart(2, "0")}`;
     const [parte1, parte2] = piscina.Nombre.split("-");
-    return [`${segFecha}${parte1}`, parte2, "N"].filter(Boolean).join("-");
+    return [`${segFecha}${parte1}`, parte2, form.CicloNumero || "?"].filter(Boolean).join("-");
   };
 
   return (
@@ -125,7 +121,7 @@ function LoteModal({ item, fincas, clases, almacenes, onSave, onClose }) {
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1">Finca *</label>
             <select required disabled={isEdit} value={form.CodigoFinca}
-              onChange={e => setForm(p => ({ ...p, CodigoFinca: e.target.value, PiscinaId: "", CicloId: "" }))}
+              onChange={e => setForm(p => ({ ...p, CodigoFinca: e.target.value, PiscinaId: "", CicloNumero: "" }))}
               className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 disabled:bg-gray-100">
               <option value="">Seleccione...</option>
               {fincas.map(f => <option key={f.Codigo} value={f.Codigo}>{f.Codigo} — {f.Descripcion}</option>)}
@@ -134,18 +130,29 @@ function LoteModal({ item, fincas, clases, almacenes, onSave, onClose }) {
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1">Piscina *</label>
             <select required disabled={isEdit || !form.CodigoFinca} value={form.PiscinaId}
-              onChange={e => setForm(p => ({ ...p, PiscinaId: e.target.value, CicloId: "" }))}
+              onChange={e => setForm(p => ({ ...p, PiscinaId: e.target.value, CicloNumero: "" }))}
               className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 disabled:bg-gray-100">
               <option value="">Seleccione...</option>
               {piscinas.map(p => <option key={p.PiscinaId} value={p.PiscinaId}>{p.Nombre}</option>)}
             </select>
           </div>
-          {ciclos.length > 0 && (
+          {form.PiscinaId && (
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1">Ciclo</label>
-              <div className="w-full border border-gray-200 bg-gray-50 rounded-lg px-3 py-2 text-sm text-gray-600">
-                {cicloVigente ? `${cicloVigente.Anio} / Ciclo ${cicloVigente.Ciclo}` : "Sin ciclo vigente para esta fecha"}
-              </div>
+              {isEdit ? (
+                <div className="w-full border border-gray-200 bg-gray-50 rounded-lg px-3 py-2 text-sm text-gray-600">
+                  {form.CicloNumero ? `Ciclo ${form.CicloNumero}` : "Sin ciclo"}
+                </div>
+              ) : (
+                <input
+                  type="number"
+                  min="1"
+                  value={form.CicloNumero}
+                  onChange={e => setForm(p => ({ ...p, CicloNumero: e.target.value }))}
+                  placeholder="Número de ciclo"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+                />
+              )}
             </div>
           )}
           <div>
@@ -419,6 +426,7 @@ export default function MateriaPrimaPage() {
                 <tr className="bg-gray-100 text-gray-600 uppercase text-xs tracking-wider">
                   <th className="px-4 py-3 text-left">Lote</th>
                   <th className="px-4 py-3 text-left">Finca</th>
+                  <th className="px-4 py-3 text-center">Ciclo</th>
                   <th className="px-4 py-3 text-left">Clase</th>
                   <th className="px-4 py-3 text-right">Pendiente</th>
                   <th className="px-4 py-3 text-center">Acciones</th>
@@ -430,6 +438,9 @@ export default function MateriaPrimaPage() {
                     className={`cursor-pointer transition ${loteSel?.Lote === l.Lote ? "bg-blue-50" : "hover:bg-gray-50"} ${!l.Activo ? "opacity-50" : ""}`}>
                     <td className="px-4 py-3 font-mono font-bold text-gray-700 whitespace-nowrap">{l.Lote}</td>
                     <td className="px-4 py-3 text-gray-900">{l.NombreFinca}</td>
+                    <td className="px-4 py-3 text-center font-mono text-gray-600">
+                      {l.Ciclo != null ? <span className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded text-xs font-semibold">{l.Anio}/{l.Ciclo}</span> : <span className="text-gray-300">—</span>}
+                    </td>
                     <td className="px-4 py-3 font-mono text-gray-700">{l.Clase}</td>
                     <td className="px-4 py-3 text-right font-semibold text-gray-700">{l.Pendiente.toFixed(2)} {l.UM}</td>
                     <td className="px-4 py-3 text-center" onClick={e => e.stopPropagation()}>
@@ -445,7 +456,7 @@ export default function MateriaPrimaPage() {
                   </tr>
                 ))}
                 {lotesFiltrados.length === 0 && (
-                  <tr><td colSpan={5} className="px-4 py-8 text-center text-gray-400">Sin lotes registrados</td></tr>
+                  <tr><td colSpan={6} className="px-4 py-8 text-center text-gray-400">Sin lotes registrados</td></tr>
                 )}
               </tbody>
             </table>

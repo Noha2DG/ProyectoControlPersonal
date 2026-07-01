@@ -34,8 +34,6 @@ function CicloModal({ item, piscinaId, onSave, onClose }) {
   const [form, setForm] = useState({
     Anio: item?.Anio || new Date().getFullYear(),
     Ciclo: item?.Ciclo || "",
-    FechaInicio: item?.FechaInicio?.slice(0, 10) || "",
-    FechaCierre: item?.FechaCierre?.slice(0, 10) || "",
   });
   const set = f => e => setForm(p => ({ ...p, [f]: e.target.value }));
   const handleSubmit = e => { e.preventDefault(); onSave({ ...form, PiscinaId: piscinaId, CicloId: item?.CicloId }); };
@@ -59,16 +57,6 @@ function CicloModal({ item, piscinaId, onSave, onClose }) {
               <input required type="number" disabled={isEdit} value={form.Ciclo} onChange={set("Ciclo")}
                 className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 disabled:bg-gray-100" />
             </div>
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-gray-500 mb-1">Fecha Inicio</label>
-            <input type="date" value={form.FechaInicio} onChange={set("FechaInicio")}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-gray-500 mb-1">Fecha Cierre</label>
-            <input type="date" value={form.FechaCierre} onChange={set("FechaCierre")}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
           </div>
           <div className="flex justify-end gap-3 pt-1">
             <button type="button" onClick={onClose} className="px-4 py-2 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 transition">Cancelar</button>
@@ -168,8 +156,6 @@ export default function PiscinaCicloPage() {
     fetchCiclos(piscinaSel.PiscinaId);
   };
 
-  const fmtFecha = (f) => f ? f.slice(0, 10) : "—";
-
   return (
     <div className="flex gap-4">
       {/* Columna Piscinas */}
@@ -254,8 +240,6 @@ export default function PiscinaCicloPage() {
                 <tr className="bg-gray-100 text-gray-600 uppercase text-xs tracking-wider">
                   <th className="px-4 py-3 text-left">Año</th>
                   <th className="px-4 py-3 text-left">Ciclo</th>
-                  <th className="px-4 py-3 text-left">Inicio</th>
-                  <th className="px-4 py-3 text-left">Cierre</th>
                   <th className="px-4 py-3 text-center">Estado</th>
                   <th className="px-4 py-3 text-center">Acciones</th>
                 </tr>
@@ -265,8 +249,6 @@ export default function PiscinaCicloPage() {
                   <tr key={c.CicloId} className={`hover:bg-gray-50 transition ${!c.Activo ? "opacity-50" : ""}`}>
                     <td className="px-4 py-3 font-mono text-gray-700">{c.Anio}</td>
                     <td className="px-4 py-3 font-mono text-gray-700">{c.Ciclo}</td>
-                    <td className="px-4 py-3 text-gray-600">{fmtFecha(c.FechaInicio)}</td>
-                    <td className="px-4 py-3 text-gray-600">{fmtFecha(c.FechaCierre)}</td>
                     <td className="px-4 py-3 text-center">
                       <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-semibold ${c.Activo ? "bg-green-100 text-green-700" : "bg-red-100 text-red-600"}`}>
                         {c.Activo ? "Activo" : "Inactivo"}
@@ -285,7 +267,7 @@ export default function PiscinaCicloPage() {
                   </tr>
                 ))}
                 {ciclos.length === 0 && (
-                  <tr><td colSpan={6} className="px-4 py-8 text-center text-gray-400">Sin ciclos para esta piscina</td></tr>
+                  <tr><td colSpan={4} className="px-4 py-8 text-center text-gray-400">Sin ciclos para esta piscina</td></tr>
                 )}
               </tbody>
             </table>
