@@ -101,6 +101,19 @@ export default function TransferenciasPage() {
 
   const areaRef   = useRef(null);
   const carnetRef = useRef(null);
+  const resultadoTimerRef = useRef(null);
+
+  // Ingreso masivo: tras un escaneo exitoso se muestra el nombre ~1s y se limpia
+  // solo el resultado del carnet — el Área Entrada se mantiene para la siguiente persona.
+  const limpiarResultado = useCallback(() => {
+    if (resultadoTimerRef.current) clearTimeout(resultadoTimerRef.current);
+    resultadoTimerRef.current = setTimeout(() => {
+      setEmpleado(null);
+      setAreaSalida(null);
+    }, 1000);
+  }, []);
+
+  useEffect(() => () => { if (resultadoTimerRef.current) clearTimeout(resultadoTimerRef.current); }, []);
 
   // Mantener el foco en el input de Carnet (lector de código de barras),
   // salvo cuando el usuario está escribiendo en Área Entrada o hay un modal abierto.
@@ -218,6 +231,7 @@ export default function TransferenciasPage() {
       areaRef.current?.focus();
       return;
     }
+    if (resultadoTimerRef.current) clearTimeout(resultadoTimerRef.current);
     setCarnetInput("");
     setEscaneando(true);
     setErrorMsg("");
@@ -241,6 +255,7 @@ export default function TransferenciasPage() {
       } else {
         setEmpleado(data.empleado);
         setAreaSalida(data.ultimaArea || null);
+        limpiarResultado();
         await Promise.all([fetchRegistros(), fetchAreas()]);
       }
     } catch {
@@ -252,6 +267,7 @@ export default function TransferenciasPage() {
   };
 
   const limpiarSesion = () => {
+    if (resultadoTimerRef.current) clearTimeout(resultadoTimerRef.current);
     setAreaEntradaInput(""); setAreaEntrada(null);
     setAreaSalida(null); setEmpleado(null);
     setCarnetInput(""); setErrorMsg("");
@@ -370,12 +386,19 @@ export default function TransferenciasPage() {
                 disabled={escaneando}
                 className="w-24 border border-gray-400 rounded px-2 py-1 text-sm font-mono text-center uppercase focus:outline-none focus:ring-2 focus:ring-blue-400 disabled:opacity-50"
               />
-              <div className={`flex-1 border rounded px-3 py-1 text-sm min-h-[32px] flex items-center ${
-                empleado ? "border-blue-300 bg-blue-50 text-blue-900 font-semibold" : "border-gray-300 bg-gray-50 text-gray-400"
+              <div className={`flex-1 border rounded px-3 py-1 text-sm min-h-[32px] flex items-center gap-2 ${
+                empleado ? "border-green-400 bg-green-50 text-green-800 font-semibold" : "border-gray-300 bg-gray-50 text-gray-400"
               }`}>
                 {escaneando
                   ? <span className="flex items-center gap-2 text-gray-500"><div className="w-3 h-3 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />Procesando...</span>
-                  : empleado ? empleado.NombreCompleto : "—"}
+                  : empleado
+                    ? <>
+                        <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
+                        </svg>
+                        {empleado.NombreCompleto}
+                      </>
+                    : "—"}
               </div>
               <span className="w-10 shrink-0" />
             </div>
