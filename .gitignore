@@ -9,3 +9,6 @@ CLAUDE.md
 # Fotos reales de empleados — nunca al historial de git
 backend/uploads/fotos/*
 !backend/uploads/fotos/.gitkeep
+
+# Respaldos de datos de empleados (contienen datos sensibles) — nunca al historial de git
+backend/backup_empleados_*.json
