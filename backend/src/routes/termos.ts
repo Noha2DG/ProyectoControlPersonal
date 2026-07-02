@@ -9,7 +9,6 @@ function formatear(rows: any[]) {
     ...r,
     TermoId: Number(r.TermoId),
     TransaccionId: Number(r.TransaccionId),
-    NumeroTermo: Number(r.NumeroTermo),
     Capacidad: r.Capacidad != null ? Number(r.Capacidad) : null,
     PesoAcumulado: Number(r.PesoAcumulado),
   }));

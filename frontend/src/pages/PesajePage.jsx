@@ -55,7 +55,7 @@ function EditarPesajeModal({ item, onSave, onClose }) {
         <form onSubmit={handleSubmit} className="px-6 py-5 space-y-4">
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1">Número de Termo *</label>
-            <input required type="number" autoFocus value={numeroTermo} onChange={e => setNumeroTermo(e.target.value)}
+            <input required type="text" inputMode="numeric" pattern="[0-9]*" autoFocus value={numeroTermo} onChange={e => setNumeroTermo(e.target.value)}
               className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
           </div>
           <div>
@@ -236,7 +236,7 @@ export default function PesajePage() {
     }
   };
 
-  const termoActual = termos.find(t => t.NumeroTermo === Number(numeroTermo));
+  const termoActual = termos.find(t => t.NumeroTermo === numeroTermo);
   const rendimiento = lote && lote.PesoIngreso > 0 ? (lote.Procesado / lote.PesoIngreso * 100) : 0;
 
   return (
@@ -279,7 +279,7 @@ export default function PesajePage() {
 
         <div className="bg-white border border-gray-300 rounded-xl shadow-sm p-4">
           <span className="text-xs font-semibold text-gray-500 uppercase">Termo</span>
-          <input ref={termoRef} type="number" value={numeroTermo}
+          <input ref={termoRef} type="text" inputMode="numeric" pattern="[0-9]*" value={numeroTermo}
             onChange={e => { setNumeroTermo(e.target.value); setEditandoCapacidad(false); setCapacidadInput(""); }}
             onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); codigoRef.current?.focus(); } }}
             disabled={!transSel} placeholder="Número de termo"

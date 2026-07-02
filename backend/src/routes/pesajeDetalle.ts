@@ -17,7 +17,7 @@ function getOperador(req: Request): string {
   }
 }
 
-async function resolverTermo(tx: any, transaccionId: number, numeroTermo: number, almacenOrigen: string) {
+async function resolverTermo(tx: any, transaccionId: number, numeroTermo: string, almacenOrigen: string) {
   let termos: any[] = await tx.$queryRaw`
     SELECT TermoId FROM Termos WHERE TransaccionId = ${transaccionId} AND NumeroTermo = ${numeroTermo} LIMIT 1
   `;
@@ -73,7 +73,7 @@ async function verificarDisponibilidad(tx: any, lote: string, pesoNuevo: number,
 }
 
 function formatear(rows: any[]) {
-  return rows.map(r => ({ ...r, PesajeId: Number(r.PesajeId), TransaccionId: Number(r.TransaccionId), TermoId: Number(r.TermoId), NumeroTermo: Number(r.NumeroTermo), Peso: Number(r.Peso) }));
+  return rows.map(r => ({ ...r, PesajeId: Number(r.PesajeId), TransaccionId: Number(r.TransaccionId), TermoId: Number(r.TermoId), Peso: Number(r.Peso) }));
 }
 
 const SELECT_PESAJE = `
@@ -141,7 +141,7 @@ router.post("/", requireAuth, requirePerm("destajo", "crear"), async (req: Reque
       const disponibilidad = await verificarDisponibilidad(tx, bloqueo.trans.Lote, Number(Peso));
       if (!disponibilidad.ok) return disponibilidad;
 
-      const termoId = await resolverTermo(tx, Number(TransaccionId), Number(NumeroTermo), bloqueo.trans.AlmacenOrigen);
+      const termoId = await resolverTermo(tx, Number(TransaccionId), String(NumeroTermo).trim(), bloqueo.trans.AlmacenOrigen);
 
       await tx.$executeRaw`
         INSERT INTO PesajeDetalle (TransaccionId, TermoId, Codigo, Peso, RegistradoPor)
@@ -178,7 +178,7 @@ router.put("/:id", requireAuth, requirePerm("destajo", "editar"), async (req: Re
       const disponibilidad = await verificarDisponibilidad(tx, bloqueo.trans.Lote, Number(Peso), id);
       if (!disponibilidad.ok) return disponibilidad;
 
-      const termoId = await resolverTermo(tx, transaccionId, Number(NumeroTermo), bloqueo.trans.AlmacenOrigen);
+      const termoId = await resolverTermo(tx, transaccionId, String(NumeroTermo).trim(), bloqueo.trans.AlmacenOrigen);
 
       await tx.$executeRaw`UPDATE PesajeDetalle SET TermoId = ${Number(termoId)}, Peso = ${Number(Peso)} WHERE PesajeId = ${id}`;
       return { ok: true };

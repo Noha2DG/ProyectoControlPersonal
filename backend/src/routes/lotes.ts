@@ -65,6 +65,7 @@ function formatear(rows: any[]) {
 
 const SELECT_LOTES = `
   SELECT l.Lote, l.CicloId, l.PiscinaId, l.Clase, c.Descripcion AS DescripcionClase,
+         l.TallaReferencia, t.Descripcion AS DescripcionTallaReferencia,
          l.Fecha, l.PesoIngreso, l.UM, l.AlmacenCodigo, l.Activo, l.RegistradoPor,
          f.Codigo AS CodigoFinca, f.Descripcion AS NombreFinca, p.Nombre AS NombrePiscina,
          ci.Anio, ci.Ciclo,
@@ -76,6 +77,7 @@ const SELECT_LOTES = `
   JOIN Piscina p ON l.PiscinaId = p.PiscinaId
   JOIN Finca f ON p.CodigoFinca = f.Codigo
   LEFT JOIN Ciclo ci ON l.CicloId = ci.CicloId
+  LEFT JOIN Tallas t ON l.TallaReferencia = t.Codigo
 `;
 
 // GET /api/lotes?activo=1&fecha=YYYY-MM-DD
@@ -98,14 +100,14 @@ router.get("/", requireAuth, requirePerm("destajo", "ver"), async (req: Request,
   }
 });
 
-// POST /api/lotes  { PiscinaId, CicloNumero?, Clase, Fecha, PesoIngreso, UM, AlmacenCodigo }
+// POST /api/lotes  { PiscinaId, CicloNumero?, Clase, TallaReferencia?, Fecha, PesoIngreso, UM }
 // El código de Lote se genera automáticamente: AñoLetra+DíaSemana+Semana - Piscina - secuencial del día.
 // CicloNumero es el número de ciclo (ej. 6). Si no existe para esa piscina+año, se crea automáticamente.
 router.post("/", requireAuth, requirePerm("destajo", "crear"), async (req: Request, res: Response) => {
   try {
-    const { PiscinaId, CicloNumero, Clase, Fecha, PesoIngreso, UM, AlmacenCodigo } = req.body;
-    if (!PiscinaId || !Clase || !Fecha || !PesoIngreso || !AlmacenCodigo) {
-      res.status(400).json({ error: "Piscina, Clase, Fecha, Peso de ingreso y Almacén son requeridos" });
+    const { PiscinaId, CicloNumero, Clase, TallaReferencia, Fecha, PesoIngreso, UM } = req.body;
+    if (!PiscinaId || !Clase || !Fecha || !PesoIngreso) {
+      res.status(400).json({ error: "Piscina, Clase, Fecha y Peso de ingreso son requeridos" });
       return;
     }
     const cicloNum = CicloNumero ? Number(CicloNumero) : undefined;
@@ -129,21 +131,21 @@ router.post("/", requireAuth, requirePerm("destajo", "crear"), async (req: Reque
 
     const operador = getOperador(req);
     await prisma.$executeRaw`
-      INSERT INTO Lotes (Lote, CicloId, PiscinaId, Clase, Fecha, PesoIngreso, UM, AlmacenCodigo, RegistradoPor)
-      VALUES (${lote}, ${resolvedCicloId}, ${Number(PiscinaId)}, ${Clase}, ${Fecha}, ${Number(PesoIngreso)}, ${UM || "KG"}, ${AlmacenCodigo}, ${operador})
+      INSERT INTO Lotes (Lote, CicloId, PiscinaId, Clase, TallaReferencia, Fecha, PesoIngreso, UM, RegistradoPor)
+      VALUES (${lote}, ${resolvedCicloId}, ${Number(PiscinaId)}, ${Clase}, ${TallaReferencia ? Number(TallaReferencia) : null}, ${Fecha}, ${Number(PesoIngreso)}, ${UM || "KG"}, ${operador})
     `;
     res.status(201).json({ ok: true, Lote: lote });
   } catch (err: any) {
     if (err.message?.includes("Duplicate")) res.status(400).json({ error: "Ya existe un lote para esta piscina con ese ciclo en esta fecha" });
-    else if (err.message?.includes("foreign key")) res.status(400).json({ error: "Piscina, Clase o Almacén no válidos" });
+    else if (err.message?.includes("foreign key")) res.status(400).json({ error: "Piscina, Clase o Talla no válidos" });
     else res.status(500).json({ error: err.message });
   }
 });
 
-// PUT /api/lotes/:lote  { PesoIngreso, Fecha, AlmacenCodigo, Activo }
+// PUT /api/lotes/:lote  { PesoIngreso, Fecha, TallaReferencia?, Activo }
 router.put("/:lote", requireAuth, requirePerm("destajo", "editar"), async (req: Request, res: Response) => {
   try {
-    const { PesoIngreso, Fecha, AlmacenCodigo, Activo } = req.body;
+    const { PesoIngreso, Fecha, TallaReferencia, Activo } = req.body;
     const lote = req.params.lote;
 
     // No se puede dejar el peso de ingreso por debajo de lo que ese lote ya tiene procesado —
@@ -161,7 +163,7 @@ router.put("/:lote", requireAuth, requirePerm("destajo", "editar"), async (req: 
 
     const activo = Activo === false || Activo === 0 ? 0 : 1;
     await prisma.$executeRaw`
-      UPDATE Lotes SET PesoIngreso = ${Number(PesoIngreso)}, Fecha = ${Fecha}, AlmacenCodigo = ${AlmacenCodigo}, Activo = ${activo}
+      UPDATE Lotes SET PesoIngreso = ${Number(PesoIngreso)}, Fecha = ${Fecha}, TallaReferencia = ${TallaReferencia ? Number(TallaReferencia) : null}, Activo = ${activo}
       WHERE Lote = ${lote}
     `;
     res.json({ ok: true });

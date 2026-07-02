@@ -78,38 +78,43 @@ export function exportarMovimientos(registros, fecha) {
   XLSX.writeFile(wb, `MovimientosPersonal_${fecha}.xlsx`);
 }
 
-export function exportarReporteProduccion(porLote, porTalla, desde, hasta) {
-  const lotes = porLote.map(l => ({
-    "Lote":            l.Lote,
-    "Finca":           l.NombreFinca,
-    "Clase MP":        l.Clase,
-    "Descripción MP":  l.DescripcionClase,
-    "Fecha Ingreso":   l.Fecha?.slice(0, 10),
-    "Peso Ingreso":    l.PesoIngreso,
-    "UM":              l.UM,
-    "Procesado":       +l.Procesado.toFixed(2),
-    "Pendiente":       +l.Pendiente.toFixed(2),
-    "Rendimiento %":   +l.Rendimiento.toFixed(1),
-    "Transacciones":   l.NumTransacciones,
-  }));
-
-  const tallas = porTalla.map(t => ({
-    "Talla":         t.Talla,
-    "Descripción":   t.DescripcionTalla,
-    "Procesado":     +t.Procesado.toFixed(2),
-    "Pesajes":       t.NumPesajes,
+export function exportarReporteProduccion(porTermo, desde, hasta) {
+  const termos = porTermo.map(t => ({
+    "Termo":          t.NumeroTermo,
+    "Lote":           t.Lote,
+    "Talla":          t.Talla,
+    "Descripción Talla": t.DescripcionTalla,
+    "Proceso":        t.DescripcionProceso,
+    "Fecha Proceso":  t.FechaProduccion?.slice(0, 10),
+    "Kg Procesados":  +t.Procesado.toFixed(2),
   }));
 
   const wb = XLSX.utils.book_new();
-  const wsLotes = XLSX.utils.json_to_sheet(lotes);
-  autoWidth(wsLotes, lotes);
-  XLSX.utils.book_append_sheet(wb, wsLotes, "Por Lote");
-
-  const wsTallas = XLSX.utils.json_to_sheet(tallas);
-  autoWidth(wsTallas, tallas);
-  XLSX.utils.book_append_sheet(wb, wsTallas, "Por Talla");
+  const wsTermos = XLSX.utils.json_to_sheet(termos);
+  autoWidth(wsTermos, termos);
+  XLSX.utils.book_append_sheet(wb, wsTermos, "Por Termo");
 
   XLSX.writeFile(wb, `ReporteProduccion_${desde}_a_${hasta}.xlsx`);
+}
+
+export function exportarPesajesPorPersona(porPersona, desde, hasta) {
+  const personas = porPersona.map(p => ({
+    "Id Empleado":  p.IdEmpleado,
+    "Nombre":       p.Nombre,
+    "Fecha":        p.FechaHora?.slice(0, 10),
+    "Hora":         p.FechaHora?.slice(11, 16),
+    "Producto":     p.Producto,
+    "Talla":        p.Talla,
+    "Descripción Talla": p.DescripcionTalla,
+    "Kilos":        +p.Kilos.toFixed(2),
+  }));
+
+  const wb = XLSX.utils.book_new();
+  const wsPersonas = XLSX.utils.json_to_sheet(personas);
+  autoWidth(wsPersonas, personas);
+  XLSX.utils.book_append_sheet(wb, wsPersonas, "Pesajes por Persona");
+
+  XLSX.writeFile(wb, `PesajesPorPersona_${desde}_a_${hasta}.xlsx`);
 }
 
 function autoWidth(ws, data) {

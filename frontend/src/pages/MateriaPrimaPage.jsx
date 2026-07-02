@@ -40,17 +40,17 @@ function ComboBuscable({ options, value, onChange, placeholder, required, disabl
   );
 }
 
-function LoteModal({ item, fincas, clases, almacenes, onSave, onClose }) {
+function LoteModal({ item, fincas, clases, tallas, onSave, onClose }) {
   const isEdit = !!item;
   const [form, setForm] = useState({
     CodigoFinca: item?.CodigoFinca || (fincas[0]?.Codigo ?? ""),
     PiscinaId: item?.PiscinaId || "",
     CicloNumero: item?.Ciclo ? String(item.Ciclo) : "",
     Clase: item?.Clase || "",
+    TallaReferencia: item?.TallaReferencia ? String(item.TallaReferencia) : "",
     Fecha: item?.Fecha?.slice(0, 10) || hoy(),
     PesoIngreso: item?.PesoIngreso ?? "",
-    UM: item?.UM || "KG",
-    AlmacenCodigo: item?.AlmacenCodigo || (almacenes[0]?.Codigo ?? ""),
+    UM: "KG",
   });
   const [piscinas, setPiscinas] = useState([]);
   const [ultimoCiclo, setUltimoCiclo] = useState(null);
@@ -161,6 +161,14 @@ function LoteModal({ item, fincas, clases, almacenes, onSave, onClose }) {
               placeholder="Buscar clase..."
               options={clases.map(c => ({ value: c.Clase, label: `${c.Clase} — ${c.Descripcion}` }))} />
           </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Talla de Referencia</label>
+            <select value={form.TallaReferencia} onChange={set("TallaReferencia")}
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400">
+              <option value="">Seleccione...</option>
+              {tallas.map(t => <option key={t.Codigo} value={t.Codigo}>{t.Codigo} — {t.Descripcion}</option>)}
+            </select>
+          </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1">Fecha de Ingreso</label>
@@ -170,25 +178,15 @@ function LoteModal({ item, fincas, clases, almacenes, onSave, onClose }) {
             </div>
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1">UM</label>
-              <select value={form.UM} onChange={set("UM")}
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400">
-                <option value="KG">KG</option>
-                <option value="LB">LB</option>
-              </select>
+              <div className="w-full border border-gray-200 bg-gray-50 rounded-lg px-3 py-2 text-sm text-gray-600">
+                KG
+              </div>
             </div>
           </div>
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1">Peso de Ingreso *</label>
             <input required type="number" step="0.01" value={form.PesoIngreso} onChange={set("PesoIngreso")}
               className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-gray-500 mb-1">Almacén *</label>
-            <select required value={form.AlmacenCodigo} onChange={set("AlmacenCodigo")}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400">
-              <option value="">Seleccione...</option>
-              {almacenes.map(a => <option key={a.Codigo} value={a.Codigo}>{a.Codigo} — {a.Descripcion}</option>)}
-            </select>
           </div>
           <div className="flex justify-end gap-3 pt-1">
             <button type="button" onClick={onClose} className="px-4 py-2 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 transition">Cancelar</button>
@@ -420,30 +418,32 @@ export default function MateriaPrimaPage() {
         {loading ? (
           <div className="flex justify-center py-10"><div className="w-6 h-6 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" /></div>
         ) : (
-          <div className="bg-white rounded-xl shadow overflow-hidden max-h-[600px] overflow-y-auto">
+          <div className="bg-white rounded-xl shadow overflow-x-auto max-h-[600px] overflow-y-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-gray-100 text-gray-600 uppercase text-xs tracking-wider">
-                  <th className="px-4 py-3 text-left">Lote</th>
-                  <th className="px-4 py-3 text-left">Finca</th>
-                  <th className="px-4 py-3 text-center">Ciclo</th>
-                  <th className="px-4 py-3 text-left">Clase</th>
-                  <th className="px-4 py-3 text-right">Pendiente</th>
-                  <th className="px-4 py-3 text-center">Acciones</th>
+                  <th className="px-3 py-3 text-left whitespace-nowrap">Lote</th>
+                  <th className="px-3 py-3 text-left whitespace-nowrap">Finca</th>
+                  <th className="px-3 py-3 text-center whitespace-nowrap">Ciclo</th>
+                  <th className="px-3 py-3 text-left whitespace-nowrap">Clase</th>
+                  <th className="px-3 py-3 text-left whitespace-nowrap">Talla</th>
+                  <th className="px-3 py-3 text-right whitespace-nowrap">Peso de Ingreso</th>
+                  <th className="px-3 py-3 text-center whitespace-nowrap">Acciones</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {lotesFiltrados.map(l => (
                   <tr key={l.Lote} onClick={() => seleccionarLote(l)}
                     className={`cursor-pointer transition ${loteSel?.Lote === l.Lote ? "bg-blue-50" : "hover:bg-gray-50"} ${!l.Activo ? "opacity-50" : ""}`}>
-                    <td className="px-4 py-3 font-mono font-bold text-gray-700 whitespace-nowrap">{l.Lote}</td>
-                    <td className="px-4 py-3 text-gray-900">{l.NombreFinca}</td>
-                    <td className="px-4 py-3 text-center font-mono text-gray-600">
+                    <td className="px-3 py-3 font-mono font-bold text-gray-700 whitespace-nowrap">{l.Lote}</td>
+                    <td className="px-3 py-3 text-gray-900 whitespace-nowrap">{l.NombreFinca}</td>
+                    <td className="px-3 py-3 text-center font-mono text-gray-600 whitespace-nowrap">
                       {l.Ciclo != null ? <span className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded text-xs font-semibold">{l.Anio}/{l.Ciclo}</span> : <span className="text-gray-300">—</span>}
                     </td>
-                    <td className="px-4 py-3 font-mono text-gray-700">{l.Clase}</td>
-                    <td className="px-4 py-3 text-right font-semibold text-gray-700">{l.Pendiente.toFixed(2)} {l.UM}</td>
-                    <td className="px-4 py-3 text-center" onClick={e => e.stopPropagation()}>
+                    <td className="px-3 py-3 font-mono text-gray-700 whitespace-nowrap">{l.Clase}</td>
+                    <td className="px-3 py-3 text-gray-700 whitespace-nowrap">{l.DescripcionTallaReferencia || <span className="text-gray-300">—</span>}</td>
+                    <td className="px-3 py-3 text-right font-semibold text-gray-700 whitespace-nowrap">{Math.round(l.PesoIngreso)} {l.UM}</td>
+                    <td className="px-3 py-3 text-center whitespace-nowrap" onClick={e => e.stopPropagation()}>
                       <div className="flex justify-center gap-2">
                         <button onClick={() => setModalLote({ open: true, item: l })}
                           className="text-blue-600 hover:text-blue-800 text-xs font-medium px-2 py-1 rounded hover:bg-blue-50 transition">Editar</button>
@@ -456,7 +456,7 @@ export default function MateriaPrimaPage() {
                   </tr>
                 ))}
                 {lotesFiltrados.length === 0 && (
-                  <tr><td colSpan={6} className="px-4 py-8 text-center text-gray-400">Sin lotes registrados</td></tr>
+                  <tr><td colSpan={7} className="px-4 py-8 text-center text-gray-400">Sin lotes registrados</td></tr>
                 )}
               </tbody>
             </table>
@@ -502,29 +502,27 @@ export default function MateriaPrimaPage() {
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="bg-gray-100 text-gray-600 uppercase text-xs tracking-wider">
-                      <th className="px-3 py-3 text-left">Proceso</th>
-                      <th className="px-3 py-3 text-left">PT</th>
-                      <th className="px-3 py-3 text-left">Talla</th>
-                      <th className="px-3 py-3 text-center">F. Producción</th>
-                      <th className="px-3 py-3 text-right">Procesado</th>
-                      <th className="px-3 py-3 text-center">Estado</th>
-                      <th className="px-3 py-3 text-center">Acciones</th>
+                      <th className="px-3 py-3 text-left whitespace-nowrap">Proceso</th>
+                      <th className="px-3 py-3 text-left whitespace-nowrap">Talla</th>
+                      <th className="px-3 py-3 text-center whitespace-nowrap">F. Producción</th>
+                      <th className="px-3 py-3 text-right whitespace-nowrap">Procesado</th>
+                      <th className="px-3 py-3 text-center whitespace-nowrap">Estado</th>
+                      <th className="px-3 py-3 text-center whitespace-nowrap">Acciones</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
                     {transacciones.map(t => (
                       <tr key={t.TransaccionId} className="hover:bg-gray-50 transition">
-                        <td className="px-3 py-3 text-gray-700">{t.DescripcionProceso}</td>
-                        <td className="px-3 py-3 font-mono text-gray-700">{t.ClasePT}</td>
-                        <td className="px-3 py-3 text-gray-700">{t.DescripcionTalla}</td>
-                        <td className="px-3 py-3 text-center text-gray-600">{t.FechaProduccion?.slice(0, 10)}</td>
-                        <td className="px-3 py-3 text-right">{t.Procesado.toFixed(2)}</td>
-                        <td className="px-3 py-3 text-center">
+                        <td className="px-3 py-3 text-gray-700 whitespace-nowrap">{t.DescripcionProceso}</td>
+                        <td className="px-3 py-3 text-gray-700 whitespace-nowrap">{t.DescripcionTalla}</td>
+                        <td className="px-3 py-3 text-center text-gray-600 whitespace-nowrap">{t.FechaProduccion?.slice(0, 10)}</td>
+                        <td className="px-3 py-3 text-right whitespace-nowrap">{t.Procesado.toFixed(2)}</td>
+                        <td className="px-3 py-3 text-center whitespace-nowrap">
                           <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-semibold ${t.Estado === "Abierta" ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-600"}`}>
                             {t.Estado}
                           </span>
                         </td>
-                        <td className="px-3 py-3 text-center">
+                        <td className="px-3 py-3 text-center whitespace-nowrap">
                           <div className="flex justify-center gap-2">
                             {t.Estado === "Abierta" && (
                               <button onClick={() => handleCerrarTransaccion(t)}
@@ -539,7 +537,7 @@ export default function MateriaPrimaPage() {
                       </tr>
                     ))}
                     {transacciones.length === 0 && (
-                      <tr><td colSpan={7} className="px-4 py-8 text-center text-gray-400">Sin transacciones para este lote</td></tr>
+                      <tr><td colSpan={6} className="px-4 py-8 text-center text-gray-400">Sin transacciones para este lote</td></tr>
                     )}
                   </tbody>
                 </table>
@@ -550,7 +548,7 @@ export default function MateriaPrimaPage() {
       </div>
 
       {modalLote.open && (
-        <LoteModal item={modalLote.item} fincas={fincas} clases={clases} almacenes={almacenes}
+        <LoteModal item={modalLote.item} fincas={fincas} clases={clases} tallas={tallas}
           onSave={handleSaveLote} onClose={() => setModalLote({ open: false, item: null })} />
       )}
       {modalTrans && loteSel && (

@@ -29,11 +29,14 @@ const SELECT_TRANS = `
   SELECT tp.TransaccionId, tp.Lote, tp.Proceso, pr.Descripcion AS DescripcionProceso,
          tp.ClasePT, cl.Descripcion AS DescripcionClasePT, tp.Talla, ta.Descripcion AS DescripcionTalla,
          tp.AlmacenOrigen, tp.AlmacenDestino, tp.Estado, tp.FechaHora, tp.FechaProduccion, tp.RegistradoPor,
+         p.Nombre AS NombrePiscina,
          COALESCE((SELECT SUM(pd.Peso) FROM PesajeDetalle pd WHERE pd.TransaccionId = tp.TransaccionId), 0) AS Procesado
   FROM TransaccionesProduccion tp
   JOIN Procesos pr ON tp.Proceso = pr.Proceso
   JOIN Clase cl ON tp.ClasePT = cl.Clase
   JOIN Tallas ta ON tp.Talla = ta.Codigo
+  JOIN Lotes l ON tp.Lote = l.Lote
+  JOIN Piscina p ON l.PiscinaId = p.PiscinaId
 `;
 
 // GET /api/transacciones-produccion?lote=XXX | ?estado=Abierta
@@ -47,7 +50,7 @@ router.get("/", requireAuth, requirePerm("destajo", "ver"), async (req: Request,
     if (lote) {
       rows = await prisma.$queryRawUnsafe(`${SELECT_TRANS} WHERE tp.Lote = ? AND tp.Estado = 'Abierta' ORDER BY tp.TransaccionId DESC`, lote);
     } else if (estado) {
-      rows = await prisma.$queryRawUnsafe(`${SELECT_TRANS} WHERE tp.Estado = ? ORDER BY tp.TransaccionId DESC LIMIT 200`, estado);
+      rows = await prisma.$queryRawUnsafe(`${SELECT_TRANS} WHERE tp.Estado = ? ORDER BY p.Nombre ASC, tp.TransaccionId DESC LIMIT 200`, estado);
     } else {
       rows = await prisma.$queryRawUnsafe(`${SELECT_TRANS} ORDER BY tp.TransaccionId DESC LIMIT 200`);
     }
