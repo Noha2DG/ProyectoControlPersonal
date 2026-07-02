@@ -17,8 +17,8 @@ function getOperador(req: Request): string {
   }
 }
 
-// POST /api/transferencias  { Codigo, CodigoArea }  (terminal de kiosco — requiere sesión)
-router.post("/", requireAuth, async (req: Request, res: Response) => {
+// POST /api/transferencias  { Codigo, CodigoArea }  (terminal de kiosco — sin sesión, dispositivo físico fijo)
+router.post("/", async (req: Request, res: Response) => {
   const { Codigo, CodigoArea } = req.body;
   if (!Codigo || !CodigoArea) {
     res.status(400).json({ error: "Código y CodigoArea son requeridos" }); return;

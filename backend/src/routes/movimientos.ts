@@ -19,8 +19,8 @@ function getOperador(req: Request): string {
   }
 }
 
-// POST /api/movimientos/registrar  { Codigo }  (terminal de kiosco — requiere sesión)
-router.post("/registrar", requireAuth, async (req: Request, res: Response) => {
+// POST /api/movimientos/registrar  { Codigo }  (terminal de kiosco — sin sesión, dispositivo físico fijo)
+router.post("/registrar", async (req: Request, res: Response) => {
   const { Codigo } = req.body;
   if (!Codigo) { res.status(400).json({ error: "Código requerido" }); return; }
 
