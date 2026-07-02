@@ -24,24 +24,12 @@ export default function KioscoPage() {
   const [procesando, setProcesando] = useState(false);
   const inputRef = useRef(null);
   const timerRef = useRef(null);
-  const tapCountRef = useRef(0);
-  const tapTimerRef = useRef(null);
 
-  // Salida oculta: 5 toques rápidos en la esquina cierran la sesión del kiosco
-  const handleSecretTap = (e) => {
+  const cerrarSesion = (e) => {
     e.stopPropagation();
-    tapCountRef.current += 1;
-    if (tapTimerRef.current) clearTimeout(tapTimerRef.current);
-    if (tapCountRef.current >= 5) {
-      tapCountRef.current = 0;
-      logout();
-      window.location.hash = "";
-      return;
-    }
-    tapTimerRef.current = setTimeout(() => { tapCountRef.current = 0; }, 2000);
+    logout();
+    window.location.hash = "";
   };
-
-  useEffect(() => () => { if (tapTimerRef.current) clearTimeout(tapTimerRef.current); }, []);
 
   useEffect(() => {
     const id = setInterval(() => { setHora(reloj()); setFecha(fechaLarga()); }, 1000);
@@ -123,7 +111,15 @@ export default function KioscoPage() {
       onClick={handlePageClick}
     >
 
-      <div onClick={handleSecretTap} className="fixed top-0 right-0 w-16 h-16 z-50" aria-hidden="true" />
+      <button
+        onClick={cerrarSesion}
+        title="Cerrar sesión"
+        className="fixed top-3 right-3 z-50 p-2.5 rounded-full bg-white/10 hover:bg-white/20 text-gray-400 hover:text-white transition"
+      >
+        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+        </svg>
+      </button>
 
       <div className="w-full max-w-md mb-5 text-center">
         <h1 className="text-white text-2xl font-bold tracking-wide">Entrada / Salida General</h1>
