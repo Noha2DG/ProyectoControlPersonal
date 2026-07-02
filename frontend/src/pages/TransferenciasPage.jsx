@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import { useAuth } from "../context/AuthContext.jsx";
 
 const DIAS  = ["Domingo","Lunes","Martes","Miércoles","Jueves","Viernes","Sábado"];
 const MESES = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
@@ -76,6 +77,7 @@ function AreaSelectorModal({ areas, onSelect, onClose }) {
 
 /* ── Página principal ──────────────────────────────────────────────── */
 export default function TransferenciasPage() {
+  const { logout } = useAuth();
   const [fecha, setFecha]         = useState(fechaLarga());
   const [areas, setAreas]         = useState([]);
   const [registros, setRegistros] = useState([]);
@@ -285,13 +287,13 @@ export default function TransferenciasPage() {
             className="bg-gray-100 border border-gray-400 rounded px-3 py-1.5 text-xs font-semibold text-gray-700 hover:bg-white transition">
             Limpiar
           </button>
-          <a href="#/"
+          <button onClick={() => { logout(); window.location.hash = ""; }}
             className="bg-red-600 text-white border border-red-700 rounded px-3 py-1.5 text-xs font-semibold hover:bg-red-700 transition flex items-center gap-1">
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
             </svg>
-            Salir
-          </a>
+            Cerrar sesión
+          </button>
         </div>
       </div>
 
