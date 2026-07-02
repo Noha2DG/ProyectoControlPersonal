@@ -30,7 +30,10 @@ router.post("/login", async (req: Request, res: Response) => {
     }
     const permisos = user.permisos ? JSON.parse(user.permisos) : null;
     const payload = { id: user.id, username: user.username, nombre: user.nombre, rol: user.rol, permisos };
-    const token = jwt.sign(payload, SECRET, { expiresIn: "8h" });
+    // El kiosco es un dispositivo físico que permanece logueado sin interacción humana;
+    // un token de 8h lo deja "Token inválido o expirado" a medio turno.
+    const expiresIn = user.rol === "kiosco" ? "30d" : "8h";
+    const token = jwt.sign(payload, SECRET, { expiresIn });
     res.json({ token, user: payload });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
