@@ -205,6 +205,7 @@ export default function ReporteProduccionPage() {
                     <th className="px-2 py-1.5 text-left whitespace-nowrap">Área</th>
                     <th className="px-2 py-1.5 text-center whitespace-nowrap">Fecha</th>
                     <th className="px-2 py-1.5 text-center whitespace-nowrap">Hora</th>
+                    <th className="px-2 py-1.5 text-left whitespace-nowrap">Lote</th>
                     <th className="px-2 py-1.5 text-left whitespace-nowrap">Producto</th>
                     <th className="px-2 py-1.5 text-left whitespace-nowrap">Talla</th>
                     <th className="px-2 py-1.5 text-right whitespace-nowrap">Kilos</th>
@@ -218,13 +219,14 @@ export default function ReporteProduccionPage() {
                       <td className="px-2 py-1.5 text-gray-700 whitespace-nowrap">{p.Area || <span className="text-gray-300">—</span>}</td>
                       <td className="px-2 py-1.5 text-center text-gray-600 whitespace-nowrap">{p.FechaHora?.slice(0, 10)}</td>
                       <td className="px-2 py-1.5 text-center text-gray-600 whitespace-nowrap">{p.FechaHora?.slice(11, 16)}</td>
+                      <td className="px-2 py-1.5 font-mono text-gray-700 whitespace-nowrap">{p.Lote}</td>
                       <td className="px-2 py-1.5 text-gray-700 whitespace-nowrap">{p.Producto}</td>
                       <td className="px-2 py-1.5 text-gray-700 whitespace-nowrap">{p.Talla} — {p.DescripcionTalla}</td>
                       <td className="px-2 py-1.5 text-right font-semibold text-blue-700 whitespace-nowrap">{p.Kilos.toFixed(2)}</td>
                     </tr>
                   ))}
                   {(reporte.porPersona ?? []).length === 0 && (
-                    <tr><td colSpan={8} className="px-3 py-6 text-center text-gray-400">Sin datos en este rango de fechas</td></tr>
+                    <tr><td colSpan={9} className="px-3 py-6 text-center text-gray-400">Sin datos en este rango de fechas</td></tr>
                   )}
                 </tbody>
               </table>

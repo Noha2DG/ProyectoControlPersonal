@@ -104,6 +104,7 @@ export function exportarPesajesPorPersona(porPersona, desde, hasta) {
     "Área":         p.Area ?? "",
     "Fecha":        p.FechaHora?.slice(0, 10),
     "Hora":         p.FechaHora?.slice(11, 16),
+    "Lote":         p.Lote,
     "Producto":     p.Producto,
     "Talla":        p.Talla,
     "Descripción Talla": p.DescripcionTalla,
