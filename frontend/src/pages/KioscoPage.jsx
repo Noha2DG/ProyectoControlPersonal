@@ -185,7 +185,7 @@ export default function KioscoPage() {
           ) : (
             <div className="text-center">
               <p className="text-4xl font-mono font-bold text-gray-800">{hora}</p>
-              <p className="text-gray-400 text-sm mt-1">Pasa su tarjeta por el lector</p>
+              <p className="text-gray-400 text-sm mt-1">Pasa tu tarjeta por el lector</p>
             </div>
           )}
 
