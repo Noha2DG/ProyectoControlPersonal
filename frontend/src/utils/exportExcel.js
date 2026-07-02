@@ -101,6 +101,7 @@ export function exportarPesajesPorPersona(porPersona, desde, hasta) {
   const personas = porPersona.map(p => ({
     "Id Empleado":  p.IdEmpleado,
     "Nombre":       p.Nombre,
+    "Área":         p.Area ?? "",
     "Fecha":        p.FechaHora?.slice(0, 10),
     "Hora":         p.FechaHora?.slice(11, 16),
     "Producto":     p.Producto,

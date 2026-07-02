@@ -1,1 +1,9 @@
 @import "tailwindcss";
+
+/* Al imprimir, solo se muestra lo que se monta en #print-root (ver PlanificacionPage.jsx) —
+   evita el bug de position:fixed repitiéndose en cada hoja y de contenido oculto que sigue
+   contando para la paginación. */
+@media print {
+  #root { display: none !important; }
+  @page { size: A4; margin: 14mm 13mm; }
+}

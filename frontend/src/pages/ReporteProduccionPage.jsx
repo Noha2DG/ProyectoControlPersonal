@@ -202,6 +202,7 @@ export default function ReporteProduccionPage() {
                   <tr className="bg-gray-100 text-gray-600 uppercase text-[10px] tracking-wider">
                     <th className="px-2 py-1.5 text-left whitespace-nowrap">Id Empleado</th>
                     <th className="px-2 py-1.5 text-left whitespace-nowrap">Nombre</th>
+                    <th className="px-2 py-1.5 text-left whitespace-nowrap">Área</th>
                     <th className="px-2 py-1.5 text-center whitespace-nowrap">Fecha</th>
                     <th className="px-2 py-1.5 text-center whitespace-nowrap">Hora</th>
                     <th className="px-2 py-1.5 text-left whitespace-nowrap">Producto</th>
@@ -214,6 +215,7 @@ export default function ReporteProduccionPage() {
                     <tr key={i} className="hover:bg-gray-50 transition">
                       <td className="px-2 py-1.5 font-mono text-gray-700 whitespace-nowrap">{p.IdEmpleado}</td>
                       <td className="px-2 py-1.5 text-gray-700 whitespace-nowrap">{p.Nombre}</td>
+                      <td className="px-2 py-1.5 text-gray-700 whitespace-nowrap">{p.Area || <span className="text-gray-300">—</span>}</td>
                       <td className="px-2 py-1.5 text-center text-gray-600 whitespace-nowrap">{p.FechaHora?.slice(0, 10)}</td>
                       <td className="px-2 py-1.5 text-center text-gray-600 whitespace-nowrap">{p.FechaHora?.slice(11, 16)}</td>
                       <td className="px-2 py-1.5 text-gray-700 whitespace-nowrap">{p.Producto}</td>
@@ -222,7 +224,7 @@ export default function ReporteProduccionPage() {
                     </tr>
                   ))}
                   {(reporte.porPersona ?? []).length === 0 && (
-                    <tr><td colSpan={7} className="px-3 py-6 text-center text-gray-400">Sin datos en este rango de fechas</td></tr>
+                    <tr><td colSpan={8} className="px-3 py-6 text-center text-gray-400">Sin datos en este rango de fechas</td></tr>
                   )}
                 </tbody>
               </table>

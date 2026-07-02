@@ -66,6 +66,12 @@ router.get("/produccion", requireAuth, requirePerm("destajo", "ver"), async (req
     const porPersona: any[] = await prisma.$queryRawUnsafe(`
       SELECT e.Codigo AS IdEmpleado,
              CONCAT_WS(' ', e.PrimerNombre, e.SegundoNombre, e.PrimerApellido, e.SegundoApellido) AS Nombre,
+             (SELECT a.Nombre FROM Transferencias tr
+              JOIN Areas a ON tr.CodigoArea = a.Codigo
+              WHERE tr.Codigo = pd.Codigo
+                AND tr.FechaHora <= pd.FechaHora
+                AND (tr.FechaSalida IS NULL OR tr.FechaSalida >= pd.FechaHora)
+              ORDER BY tr.FechaHora DESC LIMIT 1) AS Area,
              pd.FechaHora, tp.ClasePT, cl.Descripcion AS Producto, tp.Talla, ta.Descripcion AS DescripcionTalla,
              pd.Peso AS Kilos
       FROM PesajeDetalle pd
