@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import { createPortal } from "react-dom";
 import { authHeader } from "../context/AuthContext.jsx";
 import { exportarTransferencias } from "../utils/exportExcel.js";
 
@@ -59,6 +60,9 @@ export default function TransferenciasAdminPage() {
   const hoy = new Date().toLocaleDateString("sv-SE", { timeZone: "America/Guatemala" });
   const [fecha, setFecha]       = useState(hoy);
   const [busqueda, setBusqueda] = useState("");
+  const [areaFiltro, setAreaFiltro] = useState("");
+  const [areaTexto, setAreaTexto] = useState("");
+  const [areaAbierto, setAreaAbierto] = useState(false);
   const [registros, setRegistros] = useState([]);
   const [loading, setLoading]   = useState(false);
   const [editando, setEditando] = useState(null);
@@ -92,11 +96,38 @@ export default function TransferenciasAdminPage() {
     else { const e = await res.json(); alert("Error: " + e.error); }
   };
 
+  const areas = [...new Map(
+    registros.filter(r => r.CodigoArea).map(r => [r.CodigoArea, r.NombreArea])
+  ).entries()].sort((a, b) => a[0].localeCompare(b[0]));
+
+  const areasSugeridas = areas.filter(([codigo, nombre]) => {
+    const q = areaTexto.trim().toLowerCase();
+    if (!q) return true;
+    return codigo.toLowerCase().includes(q) || nombre?.toLowerCase().includes(q);
+  });
+
+  const seleccionarArea = ([codigo, nombre]) => {
+    setAreaFiltro(codigo);
+    setAreaTexto(`${codigo} — ${nombre}`);
+    setAreaAbierto(false);
+  };
+
+  const limpiarArea = () => {
+    setAreaFiltro("");
+    setAreaTexto("");
+  };
+
   const filtrados = registros.filter(r =>
-    !busqueda ||
-    r.NombreCompleto?.toLowerCase().includes(busqueda.toLowerCase()) ||
-    r.Codigo?.toLowerCase().includes(busqueda.toLowerCase())
+    (!busqueda ||
+      r.NombreCompleto?.toLowerCase().includes(busqueda.toLowerCase()) ||
+      r.Codigo?.toLowerCase().includes(busqueda.toLowerCase())) &&
+    (!areaFiltro || r.CodigoArea === areaFiltro)
   );
+  if (areaFiltro) filtrados.sort((a, b) => (b.Minutos ?? 0) - (a.Minutos ?? 0));
+
+  const nombreAreaFiltro = areas.find(([codigo]) => codigo === areaFiltro)?.[1];
+  const fechasUnicas = [...new Set(filtrados.map(r => r.Fecha))];
+  const impresoEn = new Date().toLocaleString("sv-SE", { timeZone: "America/Guatemala", hour12: false }).slice(0, 16);
 
   // Si la búsqueda quedó acotada a un solo empleado, avisar si tiene permisos en el rango filtrado
   const codigosUnicos = [...new Set(filtrados.map(r => r.Codigo))];
@@ -111,6 +142,7 @@ export default function TransferenciasAdminPage() {
   }, [empleadoUnico, fecha]);
 
   return (
+    <>
     <div>
       {/* Filtros */}
       <div className="flex flex-wrap gap-3 items-center mb-4">
@@ -122,19 +154,59 @@ export default function TransferenciasAdminPage() {
         <input type="text" placeholder="Buscar empleado o código..."
           value={busqueda} onChange={e => setBusqueda(e.target.value)}
           className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm w-64 focus:outline-none focus:ring-2 focus:ring-blue-400" />
+        <div className="relative w-64">
+          <input type="text" placeholder="Buscar área por código o nombre..."
+            value={areaTexto}
+            onChange={e => {
+              setAreaTexto(e.target.value);
+              setAreaFiltro("");
+              setAreaAbierto(true);
+            }}
+            onFocus={() => setAreaAbierto(true)}
+            onBlur={() => setTimeout(() => setAreaAbierto(false), 150)}
+            className="w-full border border-gray-300 rounded-lg pl-3 pr-7 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
+          {areaTexto && (
+            <button type="button" onClick={limpiarArea} tabIndex={-1}
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 text-sm">
+              &times;
+            </button>
+          )}
+          {areaAbierto && areasSugeridas.length > 0 && (
+            <ul className="absolute z-10 mt-1 w-full max-h-60 overflow-auto bg-white border border-gray-200 rounded-lg shadow-lg text-sm">
+              {areasSugeridas.map(([codigo, nombre]) => (
+                <li key={codigo}
+                  onMouseDown={() => seleccionarArea([codigo, nombre])}
+                  className="px-3 py-1.5 hover:bg-blue-50 cursor-pointer flex gap-2">
+                  <span className="font-mono font-bold text-blue-700">{codigo}</span>
+                  <span className="text-gray-700">{nombre}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
         <button onClick={fetchData} className="text-blue-600 hover:text-blue-800 text-sm font-medium px-3 py-1.5 rounded-lg hover:bg-blue-50 border border-blue-200 transition">
           Actualizar
         </button>
         <span className="text-sm text-gray-500 ml-auto">{filtrados.length} registro{filtrados.length !== 1 ? "s" : ""}</span>
         {filtrados.length > 0 && (
-          <button
-            onClick={() => exportarTransferencias(filtrados, fecha)}
-            className="flex items-center gap-1.5 bg-green-600 hover:bg-green-700 text-white text-sm font-semibold px-3 py-1.5 rounded-lg transition">
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-            </svg>
-            Exportar Excel
-          </button>
+          <>
+            <button
+              onClick={() => window.print()}
+              className="flex items-center gap-1.5 text-sm font-medium px-3 py-1.5 rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 transition">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6.72 13.829c-.24.03-.48.062-.72.096m.72-.096a42.415 42.415 0 0110.56 0m-10.56 0L6.34 18m10.94-4.171c.24.03.48.062.72.096m-.72-.096L17.66 18m0 0l.229 2.523a1.125 1.125 0 01-1.12 1.227H7.231c-.662 0-1.18-.568-1.12-1.227L6.34 18m11.318 0h1.091A2.25 2.25 0 0021 15.75V9.456c0-1.081-.768-2.015-1.837-2.175a48.055 48.055 0 00-1.913-.247M6.34 18H5.25A2.25 2.25 0 013 15.75V9.456c0-1.081.768-2.015 1.837-2.175a48.041 48.041 0 011.913-.247m10.5 0a48.536 48.536 0 00-10.5 0m10.5 0V3.375c0-.621-.504-1.125-1.125-1.125h-8.25c-.621 0-1.125.504-1.125 1.125v3.659M18 10.5h.008v.008H18V10.5zm-3 0h.008v.008H15V10.5z" />
+              </svg>
+              Imprimir
+            </button>
+            <button
+              onClick={() => exportarTransferencias(filtrados, fecha)}
+              className="flex items-center gap-1.5 bg-green-600 hover:bg-green-700 text-white text-sm font-semibold px-3 py-1.5 rounded-lg transition">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+              </svg>
+              Exportar Excel
+            </button>
+          </>
         )}
       </div>
 
@@ -215,5 +287,72 @@ export default function TransferenciasAdminPage() {
         <EditModal registro={editando} onSave={handleSave} onClose={() => setEditando(null)} />
       )}
     </div>
+
+    {/* Hoja imprimible — se monta en #print-root (fuera de #root) para que solo ella
+        quede en el documento cuando #root se oculta al imprimir (ver index.css) */}
+    {createPortal(
+    <div className="hidden print:block font-sans text-slate-700">
+      <div className="flex items-end justify-between border-b-[3px] border-slate-900 pb-2 mb-2">
+        <div>
+          <p className="text-[10px] font-bold uppercase tracking-widest text-blue-700">EsteroMar · Control de Personal</p>
+          <h1 className="text-xl font-extrabold uppercase text-slate-900 tracking-tight">Transferencias</h1>
+          <p className="text-[10px] text-gray-500 mt-0.5">
+            {fechasUnicas.length === 1
+              ? fechasUnicas[0]?.split("-").reverse().join("/")
+              : `Desde ${fecha.split("-").reverse().join("/")}`}
+            {areaFiltro && <> · Área <span className="font-mono font-bold text-blue-700">{areaFiltro}</span> — {nombreAreaFiltro}</>}
+            {busqueda && <> · «{busqueda}»</>}
+          </p>
+        </div>
+        <div className="text-right">
+          <p className="text-sm font-bold text-slate-900 tabular-nums">{filtrados.length} registro{filtrados.length !== 1 ? "s" : ""}</p>
+          <p className="text-[10px] text-gray-400 font-mono mt-0.5">impreso {impresoEn}</p>
+        </div>
+      </div>
+
+      <table className="print-table w-full border-collapse text-[11px] leading-tight table-fixed">
+        <colgroup>
+          <col className="w-[9%]" /><col className="w-[11%]" /><col className="w-[26%]" />
+          <col className="w-[7%]" /><col className="w-[16%]" /><col className="w-[10%]" />
+          <col className="w-[10%]" /><col className="w-[11%]" />
+        </colgroup>
+        <thead>
+          <tr>
+            <th className="text-left font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Fecha</th>
+            <th className="text-left font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Código</th>
+            <th className="text-left font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Nombre</th>
+            <th className="text-center font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Área</th>
+            <th className="text-left font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Nombre del Área</th>
+            <th className="text-center font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">H. Entrada</th>
+            <th className="text-center font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">H. Salida</th>
+            <th className="text-right font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Duración</th>
+          </tr>
+        </thead>
+        <tbody>
+          {filtrados.map(r => {
+            const abierto = !r.HoraSalida;
+            return (
+              <tr key={r.id} className="border-b border-gray-100">
+                <td className="py-0.5 px-1 text-gray-500 tabular-nums">{r.Fecha?.split("-").reverse().join("/")}</td>
+                <td className="py-0.5 px-1 font-mono font-bold text-blue-700 truncate">{r.Codigo}</td>
+                <td className="py-0.5 px-1 text-slate-800 font-medium truncate">{r.NombreCompleto}</td>
+                <td className="py-0.5 px-1 font-mono font-bold text-slate-500 text-center">{r.CodigoArea}</td>
+                <td className="py-0.5 px-1 text-slate-600 truncate">{r.NombreArea}</td>
+                <td className="py-0.5 px-1 font-mono text-center tabular-nums">{r.HoraEntrada}</td>
+                <td className="py-0.5 px-1 font-mono text-center tabular-nums">
+                  {abierto ? <span className="text-green-700 font-semibold">En curso</span> : r.HoraSalida}
+                </td>
+                <td className={`py-0.5 px-1 text-right font-bold tabular-nums ${abierto ? "text-green-700" : "text-slate-700"}`}>
+                  {formatMin(r.Minutos)}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>,
+    document.getElementById("print-root")
+    )}
+    </>
   );
 }

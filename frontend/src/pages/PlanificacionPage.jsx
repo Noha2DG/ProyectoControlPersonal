@@ -65,7 +65,9 @@ export default function PlanificacionPage() {
     } finally { setGuardando(false); }
   };
 
-  const areasRegulares   = areas.filter(a => !AREAS_LIBRES.includes(a.CodigoArea));
+  const generaPago       = a => a.FormaPago !== "No Genera Paga";
+  const areasConPago     = areas.filter(generaPago);
+  const areasRegulares   = areasConPago.filter(a => !AREAS_LIBRES.includes(a.CodigoArea));
   const totalPlanificado = areasRegulares.reduce((s, a) => s + a.Cantidad, 0);
   const totalOcupado     = areas.reduce((s, a) => s + (a.ocupacion ?? 0), 0);
   const areasActivas     = areasRegulares.filter(a => a.Cantidad > 0).length;
@@ -122,7 +124,7 @@ export default function PlanificacionPage() {
       <div className="grid grid-cols-3 gap-3 mb-4">
         <div className="bg-blue-50 border border-blue-200 rounded-xl px-4 py-3">
           <p className="text-xs text-blue-500 font-medium uppercase tracking-wide">Áreas programadas</p>
-          <p className="text-2xl font-bold text-blue-700 mt-0.5">{areasActivas} <span className="text-sm font-normal text-blue-400">de {areas.length}</span></p>
+          <p className="text-2xl font-bold text-blue-700 mt-0.5">{areasActivas} <span className="text-sm font-normal text-blue-400">de {areasConPago.length}</span></p>
         </div>
         <div className="bg-green-50 border border-green-200 rounded-xl px-4 py-3">
           <p className="text-xs text-green-500 font-medium uppercase tracking-wide">Cupos planificados</p>

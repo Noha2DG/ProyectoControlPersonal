@@ -6,4 +6,7 @@
 @media print {
   #root { display: none !important; }
   @page { size: A4; margin: 14mm 13mm; }
+
+  /* Tablas de impresión (p.ej. Transferencias): evita que una fila quede partida entre hojas */
+  .print-table tr { break-inside: avoid; }
 }
