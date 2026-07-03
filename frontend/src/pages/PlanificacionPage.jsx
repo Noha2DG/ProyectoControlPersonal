@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { authHeader } from "../context/AuthContext.jsx";
+import AsistenciaDiariaModal from "../components/AsistenciaDiariaModal.jsx";
 
 const API = "/api/planificacion";
 const AREAS_LIBRES = ["TT"]; // exentas de planificación, siempre disponibles
@@ -13,6 +14,7 @@ export default function PlanificacionPage() {
   const [guardando, setGuardando] = useState(false);
   const [guardado, setGuardado]   = useState(false);
   const [modalResumen, setModalResumen] = useState(false);
+  const [modalAsistencia, setModalAsistencia] = useState(false);
   const [busqueda, setBusqueda]   = useState("");
 
   const fetchPlan = useCallback(async () => {
@@ -97,6 +99,13 @@ export default function PlanificacionPage() {
           className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm w-64 focus:outline-none focus:ring-2 focus:ring-blue-400" />
 
         <div className="ml-auto flex items-center gap-3">
+          <button onClick={() => setModalAsistencia(true)}
+            className="flex items-center gap-1.5 text-sm px-3 py-1.5 rounded-lg border border-blue-300 text-blue-700 bg-blue-50 hover:bg-blue-100 transition font-medium">
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 012-2h2a2 2 0 012 2v6m-9 0h14a2 2 0 002-2V7.414a1 1 0 00-.293-.707l-3.414-3.414A1 1 0 0015.586 3H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+            </svg>
+            Asistencia diaria
+          </button>
           <button onClick={() => setModalResumen(true)}
             className="flex items-center gap-1.5 text-sm px-3 py-1.5 rounded-lg border border-indigo-300 text-indigo-700 bg-indigo-50 hover:bg-indigo-100 transition font-medium">
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -216,6 +225,15 @@ export default function PlanificacionPage() {
             </tbody>
           </table>
         </div>
+      )}
+
+      {/* Modal asistencia diaria */}
+      {modalAsistencia && (
+        <AsistenciaDiariaModal
+          areas={areas}
+          fecha={fecha}
+          onClose={() => setModalAsistencia(false)}
+        />
       )}
 
       {/* Modal resumen del día */}
