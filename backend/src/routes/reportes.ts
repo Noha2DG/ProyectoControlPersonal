@@ -63,6 +63,35 @@ router.get("/produccion", requireAuth, requirePerm("destajo", "ver"), async (req
       ORDER BY tp.FechaProduccion DESC, tp.Lote DESC, t.NumeroTermo ASC
     `, desde, hasta, ...argsFinca);
 
+    const porLoteTalla: any[] = await prisma.$queryRawUnsafe(`
+      SELECT tp.Lote, tp.Talla, ta.Descripcion AS DescripcionTalla, tp.ClasePT, cl.Descripcion AS DescripcionClasePT,
+             tp.Estado, COALESCE(SUM(pd.Peso), 0) AS Procesado, COUNT(pd.PesajeId) AS NumPesajes
+      FROM TransaccionesProduccion tp
+      JOIN Lotes l ON tp.Lote = l.Lote
+      JOIN Piscina p ON l.PiscinaId = p.PiscinaId
+      JOIN Finca f ON p.CodigoFinca = f.Codigo
+      JOIN Tallas ta ON tp.Talla = ta.Codigo
+      JOIN Clase cl ON tp.ClasePT = cl.Clase
+      LEFT JOIN PesajeDetalle pd ON pd.TransaccionId = tp.TransaccionId
+      WHERE l.Fecha BETWEEN ? AND ? ${filtroFinca}
+      GROUP BY tp.TransaccionId
+      ORDER BY tp.Lote DESC
+    `, desde, hasta, ...argsFinca);
+
+    const porTalla: any[] = await prisma.$queryRawUnsafe(`
+      SELECT tp.Talla, ta.Descripcion AS DescripcionTalla,
+             COALESCE(SUM(pd.Peso), 0) AS Procesado, COUNT(pd.PesajeId) AS NumPesajes
+      FROM TransaccionesProduccion tp
+      JOIN Lotes l ON tp.Lote = l.Lote
+      JOIN Piscina p ON l.PiscinaId = p.PiscinaId
+      JOIN Finca f ON p.CodigoFinca = f.Codigo
+      JOIN Tallas ta ON tp.Talla = ta.Codigo
+      LEFT JOIN PesajeDetalle pd ON pd.TransaccionId = tp.TransaccionId
+      WHERE l.Fecha BETWEEN ? AND ? ${filtroFinca}
+      GROUP BY tp.Talla
+      ORDER BY Procesado DESC
+    `, desde, hasta, ...argsFinca);
+
     const porPersona: any[] = await prisma.$queryRawUnsafe(`
       SELECT e.Codigo AS IdEmpleado,
              CONCAT_WS(' ', e.PrimerNombre, e.SegundoNombre, e.PrimerApellido, e.SegundoApellido) AS Nombre,
@@ -88,6 +117,8 @@ router.get("/produccion", requireAuth, requirePerm("destajo", "ver"), async (req
 
     const lotesFmt = numerizar(porLote, ["PesoIngreso", "Procesado", "NumTransacciones"])
       .map(l => ({ ...l, Pendiente: l.PesoIngreso - l.Procesado, Rendimiento: l.PesoIngreso > 0 ? (l.Procesado / l.PesoIngreso * 100) : 0 }));
+    const detalleFmt = numerizar(porLoteTalla, ["Talla", "Procesado", "NumPesajes"]);
+    const tallaFmt = numerizar(porTalla, ["Talla", "Procesado", "NumPesajes"]);
     const termoFmt = numerizar(porTermo, ["TermoId", "Talla", "Proceso", "Procesado"]);
     const personaFmt = numerizar(porPersona, ["Talla", "Kilos"]);
 
@@ -98,6 +129,9 @@ router.get("/produccion", requireAuth, requirePerm("destajo", "ver"), async (req
 
     res.json({
       desde, hasta,
+      porLote: lotesFmt,
+      porLoteTalla: detalleFmt,
+      porTalla: tallaFmt,
       porTermo: termoFmt,
       porPersona: personaFmt,
       totales: { ...totales, Pendiente: totales.PesoIngreso - totales.Procesado, Rendimiento: totales.PesoIngreso > 0 ? (totales.Procesado / totales.PesoIngreso * 100) : 0 },

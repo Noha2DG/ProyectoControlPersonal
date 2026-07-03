@@ -57,6 +57,10 @@ function LoteModal({ item, fincas, clases, tallas, onSave, onClose }) {
   const set = f => e => setForm(p => ({ ...p, [f]: e.target.value }));
   const setVal = f => val => setForm(p => ({ ...p, [f]: val }));
 
+  // Los sifones (ej. "TM-SIFON") no son piscinas de cultivo — nunca deben llevar ciclo
+  const piscinaSeleccionada = piscinas.find(p => String(p.PiscinaId) === String(form.PiscinaId));
+  const esSifon = piscinaSeleccionada?.Nombre?.includes("SIFON") ?? false;
+
   useEffect(() => {
     if (!form.CodigoFinca) { setPiscinas([]); return; }
     fetch(`/api/piscina?finca=${form.CodigoFinca}`, { headers: authHeader() })
@@ -72,11 +76,11 @@ function LoteModal({ item, fincas, clases, tallas, onSave, onClose }) {
       });
   }, [form.PiscinaId]);
 
-  // Al cargar la piscina, pre-llenar con el último ciclo registrado (solo si es lote nuevo)
+  // Al cargar la piscina, pre-llenar con el último ciclo registrado (solo si es lote nuevo y no es sifón)
   useEffect(() => {
-    if (isEdit) return;
+    if (isEdit || esSifon) return;
     setForm(p => ({ ...p, CicloNumero: ultimoCiclo ? String(ultimoCiclo.Ciclo) : "" }));
-  }, [ultimoCiclo?.CicloId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [ultimoCiclo?.CicloId, esSifon]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSubmit = e => { e.preventDefault(); onSave(form); };
 
@@ -139,7 +143,11 @@ function LoteModal({ item, fincas, clases, tallas, onSave, onClose }) {
           {form.PiscinaId && (
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1">Ciclo</label>
-              {isEdit ? (
+              {esSifon ? (
+                <div className="w-full border border-gray-200 bg-gray-50 rounded-lg px-3 py-2 text-sm text-gray-400">
+                  Este sifón no maneja ciclo
+                </div>
+              ) : isEdit ? (
                 <div className="w-full border border-gray-200 bg-gray-50 rounded-lg px-3 py-2 text-sm text-gray-600">
                   {form.CicloNumero ? `Ciclo ${form.CicloNumero}` : "Sin ciclo"}
                 </div>

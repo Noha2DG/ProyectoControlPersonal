@@ -163,7 +163,8 @@ export default function TransferenciasPage() {
     try {
       const token = localStorage.getItem("cp_token");
       const headers = token ? { Authorization: `Bearer ${token}` } : {};
-      const res = await fetch("/api/transferencias/hoy", { headers });
+      const params = areaEntrada ? `?area=${encodeURIComponent(areaEntrada.CodigoArea)}` : "";
+      const res = await fetch(`/api/transferencias/hoy${params}`, { headers });
       if (!res.ok) throw new Error(mensajeError(res));
       const data = await res.json();
       if (Array.isArray(data)) { setRegistros(data); setAvisoRegistros(""); }
@@ -171,7 +172,7 @@ export default function TransferenciasPage() {
       setAvisoRegistros(`No se pudo cargar las transferencias de hoy: ${err.message || "sin conexión"}`);
     }
     finally { setCargando(false); }
-  }, []);
+  }, [areaEntrada]);
 
   useEffect(() => { fetchRegistros(); }, [fetchRegistros]);
 
@@ -271,7 +272,8 @@ export default function TransferenciasPage() {
     setAreaEntradaInput(""); setAreaEntrada(null);
     setAreaSalida(null); setEmpleado(null);
     setCarnetInput(""); setErrorMsg("");
-    fetchRegistros();
+    // fetchRegistros() no se llama aquí: al limpiar areaEntrada, su identidad cambia
+    // (deja de filtrar por área) y el useEffect de abajo dispara el refetch solo.
     areaRef.current?.focus();
   };
 
@@ -466,7 +468,9 @@ export default function TransferenciasPage() {
               {abiertos.length > 0 && <span className="text-green-700 font-semibold mr-3">{abiertos.length} en curso</span>}
               {cerrados.length > 0 && <span>{cerrados.length} cerrado{cerrados.length !== 1 ? "s" : ""}</span>}
             </span>
-            <span className="text-xs text-gray-400">Últimas 15 · Actualiza cada 30 seg</span>
+            <span className="text-xs text-gray-400">
+              {areaEntrada ? `Últimas 20 en ${areaEntrada.CodigoArea}` : "Últimas 15"} · Actualiza cada 30 seg
+            </span>
           </div>
         </div>
       </div>

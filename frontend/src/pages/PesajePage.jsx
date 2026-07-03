@@ -192,7 +192,9 @@ export default function PesajePage() {
       setErrorMsg("No se pudo conectar con el servidor");
     } finally {
       setGuardando(false);
-      codigoRef.current?.focus();
+      // El input sigue disabled en este tick (guardando aún no se repintó) — se difiere
+      // el focus al próximo tick para que ya no esté deshabilitado cuando se ejecute.
+      setTimeout(() => codigoRef.current?.focus(), 0);
     }
   };
 

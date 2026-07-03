@@ -110,7 +110,14 @@ router.post("/", requireAuth, requirePerm("destajo", "crear"), async (req: Reque
       res.status(400).json({ error: "Piscina, Clase, Fecha y Peso de ingreso son requeridos" });
       return;
     }
-    const cicloNum = CicloNumero ? Number(CicloNumero) : undefined;
+
+    // Los sifones (ej. "TM-SIFON") no son piscinas de cultivo — nunca deben llevar ciclo,
+    // sin importar lo que llegue en CicloNumero.
+    const piscinaRows: any[] = await prisma.$queryRaw`SELECT Nombre FROM Piscina WHERE PiscinaId = ${Number(PiscinaId)} LIMIT 1`;
+    if (!piscinaRows.length) { res.status(404).json({ error: "Piscina no encontrada" }); return; }
+    const esSifon = String(piscinaRows[0].Nombre).includes("SIFON");
+
+    const cicloNum = (!esSifon && CicloNumero) ? Number(CicloNumero) : undefined;
     const lote = await generarCodigoLote(Number(PiscinaId), Fecha, cicloNum);
     if (!lote) { res.status(404).json({ error: "Piscina no encontrada" }); return; }
 

@@ -113,11 +113,16 @@ router.post("/", async (req: Request, res: Response) => {
   }
 });
 
-// GET /api/transferencias/hoy  (terminal de kiosco — requiere sesión)
-router.get("/hoy", requireAuth, async (_req: Request, res: Response) => {
+// GET /api/transferencias/hoy?area=CODIGO  (terminal de kiosco — requiere sesión)
+// Sin "area": últimas 15 transferencias del día (actividad general).
+// Con "area": últimas 20 personas que se dieron transferencia específicamente a esa área.
+router.get("/hoy", requireAuth, async (req: Request, res: Response) => {
   try {
     const hoyInicio = hoyInicioGT();
-    const rows: any[] = await prisma.$queryRaw`
+    const area = req.query.area as string | undefined;
+    const filtroArea = area ? "AND t.CodigoArea = ?" : "";
+    const limite = area ? 20 : 15;
+    const rows: any[] = await prisma.$queryRawUnsafe(`
       SELECT
         t.id, t.Codigo,
         CONCAT_WS(' ', e.PrimerNombre, e.SegundoNombre, e.PrimerApellido, e.SegundoApellido) AS NombreCompleto,
@@ -131,10 +136,10 @@ router.get("/hoy", requireAuth, async (_req: Request, res: Response) => {
       FROM Transferencias t
       JOIN Empleados e ON t.Codigo     = e.Codigo
       JOIN Areas     a ON t.CodigoArea = a.Codigo
-      WHERE t.FechaHora >= ${hoyInicio}
+      WHERE t.FechaHora >= ? ${filtroArea}
       ORDER BY t.FechaHora DESC
-      LIMIT 15
-    `;
+      LIMIT ${limite}
+    `, hoyInicio, ...(area ? [area] : []));
     res.json(rows.map(r => ({ ...r, Minutos: Number(r.Minutos) })));
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -166,7 +171,6 @@ router.get("/", requireAuth, requirePerm("transferencias", "ver"), async (req: R
       JOIN Areas     a ON t.CodigoArea = a.Codigo
       WHERE t.FechaHora >= ${inicio}
       ORDER BY t.FechaHora ASC
-      LIMIT 500
     `;
     res.json(rows.map(r => ({ ...r, Minutos: Number(r.Minutos) })));
   } catch (err: any) { res.status(500).json({ error: err.message }); }
