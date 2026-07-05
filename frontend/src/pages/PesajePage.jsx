@@ -244,9 +244,9 @@ export default function PesajePage() {
   return (
     <div>
       <SelectorTransacciones transacciones={transacciones} seleccionada={transSel} onSelect={seleccionarTransaccion} onCerrar={handleCerrarTransaccion} />
-      <div className="flex gap-4">
+      <div className="flex flex-col lg:flex-row gap-4">
       {/* Columna captura */}
-      <div className="w-[420px] shrink-0 space-y-4">
+      <div className="lg:w-[420px] lg:shrink-0 space-y-4">
 
         {lote && (
           <div className="bg-white border border-gray-300 rounded-xl shadow-sm p-3 space-y-3">
@@ -361,27 +361,27 @@ export default function PesajePage() {
         ) : loadingPesajes ? (
           <div className="flex justify-center py-10"><div className="w-6 h-6 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" /></div>
         ) : (
-          <div className="bg-white rounded-xl shadow overflow-hidden overflow-x-auto max-h-[640px] overflow-y-auto">
+          <div className="bg-white rounded-xl shadow overflow-x-auto max-h-[640px] overflow-y-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-gray-100 text-gray-600 uppercase text-xs tracking-wider">
-                  <th className="px-3 py-3 text-left">Empleado</th>
-                  <th className="px-3 py-3 text-left">Nombre</th>
-                  <th className="px-3 py-3 text-center">Termo</th>
-                  <th className="px-3 py-3 text-right">Peso</th>
-                  <th className="px-3 py-3 text-center">Hora</th>
-                  <th className="px-3 py-3 text-center">Acciones</th>
+                  <th className="px-3 py-3 text-left whitespace-nowrap">Empleado</th>
+                  <th className="px-3 py-3 text-left whitespace-nowrap">Nombre</th>
+                  <th className="px-3 py-3 text-center whitespace-nowrap">Termo</th>
+                  <th className="px-3 py-3 text-right whitespace-nowrap">Peso</th>
+                  <th className="px-3 py-3 text-center whitespace-nowrap">Hora</th>
+                  <th className="px-3 py-3 text-center whitespace-nowrap">Acciones</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {pesajes.map(p => (
                   <tr key={p.PesajeId} className="hover:bg-gray-50 transition">
-                    <td className="px-3 py-2 font-mono text-gray-700">{p.Codigo}</td>
-                    <td className="px-3 py-2 text-gray-900">{p.NombreCompleto}</td>
-                    <td className="px-3 py-2 text-center">#{p.NumeroTermo}</td>
-                    <td className="px-3 py-2 text-right font-semibold">{p.Peso.toFixed(2)}</td>
-                    <td className="px-3 py-2 text-center text-gray-500">{p.FechaHora?.slice(11, 16)}</td>
-                    <td className="px-3 py-2 text-center">
+                    <td className="px-3 py-2 font-mono text-gray-700 whitespace-nowrap">{p.Codigo}</td>
+                    <td className="px-3 py-2 text-gray-900 whitespace-nowrap">{p.NombreCompleto}</td>
+                    <td className="px-3 py-2 text-center whitespace-nowrap">#{p.NumeroTermo}</td>
+                    <td className="px-3 py-2 text-right font-semibold whitespace-nowrap">{p.Peso.toFixed(2)}</td>
+                    <td className="px-3 py-2 text-center text-gray-500 whitespace-nowrap">{p.FechaHora?.slice(11, 16)}</td>
+                    <td className="px-3 py-2 text-center whitespace-nowrap">
                       <div className="flex justify-center gap-2">
                         <button onClick={() => setModalEditar(p)}
                           className="text-blue-600 hover:text-blue-800 text-xs font-medium px-2 py-1 rounded hover:bg-blue-50 transition">Editar</button>

@@ -103,14 +103,14 @@ export default function TransferenciasPage() {
   const carnetRef = useRef(null);
   const resultadoTimerRef = useRef(null);
 
-  // Ingreso masivo: tras un escaneo exitoso se muestra el nombre ~1s y se limpia
+  // Ingreso masivo: tras un escaneo exitoso se muestra el nombre ~2s y se limpia
   // solo el resultado del carnet — el Área Entrada se mantiene para la siguiente persona.
   const limpiarResultado = useCallback(() => {
     if (resultadoTimerRef.current) clearTimeout(resultadoTimerRef.current);
     resultadoTimerRef.current = setTimeout(() => {
       setEmpleado(null);
       setAreaSalida(null);
-    }, 1000);
+    }, 2000);
   }, []);
 
   useEffect(() => () => { if (resultadoTimerRef.current) clearTimeout(resultadoTimerRef.current); }, []);
@@ -267,16 +267,6 @@ export default function TransferenciasPage() {
     }
   };
 
-  const limpiarSesion = () => {
-    if (resultadoTimerRef.current) clearTimeout(resultadoTimerRef.current);
-    setAreaEntradaInput(""); setAreaEntrada(null);
-    setAreaSalida(null); setEmpleado(null);
-    setCarnetInput(""); setErrorMsg("");
-    // fetchRegistros() no se llama aquí: al limpiar areaEntrada, su identidad cambia
-    // (deja de filtrar por área) y el useEffect de abajo dispara el refetch solo.
-    areaRef.current?.focus();
-  };
-
   const abiertos = registros.filter(r => !r.HoraSalida);
   const cerrados = registros.filter(r =>  r.HoraSalida);
 
@@ -300,10 +290,6 @@ export default function TransferenciasPage() {
                 d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
             </svg>
             Actualizar
-          </button>
-          <button onClick={limpiarSesion}
-            className="bg-gray-100 border border-gray-400 rounded px-3 py-1.5 text-xs font-semibold text-gray-700 hover:bg-white transition">
-            Limpiar
           </button>
           <button onClick={() => { logout(); window.location.hash = ""; }}
             className="bg-red-600 text-white border border-red-700 rounded px-3 py-1.5 text-xs font-semibold hover:bg-red-700 transition flex items-center gap-1">

@@ -157,7 +157,7 @@ export default function PiscinaCicloPage() {
   };
 
   return (
-    <div className="flex gap-4">
+    <div className="flex flex-col lg:flex-row gap-4">
       {/* Columna Piscinas */}
       <div className="flex-1 min-w-0">
         <div className="flex flex-wrap gap-3 items-center mb-4">
@@ -177,12 +177,13 @@ export default function PiscinaCicloPage() {
           <div className="flex justify-center py-10"><div className="w-6 h-6 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" /></div>
         ) : (
           <div className="bg-white rounded-xl shadow overflow-hidden">
+            <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-gray-100 text-gray-600 uppercase text-xs tracking-wider">
-                  <th className="px-4 py-3 text-left">Piscina</th>
-                  <th className="px-4 py-3 text-center">Estado</th>
-                  <th className="px-4 py-3 text-center">Acciones</th>
+                  <th className="px-4 py-3 text-left whitespace-nowrap">Piscina</th>
+                  <th className="px-4 py-3 text-center whitespace-nowrap">Estado</th>
+                  <th className="px-4 py-3 text-center whitespace-nowrap">Acciones</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
@@ -190,13 +191,13 @@ export default function PiscinaCicloPage() {
                   <tr key={p.PiscinaId}
                     onClick={() => seleccionarPiscina(p)}
                     className={`cursor-pointer transition ${piscinaSel?.PiscinaId === p.PiscinaId ? "bg-blue-50" : "hover:bg-gray-50"} ${!p.Activo ? "opacity-50" : ""}`}>
-                    <td className="px-4 py-3 font-mono font-semibold text-gray-700">{p.Nombre}</td>
-                    <td className="px-4 py-3 text-center">
+                    <td className="px-4 py-3 font-mono font-semibold text-gray-700 whitespace-nowrap">{p.Nombre}</td>
+                    <td className="px-4 py-3 text-center whitespace-nowrap">
                       <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-semibold ${p.Activo ? "bg-green-100 text-green-700" : "bg-red-100 text-red-600"}`}>
                         {p.Activo ? "Activa" : "Inactiva"}
                       </span>
                     </td>
-                    <td className="px-4 py-3 text-center" onClick={e => e.stopPropagation()}>
+                    <td className="px-4 py-3 text-center whitespace-nowrap" onClick={e => e.stopPropagation()}>
                       <div className="flex justify-center gap-2">
                         <button onClick={() => setModalPiscina({ open: true, item: p })}
                           className="text-blue-600 hover:text-blue-800 text-xs font-medium px-2 py-1 rounded hover:bg-blue-50 transition">Editar</button>
@@ -213,6 +214,7 @@ export default function PiscinaCicloPage() {
                 )}
               </tbody>
             </table>
+            </div>
           </div>
         )}
       </div>
@@ -235,26 +237,27 @@ export default function PiscinaCicloPage() {
           <div className="flex justify-center py-10"><div className="w-6 h-6 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" /></div>
         ) : (
           <div className="bg-white rounded-xl shadow overflow-hidden">
+            <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-gray-100 text-gray-600 uppercase text-xs tracking-wider">
-                  <th className="px-4 py-3 text-left">Año</th>
-                  <th className="px-4 py-3 text-left">Ciclo</th>
-                  <th className="px-4 py-3 text-center">Estado</th>
-                  <th className="px-4 py-3 text-center">Acciones</th>
+                  <th className="px-4 py-3 text-left whitespace-nowrap">Año</th>
+                  <th className="px-4 py-3 text-left whitespace-nowrap">Ciclo</th>
+                  <th className="px-4 py-3 text-center whitespace-nowrap">Estado</th>
+                  <th className="px-4 py-3 text-center whitespace-nowrap">Acciones</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {ciclos.map(c => (
                   <tr key={c.CicloId} className={`hover:bg-gray-50 transition ${!c.Activo ? "opacity-50" : ""}`}>
-                    <td className="px-4 py-3 font-mono text-gray-700">{c.Anio}</td>
-                    <td className="px-4 py-3 font-mono text-gray-700">{c.Ciclo}</td>
-                    <td className="px-4 py-3 text-center">
+                    <td className="px-4 py-3 font-mono text-gray-700 whitespace-nowrap">{c.Anio}</td>
+                    <td className="px-4 py-3 font-mono text-gray-700 whitespace-nowrap">{c.Ciclo}</td>
+                    <td className="px-4 py-3 text-center whitespace-nowrap">
                       <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-semibold ${c.Activo ? "bg-green-100 text-green-700" : "bg-red-100 text-red-600"}`}>
                         {c.Activo ? "Activo" : "Inactivo"}
                       </span>
                     </td>
-                    <td className="px-4 py-3 text-center">
+                    <td className="px-4 py-3 text-center whitespace-nowrap">
                       <div className="flex justify-center gap-2">
                         <button onClick={() => setModalCiclo({ open: true, item: c })}
                           className="text-blue-600 hover:text-blue-800 text-xs font-medium px-2 py-1 rounded hover:bg-blue-50 transition">Editar</button>
@@ -271,6 +274,7 @@ export default function PiscinaCicloPage() {
                 )}
               </tbody>
             </table>
+            </div>
           </div>
         )}
       </div>

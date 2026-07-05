@@ -12,3 +12,6 @@ backend/uploads/fotos/*
 
 # Respaldos de datos de empleados (contienen datos sensibles) — nunca al historial de git
 backend/backup_empleados_*.json
+
+# Logs de sesiones de prueba con el navegador (webapp-testing / Playwright MCP)
+.playwright-mcp/

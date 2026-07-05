@@ -164,7 +164,7 @@ export default function ClientesPage() {
   );
 
   return (
-    <div className="flex gap-4">
+    <div className="flex flex-col lg:flex-row gap-4">
       {/* Columna Clientes */}
       <div className="flex-1 min-w-0">
         <div className="flex flex-wrap gap-3 items-center mb-4">
@@ -181,29 +181,30 @@ export default function ClientesPage() {
           <div className="flex justify-center py-10"><div className="w-6 h-6 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" /></div>
         ) : (
           <div className="bg-white rounded-xl shadow overflow-hidden">
+            <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-gray-100 text-gray-600 uppercase text-xs tracking-wider">
-                  <th className="px-4 py-3 text-left">Código</th>
-                  <th className="px-4 py-3 text-left">Razón Social</th>
-                  <th className="px-4 py-3 text-left">País</th>
-                  <th className="px-4 py-3 text-center">Estado</th>
-                  <th className="px-4 py-3 text-center">Acciones</th>
+                  <th className="px-4 py-3 text-left whitespace-nowrap">Código</th>
+                  <th className="px-4 py-3 text-left whitespace-nowrap">Razón Social</th>
+                  <th className="px-4 py-3 text-left whitespace-nowrap">País</th>
+                  <th className="px-4 py-3 text-center whitespace-nowrap">Estado</th>
+                  <th className="px-4 py-3 text-center whitespace-nowrap">Acciones</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {clientesFiltrados.map(c => (
                   <tr key={c.Codigo} onClick={() => seleccionarCliente(c)}
                     className={`cursor-pointer transition ${clienteSel?.Codigo === c.Codigo ? "bg-blue-50" : "hover:bg-gray-50"} ${!c.Activo ? "opacity-50" : ""}`}>
-                    <td className="px-4 py-3 font-mono font-bold text-gray-700">{c.Codigo}</td>
-                    <td className="px-4 py-3 text-gray-900">{c.RazonSocial}</td>
-                    <td className="px-4 py-3 text-gray-700">{c.Pais}</td>
-                    <td className="px-4 py-3 text-center">
+                    <td className="px-4 py-3 font-mono font-bold text-gray-700 whitespace-nowrap">{c.Codigo}</td>
+                    <td className="px-4 py-3 text-gray-900 whitespace-nowrap">{c.RazonSocial}</td>
+                    <td className="px-4 py-3 text-gray-700 whitespace-nowrap">{c.Pais}</td>
+                    <td className="px-4 py-3 text-center whitespace-nowrap">
                       <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-semibold ${c.Activo ? "bg-green-100 text-green-700" : "bg-red-100 text-red-600"}`}>
                         {c.Activo ? "Activo" : "Inactivo"}
                       </span>
                     </td>
-                    <td className="px-4 py-3 text-center" onClick={e => e.stopPropagation()}>
+                    <td className="px-4 py-3 text-center whitespace-nowrap" onClick={e => e.stopPropagation()}>
                       <div className="flex justify-center gap-2">
                         <button onClick={() => setModalCliente({ open: true, item: c })}
                           className="text-blue-600 hover:text-blue-800 text-xs font-medium px-2 py-1 rounded hover:bg-blue-50 transition">Editar</button>
@@ -217,6 +218,7 @@ export default function ClientesPage() {
                 ))}
               </tbody>
             </table>
+            </div>
           </div>
         )}
       </div>
@@ -239,26 +241,27 @@ export default function ClientesPage() {
           <div className="flex justify-center py-10"><div className="w-6 h-6 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" /></div>
         ) : (
           <div className="bg-white rounded-xl shadow overflow-hidden">
+            <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-gray-100 text-gray-600 uppercase text-xs tracking-wider">
-                  <th className="px-4 py-3 text-left">Código</th>
-                  <th className="px-4 py-3 text-left">Razón Social</th>
-                  <th className="px-4 py-3 text-center">Estado</th>
-                  <th className="px-4 py-3 text-center">Acciones</th>
+                  <th className="px-4 py-3 text-left whitespace-nowrap">Código</th>
+                  <th className="px-4 py-3 text-left whitespace-nowrap">Razón Social</th>
+                  <th className="px-4 py-3 text-center whitespace-nowrap">Estado</th>
+                  <th className="px-4 py-3 text-center whitespace-nowrap">Acciones</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {subclientes.map(s => (
                   <tr key={s.CodigoSubcliente} className={`hover:bg-gray-50 transition ${!s.Activo ? "opacity-50" : ""}`}>
-                    <td className="px-4 py-3 font-mono font-bold text-gray-700">{s.CodigoSubcliente}</td>
-                    <td className="px-4 py-3 text-gray-900">{s.RazonSocial}</td>
-                    <td className="px-4 py-3 text-center">
+                    <td className="px-4 py-3 font-mono font-bold text-gray-700 whitespace-nowrap">{s.CodigoSubcliente}</td>
+                    <td className="px-4 py-3 text-gray-900 whitespace-nowrap">{s.RazonSocial}</td>
+                    <td className="px-4 py-3 text-center whitespace-nowrap">
                       <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-semibold ${s.Activo ? "bg-green-100 text-green-700" : "bg-red-100 text-red-600"}`}>
                         {s.Activo ? "Activo" : "Inactivo"}
                       </span>
                     </td>
-                    <td className="px-4 py-3 text-center">
+                    <td className="px-4 py-3 text-center whitespace-nowrap">
                       <div className="flex justify-center gap-2">
                         <button onClick={() => setModalSub({ open: true, item: s })}
                           className="text-blue-600 hover:text-blue-800 text-xs font-medium px-2 py-1 rounded hover:bg-blue-50 transition">Editar</button>
@@ -275,6 +278,7 @@ export default function ClientesPage() {
                 )}
               </tbody>
             </table>
+            </div>
           </div>
         )}
       </div>

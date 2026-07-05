@@ -181,7 +181,14 @@ function Dashboard() {
   if (perm("catalogos",      "ver")) nav.push({ key: "catalogos", label: "Catálogos",           icon: "catalogos" });
 
   const [seccion, setSeccion] = useState(nav[0]?.key ?? "empleados");
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  // En escritorio el sidebar inicia expandido; en móvil inicia oculto (se abre como overlay)
+  // para no robarle ancho a la pantalla angosta.
+  const [sidebarOpen, setSidebarOpen] = useState(() => window.matchMedia("(min-width: 768px)").matches);
+
+  const seleccionarSeccion = (key) => {
+    setSeccion(key);
+    if (!window.matchMedia("(min-width: 768px)").matches) setSidebarOpen(false);
+  };
 
   const TITULOS = {
     empleados: "Empleados",
@@ -271,12 +278,21 @@ function Dashboard() {
       {/* Cuerpo con sidebar */}
       <div className="flex flex-1 overflow-hidden">
 
-        <aside className={`${sidebarOpen ? "w-52" : "w-14"} shrink-0 bg-white border-r border-gray-200 shadow-sm flex flex-col transition-all duration-200 overflow-hidden`}>
-          <nav className="flex-1 py-3">
+        {/* Fondo oscuro tras el sidebar cuando está abierto como overlay en móvil */}
+        {sidebarOpen && (
+          <div className="fixed inset-0 bg-black/40 z-30 md:hidden" onClick={() => setSidebarOpen(false)} />
+        )}
+
+        <aside className={
+          sidebarOpen
+            ? "fixed inset-y-0 left-0 z-40 w-64 bg-white border-r border-gray-200 shadow-lg flex flex-col transition-transform duration-200 md:static md:z-auto md:w-52 md:shadow-sm"
+            : "fixed inset-y-0 left-0 z-40 w-64 -translate-x-full bg-white border-r border-gray-200 shadow-lg flex flex-col transition-transform duration-200 md:static md:translate-x-0 md:z-auto md:w-14 md:shadow-sm md:overflow-hidden"
+        }>
+          <nav className="flex-1 py-3 overflow-y-auto">
             {nav.map(item => {
               const active = seccion === item.key;
               return (
-                <button key={item.key} onClick={() => setSeccion(item.key)}
+                <button key={item.key} onClick={() => seleccionarSeccion(item.key)}
                   title={item.label}
                   className={`w-full flex items-center gap-3 px-3.5 py-3 text-sm font-medium transition-all ${
                     active ? "bg-blue-50 text-blue-700 border-r-2 border-blue-600" : "text-gray-600 hover:bg-gray-50 hover:text-gray-900"
@@ -291,8 +307,8 @@ function Dashboard() {
           </nav>
         </aside>
 
-        <main className="flex-1 overflow-auto">
-          <div className="px-6 py-5">
+        <main className="flex-1 min-w-0 overflow-auto">
+          <div className="px-4 py-4 sm:px-6 sm:py-5">
             {seccion !== "destajo" && <h2 className="text-xl font-bold text-gray-800 mb-5">{TITULOS[seccion]}</h2>}
 
             {seccion === "empleados" && perm("empleados", "ver") && (

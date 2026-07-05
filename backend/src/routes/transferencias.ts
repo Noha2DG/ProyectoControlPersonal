@@ -3,6 +3,7 @@ import jwt from "jsonwebtoken";
 import prisma from "../lib/prisma.ts";
 import { nowGT, hoyInicioGT } from "../lib/dateGT.ts";
 import { requireAuth, requirePerm } from "../middleware/auth.ts";
+import { aplicarCorteMedianoche } from "../lib/corteMedianoche.ts";
 
 const router = Router();
 
@@ -24,6 +25,10 @@ router.post("/", async (req: Request, res: Response) => {
     res.status(400).json({ error: "Código y CodigoArea son requeridos" }); return;
   }
   try {
+    // Igual que en movimientos.ts: si la Entrada quedó abierta desde un día
+    // calendario anterior, se cierra y reabre hoy antes de validar "tieneEntrada/tieneSalida hoy".
+    await aplicarCorteMedianoche(Codigo);
+
     const hoyInicio = hoyInicioGT();
     const hoyFecha = hoyInicio.slice(0, 10);
     // Área General (TT) está exenta de planificación — siempre libre

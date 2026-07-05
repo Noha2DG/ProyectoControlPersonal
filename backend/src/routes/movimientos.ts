@@ -3,6 +3,7 @@ import jwt from "jsonwebtoken";
 import prisma from "../lib/prisma.ts";
 import { nowGT, hoyInicioGT } from "../lib/dateGT.ts";
 import { requireAuth, requirePerm } from "../middleware/auth.ts";
+import { aplicarCorteMedianoche } from "../lib/corteMedianoche.ts";
 
 const router = Router();
 
@@ -32,6 +33,11 @@ router.post("/registrar", async (req: Request, res: Response) => {
     if (!empleados.length) { res.status(404).json({ error: "Empleado no encontrado" }); return; }
     const emp = empleados[0];
     if (emp.Estado !== "Activo") { res.status(400).json({ error: "Empleado no está activo" }); return; }
+
+    // Si venía de una Entrada de un día calendario anterior (turno que cruzó
+    // medianoche), primero la cierra y reabre en el día de hoy antes de decidir
+    // si este marcaje es Entrada o Salida.
+    await aplicarCorteMedianoche(Codigo);
 
     const hoyInicio = hoyInicioGT();
 

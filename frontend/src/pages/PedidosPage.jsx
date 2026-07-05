@@ -364,7 +364,7 @@ export default function PedidosPage() {
   );
 
   return (
-    <div className="flex gap-4">
+    <div className="flex flex-col lg:flex-row gap-4">
       {/* Columna Pedidos */}
       <div className="flex-1 min-w-0">
         <div className="flex flex-wrap gap-3 items-center mb-4">
@@ -380,14 +380,14 @@ export default function PedidosPage() {
         {loading ? (
           <div className="flex justify-center py-10"><div className="w-6 h-6 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" /></div>
         ) : (
-          <div className="bg-white rounded-xl shadow overflow-hidden max-h-[600px] overflow-y-auto">
+          <div className="bg-white rounded-xl shadow overflow-x-auto max-h-[600px] overflow-y-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-gray-100 text-gray-600 uppercase text-xs tracking-wider">
-                  <th className="px-4 py-3 text-left">Pedido</th>
-                  <th className="px-4 py-3 text-left">Descripción</th>
-                  <th className="px-4 py-3 text-center">Estatus</th>
-                  <th className="px-4 py-3 text-center">Editar</th>
+                  <th className="px-4 py-3 text-left whitespace-nowrap">Pedido</th>
+                  <th className="px-4 py-3 text-left whitespace-nowrap">Descripción</th>
+                  <th className="px-4 py-3 text-center whitespace-nowrap">Estatus</th>
+                  <th className="px-4 py-3 text-center whitespace-nowrap">Editar</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
@@ -395,13 +395,13 @@ export default function PedidosPage() {
                   <tr key={p.CodigoPedido} onClick={() => seleccionarPedido(p)}
                     className={`cursor-pointer transition ${pedidoSel?.CodigoPedido === p.CodigoPedido ? "bg-blue-50" : "hover:bg-gray-50"}`}>
                     <td className="px-4 py-3 font-mono font-bold text-gray-700 whitespace-nowrap">{p.CodigoPedido}</td>
-                    <td className="px-4 py-3 text-gray-900">{p.Descripcion}</td>
-                    <td className="px-4 py-3 text-center">
+                    <td className="px-4 py-3 text-gray-900 whitespace-nowrap">{p.Descripcion}</td>
+                    <td className="px-4 py-3 text-center whitespace-nowrap">
                       <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-semibold ${ESTATUS_BADGE[p.Estatus] || "bg-gray-100 text-gray-600"}`}>
                         {p.Estatus}
                       </span>
                     </td>
-                    <td className="px-4 py-3 text-center" onClick={e => e.stopPropagation()}>
+                    <td className="px-4 py-3 text-center whitespace-nowrap" onClick={e => e.stopPropagation()}>
                       <button onClick={() => setModalPedido({ open: true, item: p })}
                         className="text-blue-600 hover:text-blue-800 text-xs font-medium px-2 py-1 rounded hover:bg-blue-50 transition">Editar</button>
                     </td>
@@ -430,27 +430,27 @@ export default function PedidosPage() {
         ) : loadingDet ? (
           <div className="flex justify-center py-10"><div className="w-6 h-6 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" /></div>
         ) : (
-          <div className="bg-white rounded-xl shadow overflow-hidden overflow-x-auto">
+          <div className="bg-white rounded-xl shadow overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-gray-100 text-gray-600 uppercase text-xs tracking-wider">
-                  <th className="px-4 py-3 text-left">Clase</th>
-                  <th className="px-4 py-3 text-left">Talla</th>
-                  <th className="px-4 py-3 text-left">Presentación</th>
-                  <th className="px-4 py-3 text-right">Cajas</th>
-                  <th className="px-4 py-3 text-right">Kg</th>
-                  <th className="px-4 py-3 text-center">Acciones</th>
+                  <th className="px-4 py-3 text-left whitespace-nowrap">Clase</th>
+                  <th className="px-4 py-3 text-left whitespace-nowrap">Talla</th>
+                  <th className="px-4 py-3 text-left whitespace-nowrap">Presentación</th>
+                  <th className="px-4 py-3 text-right whitespace-nowrap">Cajas</th>
+                  <th className="px-4 py-3 text-right whitespace-nowrap">Kg</th>
+                  <th className="px-4 py-3 text-center whitespace-nowrap">Acciones</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {detalles.map(d => (
                   <tr key={d.DetalleId} className="hover:bg-gray-50 transition">
-                    <td className="px-4 py-3 font-mono text-gray-700">{d.Clase}</td>
-                    <td className="px-4 py-3 font-mono text-gray-700">{d.Talla}</td>
-                    <td className="px-4 py-3 font-mono text-gray-700">{d.Presentacion}</td>
-                    <td className="px-4 py-3 text-right">{d.CantidadCajas}</td>
-                    <td className="px-4 py-3 text-right">{d.KgPedido}</td>
-                    <td className="px-4 py-3 text-center">
+                    <td className="px-4 py-3 font-mono text-gray-700 whitespace-nowrap">{d.Clase}</td>
+                    <td className="px-4 py-3 font-mono text-gray-700 whitespace-nowrap">{d.Talla}</td>
+                    <td className="px-4 py-3 font-mono text-gray-700 whitespace-nowrap">{d.Presentacion}</td>
+                    <td className="px-4 py-3 text-right whitespace-nowrap">{d.CantidadCajas}</td>
+                    <td className="px-4 py-3 text-right whitespace-nowrap">{d.KgPedido}</td>
+                    <td className="px-4 py-3 text-center whitespace-nowrap">
                       <div className="flex justify-center gap-2">
                         <button onClick={() => setModalDetalle({ open: true, item: d })}
                           className="text-blue-600 hover:text-blue-800 text-xs font-medium px-2 py-1 rounded hover:bg-blue-50 transition">Editar</button>

@@ -410,7 +410,7 @@ export default function MateriaPrimaPage() {
   const lotesFiltrados = lotes.filter(l => !q || l.Lote.toLowerCase().includes(q) || l.NombreFinca.toLowerCase().includes(q));
 
   return (
-    <div className="flex gap-4">
+    <div className="flex flex-col lg:flex-row gap-4">
       {/* Columna Lotes */}
       <div className="flex-1 min-w-0">
         <div className="flex flex-wrap gap-3 items-center mb-4">
@@ -506,7 +506,7 @@ export default function MateriaPrimaPage() {
             {loadingTrans ? (
               <div className="flex justify-center py-10"><div className="w-6 h-6 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" /></div>
             ) : (
-              <div className="bg-white rounded-xl shadow overflow-hidden overflow-x-auto">
+              <div className="bg-white rounded-xl shadow overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="bg-gray-100 text-gray-600 uppercase text-xs tracking-wider">

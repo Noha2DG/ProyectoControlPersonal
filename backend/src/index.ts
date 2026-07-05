@@ -29,6 +29,7 @@ import termosRouter from "./routes/termos.ts";
 import pesajeDetalleRouter from "./routes/pesajeDetalle.ts";
 import reportesRouter from "./routes/reportes.ts";
 import { requireAuth } from "./middleware/auth.ts";
+import { barridoCorteMedianoche } from "./lib/corteMedianoche.ts";
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -80,4 +81,13 @@ app.use((req, res, next) => {
 
 app.listen(PORT, () => {
   console.log(`Servidor corriendo en http://localhost:${PORT}`);
+
+  // Reabre en el día de hoy a quien se quedó con una Entrada abierta de un día
+  // anterior (turno que cruzó medianoche), aunque nadie vuelva a marcar todavía
+  // — así los reportes de la mañana ya salen correctos.
+  const INTERVALO_BARRIDO_MS = 15 * 60 * 1000;
+  barridoCorteMedianoche().catch(err => console.error("Barrido corte medianoche falló:", err));
+  setInterval(() => {
+    barridoCorteMedianoche().catch(err => console.error("Barrido corte medianoche falló:", err));
+  }, INTERVALO_BARRIDO_MS);
 });

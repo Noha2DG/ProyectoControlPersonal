@@ -3,10 +3,11 @@
 import { useState } from "react";
 import { toPng } from "html-to-image";
 
-const AREAS_LIBRES = ["TT"]; // igual que en PlanificacionPage.jsx
+// Cafetería, Área General, Salida Temporal, Baño, Consultas Enfermería, Gestiones RRHH
+const AREAS_TEMPORALES = ["TC", "TT", "TM", "TB", "AS", "TR"];
 
 // Áreas que son trabajo directo de línea de producción. Todo lo que no esté
-// aquí (y no sea área libre) se cuenta como indirecto/apoyo. Lista fija,
+// aquí (y no sea actividad temporal) se cuenta como indirecto/apoyo. Lista fija,
 // ajustar aquí si cambia la clasificación de alguna área.
 const AREAS_DIRECTAS = [
   "AW", "AY", "DM", "DL", "HA", "BF", "DU", "DE", "FF", "EM", "EQ", "EP",
@@ -16,7 +17,7 @@ const AREAS_DIRECTAS = [
 
 const COLOR_DIRECTO   = "#2563eb";
 const COLOR_INDIRECTO = "#f97316";
-const COLOR_LIBRE     = "#16a34a";
+const COLOR_TEMPORAL  = "#16a34a";
 
 const CONECTORES = new Set(["y", "de", "del", "la", "el", "en", "a"]);
 function tituloArea(nombre) {
@@ -127,20 +128,21 @@ function TablaAreas({ titulo, filas, total, colorClass }) {
 
 export default function AsistenciaDiariaModal({ areas, fecha, onClose }) {
   const conEscaneo = areas.filter(a => (a.ocupacion ?? 0) > 0);
-  const libres     = conEscaneo.filter(a => AREAS_LIBRES.includes(a.CodigoArea));
+  const temporales = conEscaneo.filter(a => AREAS_TEMPORALES.includes(a.CodigoArea));
   const directas   = conEscaneo.filter(a => AREAS_DIRECTAS.includes(a.CodigoArea));
-  const indirectas = conEscaneo.filter(a => !AREAS_LIBRES.includes(a.CodigoArea) && !AREAS_DIRECTAS.includes(a.CodigoArea));
+  const indirectas = conEscaneo.filter(a => !AREAS_TEMPORALES.includes(a.CodigoArea) && !AREAS_DIRECTAS.includes(a.CodigoArea));
 
   const sumaOcup = list => list.reduce((s, a) => s + a.ocupacion, 0);
   const totalDirecto   = sumaOcup(directas);
   const totalIndirecto = sumaOcup(indirectas);
-  const totalLibre     = sumaOcup(libres);
-  const totalGeneral   = totalDirecto + totalIndirecto + totalLibre;
+  const totalTemporal  = sumaOcup(temporales);
+  const totalGeneral   = totalDirecto + totalIndirecto + totalTemporal;
   const pct = n => totalGeneral === 0 ? "0.0" : ((n / totalGeneral) * 100).toFixed(1);
 
   const aFila = a => ({ nombre: tituloArea(a.Nombre), valor: a.ocupacion });
   const filasDirecto   = [...directas].sort((x, y) => y.ocupacion - x.ocupacion).map(aFila);
   const filasIndirecto = [...indirectas].sort((x, y) => y.ocupacion - x.ocupacion).map(aFila);
+  const filasTemporal  = [...temporales].sort((x, y) => y.ocupacion - x.ocupacion).map(aFila);
 
   const topAreas = [...conEscaneo]
     .sort((x, y) => y.ocupacion - x.ocupacion)
@@ -216,8 +218,8 @@ export default function AsistenciaDiariaModal({ areas, fecha, onClose }) {
                   <p className="text-2xl font-black leading-tight" style={{ color: COLOR_INDIRECTO }}>{totalIndirecto} <span className="text-xs font-normal text-gray-400">{pct(totalIndirecto)}%</span></p>
                 </div>
                 <div className="bg-slate-50 border border-gray-200 rounded-xl px-4 py-3">
-                  <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide">Área libre</p>
-                  <p className="text-2xl font-black leading-tight" style={{ color: COLOR_LIBRE }}>{totalLibre} <span className="text-xs font-normal text-gray-400">{pct(totalLibre)}%</span></p>
+                  <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide">Actividad temporal</p>
+                  <p className="text-2xl font-black leading-tight" style={{ color: COLOR_TEMPORAL }}>{totalTemporal} <span className="text-xs font-normal text-gray-400">{pct(totalTemporal)}%</span></p>
                 </div>
               </div>
 
@@ -228,12 +230,12 @@ export default function AsistenciaDiariaModal({ areas, fecha, onClose }) {
                   <PieChart segmentos={[
                     { nombre: "Directo",   valor: totalDirecto,   color: COLOR_DIRECTO },
                     { nombre: "Indirecto", valor: totalIndirecto, color: COLOR_INDIRECTO },
-                    { nombre: "Área libre", valor: totalLibre,    color: COLOR_LIBRE },
+                    { nombre: "Actividad temporal", valor: totalTemporal, color: COLOR_TEMPORAL },
                   ]} />
                   <div className="flex justify-center gap-4 mt-2">
                     <span className="flex items-center gap-1.5 text-[11px] text-slate-600"><span className="w-2.5 h-2.5 rounded-sm inline-block" style={{ background: COLOR_DIRECTO }} />Directo</span>
                     <span className="flex items-center gap-1.5 text-[11px] text-slate-600"><span className="w-2.5 h-2.5 rounded-sm inline-block" style={{ background: COLOR_INDIRECTO }} />Indirecto</span>
-                    <span className="flex items-center gap-1.5 text-[11px] text-slate-600"><span className="w-2.5 h-2.5 rounded-sm inline-block" style={{ background: COLOR_LIBRE }} />Área libre</span>
+                    <span className="flex items-center gap-1.5 text-[11px] text-slate-600"><span className="w-2.5 h-2.5 rounded-sm inline-block" style={{ background: COLOR_TEMPORAL }} />Actividad temporal</span>
                   </div>
                 </div>
                 <div>
@@ -245,11 +247,13 @@ export default function AsistenciaDiariaModal({ areas, fecha, onClose }) {
               </div>
 
               {/* Tablas */}
-              <div className="grid grid-cols-2 gap-6">
+              <div className="grid grid-cols-3 gap-6">
                 <TablaAreas titulo="Personal directo de producción" filas={filasDirecto} total={totalDirecto}
                   colorClass="text-blue-700" />
                 <TablaAreas titulo="Personal indirecto / apoyo" filas={filasIndirecto} total={totalIndirecto}
                   colorClass="text-orange-600" />
+                <TablaAreas titulo="Actividad temporal" filas={filasTemporal} total={totalTemporal}
+                  colorClass="text-green-700" />
               </div>
 
               {/* Pie */}
