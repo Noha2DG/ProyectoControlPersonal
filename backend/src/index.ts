@@ -14,7 +14,7 @@ import planificacionRouter from "./routes/planificacion.ts";
 import tiposPermisoRouter from "./routes/tiposPermiso.ts";
 import permisosRouter from "./routes/permisos.ts";
 import equipoRouter from "./routes/equipo.ts";
-import { familiaRouter, procesosRouter, tallasRouter, empaquesRouter, fincaRouter, almacenesRouter } from "./routes/catalogosProduccion.ts";
+import { familiaRouter, procesosRouter, tallasRouter, empaquesRouter, fincaRouter, almacenesRouter, origenRouter, congelacionRouter } from "./routes/catalogosProduccion.ts";
 import claseRouter from "./routes/clase.ts";
 import presentacionRouter from "./routes/presentacion.ts";
 import piscinaRouter from "./routes/piscina.ts";
@@ -27,9 +27,11 @@ import lotesRouter from "./routes/lotes.ts";
 import transaccionesProduccionRouter from "./routes/transaccionesProduccion.ts";
 import termosRouter from "./routes/termos.ts";
 import pesajeDetalleRouter from "./routes/pesajeDetalle.ts";
+import ordenEtiquetadoRouter from "./routes/ordenEtiquetado.ts";
 import reportesRouter from "./routes/reportes.ts";
 import { requireAuth } from "./middleware/auth.ts";
 import { barridoCorteMedianoche } from "./lib/corteMedianoche.ts";
+import { reintentar } from "./lib/retry.ts";
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -68,6 +70,9 @@ app.use("/api/lotes", lotesRouter);
 app.use("/api/transacciones-produccion", transaccionesProduccionRouter);
 app.use("/api/termos", termosRouter);
 app.use("/api/pesaje", pesajeDetalleRouter);
+app.use("/api/origen", origenRouter);
+app.use("/api/unidades-congelacion", congelacionRouter);
+app.use("/api/orden-etiquetado", ordenEtiquetadoRouter);
 app.use("/api/reportes", reportesRouter);
 
 // Sirve el frontend ya compilado (frontend/dist) para no necesitar un segundo servicio en Railway.
@@ -86,8 +91,12 @@ app.listen(PORT, () => {
   // anterior (turno que cruzó medianoche), aunque nadie vuelva a marcar todavía
   // — así los reportes de la mañana ya salen correctos.
   const INTERVALO_BARRIDO_MS = 15 * 60 * 1000;
-  barridoCorteMedianoche().catch(err => console.error("Barrido corte medianoche falló:", err));
-  setInterval(() => {
-    barridoCorteMedianoche().catch(err => console.error("Barrido corte medianoche falló:", err));
-  }, INTERVALO_BARRIDO_MS);
+  // Reintenta 3 veces (2s, 4s) antes de darse por vencido: al arrancar es común
+  // que la base de datos remota tarde un momento en responder (DNS, red).
+  const ejecutarBarrido = () =>
+    reintentar(() => barridoCorteMedianoche(), 3, 2000).catch(err =>
+      console.error("Barrido corte medianoche falló:", err.message)
+    );
+  ejecutarBarrido();
+  setInterval(ejecutarBarrido, INTERVALO_BARRIDO_MS);
 });

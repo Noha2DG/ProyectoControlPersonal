@@ -20,6 +20,7 @@ const MODULOS = [
   { key: "planificacion",  label: "Planificación por Área",         acciones: ["ver","editar"],                    bajaElimKey: null,       grupo: "Config"   },
   // ── Destajo (producción)
   { key: "destajo",        label: "Destajo — Materia Prima y Pesaje", acciones: ["ver","crear","editar","eliminar"], bajaElimKey: "eliminar", grupo: "Operación" },
+  { key: "etiquetado",     label: "Etiquetado — Orden de Trabajo",   acciones: ["ver","crear","editar","eliminar"], bajaElimKey: "eliminar", grupo: "Operación" },
   // ── Configuración
   { key: "areas",          label: "Áreas",                          acciones: ["ver","crear","editar","eliminar"], bajaElimKey: "eliminar", grupo: "Config"   },
   { key: "permisos",       label: "Permisos",                       acciones: ["ver","crear","editar","eliminar"], bajaElimKey: "eliminar", grupo: "Config"   },
@@ -37,6 +38,7 @@ const EMPTY_PERMISOS = {
   transferencias: { ver: false, editar: false, eliminar: false },
   planificacion:  { ver: false, editar: false },
   destajo:        { ver: false, crear: false, editar: false, eliminar: false },
+  etiquetado:     { ver: false, crear: false, editar: false, eliminar: false },
   areas:          { ver: false, crear: false, editar: false, eliminar: false },
   permisos:       { ver: false, crear: false, editar: false, eliminar: false },
   tipos_permiso:  { ver: false, crear: false, editar: false, eliminar: false },
@@ -54,6 +56,7 @@ const PRESETS = {
     transferencias: { ver: true,  editar: true,  eliminar: true  },
     planificacion:  { ver: true,  editar: true  },
     destajo:        { ver: true,  crear: true,  editar: true,  eliminar: true  },
+    etiquetado:     { ver: true,  crear: true,  editar: true,  eliminar: true  },
     areas:          { ver: true,  crear: true,  editar: true,  eliminar: true  },
     permisos:       { ver: true,  crear: true,  editar: true,  eliminar: true  },
     tipos_permiso:  { ver: true,  crear: true,  editar: true,  eliminar: true  },
@@ -69,6 +72,7 @@ const PRESETS = {
     transferencias: { ver: false, editar: false, eliminar: false },
     planificacion:  { ver: false, editar: false },
     destajo:        { ver: false, crear: false, editar: false, eliminar: false },
+    etiquetado:     { ver: false, crear: false, editar: false, eliminar: false },
     areas:          { ver: false, crear: false, editar: false, eliminar: false },
     permisos:       { ver: false, crear: false, editar: false, eliminar: false },
     tipos_permiso:  { ver: false, crear: false, editar: false, eliminar: false },
@@ -84,6 +88,7 @@ const PRESETS = {
     transferencias: { ver: false, editar: false, eliminar: false },
     planificacion:  { ver: false, editar: false },
     destajo:        { ver: false, crear: false, editar: false, eliminar: false },
+    etiquetado:     { ver: false, crear: false, editar: false, eliminar: false },
     areas:          { ver: false, crear: false, editar: false, eliminar: false },
     permisos:       { ver: false, crear: false, editar: false, eliminar: false },
     tipos_permiso:  { ver: false, crear: false, editar: false, eliminar: false },
@@ -99,6 +104,7 @@ const PRESETS = {
     transferencias: { ver: false, editar: false, eliminar: false },
     planificacion:  { ver: false, editar: false },
     destajo:        { ver: false, crear: false, editar: false, eliminar: false },
+    etiquetado:     { ver: false, crear: false, editar: false, eliminar: false },
     areas:          { ver: false, crear: false, editar: false, eliminar: false },
     permisos:       { ver: false, crear: false, editar: false, eliminar: false },
     tipos_permiso:  { ver: false, crear: false, editar: false, eliminar: false },
@@ -114,6 +120,7 @@ const PRESETS = {
     transferencias: { ver: false, editar: false, eliminar: false },
     planificacion:  { ver: false, editar: false },
     destajo:        { ver: false, crear: false, editar: false, eliminar: false },
+    etiquetado:     { ver: false, crear: false, editar: false, eliminar: false },
     areas:          { ver: false, crear: false, editar: false, eliminar: false },
     permisos:       { ver: false, crear: false, editar: false, eliminar: false },
     tipos_permiso:  { ver: false, crear: false, editar: false, eliminar: false },
@@ -132,6 +139,7 @@ function mergePermisos(stored) {
     transferencias: { ...EMPTY_PERMISOS.transferencias, ...(stored?.transferencias || {}) },
     planificacion:  { ...EMPTY_PERMISOS.planificacion,  ...(stored?.planificacion  || {}) },
     destajo:        { ...EMPTY_PERMISOS.destajo,        ...(stored?.destajo        || {}) },
+    etiquetado:     { ...EMPTY_PERMISOS.etiquetado,     ...(stored?.etiquetado     || {}) },
     areas:          { ...EMPTY_PERMISOS.areas,          ...(stored?.areas          || {}) },
     permisos:       { ...EMPTY_PERMISOS.permisos,       ...(stored?.permisos       || {}) },
     tipos_permiso:  { ...EMPTY_PERMISOS.tipos_permiso,  ...(stored?.tipos_permiso  || {}) },
@@ -141,7 +149,7 @@ function mergePermisos(stored) {
 }
 
 function derivarRol(p) {
-  const soloPantallas = !p?.empleados?.ver && !p?.movimientos?.ver && !p?.transferencias?.ver && !p?.areas?.ver && !p?.permisos?.ver && !p?.tipos_permiso?.ver && !p?.usuarios?.ver && !p?.catalogos?.ver && !p?.destajo?.ver;
+  const soloPantallas = !p?.empleados?.ver && !p?.movimientos?.ver && !p?.transferencias?.ver && !p?.areas?.ver && !p?.permisos?.ver && !p?.tipos_permiso?.ver && !p?.usuarios?.ver && !p?.catalogos?.ver && !p?.destajo?.ver && !p?.etiquetado?.ver;
   if (soloPantallas && (p?.kiosco?.ver || p?.kiosco_areas?.ver || p?.equipo?.ver)) return "kiosco";
   return "readonly";
 }

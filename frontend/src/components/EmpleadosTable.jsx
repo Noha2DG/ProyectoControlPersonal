@@ -1,8 +1,10 @@
 const fmt = (dateStr) => {
   if (!dateStr) return "-";
-  const d = new Date(dateStr);
-  if (isNaN(d.getTime()) || d.getFullYear() < 1900) return "-";
-  return d.toLocaleDateString("es-MX", { day: "2-digit", month: "2-digit", year: "numeric" });
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(dateStr));
+  if (!m) return "-";
+  const [, y, mo, d] = m;
+  if (Number(y) < 1900) return "-";
+  return `${d}/${mo}/${y}`;
 };
 
 export default function EmpleadosTable({ empleados, loading, isAdmin, onEdit, onBaja, onReactivar }) {

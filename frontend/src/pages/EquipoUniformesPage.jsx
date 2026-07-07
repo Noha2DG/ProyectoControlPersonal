@@ -34,7 +34,6 @@ export default function EquipoUniformesPage() {
   const [entrega, setEntrega]         = useState(null); // null = sin asignar hoy
   const [seleccion, setSeleccion]     = useState({});   // { CodigoTipoEquipo: boolean }
   const [extraSeleccion, setExtraSeleccion] = useState({}); // equipo adicional a agregar a medio turno
-  const [fotoError, setFotoError]     = useState(false);
   const [escaneando, setEscaneando]   = useState(false);
   const [guardando, setGuardando]     = useState(false);
   const [agregando, setAgregando]     = useState(false);
@@ -100,7 +99,7 @@ export default function EquipoUniformesPage() {
 
   const limpiarSesion = () => {
     setCodigoInput(""); setEmpleado(null); setEntrega(null);
-    setSeleccion({}); setExtraSeleccion({}); setFotoError(false); setErrorMsg(""); setExito("");
+    setSeleccion({}); setExtraSeleccion({}); setErrorMsg(""); setExito("");
     setSugerenciasAbiertas(false);
     fetchRegistros();
     codigoRef.current?.focus();
@@ -112,7 +111,7 @@ export default function EquipoUniformesPage() {
     setCodigoInput("");
     setEscaneando(true);
     setErrorMsg(""); setExito("");
-    setEmpleado(null); setEntrega(null); setSeleccion({}); setExtraSeleccion({}); setFotoError(false);
+    setEmpleado(null); setEntrega(null); setSeleccion({}); setExtraSeleccion({});
 
     try {
       const res = await fetch(`/api/equipo/entrega/${encodeURIComponent(cod)}`, { headers: authHeader() });
@@ -427,33 +426,6 @@ export default function EquipoUniformesPage() {
               </svg>
               {exito}
             </div>
-          )}
-        </div>
-
-        {/* Foto empleado */}
-        <div className="shrink-0 w-36">
-          <div className={`w-36 h-44 rounded-xl overflow-hidden border-4 bg-gray-100 flex items-center justify-center transition-all ${
-            empleado ? "border-blue-600 shadow-[0_0_0_3px_rgba(59,130,246,0.25)]" : "border-gray-300"
-          }`}>
-            {empleado && !fotoError ? (
-              <img
-                src={`/uploads/fotos/${empleado.Codigo}.jpg`}
-                alt={empleado.NombreCompleto}
-                className="w-full h-full object-cover"
-                onError={() => setFotoError(true)}
-              />
-            ) : (
-              <div className="flex flex-col items-center justify-center gap-2 text-gray-300">
-                <svg className="w-14 h-14 opacity-40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
-                    d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-                </svg>
-                {empleado && <span className="text-xs text-gray-400 text-center px-1">{empleado.Codigo}</span>}
-              </div>
-            )}
-          </div>
-          {empleado && (
-            <p className="text-center text-xs text-gray-600 mt-1 font-mono">{empleado.Codigo}</p>
           )}
         </div>
       </div>

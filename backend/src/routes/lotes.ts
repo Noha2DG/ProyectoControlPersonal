@@ -2,6 +2,7 @@ import { Router, Request, Response } from "express";
 import jwt from "jsonwebtoken";
 import prisma from "../lib/prisma.ts";
 import { requireAuth, requirePerm } from "../middleware/auth.ts";
+import { componerCodigoLote, piscinaRequiereCiclo } from "../lib/codigoLote.ts";
 
 const router = Router();
 
@@ -16,33 +17,11 @@ function getOperador(req: Request): string {
   }
 }
 
-// Número de semana ISO-8601 y día de semana ISO (lunes=1...domingo=7) de una fecha "YYYY-MM-DD".
-// Se usa Date.UTC para evitar corrimientos de zona horaria.
-function isoSemana(fecha: string) {
-  const [anio, mes, dia] = fecha.split("-").map(Number);
-  const date = new Date(Date.UTC(anio, mes - 1, dia));
-  const diaSemanaISO = date.getUTCDay() || 7;
-  const jueves = new Date(date);
-  jueves.setUTCDate(date.getUTCDate() + 4 - diaSemanaISO);
-  const inicioAnio = new Date(Date.UTC(jueves.getUTCFullYear(), 0, 1));
-  const semana = Math.ceil((((jueves.getTime() - inicioAnio.getTime()) / 86400000) + 1) / 7);
-  return { diaSemanaISO, semana };
-}
-
-// Letra de año (A=2020, B=2021... G=2026) + día de semana ISO + semana ISO (2 dígitos).
-function segmentoFecha(fecha: string) {
-  const [anio] = fecha.split("-").map(Number);
-  const letra = String.fromCharCode(65 + (anio - 2020));
-  const { diaSemanaISO, semana } = isoSemana(fecha);
-  return `${letra}${diaSemanaISO}${String(semana).padStart(2, "0")}`;
-}
-
 // Formato: <letraAño><díaSemanaISO><semanaISO><primeraParteDePiscina>-<segundaParteDePiscina>-<ciclo>
 // ej. piscina "EM07-E01", martes (2) semana 27 de 2026 (G), ciclo 5 → G227EM07-E01-5
 async function generarCodigoLote(piscinaId: number, fecha: string, cicloNumero?: number) {
   const piscinas: any[] = await prisma.$queryRaw`SELECT Nombre FROM Piscina WHERE PiscinaId = ${piscinaId} LIMIT 1`;
   if (!piscinas.length) return null;
-  const [parte1, parte2] = String(piscinas[0].Nombre).split("-");
   let secuencial: string;
   if (cicloNumero) {
     secuencial = String(cicloNumero);
@@ -50,7 +29,7 @@ async function generarCodigoLote(piscinaId: number, fecha: string, cicloNumero?:
     const countRows: any[] = await prisma.$queryRaw`SELECT COUNT(*) AS n FROM Lotes WHERE Fecha = ${fecha}`;
     secuencial = String(Number(countRows[0].n) + 1);
   }
-  return [`${segmentoFecha(fecha)}${parte1}`, parte2, secuencial].filter(Boolean).join("-");
+  return componerCodigoLote(String(piscinas[0].Nombre), fecha, secuencial);
 }
 
 function formatear(rows: any[]) {
@@ -111,13 +90,14 @@ router.post("/", requireAuth, requirePerm("destajo", "crear"), async (req: Reque
       return;
     }
 
-    // Los sifones (ej. "TM-SIFON") no son piscinas de cultivo — nunca deben llevar ciclo,
-    // sin importar lo que llegue en CicloNumero.
-    const piscinaRows: any[] = await prisma.$queryRaw`SELECT Nombre FROM Piscina WHERE PiscinaId = ${Number(PiscinaId)} LIMIT 1`;
+    // Los sifones, piscinas genéricas ("00-E00") y fincas proveedoras externas (Importación, Maquila,
+    // Proveedores de Pescado) no son piscinas de cultivo real — nunca deben llevar ciclo, sin importar
+    // lo que llegue en CicloNumero. Ver piscinaRequiereCiclo en lib/codigoLote.ts.
+    const piscinaRows: any[] = await prisma.$queryRaw`SELECT Nombre, CodigoFinca FROM Piscina WHERE PiscinaId = ${Number(PiscinaId)} LIMIT 1`;
     if (!piscinaRows.length) { res.status(404).json({ error: "Piscina no encontrada" }); return; }
-    const esSifon = String(piscinaRows[0].Nombre).includes("SIFON");
+    const requiereCiclo = piscinaRequiereCiclo(String(piscinaRows[0].Nombre), String(piscinaRows[0].CodigoFinca));
 
-    const cicloNum = (!esSifon && CicloNumero) ? Number(CicloNumero) : undefined;
+    const cicloNum = (requiereCiclo && CicloNumero) ? Number(CicloNumero) : undefined;
     const lote = await generarCodigoLote(Number(PiscinaId), Fecha, cicloNum);
     if (!lote) { res.status(404).json({ error: "Piscina no encontrada" }); return; }
 

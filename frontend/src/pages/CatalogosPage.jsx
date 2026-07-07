@@ -20,6 +20,8 @@ const TABS = [
   { key: "piscina", label: "Piscinas y Ciclos" },
   { key: "clientes", label: "Clientes" },
   { key: "pedidos", label: "Pedidos" },
+  { key: "origen", label: "Origen" },
+  { key: "congelacion", label: "Congelación" },
 ];
 
 export default function CatalogosPage() {
@@ -63,6 +65,12 @@ export default function CatalogosPage() {
       {tab === "piscina" && <PiscinaCicloPage />}
       {tab === "clientes" && <ClientesPage />}
       {tab === "pedidos" && <PedidosPage />}
+      {tab === "origen" && (
+        <CatalogoSimpleTable api="/api/origen" pk="Codigo" pkLabel="Código" nuevoLabel="+ Nuevo Origen" />
+      )}
+      {tab === "congelacion" && (
+        <CatalogoSimpleTable api="/api/unidades-congelacion" pk="Codigo" pkLabel="Código" nuevoLabel="+ Nueva Unidad de Congelación" />
+      )}
     </div>
   );
 }

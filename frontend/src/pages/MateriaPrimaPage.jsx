@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { authHeader } from "../context/AuthContext.jsx";
+import { piscinaRequiereCiclo } from "../utils/codigoLote.js";
 
 function hoy() { return new Date().toLocaleDateString("sv-SE"); }
 
@@ -57,9 +58,10 @@ function LoteModal({ item, fincas, clases, tallas, onSave, onClose }) {
   const set = f => e => setForm(p => ({ ...p, [f]: e.target.value }));
   const setVal = f => val => setForm(p => ({ ...p, [f]: val }));
 
-  // Los sifones (ej. "TM-SIFON") no son piscinas de cultivo — nunca deben llevar ciclo
+  // Sifones, piscinas genéricas ("00-E00") y fincas proveedoras externas (Importación, Maquila,
+  // Proveedores de Pescado) no son piscinas de cultivo real — nunca llevan ciclo.
   const piscinaSeleccionada = piscinas.find(p => String(p.PiscinaId) === String(form.PiscinaId));
-  const esSifon = piscinaSeleccionada?.Nombre?.includes("SIFON") ?? false;
+  const requiereCiclo = piscinaSeleccionada ? piscinaRequiereCiclo(piscinaSeleccionada.Nombre, form.CodigoFinca) : true;
 
   useEffect(() => {
     if (!form.CodigoFinca) { setPiscinas([]); return; }
@@ -76,11 +78,11 @@ function LoteModal({ item, fincas, clases, tallas, onSave, onClose }) {
       });
   }, [form.PiscinaId]);
 
-  // Al cargar la piscina, pre-llenar con el último ciclo registrado (solo si es lote nuevo y no es sifón)
+  // Al cargar la piscina, pre-llenar con el último ciclo registrado (solo si es lote nuevo y requiere ciclo)
   useEffect(() => {
-    if (isEdit || esSifon) return;
+    if (isEdit || !requiereCiclo) return;
     setForm(p => ({ ...p, CicloNumero: ultimoCiclo ? String(ultimoCiclo.Ciclo) : "" }));
-  }, [ultimoCiclo?.CicloId, esSifon]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [ultimoCiclo?.CicloId, requiereCiclo]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSubmit = e => { e.preventDefault(); onSave(form); };
 
@@ -143,9 +145,9 @@ function LoteModal({ item, fincas, clases, tallas, onSave, onClose }) {
           {form.PiscinaId && (
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1">Ciclo</label>
-              {esSifon ? (
+              {!requiereCiclo ? (
                 <div className="w-full border border-gray-200 bg-gray-50 rounded-lg px-3 py-2 text-sm text-gray-400">
-                  Este sifón no maneja ciclo
+                  Esta piscina no maneja ciclo
                 </div>
               ) : isEdit ? (
                 <div className="w-full border border-gray-200 bg-gray-50 rounded-lg px-3 py-2 text-sm text-gray-600">

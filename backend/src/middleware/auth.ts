@@ -15,6 +15,7 @@ export interface Permisos {
   permisos?:       { ver?: boolean; crear?: boolean; editar?: boolean; eliminar?: boolean };
   catalogos?:      { ver?: boolean; crear?: boolean; editar?: boolean; eliminar?: boolean };
   destajo?:        { ver?: boolean; crear?: boolean; editar?: boolean; eliminar?: boolean };
+  etiquetado?:     { ver?: boolean; crear?: boolean; editar?: boolean; eliminar?: boolean };
 }
 
 export interface AuthPayload {
@@ -60,6 +61,19 @@ export function requirePerm(mod: string, accion: string) {
     // Si tiene permisos explícitos, siempre verificar (sin importar el rol)
     const p = (req.user?.permisos as any)?.[mod];
     if (p?.[accion]) { next(); return; }
+    res.status(403).json({ error: "Sin permiso para esta acción" });
+  };
+}
+
+// Igual que requirePerm, pero basta con cumplir cualquiera de los pares [modulo, accion] dados.
+// Se usa en lecturas compartidas entre módulos (ej. Lotes/Pedidos los consulta tanto Destajo/Catálogos
+// como Etiquetado) donde exigir un solo módulo obligaría a dar de más permisos de otro módulo.
+export function requireAnyPerm(checks: [string, string][]) {
+  return (req: AuthRequest, res: Response, next: NextFunction) => {
+    if (req.user?.rol === "admin" && !req.user?.permisos) { next(); return; }
+    const permisos = req.user?.permisos as any;
+    const ok = checks.some(([mod, accion]) => permisos?.[mod]?.[accion]);
+    if (ok) { next(); return; }
     res.status(403).json({ error: "Sin permiso para esta acción" });
   };
 }

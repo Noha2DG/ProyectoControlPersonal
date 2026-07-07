@@ -1,6 +1,6 @@
 import { Router, Request, Response } from "express";
 import prisma from "../lib/prisma.ts";
-import { requireAuth, requirePerm } from "../middleware/auth.ts";
+import { requireAuth, requirePerm, requireAnyPerm } from "../middleware/auth.ts";
 
 const router = Router();
 
@@ -16,7 +16,7 @@ function formatear(rows: any[]) {
 }
 
 // GET /api/detalle-pedido?pedido=2025004
-router.get("/", requireAuth, requirePerm("catalogos", "ver"), async (req: Request, res: Response) => {
+router.get("/", requireAuth, requireAnyPerm([["catalogos", "ver"], ["etiquetado", "ver"]]), async (req: Request, res: Response) => {
   try {
     const pedido = req.query.pedido as string | undefined;
     const rows: any[] = pedido

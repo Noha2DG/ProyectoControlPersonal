@@ -45,33 +45,38 @@ export async function aplicarCorteMedianoche(codigo: string): Promise<void> {
   const salidaAuto = `${entrada.Fecha} 23:59:59`;
   const entradaAuto = `${hoy} 00:00:00`;
 
-  const salidaInsertada = await prisma.$executeRaw`
-    INSERT IGNORE INTO Movimientos (Codigo, NombreEmpleado, Tipo, FechaHora, DiaSemana, Operador)
-    VALUES (${codigo}, ${entrada.NombreEmpleado}, 'Salida', ${salidaAuto}, ${diaSemanaDe(entrada.Fecha)}, ${OPERADOR_SISTEMA})
-  `;
-  if (salidaInsertada === 0) return; // otra llamada concurrente ya aplicó este corte
+  // Todo el corte (Salida + Entrada + arrastre de Transferencias) se aplica en
+  // una sola transacción: si la conexión se cae a medio camino, no debe quedar
+  // un empleado con Salida insertada pero sin su Entrada correspondiente.
+  await prisma.$transaction(async (tx) => {
+    const salidaInsertada = await tx.$executeRaw`
+      INSERT IGNORE INTO Movimientos (Codigo, NombreEmpleado, Tipo, FechaHora, DiaSemana, Operador)
+      VALUES (${codigo}, ${entrada.NombreEmpleado}, 'Salida', ${salidaAuto}, ${diaSemanaDe(entrada.Fecha)}, ${OPERADOR_SISTEMA})
+    `;
+    if (salidaInsertada === 0) return; // otra llamada concurrente ya aplicó este corte
 
-  await prisma.$executeRaw`
-    INSERT IGNORE INTO Movimientos (Codigo, NombreEmpleado, Tipo, FechaHora, DiaSemana, Operador)
-    VALUES (${codigo}, ${entrada.NombreEmpleado}, 'Entrada', ${entradaAuto}, ${diaSemanaDe(hoy)}, ${OPERADOR_SISTEMA})
-  `;
+    await tx.$executeRaw`
+      INSERT IGNORE INTO Movimientos (Codigo, NombreEmpleado, Tipo, FechaHora, DiaSemana, Operador)
+      VALUES (${codigo}, ${entrada.NombreEmpleado}, 'Entrada', ${entradaAuto}, ${diaSemanaDe(hoy)}, ${OPERADOR_SISTEMA})
+    `;
 
-  const areaAbierta: any[] = await prisma.$queryRaw`
-    SELECT CodigoArea FROM Transferencias
-    WHERE Codigo = ${codigo} AND FechaSalida IS NULL
-    ORDER BY FechaHora DESC
-    LIMIT 1
-  `;
-  if (areaAbierta.length) {
-    await prisma.$executeRaw`
-      UPDATE Transferencias SET FechaSalida = ${salidaAuto}
+    const areaAbierta: any[] = await tx.$queryRaw`
+      SELECT CodigoArea FROM Transferencias
       WHERE Codigo = ${codigo} AND FechaSalida IS NULL
+      ORDER BY FechaHora DESC
+      LIMIT 1
     `;
-    await prisma.$executeRaw`
-      INSERT INTO Transferencias (Codigo, CodigoArea, FechaHora, RegistradoPor)
-      VALUES (${codigo}, ${areaAbierta[0].CodigoArea}, ${entradaAuto}, ${OPERADOR_SISTEMA})
-    `;
-  }
+    if (areaAbierta.length) {
+      await tx.$executeRaw`
+        UPDATE Transferencias SET FechaSalida = ${salidaAuto}
+        WHERE Codigo = ${codigo} AND FechaSalida IS NULL
+      `;
+      await tx.$executeRaw`
+        INSERT INTO Transferencias (Codigo, CodigoArea, FechaHora, RegistradoPor)
+        VALUES (${codigo}, ${areaAbierta[0].CodigoArea}, ${entradaAuto}, ${OPERADOR_SISTEMA})
+      `;
+    }
+  });
 }
 
 /** Aplica el corte a todo empleado cuya última Entrada quedó abierta antes de hoy. */
