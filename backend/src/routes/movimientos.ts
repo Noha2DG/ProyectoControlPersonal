@@ -1,13 +1,17 @@
 import { Router, Request, Response } from "express";
 import jwt from "jsonwebtoken";
 import prisma from "../lib/prisma.ts";
-import { nowGT, hoyInicioGT } from "../lib/dateGT.ts";
+import { nowGT, hoyInicioGT, diaSemanaDe } from "../lib/dateGT.ts";
 import { requireAuth, requirePerm } from "../middleware/auth.ts";
 import { aplicarCorteMedianoche } from "../lib/corteMedianoche.ts";
 
 const router = Router();
 
-const DIAS = ["Domingo","Lunes","Martes","Miércoles","Jueves","Viernes","Sábado"];
+const TIPOS_VALIDOS = ["Entrada", "Salida"];
+
+function esDuplicado(err: any): boolean {
+  return err?.code === "P2010" || /Duplicate entry/i.test(err?.message ?? "");
+}
 
 function getOperador(req: Request): string {
   try {
@@ -58,7 +62,7 @@ router.post("/registrar", async (req: Request, res: Response) => {
         : "Salida";
 
     const ahora     = nowGT();
-    const diaSemana = DIAS[new Date().getDay()];
+    const diaSemana = diaSemanaDe(ahora);
     const operador  = getOperador(req);
 
     await prisma.$executeRaw`
@@ -108,13 +112,12 @@ router.get("/hoy", requireAuth, async (_req: Request, res: Response) => {
   }
 });
 
-// GET /api/movimientos?fecha=YYYY-MM-DD
+// GET /api/movimientos?fecha=YYYY-MM-DD → registros desde esa fecha en adelante
 router.get("/", requireAuth, requirePerm("movimientos", "ver"), async (req: Request, res: Response) => {
   try {
     const fecha = (req.query.fecha as string) ||
       new Date().toLocaleDateString("sv-SE", { timeZone: "America/Guatemala" });
     const inicio = `${fecha} 00:00:00`;
-    const fin    = `${fecha} 23:59:59`;
     const rows: any[] = await prisma.$queryRaw`
       SELECT m.id, m.Codigo,
              COALESCE(NULLIF(m.NombreEmpleado,''), NULLIF(CONCAT_WS(' ', e.PrimerNombre, e.SegundoNombre, e.PrimerApellido, e.SegundoApellido), ''), m.Codigo) AS NombreEmpleado,
@@ -124,23 +127,72 @@ router.get("/", requireAuth, requirePerm("movimientos", "ver"), async (req: Requ
              m.DiaSemana, m.Operador
       FROM Movimientos m
       LEFT JOIN Empleados e ON m.Codigo = e.Codigo
-      WHERE m.FechaHora BETWEEN ${inicio} AND ${fin}
+      WHERE m.FechaHora >= ${inicio}
       ORDER BY m.FechaHora ASC
     `;
     res.json(rows);
   } catch (err: any) { res.status(500).json({ error: err.message }); }
 });
 
-// PUT /api/movimientos/:id  { FechaHora, Tipo }
+// POST /api/movimientos  { Codigo, Tipo, FechaHora }  (alta manual de admin — corrección por falta de gafete)
+router.post("/", requireAuth, requirePerm("movimientos", "editar"), async (req: Request, res: Response) => {
+  try {
+    const { Codigo, Tipo, FechaHora } = req.body;
+    if (!Codigo || !FechaHora) { res.status(400).json({ error: "Código y Fecha/Hora son requeridos" }); return; }
+    if (!TIPOS_VALIDOS.includes(Tipo)) { res.status(400).json({ error: "Tipo inválido" }); return; }
+
+    const empleados: any[] = await prisma.$queryRaw`
+      SELECT Codigo, CONCAT_WS(' ', PrimerNombre, SegundoNombre, PrimerApellido, SegundoApellido) AS NombreCompleto
+      FROM Empleados WHERE Codigo = ${Codigo} LIMIT 1
+    `;
+    if (!empleados.length) { res.status(404).json({ error: "Empleado no encontrado" }); return; }
+
+    const fh = FechaHora.replace("T", " ") + (FechaHora.length === 16 ? ":00" : "");
+    const diaSemana = diaSemanaDe(fh);
+    const operador  = getOperador(req);
+
+    try {
+      await prisma.$executeRaw`
+        INSERT INTO Movimientos (Codigo, NombreEmpleado, Tipo, FechaHora, DiaSemana, Operador)
+        VALUES (${Codigo}, ${empleados[0].NombreCompleto}, ${Tipo}, ${fh}, ${diaSemana}, ${operador})
+      `;
+    } catch (err: any) {
+      if (esDuplicado(err)) { res.status(400).json({ error: "Ya existe un registro idéntico para ese empleado, fecha/hora y tipo" }); return; }
+      throw err;
+    }
+    res.status(201).json({ ok: true });
+  } catch (err: any) { res.status(500).json({ error: err.message }); }
+});
+
+// PUT /api/movimientos/:id  { Codigo, FechaHora, Tipo }
 router.put("/:id", requireAuth, requirePerm("movimientos", "editar"), async (req: Request, res: Response) => {
   try {
-    const id   = parseInt(req.params.id);
-    const { FechaHora, Tipo } = req.body;
+    const id = parseInt(req.params.id);
+    const { Codigo, FechaHora, Tipo } = req.body;
+    if (!Codigo || !FechaHora) { res.status(400).json({ error: "Código y Fecha/Hora son requeridos" }); return; }
+    if (!TIPOS_VALIDOS.includes(Tipo)) { res.status(400).json({ error: "Tipo inválido" }); return; }
+
+    const empleados: any[] = await prisma.$queryRaw`
+      SELECT Codigo, CONCAT_WS(' ', PrimerNombre, SegundoNombre, PrimerApellido, SegundoApellido) AS NombreCompleto
+      FROM Empleados WHERE Codigo = ${Codigo} LIMIT 1
+    `;
+    if (!empleados.length) { res.status(404).json({ error: "Empleado no encontrado" }); return; }
+
     // FechaHora viene como "2026-06-17T12:08" del input datetime-local → normalizar
     const fh = FechaHora.replace("T", " ") + (FechaHora.length === 16 ? ":00" : "");
-    await prisma.$executeRaw`
-      UPDATE Movimientos SET FechaHora = ${fh}, Tipo = ${Tipo} WHERE id = ${id}
-    `;
+    const diaSemana = diaSemanaDe(fh);
+
+    try {
+      await prisma.$executeRaw`
+        UPDATE Movimientos
+        SET Codigo = ${Codigo}, NombreEmpleado = ${empleados[0].NombreCompleto},
+            Tipo = ${Tipo}, FechaHora = ${fh}, DiaSemana = ${diaSemana}
+        WHERE id = ${id}
+      `;
+    } catch (err: any) {
+      if (esDuplicado(err)) { res.status(400).json({ error: "Ya existe un registro idéntico para ese empleado, fecha/hora y tipo" }); return; }
+      throw err;
+    }
     res.json({ ok: true });
   } catch (err: any) { res.status(500).json({ error: err.message }); }
 });

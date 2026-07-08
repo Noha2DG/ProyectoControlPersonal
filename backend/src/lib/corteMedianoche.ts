@@ -1,13 +1,8 @@
 import prisma from "./prisma.ts";
-import { nowGT, hoyInicioGT } from "./dateGT.ts";
+import { nowGT, hoyInicioGT, diaSemanaDe } from "./dateGT.ts";
 
-const DIAS = ["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"];
 const OPERADOR_SISTEMA = "Sistema";
 const LIMITE_HORAS_JORNADA = 20; // más allá de esto, se asume olvido de marcar salida, no turno real
-
-function diaSemanaDe(fechaYMD: string): string {
-  return DIAS[new Date(`${fechaYMD}T12:00:00`).getDay()];
-}
 
 /**
  * Si la última Entrada del empleado quedó abierta en un día calendario anterior

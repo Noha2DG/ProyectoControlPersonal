@@ -118,6 +118,43 @@ router.post("/", async (req: Request, res: Response) => {
   }
 });
 
+// POST /api/transferencias/manual  { Codigo, CodigoArea, FechaHora, FechaSalida? }
+// Alta manual de admin — corrección por falta de gafete, sin las validaciones de cupo/turno del
+// flujo de kiosco (POST /) ni el cierre automático del área abierta actual.
+router.post("/manual", requireAuth, requirePerm("transferencias", "editar"), async (req: Request, res: Response) => {
+  try {
+    const { Codigo, CodigoArea, FechaHora, FechaSalida } = req.body;
+    if (!Codigo || !CodigoArea || !FechaHora) {
+      res.status(400).json({ error: "Código, Área y Fecha/Hora de entrada son requeridos" }); return;
+    }
+
+    const [empleados, areas] = await Promise.all([
+      prisma.$queryRaw`
+        SELECT Codigo, CONCAT_WS(' ', PrimerNombre, SegundoNombre, PrimerApellido, SegundoApellido) AS NombreCompleto
+        FROM Empleados WHERE Codigo = ${Codigo} LIMIT 1
+      `,
+      prisma.$queryRaw`SELECT Codigo FROM Areas WHERE Codigo = ${CodigoArea} LIMIT 1`,
+    ]) as any[][];
+    if (!empleados.length) { res.status(404).json({ error: "Empleado no encontrado" }); return; }
+    if (!areas.length) { res.status(404).json({ error: "Área no encontrada" }); return; }
+
+    const fh  = FechaHora.replace("T", " ") + (FechaHora.length === 16 ? ":00" : "");
+    const fhs = FechaSalida
+      ? FechaSalida.replace("T", " ") + (FechaSalida.length === 16 ? ":00" : "")
+      : null;
+    if (fhs && fhs < fh) { res.status(400).json({ error: "La hora de salida no puede ser anterior a la de entrada" }); return; }
+
+    const operador = getOperador(req);
+    await prisma.$executeRaw`
+      INSERT INTO Transferencias (Codigo, CodigoArea, FechaHora, FechaSalida, RegistradoPor)
+      VALUES (${Codigo}, ${CodigoArea}, ${fh}, ${fhs}, ${operador})
+    `;
+    res.status(201).json({ ok: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/transferencias/hoy?area=CODIGO  (terminal de kiosco — requiere sesión)
 // Sin "area": últimas 15 transferencias del día (actividad general).
 // Con "area": últimas 20 personas que se dieron transferencia específicamente a esa área.
@@ -181,17 +218,30 @@ router.get("/", requireAuth, requirePerm("transferencias", "ver"), async (req: R
   } catch (err: any) { res.status(500).json({ error: err.message }); }
 });
 
-// PUT /api/transferencias/:id  { FechaHora, FechaSalida }
+// PUT /api/transferencias/:id  { Codigo, CodigoArea, FechaHora, FechaSalida }
 router.put("/:id", requireAuth, requirePerm("transferencias", "editar"), async (req: Request, res: Response) => {
   try {
     const id = parseInt(req.params.id);
-    const { FechaHora, FechaSalida } = req.body;
+    const { Codigo, CodigoArea, FechaHora, FechaSalida } = req.body;
+    if (!Codigo || !CodigoArea || !FechaHora) {
+      res.status(400).json({ error: "Código, Área y Fecha/Hora de entrada son requeridos" }); return;
+    }
+
+    const [empleados, areas] = await Promise.all([
+      prisma.$queryRaw`SELECT Codigo FROM Empleados WHERE Codigo = ${Codigo} LIMIT 1`,
+      prisma.$queryRaw`SELECT Codigo FROM Areas WHERE Codigo = ${CodigoArea} LIMIT 1`,
+    ]) as any[][];
+    if (!empleados.length) { res.status(404).json({ error: "Empleado no encontrado" }); return; }
+    if (!areas.length) { res.status(404).json({ error: "Área no encontrada" }); return; }
+
     const fh  = FechaHora.replace("T", " ") + (FechaHora.length === 16 ? ":00" : "");
     const fhs = FechaSalida
       ? FechaSalida.replace("T", " ") + (FechaSalida.length === 16 ? ":00" : "")
       : null;
+    if (fhs && fhs < fh) { res.status(400).json({ error: "La hora de salida no puede ser anterior a la de entrada" }); return; }
+
     await prisma.$executeRaw`
-      UPDATE Transferencias SET FechaHora = ${fh}, FechaSalida = ${fhs} WHERE id = ${id}
+      UPDATE Transferencias SET Codigo = ${Codigo}, CodigoArea = ${CodigoArea}, FechaHora = ${fh}, FechaSalida = ${fhs} WHERE id = ${id}
     `;
     res.json({ ok: true });
   } catch (err: any) { res.status(500).json({ error: err.message }); }

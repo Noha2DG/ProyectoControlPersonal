@@ -1,26 +1,44 @@
 import { useState, useEffect, useCallback } from "react";
 import { authHeader } from "../context/AuthContext.jsx";
 import { exportarMovimientos } from "../utils/exportExcel.js";
+import EmpleadoAutocomplete from "../components/EmpleadoAutocomplete.jsx";
 
 const TIPOS = ["Entrada", "Salida"];
 
-function EditModal({ registro, onSave, onClose }) {
+function ahoraInputGT() {
+  return new Date().toLocaleString("sv-SE", { timeZone: "America/Guatemala" }).slice(0, 16).replace(" ", "T");
+}
+
+function RegistroModal({ registro, empleados, onSave, onClose }) {
+  const isEdit = !!registro;
   const [form, setForm] = useState({
-    FechaHora: registro.FechaHoraInput || "",
-    Tipo: registro.Tipo || "Entrada",
+    Codigo: registro?.Codigo || "",
+    FechaHora: registro?.FechaHoraInput || ahoraInputGT(),
+    Tipo: registro?.Tipo || "Entrada",
   });
-  const handleSubmit = e => { e.preventDefault(); onSave(registro.id, form); };
+
+  const handleSubmit = e => {
+    e.preventDefault();
+    if (!form.Codigo) { alert("Selecciona un empleado válido de la lista"); return; }
+    onSave(registro?.id, form);
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
       <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm mx-4">
         <div className="px-6 py-4 border-b flex items-center justify-between">
-          <div>
-            <h2 className="text-base font-semibold text-gray-800">Corregir Registro</h2>
-            <p className="text-xs text-gray-500 font-mono mt-0.5">{registro.Codigo} — {registro.NombreEmpleado}</p>
-          </div>
+          <h2 className="text-base font-semibold text-gray-800">{isEdit ? "Corregir Registro" : "Registrar Movimiento Manual"}</h2>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl">&times;</button>
         </div>
         <form onSubmit={handleSubmit} className="px-6 py-5 space-y-4">
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Empleado</label>
+            <EmpleadoAutocomplete
+              empleados={empleados}
+              value={form.Codigo}
+              onSelect={codigo => setForm(p => ({ ...p, Codigo: codigo }))}
+            />
+          </div>
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1">Fecha y Hora</label>
             <input type="datetime-local" required value={form.FechaHora}
@@ -44,7 +62,7 @@ function EditModal({ registro, onSave, onClose }) {
           </div>
           <div className="flex justify-end gap-3 pt-1">
             <button type="button" onClick={onClose} className="px-4 py-2 text-sm border border-gray-300 rounded-lg text-gray-600 hover:bg-gray-50">Cancelar</button>
-            <button type="submit" className="px-5 py-2 text-sm bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700">Guardar</button>
+            <button type="submit" className="px-5 py-2 text-sm bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700">{isEdit ? "Guardar" : "Crear"}</button>
           </div>
         </form>
       </div>
@@ -57,8 +75,9 @@ export default function MovimientosAdminPage() {
   const [fecha, setFecha]       = useState(hoy);
   const [busqueda, setBusqueda] = useState("");
   const [registros, setRegistros] = useState([]);
+  const [empleados, setEmpleados] = useState([]);
   const [loading, setLoading]   = useState(false);
-  const [editando, setEditando] = useState(null);
+  const [modal, setModal] = useState({ open: false, registro: null });
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -71,13 +90,19 @@ export default function MovimientosAdminPage() {
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
+  useEffect(() => {
+    fetch("/api/empleados", { headers: authHeader() }).then(r => r.json())
+      .then(d => { if (Array.isArray(d)) setEmpleados(d.filter(e => e.Estado === "Activo")); });
+  }, []);
+
   const handleSave = async (id, form) => {
-    const res = await fetch(`/api/movimientos/${id}`, {
-      method: "PUT",
+    const isEdit = !!id;
+    const res = await fetch(isEdit ? `/api/movimientos/${id}` : "/api/movimientos", {
+      method: isEdit ? "PUT" : "POST",
       headers: { "Content-Type": "application/json", ...authHeader() },
       body: JSON.stringify(form),
     });
-    if (res.ok) { setEditando(null); fetchData(); }
+    if (res.ok) { setModal({ open: false, registro: null }); fetchData(); }
     else { const e = await res.json(); alert("Error: " + e.error); }
   };
 
@@ -99,7 +124,7 @@ export default function MovimientosAdminPage() {
       {/* Filtros */}
       <div className="flex flex-wrap gap-3 items-center mb-4">
         <div className="flex items-center gap-2">
-          <label className="text-sm text-gray-600 font-medium">Fecha:</label>
+          <label className="text-sm text-gray-600 font-medium">Desde:</label>
           <input type="date" value={fecha} onChange={e => setFecha(e.target.value)}
             className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
         </div>
@@ -108,6 +133,12 @@ export default function MovimientosAdminPage() {
           className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm w-64 focus:outline-none focus:ring-2 focus:ring-blue-400" />
         <button onClick={fetchData} className="text-blue-600 hover:text-blue-800 text-sm font-medium px-3 py-1.5 rounded-lg hover:bg-blue-50 border border-blue-200 transition">
           Actualizar
+        </button>
+        <button
+          onClick={() => setModal({ open: true, registro: null })}
+          className="bg-blue-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-blue-700 transition"
+        >
+          + Registrar manual
         </button>
         <span className="text-sm text-gray-500 ml-auto">{filtrados.length} registro{filtrados.length !== 1 ? "s" : ""}</span>
         {filtrados.length > 0 && (
@@ -141,7 +172,7 @@ export default function MovimientosAdminPage() {
             </thead>
             <tbody className="divide-y divide-gray-100">
               {filtrados.length === 0 ? (
-                <tr><td colSpan={8} className="px-4 py-10 text-center text-gray-400">Sin registros para esta fecha</td></tr>
+                <tr><td colSpan={8} className="px-4 py-10 text-center text-gray-400">Sin registros desde esta fecha</td></tr>
               ) : filtrados.map(r => (
                 <tr key={r.id} className="hover:bg-gray-50 transition">
                   <td className="px-4 py-2.5 text-gray-400 text-xs font-mono">{r.id}</td>
@@ -157,7 +188,7 @@ export default function MovimientosAdminPage() {
                   <td className="px-4 py-2.5 text-center text-gray-500 text-xs">{r.Operador}</td>
                   <td className="px-4 py-2.5 text-center">
                     <div className="flex justify-center gap-2">
-                      <button onClick={() => setEditando(r)}
+                      <button onClick={() => setModal({ open: true, registro: r })}
                         className="text-blue-600 hover:text-blue-800 text-xs font-medium px-2 py-1 rounded hover:bg-blue-50 transition">
                         Editar
                       </button>
@@ -174,8 +205,8 @@ export default function MovimientosAdminPage() {
         </div>
       )}
 
-      {editando && (
-        <EditModal registro={editando} onSave={handleSave} onClose={() => setEditando(null)} />
+      {modal.open && (
+        <RegistroModal registro={modal.registro} empleados={empleados} onSave={handleSave} onClose={() => setModal({ open: false, registro: null })} />
       )}
     </div>
   );

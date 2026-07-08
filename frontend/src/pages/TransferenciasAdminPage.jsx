@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { authHeader } from "../context/AuthContext.jsx";
 import { exportarTransferencias } from "../utils/exportExcel.js";
+import EmpleadoAutocomplete from "../components/EmpleadoAutocomplete.jsx";
 
 function formatMin(m) {
   if (m == null || m < 0) return "—";
@@ -9,25 +10,53 @@ function formatMin(m) {
   return `${Math.floor(m/60)}h ${m%60 > 0 ? m%60+"m" : ""}`.trim();
 }
 
-function EditModal({ registro, onSave, onClose }) {
+function ahoraInputGT() {
+  return new Date().toLocaleString("sv-SE", { timeZone: "America/Guatemala" }).slice(0, 16).replace(" ", "T");
+}
+
+function RegistroModal({ registro, empleados, areas, onSave, onClose }) {
+  const isEdit = !!registro;
   const [form, setForm] = useState({
-    FechaHora:   registro.FechaHoraInput   || "",
-    FechaSalida: registro.FechaSalidaInput || "",
+    Codigo:      registro?.Codigo      || "",
+    CodigoArea:  registro?.CodigoArea  || "",
+    FechaHora:   registro?.FechaHoraInput   || ahoraInputGT(),
+    FechaSalida: registro?.FechaSalidaInput || "",
   });
-  const handleSubmit = e => { e.preventDefault(); onSave(registro.id, form); };
+
+  const handleSubmit = e => {
+    e.preventDefault();
+    if (!form.Codigo) { alert("Selecciona un empleado válido de la lista"); return; }
+    if (!form.CodigoArea) { alert("Selecciona un área"); return; }
+    onSave(registro?.id, form);
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
       <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm mx-4">
         <div className="px-6 py-4 border-b flex items-center justify-between">
-          <div>
-            <h2 className="text-base font-semibold text-gray-800">Corregir Transferencia</h2>
-            <p className="text-xs text-gray-500 mt-0.5">
-              <span className="font-mono font-bold text-blue-700">{registro.CodigoArea}</span> {registro.NombreArea} · {registro.Codigo}
-            </p>
-          </div>
+          <h2 className="text-base font-semibold text-gray-800">{isEdit ? "Corregir Transferencia" : "Registrar Transferencia Manual"}</h2>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl">&times;</button>
         </div>
         <form onSubmit={handleSubmit} className="px-6 py-5 space-y-4">
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Empleado</label>
+            <EmpleadoAutocomplete
+              empleados={empleados}
+              value={form.Codigo}
+              onSelect={codigo => setForm(p => ({ ...p, Codigo: codigo }))}
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Área</label>
+            <select required value={form.CodigoArea}
+              onChange={e => setForm(p => ({ ...p, CodigoArea: e.target.value }))}
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400">
+              <option value="">Seleccionar...</option>
+              {areas.map(a => (
+                <option key={a.Codigo} value={a.Codigo}>{a.Codigo} — {a.Nombre}</option>
+              ))}
+            </select>
+          </div>
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1">Hora de Entrada</label>
             <input type="datetime-local" required value={form.FechaHora}
@@ -48,7 +77,7 @@ function EditModal({ registro, onSave, onClose }) {
           </div>
           <div className="flex justify-end gap-3 pt-1">
             <button type="button" onClick={onClose} className="px-4 py-2 text-sm border border-gray-300 rounded-lg text-gray-600 hover:bg-gray-50">Cancelar</button>
-            <button type="submit" className="px-5 py-2 text-sm bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700">Guardar</button>
+            <button type="submit" className="px-5 py-2 text-sm bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700">{isEdit ? "Guardar" : "Crear"}</button>
           </div>
         </form>
       </div>
@@ -64,8 +93,10 @@ export default function TransferenciasAdminPage() {
   const [areaTexto, setAreaTexto] = useState("");
   const [areaAbierto, setAreaAbierto] = useState(false);
   const [registros, setRegistros] = useState([]);
+  const [empleados, setEmpleados] = useState([]);
+  const [areasTodas, setAreasTodas] = useState([]);
   const [loading, setLoading]   = useState(false);
-  const [editando, setEditando] = useState(null);
+  const [modal, setModal] = useState({ open: false, registro: null });
   const [permisosEmpleado, setPermisosEmpleado] = useState([]);
 
   const fetchData = useCallback(async () => {
@@ -79,13 +110,21 @@ export default function TransferenciasAdminPage() {
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
+  useEffect(() => {
+    fetch("/api/empleados", { headers: authHeader() }).then(r => r.json())
+      .then(d => { if (Array.isArray(d)) setEmpleados(d.filter(e => e.Estado === "Activo")); });
+    fetch("/api/areas", { headers: authHeader() }).then(r => r.json())
+      .then(d => { if (Array.isArray(d)) setAreasTodas([...d].sort((a, b) => a.Nombre.localeCompare(b.Nombre))); });
+  }, []);
+
   const handleSave = async (id, form) => {
-    const res = await fetch(`/api/transferencias/${id}`, {
-      method: "PUT",
+    const isEdit = !!id;
+    const res = await fetch(isEdit ? `/api/transferencias/${id}` : "/api/transferencias/manual", {
+      method: isEdit ? "PUT" : "POST",
       headers: { "Content-Type": "application/json", ...authHeader() },
       body: JSON.stringify(form),
     });
-    if (res.ok) { setEditando(null); fetchData(); }
+    if (res.ok) { setModal({ open: false, registro: null }); fetchData(); }
     else { const e = await res.json(); alert("Error: " + e.error); }
   };
 
@@ -187,6 +226,12 @@ export default function TransferenciasAdminPage() {
         <button onClick={fetchData} className="text-blue-600 hover:text-blue-800 text-sm font-medium px-3 py-1.5 rounded-lg hover:bg-blue-50 border border-blue-200 transition">
           Actualizar
         </button>
+        <button
+          onClick={() => setModal({ open: true, registro: null })}
+          className="bg-blue-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-blue-700 transition"
+        >
+          + Registrar manual
+        </button>
         <span className="text-sm text-gray-500 ml-auto">{filtrados.length} registro{filtrados.length !== 1 ? "s" : ""}</span>
         {filtrados.length > 0 && (
           <>
@@ -265,7 +310,7 @@ export default function TransferenciasAdminPage() {
                     </td>
                     <td className="px-4 py-2.5 text-center">
                       <div className="flex justify-center gap-2">
-                        <button onClick={() => setEditando(r)}
+                        <button onClick={() => setModal({ open: true, registro: r })}
                           className="text-blue-600 hover:text-blue-800 text-xs font-medium px-2 py-1 rounded hover:bg-blue-50 transition">
                           Editar
                         </button>
@@ -283,8 +328,8 @@ export default function TransferenciasAdminPage() {
         </div>
       )}
 
-      {editando && (
-        <EditModal registro={editando} onSave={handleSave} onClose={() => setEditando(null)} />
+      {modal.open && (
+        <RegistroModal registro={modal.registro} empleados={empleados} areas={areasTodas} onSave={handleSave} onClose={() => setModal({ open: false, registro: null })} />
       )}
     </div>
 

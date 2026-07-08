@@ -115,14 +115,14 @@ function EmpleadosSection({ canCrear, canEditar, canBaja }) {
   const q = search.toLowerCase();
   const filtrados = empleados.filter(e => {
     const matchEstado = filtroEstado === "Todos" || e.Estado === filtroEstado;
-    const matchSearch = !q || String(e.NombreCompleto ?? "").toLowerCase().includes(q) || String(e.Codigo ?? "").toLowerCase().includes(q) || String(e.DPI ?? "").toLowerCase().includes(q);
+    const matchSearch = !q || String(e.NombreCompleto ?? "").toLowerCase().includes(q) || String(e.Codigo ?? "").toLowerCase().includes(q) || String(e.DPI ?? "").toLowerCase().includes(q) || String(e.CodigoEtalent ?? "").toLowerCase().includes(q);
     return matchEstado && matchSearch;
   });
 
   return (
     <>
       <div className="flex flex-wrap gap-3 items-center mb-4">
-        <input type="text" placeholder="Buscar por nombre, código o DPI..."
+        <input type="text" placeholder="Buscar por nombre, código, DPI o etalent..."
           value={search} onChange={e => setSearch(e.target.value)}
           className="border border-gray-300 rounded-lg px-3 py-2 text-sm w-72 focus:outline-none focus:ring-2 focus:ring-blue-400" />
         <div className="flex gap-1 bg-gray-200 rounded-lg p-1">
