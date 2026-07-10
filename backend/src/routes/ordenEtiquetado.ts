@@ -34,6 +34,7 @@ function formatear(rows: any[]) {
     DetalleId: Number(r.DetalleId),
     Talla: Number(r.Talla),
     CantidadMaster: Number(r.CantidadMaster),
+    Impresas: Number(r.Impresas),
   }));
 }
 
@@ -47,7 +48,9 @@ const SELECT_ORDEN = `
          dp.Talla, ta.Descripcion AS DescripcionTalla,
          dp.Presentacion, pr.Descripcion AS DescripcionPresentacion,
          emM.Descripcion AS DescripcionEmpaqueMaster, emA.Descripcion AS DescripcionEmpaqueAccesorio,
-         f.Codigo AS CodigoFinca, f.Descripcion AS NombreFinca, pi.Nombre AS NombrePiscina
+         f.Codigo AS CodigoFinca, f.Descripcion AS NombreFinca, pi.Nombre AS NombrePiscina,
+         cli.RazonSocial AS NombreCliente, sub.RazonSocial AS NombreSubcliente,
+         (SELECT COUNT(*) FROM EtiquetaImpresa ei WHERE ei.OrdenId = oe.OrdenId AND ei.Estatus = 'Activa') AS Impresas
   FROM OrdenEtiquetado oe
   JOIN DetallePedido dp ON oe.DetalleId = dp.DetalleId
   JOIN Clase cl ON dp.Clase = cl.Clase
@@ -60,18 +63,24 @@ const SELECT_ORDEN = `
   JOIN Piscina pi ON oe.PiscinaId = pi.PiscinaId
   JOIN Finca f ON pi.CodigoFinca = f.Codigo
   LEFT JOIN Areas ar ON oe.AreaCodigo = ar.Codigo
+  JOIN Pedidos ped ON dp.CodigoPedido = ped.CodigoPedido
+  JOIN Clientes cli ON ped.CodigoCliente = cli.Codigo
+  LEFT JOIN Subcliente sub ON ped.CodigoCliente = sub.CodigoCliente AND ped.CodigoSubcliente = sub.CodigoSubcliente
 `;
 
-// GET /api/orden-etiquetado?pedido=001-2026 | ?detalle=123
+// GET /api/orden-etiquetado?pedido=001-2026 | ?detalle=123 | ?fecha=2026-07-08
 router.get("/", requireAuth, requirePerm("etiquetado", "ver"), async (req: Request, res: Response) => {
   try {
     const pedido = req.query.pedido as string | undefined;
     const detalle = req.query.detalle ? Number(req.query.detalle) : undefined;
+    const fecha = req.query.fecha as string | undefined;
     let rows: any[];
     if (detalle) {
       rows = await prisma.$queryRawUnsafe(`${SELECT_ORDEN} WHERE oe.DetalleId = ? ORDER BY oe.OrdenId DESC`, detalle);
     } else if (pedido) {
       rows = await prisma.$queryRawUnsafe(`${SELECT_ORDEN} WHERE dp.CodigoPedido = ? ORDER BY oe.OrdenId DESC`, pedido);
+    } else if (fecha) {
+      rows = await prisma.$queryRawUnsafe(`${SELECT_ORDEN} WHERE oe.FechaProduccion = ? ORDER BY oe.OrdenId DESC`, fecha);
     } else {
       rows = await prisma.$queryRawUnsafe(`${SELECT_ORDEN} ORDER BY oe.OrdenId DESC LIMIT 500`);
     }

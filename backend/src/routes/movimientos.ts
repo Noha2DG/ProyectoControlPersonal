@@ -8,6 +8,7 @@ import { aplicarCorteMedianoche } from "../lib/corteMedianoche.ts";
 const router = Router();
 
 const TIPOS_VALIDOS = ["Entrada", "Salida"];
+const OPERADOR_SISTEMA = "Sistema";
 
 function esDuplicado(err: any): boolean {
   return err?.code === "P2010" || /Duplicate entry/i.test(err?.message ?? "");
@@ -46,12 +47,21 @@ router.post("/registrar", async (req: Request, res: Response) => {
     const hoyInicio = hoyInicioGT();
 
     const movimientosHoy: any[] = await prisma.$queryRaw`
-      SELECT Tipo FROM Movimientos
+      SELECT Tipo, Operador FROM Movimientos
       WHERE Codigo = ${Codigo} AND FechaHora >= ${hoyInicio}
       ORDER BY FechaHora ASC
     `;
 
-    if (movimientosHoy.length >= 2) {
+    // Si el turno venía de ayer (corte de medianoche), el primer movimiento de
+    // hoy es la Entrada sintética del corte y el siguiente es la Salida real
+    // que la cierra: ese par cierra el turno de ayer, no cuenta como
+    // asistencia del día de hoy para el límite de 2 marcajes.
+    const marcajesDeHoy =
+      movimientosHoy[0]?.Operador === OPERADOR_SISTEMA && movimientosHoy[0]?.Tipo === "Entrada"
+        ? movimientosHoy.slice(2)
+        : movimientosHoy;
+
+    if (marcajesDeHoy.length >= 2) {
       res.status(400).json({ error: "Ya tiene 2 marcajes registrados hoy" });
       return;
     }
@@ -123,6 +133,7 @@ router.get("/", requireAuth, requirePerm("movimientos", "ver"), async (req: Requ
              COALESCE(NULLIF(m.NombreEmpleado,''), NULLIF(CONCAT_WS(' ', e.PrimerNombre, e.SegundoNombre, e.PrimerApellido, e.SegundoApellido), ''), m.Codigo) AS NombreEmpleado,
              m.Tipo,
              DATE_FORMAT(m.FechaHora, '%Y-%m-%dT%H:%i') AS FechaHoraInput,
+             DATE_FORMAT(m.FechaHora, '%Y-%m-%d')        AS Fecha,
              DATE_FORMAT(m.FechaHora, '%H:%i:%s')        AS Hora,
              m.DiaSemana, m.Operador
       FROM Movimientos m

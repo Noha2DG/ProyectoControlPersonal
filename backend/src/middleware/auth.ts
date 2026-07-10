@@ -15,7 +15,7 @@ export interface Permisos {
   permisos?:       { ver?: boolean; crear?: boolean; editar?: boolean; eliminar?: boolean };
   catalogos?:      { ver?: boolean; crear?: boolean; editar?: boolean; eliminar?: boolean };
   destajo?:        { ver?: boolean; crear?: boolean; editar?: boolean; eliminar?: boolean };
-  etiquetado?:     { ver?: boolean; crear?: boolean; editar?: boolean; eliminar?: boolean };
+  etiquetado?:     { ver?: boolean; crear?: boolean; editar?: boolean; eliminar?: boolean; imprimir?: boolean };
 }
 
 export interface AuthPayload {

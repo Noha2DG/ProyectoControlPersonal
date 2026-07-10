@@ -160,7 +160,7 @@ export default function MovimientosAdminPage() {
           <table className="w-full text-sm">
             <thead>
               <tr className="bg-gray-100 text-gray-600 uppercase text-xs tracking-wider">
-                <th className="px-4 py-3 text-left">ID</th>
+                <th className="px-4 py-3 text-left">Fecha</th>
                 <th className="px-4 py-3 text-left">Código</th>
                 <th className="px-4 py-3 text-left">Nombre</th>
                 <th className="px-4 py-3 text-center">Tipo</th>
@@ -175,7 +175,7 @@ export default function MovimientosAdminPage() {
                 <tr><td colSpan={8} className="px-4 py-10 text-center text-gray-400">Sin registros desde esta fecha</td></tr>
               ) : filtrados.map(r => (
                 <tr key={r.id} className="hover:bg-gray-50 transition">
-                  <td className="px-4 py-2.5 text-gray-400 text-xs font-mono">{r.id}</td>
+                  <td className="px-4 py-2.5 text-gray-500 text-xs font-mono">{r.Fecha ? r.Fecha.split("-").reverse().join("/") : ""}</td>
                   <td className="px-4 py-2.5 font-mono font-bold text-gray-700">{r.Codigo}</td>
                   <td className="px-4 py-2.5 text-gray-900">{r.NombreEmpleado}</td>
                   <td className="px-4 py-2.5 text-center">
