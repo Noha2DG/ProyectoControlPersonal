@@ -22,13 +22,12 @@ function segmentoFecha(fecha) {
   return `${letra}${diaSemanaISO}${String(semana).padStart(2, "0")}`;
 }
 
-// Formato: <letraAño><díaSemanaISO><semanaISO><primeraParteDePiscina>-<segundaParteDePiscina>-<ciclo>-<clase>
+// Formato: <letraAño><díaSemanaISO><semanaISO><primeraParteDePiscina>-<segundaParteDePiscina>-<ciclo>
 // ciclo puede venir vacío (piscinas exentas, ver piscinaRequiereCiclo) — simplemente se omite ese segmento.
-// clase es opcional (solo la usa Destajo, para distinguir etapas de proceso del mismo ciclo/día).
-export function componerCodigoLote(nombrePiscina, fecha, ciclo, clase) {
+export function componerCodigoLote(nombrePiscina, fecha, ciclo) {
   if (!nombrePiscina || !fecha) return null;
   const [parte1, parte2] = nombrePiscina.split("-");
-  return [`${segmentoFecha(fecha)}${parte1}`, parte2, ciclo, clase].filter(Boolean).join("-");
+  return [`${segmentoFecha(fecha)}${parte1}`, parte2, ciclo].filter(Boolean).join("-");
 }
 
 // Fincas proveedoras externas (importación, maquila, proveedores de pescado): no tienen piscinas de

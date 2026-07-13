@@ -111,10 +111,13 @@ export default function PesajePage() {
     return () => clearInterval(id);
   }, [fetchTransaccionesAbiertas]);
 
-  const fetchLote = useCallback(async (codigoLote) => {
+  // codigoLote puede repetirse entre Clases del mismo Piscina+Ciclo+Fecha (ver
+  // project_destajo_lote_clase_en_codigo) — claseOrigen (t.ClaseOrigen) es obligatoria para
+  // encontrar la fila real de Materia Prima.
+  const fetchLote = useCallback(async (codigoLote, claseOrigen) => {
     const res = await fetch("/api/lotes", { headers: authHeader() });
     const data = await res.json();
-    if (Array.isArray(data)) setLote(data.find(l => l.Lote === codigoLote) || null);
+    if (Array.isArray(data)) setLote(data.find(l => l.Lote === codigoLote && l.Clase === claseOrigen) || null);
   }, []);
 
   const fetchTermos = useCallback(async (transaccionId) => {
@@ -138,7 +141,7 @@ export default function PesajePage() {
     setUltimoEmpleado(null);
     setErrorMsg("");
     setAreaActualError(undefined);
-    fetchLote(t.Lote);
+    fetchLote(t.Lote, t.ClaseOrigen);
     fetchTermos(t.TransaccionId);
     fetchPesajes(t.TransaccionId);
     setTimeout(() => termoRef.current?.focus(), 0);
@@ -148,7 +151,7 @@ export default function PesajePage() {
     await Promise.all([
       fetchTermos(transSel.TransaccionId),
       fetchPesajes(transSel.TransaccionId),
-      fetchLote(transSel.Lote),
+      fetchLote(transSel.Lote, transSel.ClaseOrigen),
       fetchTransaccionesAbiertas(),
     ]);
   };

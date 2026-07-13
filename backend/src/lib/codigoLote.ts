@@ -19,15 +19,16 @@ export function segmentoFecha(fecha: string) {
   return `${letra}${diaSemanaISO}${String(semana).padStart(2, "0")}`;
 }
 
-// Formato: <letraAño><díaSemanaISO><semanaISO><primeraParteDePiscina>-<segundaParteDePiscina>-<secuencial>[-<clase>]
+// Formato: <letraAño><díaSemanaISO><semanaISO><primeraParteDePiscina>-<segundaParteDePiscina>-<secuencial>
 // ej. piscina "EM07-E01", martes (2) semana 27 de 2026 (G), secuencial 5 → G227EM07-E01-5
-// Usado tanto por Destajo (Lotes, con secuencial autogenerado por día y Clase para distinguir etapas
-// de proceso del mismo ciclo/día — ej. C20 entero vs D30 descabezado del mismo ciclo) como por
-// Etiquetado (OrdenEtiquetado, con secuencial = Ciclo capturado manualmente, sin clase) — ver
-// project_ordenetiquetado_design.
-export function componerCodigoLote(nombrePiscina: string, fecha: string, secuencial: string, clase?: string) {
+// Usado tanto por Destajo (Lotes, con secuencial autogenerado por día) como por Etiquetado
+// (OrdenEtiquetado, con secuencial = Ciclo capturado manualmente) — ver project_ordenetiquetado_design.
+// La Clase NO va en el código (el usuario la ve aparte, en su propia columna) — varias etapas de
+// proceso del mismo ciclo/día (ej. C20 entero y D30 descabezado) comparten el mismo texto de Lote y
+// se distinguen a nivel de base de datos por la llave compuesta (Lote, Clase) de la tabla Lotes.
+export function componerCodigoLote(nombrePiscina: string, fecha: string, secuencial: string) {
   const [parte1, parte2] = nombrePiscina.split("-");
-  return [`${segmentoFecha(fecha)}${parte1}`, parte2, secuencial, clase].filter(Boolean).join("-");
+  return [`${segmentoFecha(fecha)}${parte1}`, parte2, secuencial].filter(Boolean).join("-");
 }
 
 // Fincas que son proveedores externos (importación, maquila, proveedores de pescado) — no tienen

@@ -17,11 +17,9 @@ function getOperador(req: Request): string {
   }
 }
 
-// Formato: <letraAño><díaSemanaISO><semanaISO><primeraParteDePiscina>-<segundaParteDePiscina>-<ciclo>-<clase>
-// ej. piscina "EM07-E01", martes (2) semana 27 de 2026 (G), ciclo 5, clase D30 → G227EM07-E01-5-D30
-// La Clase va al final del código para poder tener varias etapas de proceso (ej. C20 entero y D30
-// descabezado) del mismo ciclo/día sin chocar contra la llave primaria de Lotes (Piscina+Ciclo+Fecha+Clase).
-async function generarCodigoLote(piscinaId: number, fecha: string, clase: string, cicloNumero?: number) {
+// Formato: <letraAño><díaSemanaISO><semanaISO><primeraParteDePiscina>-<segundaParteDePiscina>-<ciclo>
+// ej. piscina "EM07-E01", martes (2) semana 27 de 2026 (G), ciclo 5 → G227EM07-E01-5
+async function generarCodigoLote(piscinaId: number, fecha: string, cicloNumero?: number) {
   const piscinas: any[] = await prisma.$queryRaw`SELECT Nombre FROM Piscina WHERE PiscinaId = ${piscinaId} LIMIT 1`;
   if (!piscinas.length) return null;
   let secuencial: string;
@@ -31,7 +29,7 @@ async function generarCodigoLote(piscinaId: number, fecha: string, clase: string
     const countRows: any[] = await prisma.$queryRaw`SELECT COUNT(*) AS n FROM Lotes WHERE Fecha = ${fecha}`;
     secuencial = String(Number(countRows[0].n) + 1);
   }
-  return componerCodigoLote(String(piscinas[0].Nombre), fecha, secuencial, clase);
+  return componerCodigoLote(String(piscinas[0].Nombre), fecha, secuencial);
 }
 
 function formatear(rows: any[]) {
@@ -52,7 +50,7 @@ const SELECT_LOTES = `
          ci.Anio, ci.Ciclo,
          COALESCE((SELECT SUM(pd.Peso) FROM PesajeDetalle pd
                    JOIN TransaccionesProduccion tp ON pd.TransaccionId = tp.TransaccionId
-                   WHERE tp.Lote = l.Lote), 0) AS Procesado
+                   WHERE tp.Lote = l.Lote AND tp.ClaseOrigen = l.Clase), 0) AS Procesado
   FROM Lotes l
   JOIN Clase c ON l.Clase = c.Clase
   JOIN Piscina p ON l.PiscinaId = p.PiscinaId
@@ -100,7 +98,7 @@ router.post("/", requireAuth, requirePerm("destajo", "crear"), async (req: Reque
     const requiereCiclo = piscinaRequiereCiclo(String(piscinaRows[0].Nombre), String(piscinaRows[0].CodigoFinca));
 
     const cicloNum = (requiereCiclo && CicloNumero) ? Number(CicloNumero) : undefined;
-    const lote = await generarCodigoLote(Number(PiscinaId), Fecha, Clase, cicloNum);
+    const lote = await generarCodigoLote(Number(PiscinaId), Fecha, cicloNum);
     if (!lote) { res.status(404).json({ error: "Piscina no encontrada" }); return; }
 
     let resolvedCicloId: number | null = null;
@@ -131,18 +129,21 @@ router.post("/", requireAuth, requirePerm("destajo", "crear"), async (req: Reque
   }
 });
 
-// PUT /api/lotes/:lote  { PesoIngreso, Fecha, TallaReferencia?, Activo }
-router.put("/:lote", requireAuth, requirePerm("destajo", "editar"), async (req: Request, res: Response) => {
+// PUT /api/lotes/:lote/:clase  { PesoIngreso, Fecha, TallaReferencia?, Activo }
+// El texto de Lote puede repetirse entre Clases del mismo Piscina+Ciclo+Fecha (ver
+// project_destajo_lote_clase_en_codigo) — la fila real siempre se identifica por Lote+Clase juntos.
+router.put("/:lote/:clase", requireAuth, requirePerm("destajo", "editar"), async (req: Request, res: Response) => {
   try {
     const { PesoIngreso, Fecha, TallaReferencia, Activo } = req.body;
     const lote = req.params.lote;
+    const clase = req.params.clase;
 
     // No se puede dejar el peso de ingreso por debajo de lo que ese lote ya tiene procesado —
     // si no, el lote queda con Pendiente negativo y bloquea cualquier pesaje futuro sin explicación.
     const procesado: any[] = await prisma.$queryRaw`
       SELECT COALESCE(SUM(pd.Peso), 0) AS Procesado
       FROM PesajeDetalle pd JOIN TransaccionesProduccion tp ON pd.TransaccionId = tp.TransaccionId
-      WHERE tp.Lote = ${lote}
+      WHERE tp.Lote = ${lote} AND tp.ClaseOrigen = ${clase}
     `;
     const procesadoActual = Number(procesado[0].Procesado);
     if (Number(PesoIngreso) < procesadoActual) {
@@ -153,7 +154,7 @@ router.put("/:lote", requireAuth, requirePerm("destajo", "editar"), async (req: 
     const activo = Activo === false || Activo === 0 ? 0 : 1;
     await prisma.$executeRaw`
       UPDATE Lotes SET PesoIngreso = ${Number(PesoIngreso)}, Fecha = ${Fecha}, TallaReferencia = ${TallaReferencia ? Number(TallaReferencia) : null}, Activo = ${activo}
-      WHERE Lote = ${lote}
+      WHERE Lote = ${lote} AND Clase = ${clase}
     `;
     res.json({ ok: true });
   } catch (err: any) {
@@ -161,16 +162,17 @@ router.put("/:lote", requireAuth, requirePerm("destajo", "editar"), async (req: 
   }
 });
 
-// DELETE /api/lotes/:lote  (solo si no tiene transacciones de producción registradas — corrección de error de captura)
-router.delete("/:lote", requireAuth, requirePerm("destajo", "eliminar"), async (req: Request, res: Response) => {
+// DELETE /api/lotes/:lote/:clase  (solo si no tiene transacciones de producción registradas — corrección de error de captura)
+router.delete("/:lote/:clase", requireAuth, requirePerm("destajo", "eliminar"), async (req: Request, res: Response) => {
   try {
     const lote = req.params.lote;
-    const trans: any[] = await prisma.$queryRaw`SELECT COUNT(*) AS n FROM TransaccionesProduccion WHERE Lote = ${lote}`;
+    const clase = req.params.clase;
+    const trans: any[] = await prisma.$queryRaw`SELECT COUNT(*) AS n FROM TransaccionesProduccion WHERE Lote = ${lote} AND ClaseOrigen = ${clase}`;
     if (Number(trans[0].n) > 0) {
       res.status(400).json({ error: "No se puede eliminar: este lote ya tiene transacciones de producción registradas" });
       return;
     }
-    await prisma.$executeRaw`DELETE FROM Lotes WHERE Lote = ${lote}`;
+    await prisma.$executeRaw`DELETE FROM Lotes WHERE Lote = ${lote} AND Clase = ${clase}`;
     res.json({ ok: true });
   } catch (err: any) {
     res.status(500).json({ error: err.message });

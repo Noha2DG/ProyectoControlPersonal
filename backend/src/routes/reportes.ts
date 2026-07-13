@@ -36,14 +36,14 @@ router.get("/produccion", requireAuth, requirePerm("destajo", "ver"), async (req
              l.Fecha, l.PesoIngreso, l.UM,
              COALESCE((SELECT SUM(pd.Peso) FROM PesajeDetalle pd
                        JOIN TransaccionesProduccion tp ON pd.TransaccionId = tp.TransaccionId
-                       WHERE tp.Lote = l.Lote), 0) AS Procesado,
-             (SELECT COUNT(*) FROM TransaccionesProduccion tp WHERE tp.Lote = l.Lote) AS NumTransacciones
+                       WHERE tp.Lote = l.Lote AND tp.ClaseOrigen = l.Clase), 0) AS Procesado,
+             (SELECT COUNT(*) FROM TransaccionesProduccion tp WHERE tp.Lote = l.Lote AND tp.ClaseOrigen = l.Clase) AS NumTransacciones
       FROM Lotes l
       JOIN Clase c ON l.Clase = c.Clase
       JOIN Piscina p ON l.PiscinaId = p.PiscinaId
       JOIN Finca f ON p.CodigoFinca = f.Codigo
       WHERE l.Fecha BETWEEN ? AND ? ${filtroFinca}
-      ORDER BY l.Fecha DESC, l.Lote DESC
+      ORDER BY l.Fecha DESC, l.Lote DESC, l.Clase ASC
     `, desde, hasta, ...argsFinca);
 
     const porTermo: any[] = await prisma.$queryRawUnsafe(`
@@ -54,7 +54,7 @@ router.get("/produccion", requireAuth, requirePerm("destajo", "ver"), async (req
       JOIN TransaccionesProduccion tp ON t.TransaccionId = tp.TransaccionId
       JOIN Procesos pr ON tp.Proceso = pr.Proceso
       JOIN Tallas ta ON tp.Talla = ta.Codigo
-      JOIN Lotes l ON tp.Lote = l.Lote
+      JOIN Lotes l ON tp.Lote = l.Lote AND tp.ClaseOrigen = l.Clase
       JOIN Piscina p ON l.PiscinaId = p.PiscinaId
       JOIN Finca f ON p.CodigoFinca = f.Codigo
       LEFT JOIN PesajeDetalle pd ON pd.TermoId = t.TermoId
@@ -64,10 +64,10 @@ router.get("/produccion", requireAuth, requirePerm("destajo", "ver"), async (req
     `, desde, hasta, ...argsFinca);
 
     const porLoteTalla: any[] = await prisma.$queryRawUnsafe(`
-      SELECT tp.Lote, tp.Talla, ta.Descripcion AS DescripcionTalla, tp.ClasePT, cl.Descripcion AS DescripcionClasePT,
+      SELECT tp.Lote, tp.ClaseOrigen, tp.Talla, ta.Descripcion AS DescripcionTalla, tp.ClasePT, cl.Descripcion AS DescripcionClasePT,
              tp.Estado, COALESCE(SUM(pd.Peso), 0) AS Procesado, COUNT(pd.PesajeId) AS NumPesajes
       FROM TransaccionesProduccion tp
-      JOIN Lotes l ON tp.Lote = l.Lote
+      JOIN Lotes l ON tp.Lote = l.Lote AND tp.ClaseOrigen = l.Clase
       JOIN Piscina p ON l.PiscinaId = p.PiscinaId
       JOIN Finca f ON p.CodigoFinca = f.Codigo
       JOIN Tallas ta ON tp.Talla = ta.Codigo
@@ -82,7 +82,7 @@ router.get("/produccion", requireAuth, requirePerm("destajo", "ver"), async (req
       SELECT tp.Talla, ta.Descripcion AS DescripcionTalla,
              COALESCE(SUM(pd.Peso), 0) AS Procesado, COUNT(pd.PesajeId) AS NumPesajes
       FROM TransaccionesProduccion tp
-      JOIN Lotes l ON tp.Lote = l.Lote
+      JOIN Lotes l ON tp.Lote = l.Lote AND tp.ClaseOrigen = l.Clase
       JOIN Piscina p ON l.PiscinaId = p.PiscinaId
       JOIN Finca f ON p.CodigoFinca = f.Codigo
       JOIN Tallas ta ON tp.Talla = ta.Codigo
@@ -108,7 +108,7 @@ router.get("/produccion", requireAuth, requirePerm("destajo", "ver"), async (req
       JOIN TransaccionesProduccion tp ON pd.TransaccionId = tp.TransaccionId
       JOIN Clase cl ON tp.ClasePT = cl.Clase
       JOIN Tallas ta ON tp.Talla = ta.Codigo
-      JOIN Lotes l ON tp.Lote = l.Lote
+      JOIN Lotes l ON tp.Lote = l.Lote AND tp.ClaseOrigen = l.Clase
       JOIN Piscina p ON l.PiscinaId = p.PiscinaId
       JOIN Finca f ON p.CodigoFinca = f.Codigo
       WHERE DATE(pd.FechaHora) BETWEEN ? AND ? ${filtroFinca}

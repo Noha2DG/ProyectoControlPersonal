@@ -106,7 +106,7 @@ function LoteModal({ item, fincas, clases, tallas, onSave, onClose }) {
     const { diaSemanaISO, semana } = isoSemana(form.Fecha);
     const segFecha = `${letra}${diaSemanaISO}${String(semana).padStart(2, "0")}`;
     const [parte1, parte2] = piscina.Nombre.split("-");
-    return [`${segFecha}${parte1}`, parte2, form.CicloNumero || "?", form.Clase || "?"].filter(Boolean).join("-");
+    return [`${segFecha}${parte1}`, parte2, form.CicloNumero || "?"].filter(Boolean).join("-");
   };
 
   return (
@@ -223,7 +223,7 @@ function TransaccionModal({ lote, procesos, clases, tallas, almacenes, onSave, o
   const procesoDerivado = clasePTSel?.Proceso;
   const procesoInfo = procesos.find(p => p.Proceso === procesoDerivado);
 
-  const handleSubmit = e => { e.preventDefault(); onSave({ ...form, Lote: lote.Lote, Proceso: procesoDerivado }); };
+  const handleSubmit = e => { e.preventDefault(); onSave({ ...form, Lote: lote.Lote, ClaseOrigen: lote.Clase, Proceso: procesoDerivado }); };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
@@ -331,21 +331,27 @@ export default function MateriaPrimaPage() {
     });
   }, [fetchLotes]);
 
-  const fetchTransacciones = useCallback(async (lote) => {
+  // El texto de Lote puede repetirse entre Clases del mismo Piscina+Ciclo+Fecha (ver
+  // project_destajo_lote_clase_en_codigo) — hace falta la Clase para no mezclar transacciones de dos
+  // filas de Materia Prima distintas que comparten el mismo texto de Lote.
+  const fetchTransacciones = useCallback(async (lote, clase) => {
     setLoadingTrans(true);
     try {
-      const res = await fetch(`/api/transacciones-produccion?lote=${encodeURIComponent(lote)}`, { headers: authHeader() });
+      const res = await fetch(`/api/transacciones-produccion?lote=${encodeURIComponent(lote)}&clase=${encodeURIComponent(clase)}`, { headers: authHeader() });
       const data = await res.json();
       if (Array.isArray(data)) setTransacciones(data);
     } finally { setLoadingTrans(false); }
   }, []);
 
-  const seleccionarLote = (l) => { setLoteSel(l); fetchTransacciones(l.Lote); };
+  const seleccionarLote = (l) => { setLoteSel(l); fetchTransacciones(l.Lote, l.Clase); };
 
   const handleSaveLote = async (form) => {
     try {
       const isEdit = !!modalLote.item;
-      const res = await fetch(isEdit ? `/api/lotes/${modalLote.item.Lote}` : "/api/lotes", {
+      const url = isEdit
+        ? `/api/lotes/${encodeURIComponent(modalLote.item.Lote)}/${encodeURIComponent(modalLote.item.Clase)}`
+        : "/api/lotes";
+      const res = await fetch(url, {
         method: isEdit ? "PUT" : "POST",
         headers: { "Content-Type": "application/json", ...authHeader() },
         body: JSON.stringify(form),
@@ -359,11 +365,11 @@ export default function MateriaPrimaPage() {
   };
 
   const handleEliminarLote = async (l) => {
-    if (!confirm(`¿Eliminar el lote ${l.Lote}? Esta acción no se puede deshacer.`)) return;
+    if (!confirm(`¿Eliminar el lote ${l.Lote} (${l.Clase})? Esta acción no se puede deshacer.`)) return;
     try {
-      const res = await fetch(`/api/lotes/${l.Lote}`, { method: "DELETE", headers: authHeader() });
+      const res = await fetch(`/api/lotes/${encodeURIComponent(l.Lote)}/${encodeURIComponent(l.Clase)}`, { method: "DELETE", headers: authHeader() });
       if (res.ok) {
-        if (loteSel?.Lote === l.Lote) setLoteSel(null);
+        if (loteSel?.Lote === l.Lote && loteSel?.Clase === l.Clase) setLoteSel(null);
         fetchLotes();
       } else { const e = await res.json(); alert("Error: " + e.error); }
     } catch (err) {
@@ -379,7 +385,7 @@ export default function MateriaPrimaPage() {
         headers: { "Content-Type": "application/json", ...authHeader() },
         body: JSON.stringify(form),
       });
-      if (res.ok) { setModalTrans(false); fetchTransacciones(loteSel.Lote); fetchLotes(); }
+      if (res.ok) { setModalTrans(false); fetchTransacciones(loteSel.Lote, loteSel.Clase); fetchLotes(); }
       else { const e = await res.json(); alert("Error: " + e.error); }
     } catch (err) {
       console.error("Error al guardar la transacción:", err);
@@ -393,14 +399,14 @@ export default function MateriaPrimaPage() {
       method: "PUT", headers: { "Content-Type": "application/json", ...authHeader() },
       body: JSON.stringify({ Estado: "Cerrada" }),
     });
-    fetchTransacciones(loteSel.Lote);
+    fetchTransacciones(loteSel.Lote, loteSel.Clase);
   };
 
   const handleEliminarTransaccion = async (t) => {
     if (!confirm("¿Eliminar esta transacción de producción?")) return;
     try {
       const res = await fetch(`/api/transacciones-produccion/${t.TransaccionId}`, { method: "DELETE", headers: authHeader() });
-      if (res.ok) { fetchTransacciones(loteSel.Lote); fetchLotes(); }
+      if (res.ok) { fetchTransacciones(loteSel.Lote, loteSel.Clase); fetchLotes(); }
       else { const e = await res.json(); alert("Error: " + e.error); }
     } catch (err) {
       console.error("Error al eliminar la transacción:", err);
@@ -443,8 +449,8 @@ export default function MateriaPrimaPage() {
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {lotesFiltrados.map(l => (
-                  <tr key={l.Lote} onClick={() => seleccionarLote(l)}
-                    className={`cursor-pointer transition ${loteSel?.Lote === l.Lote ? "bg-blue-50" : "hover:bg-gray-50"} ${!l.Activo ? "opacity-50" : ""}`}>
+                  <tr key={`${l.Lote}-${l.Clase}`} onClick={() => seleccionarLote(l)}
+                    className={`cursor-pointer transition ${loteSel?.Lote === l.Lote && loteSel?.Clase === l.Clase ? "bg-blue-50" : "hover:bg-gray-50"} ${!l.Activo ? "opacity-50" : ""}`}>
                     <td className="px-3 py-3 font-mono font-bold text-gray-700 whitespace-nowrap">{l.Lote}</td>
                     <td className="px-3 py-3 text-gray-900 whitespace-nowrap">{l.NombreFinca}</td>
                     <td className="px-3 py-3 text-center font-mono text-gray-600 whitespace-nowrap">

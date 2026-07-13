@@ -152,14 +152,17 @@ export default function ReporteProduccionPage() {
 
   useEffect(() => { buscar(); }, [buscar]);
 
-  const detalleDeLote = (lote) => (reporte?.porLoteTalla ?? []).filter(d => d.Lote === lote);
+  // Lote (texto) puede repetirse entre Clases del mismo Piscina+Ciclo+Fecha (ver
+  // project_destajo_lote_clase_en_codigo) — hace falta también la Clase para no mezclar el detalle de
+  // dos filas de Materia Prima distintas.
+  const detalleDeLote = (lote, clase) => (reporte?.porLoteTalla ?? []).filter(d => d.Lote === lote && d.ClaseOrigen === clase);
 
   // Si hay un lote abierto (tocado en la tabla de la izquierda), la tabla de Talla se
   // filtra a solo lo procesado de ese lote; si no, muestra el total del rango de fechas.
   const tallasMostradas = (() => {
     if (!loteAbierto) return reporte?.porTalla ?? [];
     const mapa = new Map();
-    for (const d of detalleDeLote(loteAbierto)) {
+    for (const d of detalleDeLote(loteAbierto.Lote, loteAbierto.Clase)) {
       if (!mapa.has(d.Talla)) mapa.set(d.Talla, { Talla: d.Talla, DescripcionTalla: d.DescripcionTalla, Procesado: 0, NumPesajes: 0 });
       const acc = mapa.get(d.Talla);
       acc.Procesado += d.Procesado;
@@ -300,9 +303,9 @@ export default function ReporteProduccionPage() {
                         return (
                           <Fragment key={nombreFinca}>
                             {lotes.map(l => (
-                              <FilaLote key={l.Lote} l={l} detalle={detalleDeLote(l.Lote)}
-                                abierta={loteAbierto === l.Lote}
-                                onToggle={() => setLoteAbierto(loteAbierto === l.Lote ? null : l.Lote)} />
+                              <FilaLote key={`${l.Lote}-${l.Clase}`} l={l} detalle={detalleDeLote(l.Lote, l.Clase)}
+                                abierta={loteAbierto?.Lote === l.Lote && loteAbierto?.Clase === l.Clase}
+                                onToggle={() => setLoteAbierto(loteAbierto?.Lote === l.Lote && loteAbierto?.Clase === l.Clase ? null : { Lote: l.Lote, Clase: l.Clase })} />
                             ))}
                             <tr className="bg-gray-50 font-semibold">
                               <td className="px-3 py-2" colSpan={5}>Subtotal — {nombreFinca}</td>

@@ -41,7 +41,7 @@ async function resolverTermo(tx: any, transaccionId: number, numeroTermo: string
 // y evita leer un Estado que cambió justo después de leerlo afuera.
 async function bloquearTransaccionAbierta(tx: any, transaccionId: number) {
   const trans: any[] = await tx.$queryRaw`
-    SELECT Lote, AlmacenOrigen, Estado FROM TransaccionesProduccion WHERE TransaccionId = ${transaccionId} LIMIT 1 FOR UPDATE
+    SELECT Lote, ClaseOrigen, AlmacenOrigen, Estado FROM TransaccionesProduccion WHERE TransaccionId = ${transaccionId} LIMIT 1 FOR UPDATE
   `;
   if (!trans.length) return { error: "Transacción no encontrada", status: 404 };
   if (trans[0].Estado !== "Abierta") return { error: "La transacción está cerrada", status: 400 };
@@ -51,15 +51,17 @@ async function bloquearTransaccionAbierta(tx: any, transaccionId: number) {
 // Bloquea la fila del lote (FOR UPDATE) y calcula cuánta materia prima sigue disponible — al estar dentro
 // de la misma transacción de BD que el INSERT/UPDATE de PesajeDetalle, dos pesadas concurrentes contra el
 // mismo lote ya no pueden leer el mismo "disponible" y juntas exceder el 100% del peso de ingreso.
-async function verificarDisponibilidad(tx: any, lote: string, pesoNuevo: number, excluirPesajeId?: number) {
-  const lotes: any[] = await tx.$queryRaw`SELECT PesoIngreso, UM FROM Lotes WHERE Lote = ${lote} LIMIT 1 FOR UPDATE`;
+// `lote` (texto) puede repetirse entre Clases del mismo Piscina+Ciclo+Fecha — `claseOrigen` es obligatorio
+// para identificar la fila real de Lotes (llave compuesta Lote+Clase).
+async function verificarDisponibilidad(tx: any, lote: string, claseOrigen: string, pesoNuevo: number, excluirPesajeId?: number) {
+  const lotes: any[] = await tx.$queryRaw`SELECT PesoIngreso, UM FROM Lotes WHERE Lote = ${lote} AND Clase = ${claseOrigen} LIMIT 1 FOR UPDATE`;
   if (!lotes.length) return { ok: false, error: "Lote no encontrado", status: 404 };
   const { PesoIngreso, UM } = lotes[0];
   const procesado: any[] = await tx.$queryRaw`
     SELECT COALESCE(SUM(pd.Peso), 0) AS Procesado
     FROM PesajeDetalle pd
     JOIN TransaccionesProduccion tp ON pd.TransaccionId = tp.TransaccionId
-    WHERE tp.Lote = ${lote} ${excluirPesajeId ? Prisma.sql`AND pd.PesajeId != ${excluirPesajeId}` : Prisma.empty}
+    WHERE tp.Lote = ${lote} AND tp.ClaseOrigen = ${claseOrigen} ${excluirPesajeId ? Prisma.sql`AND pd.PesajeId != ${excluirPesajeId}` : Prisma.empty}
   `;
   const procesadoActual = Number(procesado[0].Procesado);
   const disponible = Number(PesoIngreso) - procesadoActual;
@@ -138,7 +140,7 @@ router.post("/", requireAuth, requirePerm("destajo", "crear"), async (req: Reque
       const bloqueo = await bloquearTransaccionAbierta(tx, Number(TransaccionId));
       if ("error" in bloqueo) return bloqueo;
 
-      const disponibilidad = await verificarDisponibilidad(tx, bloqueo.trans.Lote, Number(Peso));
+      const disponibilidad = await verificarDisponibilidad(tx, bloqueo.trans.Lote, bloqueo.trans.ClaseOrigen, Number(Peso));
       if (!disponibilidad.ok) return disponibilidad;
 
       const termoId = await resolverTermo(tx, Number(TransaccionId), String(NumeroTermo).trim(), bloqueo.trans.AlmacenOrigen);
@@ -175,7 +177,7 @@ router.put("/:id", requireAuth, requirePerm("destajo", "editar"), async (req: Re
       const bloqueo = await bloquearTransaccionAbierta(tx, transaccionId);
       if ("error" in bloqueo) return bloqueo;
 
-      const disponibilidad = await verificarDisponibilidad(tx, bloqueo.trans.Lote, Number(Peso), id);
+      const disponibilidad = await verificarDisponibilidad(tx, bloqueo.trans.Lote, bloqueo.trans.ClaseOrigen, Number(Peso), id);
       if (!disponibilidad.ok) return disponibilidad;
 
       const termoId = await resolverTermo(tx, transaccionId, String(NumeroTermo).trim(), bloqueo.trans.AlmacenOrigen);

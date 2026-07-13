@@ -26,7 +26,7 @@ function formatear(rows: any[]) {
 }
 
 const SELECT_TRANS = `
-  SELECT tp.TransaccionId, tp.Lote, tp.Proceso, pr.Descripcion AS DescripcionProceso,
+  SELECT tp.TransaccionId, tp.Lote, tp.ClaseOrigen, tp.Proceso, pr.Descripcion AS DescripcionProceso,
          tp.ClasePT, cl.Descripcion AS DescripcionClasePT, tp.Talla, ta.Descripcion AS DescripcionTalla,
          tp.AlmacenOrigen, tp.AlmacenDestino, tp.Estado, tp.FechaHora, tp.FechaProduccion, tp.RegistradoPor,
          p.Nombre AS NombrePiscina,
@@ -35,20 +35,26 @@ const SELECT_TRANS = `
   JOIN Procesos pr ON tp.Proceso = pr.Proceso
   JOIN Clase cl ON tp.ClasePT = cl.Clase
   JOIN Tallas ta ON tp.Talla = ta.Codigo
-  JOIN Lotes l ON tp.Lote = l.Lote
+  JOIN Lotes l ON tp.Lote = l.Lote AND tp.ClaseOrigen = l.Clase
   JOIN Piscina p ON l.PiscinaId = p.PiscinaId
 `;
 
-// GET /api/transacciones-produccion?lote=XXX | ?estado=Abierta
+// GET /api/transacciones-produccion?lote=XXX&clase=YYY | ?estado=Abierta
 // El filtro por lote (vista operativa del día) solo muestra transacciones Abiertas — las Cerradas
-// ya quedaron resueltas y se consultan desde el Reporte, no aquí.
+// ya quedaron resueltas y se consultan desde el Reporte, no aquí. `clase` es la Clase de origen de la
+// Materia Prima (Lotes.Clase) — el texto de Lote puede repetirse entre Clases del mismo Piscina+Ciclo+Fecha,
+// así que hace falta para no mezclar las transacciones de dos filas de Lotes distintas.
 router.get("/", requireAuth, requirePerm("destajo", "ver"), async (req: Request, res: Response) => {
   try {
     const lote = req.query.lote as string | undefined;
+    const clase = req.query.clase as string | undefined;
     const estado = req.query.estado as string | undefined;
     let rows: any[];
     if (lote) {
-      rows = await prisma.$queryRawUnsafe(`${SELECT_TRANS} WHERE tp.Lote = ? AND tp.Estado = 'Abierta' ORDER BY tp.TransaccionId DESC`, lote);
+      rows = await prisma.$queryRawUnsafe(
+        `${SELECT_TRANS} WHERE tp.Lote = ? AND tp.ClaseOrigen = ? AND tp.Estado = 'Abierta' ORDER BY tp.TransaccionId DESC`,
+        lote, clase
+      );
     } else if (estado) {
       rows = await prisma.$queryRawUnsafe(`${SELECT_TRANS} WHERE tp.Estado = ? ORDER BY p.Nombre ASC, tp.TransaccionId DESC LIMIT 200`, estado);
     } else {
@@ -60,21 +66,23 @@ router.get("/", requireAuth, requirePerm("destajo", "ver"), async (req: Request,
   }
 });
 
-// POST /api/transacciones-produccion  { Lote, Proceso, ClasePT, Talla, AlmacenOrigen, AlmacenDestino, FechaProduccion }
+// POST /api/transacciones-produccion  { Lote, ClaseOrigen, Proceso, ClasePT, Talla, AlmacenOrigen, AlmacenDestino, FechaProduccion }
+// ClaseOrigen es la Clase de la fila de Lotes (Materia Prima) que se está consumiendo — obligatoria
+// porque el texto de Lote puede repetirse entre Clases del mismo Piscina+Ciclo+Fecha.
 router.post("/", requireAuth, requirePerm("destajo", "crear"), async (req: Request, res: Response) => {
   try {
-    const { Lote, Proceso, ClasePT, Talla, AlmacenOrigen, AlmacenDestino, FechaProduccion } = req.body;
-    if (!Lote || !Proceso || !ClasePT || !Talla || !AlmacenOrigen || !AlmacenDestino) {
-      res.status(400).json({ error: "Lote, Proceso, Clase PT, Talla, Almacén origen y destino son requeridos" });
+    const { Lote, ClaseOrigen, Proceso, ClasePT, Talla, AlmacenOrigen, AlmacenDestino, FechaProduccion } = req.body;
+    if (!Lote || !ClaseOrigen || !Proceso || !ClasePT || !Talla || !AlmacenOrigen || !AlmacenDestino) {
+      res.status(400).json({ error: "Lote, Clase origen, Proceso, Clase PT, Talla, Almacén origen y destino son requeridos" });
       return;
     }
-    const lotes: any[] = await prisma.$queryRaw`SELECT Lote FROM Lotes WHERE Lote = ${Lote} AND Activo = 1 LIMIT 1`;
+    const lotes: any[] = await prisma.$queryRaw`SELECT Lote FROM Lotes WHERE Lote = ${Lote} AND Clase = ${ClaseOrigen} AND Activo = 1 LIMIT 1`;
     if (!lotes.length) { res.status(404).json({ error: "Lote no encontrado o inactivo" }); return; }
 
     const operador = getOperador(req);
     await prisma.$executeRaw`
-      INSERT INTO TransaccionesProduccion (Lote, Proceso, ClasePT, Talla, AlmacenOrigen, AlmacenDestino, FechaProduccion, RegistradoPor)
-      VALUES (${Lote}, ${Number(Proceso)}, ${ClasePT}, ${Number(Talla)}, ${AlmacenOrigen}, ${AlmacenDestino}, ${FechaProduccion || new Date().toLocaleDateString("sv-SE", { timeZone: "America/Guatemala" })}, ${operador})
+      INSERT INTO TransaccionesProduccion (Lote, ClaseOrigen, Proceso, ClasePT, Talla, AlmacenOrigen, AlmacenDestino, FechaProduccion, RegistradoPor)
+      VALUES (${Lote}, ${ClaseOrigen}, ${Number(Proceso)}, ${ClasePT}, ${Number(Talla)}, ${AlmacenOrigen}, ${AlmacenDestino}, ${FechaProduccion || new Date().toLocaleDateString("sv-SE", { timeZone: "America/Guatemala" })}, ${operador})
     `;
     res.status(201).json({ ok: true });
   } catch (err: any) {
