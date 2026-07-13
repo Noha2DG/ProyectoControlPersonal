@@ -11,6 +11,22 @@ function tamanoValido(tamano: any): tamano is TamanoId {
   return typeof tamano === "string" && tamano in TAMANOS_ETIQUETA;
 }
 
+// Error de negocio lanzado DENTRO de una transacción (donde no se puede responder directo al
+// cliente) — el catch de la ruta lo traduce a su status HTTP en vez de un 500 genérico.
+class ErrorNegocio extends Error {
+  status: number;
+  constructor(status: number, mensaje: string) {
+    super(mensaje);
+    this.status = status;
+  }
+}
+
+// Acepta el correlativo tal como lo ve el operador ("E120") o el número pelado (120).
+function parseCorrelativo(valor: any): number | null {
+  const n = Number(String(valor ?? "").trim().replace(/^[eE]/, ""));
+  return Number.isInteger(n) && n > 0 ? n : null;
+}
+
 function getOperador(req: Request): string {
   try {
     const header = req.headers.authorization;
@@ -129,25 +145,34 @@ router.post("/", requireAuth, requirePerm("etiquetado", "imprimir"), async (req:
 
     const orden = await obtenerDatosOrden(Number(OrdenId));
     if (!orden) { res.status(404).json({ error: "Orden de etiquetado no encontrada" }); return; }
-    if (orden.EstatusOrden === "Cancelada") { res.status(400).json({ error: "Esta captura está cancelada, no se puede imprimir" }); return; }
-
-    const impresasRows: any[] = await prisma.$queryRaw`
-      SELECT COUNT(*) AS n FROM EtiquetaImpresa WHERE OrdenId = ${Number(OrdenId)} AND Estatus = 'Activa'
-    `;
-    const impresas = Number(impresasRows[0].n);
-    const pendientes = Number(orden.CantidadMaster) - impresas;
-    if (pendientes <= 0) {
-      res.status(400).json({ error: `Ya se imprimieron las ${orden.CantidadMaster} etiquetas declaradas para esta captura` });
-      return;
-    }
 
     const operador = getOperador(req);
     const posiciones = await obtenerPosiciones(Tamano);
     const correlativos: string[] = [];
+    let impresas = 0;
+    let pendientes = 0;
 
+    // Estatus + cupo + creación en la MISMA transacción, con la fila de la captura bloqueada
+    // (FOR UPDATE): antes el conteo se hacía fuera y dos estaciones confirmando la misma captura
+    // a la vez leían ambas el mismo "pendientes" y duplicaban la tanda completa. Con el candado,
+    // la segunda espera el commit de la primera y ya ve el cupo consumido.
     // LAST_INSERT_ID() es por conexión — debe leerse en la misma transacción que el INSERT,
     // si no el pool de conexiones puede devolver el id de otra sesión concurrente.
     await prisma.$transaction(async (tx) => {
+      const capturaRows: any[] = await tx.$queryRaw`
+        SELECT CantidadMaster, Estatus FROM OrdenEtiquetado WHERE OrdenId = ${Number(OrdenId)} FOR UPDATE
+      `;
+      if (!capturaRows.length) throw new ErrorNegocio(404, "Orden de etiquetado no encontrada");
+      if (capturaRows[0].Estatus === "Cancelada") throw new ErrorNegocio(400, "Esta captura está cancelada, no se puede imprimir");
+
+      const impresasRows: any[] = await tx.$queryRaw`
+        SELECT COUNT(*) AS n FROM EtiquetaImpresa WHERE OrdenId = ${Number(OrdenId)} AND Estatus = 'Activa'
+      `;
+      impresas = Number(impresasRows[0].n);
+      const cantidadMaster = Number(capturaRows[0].CantidadMaster);
+      pendientes = cantidadMaster - impresas;
+      if (pendientes <= 0) throw new ErrorNegocio(400, `Ya se imprimieron las ${cantidadMaster} etiquetas declaradas para esta captura`);
+
       for (let i = 0; i < pendientes; i++) {
         await tx.$executeRaw`INSERT INTO EtiquetaImpresa (OrdenId, Tamano, RegistradoPor) VALUES (${Number(OrdenId)}, ${Tamano}, ${operador})`;
         const fila: any[] = await tx.$queryRaw`SELECT LAST_INSERT_ID() AS id`;
@@ -155,12 +180,72 @@ router.post("/", requireAuth, requirePerm("etiquetado", "imprimir"), async (req:
         await tx.$executeRaw`INSERT INTO ImpresionLog (EtiquetaId, Motivo, ImpresoPor) VALUES (${id}, ${"Impresión inicial"}, ${operador})`;
         correlativos.push("E" + id);
       }
-    });
+    }, { timeout: 60_000 });
 
-    const zpl = correlativos.map(correlativo => armarZPL(orden, correlativo, posiciones, Tamano)).join("\n");
+    // Bloques individuales (no un solo string concatenado): el frontend los envía a la impresora
+    // en tandas con progreso, y si el envío falla a medias sabe exactamente qué correlativos
+    // faltaron para reintentar solo esos.
+    const bloques = correlativos.map(correlativo => ({
+      Correlativo: correlativo,
+      Zpl: armarZPL(orden, correlativo, posiciones, Tamano),
+    }));
     res.status(201).json({
-      ok: true, Cantidad: pendientes, Correlativos: correlativos, Zpl: zpl,
+      ok: true, Cantidad: pendientes, Correlativos: correlativos, Bloques: bloques,
       Impresas: impresas + pendientes, CantidadMaster: Number(orden.CantidadMaster),
+    });
+  } catch (err: any) {
+    if (err instanceof ErrorNegocio) { res.status(err.status).json({ error: err.message }); return; }
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/etiqueta-impresa/reimprimir-bloque  { OrdenId, Desde, Hasta, Motivo }
+// Recuperación de una tanda que falló a medias camino a la impresora (atasco, rollo agotado,
+// Browser Print caído): reimprime en bloque un rango de correlativos YA registrados de esa
+// captura. No crea etiquetas nuevas ni consume cupo — solo audita un ImpresionLog por etiqueta,
+// igual que la reimpresión individual. Cada etiqueta respeta el tamaño con el que se registró.
+router.post("/reimprimir-bloque", requireAuth, requirePerm("etiquetado", "imprimir"), async (req: Request, res: Response) => {
+  try {
+    const { OrdenId, Desde, Hasta, Motivo } = req.body;
+    if (!OrdenId) { res.status(400).json({ error: "OrdenId es requerido" }); return; }
+    const desde = parseCorrelativo(Desde);
+    const hasta = parseCorrelativo(Hasta);
+    if (!desde || !hasta || desde > hasta) { res.status(400).json({ error: "Rango de correlativos inválido (ej. Desde E120, Hasta E180)" }); return; }
+    if (hasta - desde + 1 > 1000) { res.status(400).json({ error: "Rango demasiado grande (máximo 1000 etiquetas por bloque)" }); return; }
+    if (!Motivo || !String(Motivo).trim()) { res.status(400).json({ error: "El motivo de la reimpresión es requerido" }); return; }
+
+    const orden = await obtenerDatosOrden(Number(OrdenId));
+    if (!orden) { res.status(404).json({ error: "Orden de etiquetado no encontrada" }); return; }
+
+    // Solo etiquetas activas de ESTA captura dentro del rango — correlativos de otras capturas
+    // que caigan en el rango numérico se ignoran, no se pueden reimprimir desde aquí.
+    const etiquetas: any[] = await prisma.$queryRaw`
+      SELECT EtiquetaId, Tamano FROM EtiquetaImpresa
+      WHERE OrdenId = ${Number(OrdenId)} AND EtiquetaId BETWEEN ${desde} AND ${hasta} AND Estatus = 'Activa'
+      ORDER BY EtiquetaId ASC
+    `;
+    if (!etiquetas.length) { res.status(400).json({ error: "No hay etiquetas activas de esta captura en ese rango de correlativos" }); return; }
+
+    const operador = getOperador(req);
+    const motivo = String(Motivo).trim();
+    await prisma.$transaction(async (tx) => {
+      for (const e of etiquetas) {
+        await tx.$executeRaw`INSERT INTO ImpresionLog (EtiquetaId, Motivo, ImpresoPor) VALUES (${Number(e.EtiquetaId)}, ${motivo}, ${operador})`;
+      }
+    }, { timeout: 60_000 });
+
+    const posPorTamano = new Map<TamanoId, Posiciones>();
+    const bloques: { Correlativo: string; Zpl: string }[] = [];
+    for (const e of etiquetas) {
+      const tamano: TamanoId = tamanoValido(e.Tamano) ? e.Tamano : TAMANO_DEFECTO;
+      if (!posPorTamano.has(tamano)) posPorTamano.set(tamano, await obtenerPosiciones(tamano));
+      const correlativo = "E" + Number(e.EtiquetaId);
+      bloques.push({ Correlativo: correlativo, Zpl: armarZPL(orden, correlativo, posPorTamano.get(tamano)!, tamano) });
+    }
+    res.json({
+      ok: true, Cantidad: bloques.length,
+      Desde: bloques[0].Correlativo, Hasta: bloques[bloques.length - 1].Correlativo,
+      Bloques: bloques,
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message });

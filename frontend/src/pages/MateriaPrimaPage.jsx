@@ -106,7 +106,7 @@ function LoteModal({ item, fincas, clases, tallas, onSave, onClose }) {
     const { diaSemanaISO, semana } = isoSemana(form.Fecha);
     const segFecha = `${letra}${diaSemanaISO}${String(semana).padStart(2, "0")}`;
     const [parte1, parte2] = piscina.Nombre.split("-");
-    return [`${segFecha}${parte1}`, parte2, form.CicloNumero || "?"].filter(Boolean).join("-");
+    return [`${segFecha}${parte1}`, parte2, form.CicloNumero || "?", form.Clase || "?"].filter(Boolean).join("-");
   };
 
   return (

@@ -36,6 +36,65 @@ function enviarZPL(device, zpl) {
   });
 }
 
+// Consulta el estatus de hardware con ~HQES. Es "best effort": si el canal de lectura no responde
+// en 3s se continúa solo con la detección del dispositivo (no todos los enlaces exponen lectura),
+// pero si SÍ responde y reporta errores (sin rollo, cabezal abierto...), quien llama bloquea la
+// impresión ANTES de registrar nada en la base de datos.
+function leerEstadoImpresora(device) {
+  return new Promise((resolve) => {
+    let terminado = false;
+    const listo = (r) => { if (!terminado) { terminado = true; resolve(r); } };
+    setTimeout(() => listo(null), 3000);
+    try {
+      device.sendThenRead("~HQES", (texto) => {
+        const m = /ERRORS:\s*(\d)\s+([0-9A-Fa-f]+)\s+([0-9A-Fa-f]+)/.exec(String(texto || ""));
+        if (!m) { listo(null); return; }
+        if (m[1] !== "1") { listo({ error: false }); return; }
+        const flags = parseInt(m[3], 16);
+        const causas = [];
+        if (flags & 0x1) causas.push("sin papel/rollo");
+        if (flags & 0x2) causas.push("sin ribbon");
+        if (flags & 0x4) causas.push("cabezal abierto");
+        if (flags & 0x8) causas.push("falla en el cortador");
+        listo({ error: true, detalle: causas.length ? causas.join(", ") : `código de error ${m[2]} ${m[3]}` });
+      }, () => listo(null));
+    } catch {
+      listo(null);
+    }
+  });
+}
+
+// Detecta la impresora Y verifica su estatus físico. Se llama ANTES de registrar etiquetas en la
+// base de datos — si Browser Print está caído, el USB suelto o la impresora reporta un problema,
+// se aborta sin consumir cupo ni crear correlativos huérfanos.
+async function verificarImpresora() {
+  const device = await detectarDispositivo();
+  const estado = await leerEstadoImpresora(device);
+  if (estado?.error) throw new Error(`la impresora reporta un problema: ${estado.detalle}. Corrígelo y vuelve a intentar.`);
+  return device;
+}
+
+// Envía los bloques ZPL en tandas (no un solo string gigante): da progreso real en pantalla y,
+// si el envío falla a medias, el error lleva .enviadas/.restantes para que quien llama ofrezca
+// reintentar exactamente lo que faltó (los correlativos ya están registrados, no se crean nuevos).
+const ETIQUETAS_POR_TANDA = 25;
+async function enviarBloques(device, bloques, onProgreso) {
+  let enviadas = 0;
+  while (enviadas < bloques.length) {
+    const tanda = bloques.slice(enviadas, enviadas + ETIQUETAS_POR_TANDA);
+    try {
+      await enviarZPL(device, tanda.map((b) => b.Zpl).join("\n"));
+    } catch (err) {
+      const fallo = new Error(err.message);
+      fallo.enviadas = enviadas;
+      fallo.restantes = bloques.slice(enviadas);
+      throw fallo;
+    }
+    enviadas += tanda.length;
+    onProgreso?.(enviadas, bloques.length);
+  }
+}
+
 const ANCHO_VISTA = 480; // px en pantalla — la escala hacia puntos ZPL se calcula a partir de esto
 
 // Campos disponibles en la etiqueta — espejo de CAMPOS_DISENO/ETIQUETA_CAMPO_LABEL en backend/src/lib/zpl.ts.
@@ -71,7 +130,7 @@ function CampoArrastrable({ nombre, posiciones, escala, editando, onIniciarArras
 // DATOS (cliente/lote/talla correctos) antes de gastar una etiqueta física, y para reposicionar los
 // campos arrastrándolos cuando el diseño real no coincide (guarda las posiciones en DisenoEtiqueta,
 // que es lo que también usa el backend al armar el ZPL real).
-function VistaPreviaModal({ preview, onConfirmar, onCancelar, confirmando, onGuardarDiseno }) {
+function VistaPreviaModal({ preview, onConfirmar, onCancelar, confirmando, progreso, onGuardarDiseno }) {
   const { AnchoPuntos, AltoPuntos, Datos: d } = preview;
   const pendientes = preview.orden.CantidadMaster - preview.orden.Impresas;
   const [editando, setEditando] = useState(false);
@@ -177,13 +236,83 @@ function VistaPreviaModal({ preview, onConfirmar, onCancelar, confirmando, onGua
                 </button>
                 <button onClick={onConfirmar} disabled={confirmando}
                   className="px-5 py-2 text-sm bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 transition disabled:opacity-50">
-                  {confirmando ? `Imprimiendo ${pendientes}...` : `Confirmar e imprimir (${pendientes})`}
+                  {confirmando
+                    ? (progreso ? `Imprimiendo ${progreso.hechas}/${progreso.total}...` : `Imprimiendo ${pendientes}...`)
+                    : `Confirmar e imprimir (${pendientes})`}
                 </button>
               </div>
             </>
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+// Aparece cuando una tanda falló a medias camino a la impresora: las etiquetas YA quedaron
+// registradas (el cupo se consumió), solo faltó el envío físico de una parte. Ofrece reintentar
+// exactamente los correlativos que faltaron, sin crear nuevos. Si se cierra, ese mismo rango se
+// recupera después con "Reimprimir rango" en el historial de la captura.
+function RecuperacionEnvioModal({ fallo, progreso, reintentando, onReintentar, onCerrar }) {
+  const primera = fallo.bloques[0].Correlativo;
+  const ultima = fallo.bloques[fallo.bloques.length - 1].Correlativo;
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-md">
+        <div className="px-6 py-4 border-b">
+          <h2 className="text-base font-semibold text-red-700">La impresión se interrumpió</h2>
+        </div>
+        <div className="px-6 py-4 text-sm text-gray-700 space-y-2">
+          <p>Se enviaron <b>{fallo.enviadas}</b> de <b>{fallo.total}</b> etiquetas a la impresora antes del error: <span className="text-red-600">{fallo.mensaje}</span></p>
+          <p>
+            Las <b>{fallo.bloques.length}</b> restantes (<span className="font-mono">{primera}</span> a <span className="font-mono">{ultima}</span>) ya
+            están registradas en el sistema — al reintentar NO se crean correlativos nuevos, solo se vuelve a enviar lo que faltó.
+          </p>
+          <p className="text-xs text-gray-400">
+            Revisa la impresora (rollo, atasco, Browser Print) antes de reintentar. Si cierras esta ventana, puedes recuperar el
+            mismo rango después con "Reimprimir rango" en el historial de la captura.
+          </p>
+        </div>
+        <div className="px-6 py-4 border-t flex justify-end gap-3">
+          <button onClick={onCerrar} disabled={reintentando}
+            className="px-4 py-2 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 transition disabled:opacity-50">
+            Cerrar
+          </button>
+          <button onClick={onReintentar} disabled={reintentando}
+            className="px-5 py-2 text-sm bg-red-600 text-white font-semibold rounded-lg hover:bg-red-700 transition disabled:opacity-50">
+            {reintentando
+              ? (progreso ? `Enviando ${progreso.hechas}/${progreso.total}...` : "Enviando...")
+              : `Reintentar envío (${fallo.bloques.length})`}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Reimpresión en bloque por rango de correlativos — la vía de recuperación cuando una tanda
+// falló y ya no está abierta la ventana de reintento (o el problema se descubrió después, ej.
+// etiquetas ilegibles por cabezal sucio). Exige motivo, igual que la reimpresión individual.
+function ReimprimirRangoForm({ enCurso, progreso, onEjecutar }) {
+  const [desde, setDesde] = useState("");
+  const [hasta, setHasta] = useState("");
+  const [motivo, setMotivo] = useState("");
+  const listo = desde.trim() && hasta.trim() && motivo.trim();
+  return (
+    <div className="mt-3 pt-3 border-t border-gray-200 flex flex-wrap items-center gap-2">
+      <span className="text-xs text-gray-500">Reimprimir rango (recuperar tanda fallida):</span>
+      <input type="text" value={desde} onChange={e => setDesde(e.target.value)} placeholder="Desde (ej. E120)"
+        className="border border-gray-300 rounded-lg px-2 py-1 text-xs font-mono w-28 focus:outline-none focus:ring-2 focus:ring-orange-400" />
+      <input type="text" value={hasta} onChange={e => setHasta(e.target.value)} placeholder="Hasta (ej. E180)"
+        className="border border-gray-300 rounded-lg px-2 py-1 text-xs font-mono w-28 focus:outline-none focus:ring-2 focus:ring-orange-400" />
+      <input type="text" value={motivo} onChange={e => setMotivo(e.target.value)} placeholder="Motivo (ej. atasco a mitad de tanda)"
+        className="border border-gray-300 rounded-lg px-2 py-1 text-xs w-64 focus:outline-none focus:ring-2 focus:ring-orange-400" />
+      <button disabled={!listo || enCurso} onClick={() => onEjecutar(desde.trim(), hasta.trim(), motivo.trim())}
+        className="px-3 py-1.5 text-xs bg-orange-600 text-white font-semibold rounded-lg hover:bg-orange-700 transition disabled:opacity-50">
+        {enCurso
+          ? (progreso ? `Enviando ${progreso.hechas}/${progreso.total}...` : "Enviando...")
+          : "Reimprimir rango"}
+      </button>
     </div>
   );
 }
@@ -202,6 +331,10 @@ export default function ImpresionEtiquetasPage() {
   const [fecha, setFecha] = useState("");
   const [tamanos, setTamanos] = useState([]);
   const [tamano, setTamano] = useState("4x2");
+  const [progreso, setProgreso] = useState(null); // { hechas, total } durante un envío por tandas
+  const [falloEnvio, setFalloEnvio] = useState(null); // { bloques, enviadas, total, mensaje, ordenId } si un envío quedó a medias
+  const [reintentando, setReintentando] = useState(false);
+  const [rangoEnCurso, setRangoEnCurso] = useState(null); // OrdenId con reimpresión de rango en marcha
 
   const fetchOrdenes = useCallback(async (fechaFiltro) => {
     setLoading(true);
@@ -257,7 +390,20 @@ export default function ImpresionEtiquetasPage() {
   const confirmarImpresion = async () => {
     const orden = preview.orden;
     setOrdenEnCurso(orden.OrdenId);
+    setProgreso(null);
     try {
+      // 1. Impresora verificada ANTES de registrar nada: si Browser Print está caído o la
+      // impresora reporta un problema (sin rollo, cabezal abierto), se aborta aquí sin haber
+      // consumido cupo ni creado correlativos huérfanos en la base de datos.
+      let dispositivo;
+      try {
+        dispositivo = await verificarImpresora();
+        setDevice(dispositivo); setDeviceError("");
+      } catch (err) {
+        alert("Impresora no lista — no se registró ninguna etiqueta.\n" + err.message);
+        return;
+      }
+      // 2. Registrar la tanda completa (correlativos + cupo, transacción con candado en backend).
       const res = await fetch("/api/etiqueta-impresa", {
         method: "POST",
         headers: { "Content-Type": "application/json", ...authHeader() },
@@ -265,15 +411,97 @@ export default function ImpresionEtiquetasPage() {
       });
       const data = await res.json();
       if (!res.ok) { alert("Error: " + data.error); return; }
-      const dispositivo = await detectarDispositivo();
-      setDevice(dispositivo); setDeviceError("");
-      await enviarZPL(dispositivo, data.Zpl);
+      // 3. Enviar a la impresora en tandas con progreso; si falla a medias, abrir la ventana de
+      // recuperación con exactamente los correlativos que faltaron.
+      try {
+        await enviarBloques(dispositivo, data.Bloques, (hechas, total) => setProgreso({ hechas, total }));
+      } catch (err) {
+        setPreview(null);
+        setFalloEnvio({
+          bloques: err.restantes, enviadas: err.enviadas, total: data.Bloques.length,
+          mensaje: err.message, ordenId: orden.OrdenId,
+        });
+        return;
+      }
       setPreview(null);
-      fetchOrdenes(fecha);
-      if (expandidoId === orden.OrdenId) cargarEtiquetas(orden.OrdenId);
+      alert(`Se imprimieron las ${data.Cantidad} etiquetas (${data.Bloques[0].Correlativo} a ${data.Bloques[data.Bloques.length - 1].Correlativo}).`);
     } catch (err) {
       alert("No se pudo imprimir: " + err.message);
-    } finally { setOrdenEnCurso(null); }
+    } finally {
+      setOrdenEnCurso(null);
+      setProgreso(null);
+      fetchOrdenes(fecha);
+      if (expandidoId === orden.OrdenId) cargarEtiquetas(orden.OrdenId);
+    }
+  };
+
+  // Reintento desde la ventana de recuperación: reenvía SOLO los bloques que faltaron (ya
+  // registrados). Si vuelve a fallar, la ventana se actualiza con lo que siga pendiente.
+  const reintentarEnvio = async () => {
+    setReintentando(true);
+    setProgreso(null);
+    try {
+      let dispositivo;
+      try {
+        dispositivo = await verificarImpresora();
+        setDevice(dispositivo); setDeviceError("");
+      } catch (err) {
+        alert("Impresora no lista: " + err.message);
+        return;
+      }
+      try {
+        await enviarBloques(dispositivo, falloEnvio.bloques, (hechas, total) => setProgreso({ hechas, total }));
+        const ordenId = falloEnvio.ordenId;
+        setFalloEnvio(null);
+        if (expandidoId === ordenId) cargarEtiquetas(ordenId);
+      } catch (err) {
+        setFalloEnvio(f => ({
+          ...f, enviadas: f.enviadas + err.enviadas, bloques: err.restantes, mensaje: err.message,
+        }));
+      }
+    } finally {
+      setReintentando(false);
+      setProgreso(null);
+    }
+  };
+
+  // Reimpresión en bloque por rango de correlativos (recuperación tardía de una tanda fallida).
+  const reimprimirRango = async (orden, desde, hasta, motivo) => {
+    setRangoEnCurso(orden.OrdenId);
+    setProgreso(null);
+    try {
+      let dispositivo;
+      try {
+        dispositivo = await verificarImpresora();
+        setDevice(dispositivo); setDeviceError("");
+      } catch (err) {
+        alert("Impresora no lista: " + err.message);
+        return;
+      }
+      const res = await fetch("/api/etiqueta-impresa/reimprimir-bloque", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeader() },
+        body: JSON.stringify({ OrdenId: orden.OrdenId, Desde: desde, Hasta: hasta, Motivo: motivo }),
+      });
+      const data = await res.json();
+      if (!res.ok) { alert("Error: " + data.error); return; }
+      try {
+        await enviarBloques(dispositivo, data.Bloques, (hechas, total) => setProgreso({ hechas, total }));
+      } catch (err) {
+        setFalloEnvio({
+          bloques: err.restantes, enviadas: err.enviadas, total: data.Bloques.length,
+          mensaje: err.message, ordenId: orden.OrdenId,
+        });
+        return;
+      }
+      cargarEtiquetas(orden.OrdenId);
+      alert(`Se reimprimieron ${data.Cantidad} etiquetas (${data.Desde} a ${data.Hasta}).`);
+    } catch (err) {
+      alert("No se pudo reimprimir el rango: " + err.message);
+    } finally {
+      setRangoEnCurso(null);
+      setProgreso(null);
+    }
   };
 
   const guardarDisenoEtiqueta = async (posiciones) => {
@@ -291,6 +519,10 @@ export default function ImpresionEtiquetasPage() {
     const motivo = prompt("Motivo de la reimpresión (ej. etiqueta dañada al pegar):");
     if (!motivo || !motivo.trim()) return;
     try {
+      // Impresora verificada antes de registrar el evento en el log — mismo criterio que la
+      // impresión en bloque: no dejar rastro en BD de algo que físicamente no va a salir.
+      const dispositivo = await verificarImpresora();
+      setDevice(dispositivo); setDeviceError("");
       const res = await fetch(`/api/etiqueta-impresa/${etiqueta.EtiquetaId}/reimprimir`, {
         method: "POST",
         headers: { "Content-Type": "application/json", ...authHeader() },
@@ -298,8 +530,6 @@ export default function ImpresionEtiquetasPage() {
       });
       const data = await res.json();
       if (!res.ok) { alert("Error: " + data.error); return; }
-      const dispositivo = await detectarDispositivo();
-      setDevice(dispositivo); setDeviceError("");
       await enviarZPL(dispositivo, data.Zpl);
       cargarEtiquetas(etiqueta.OrdenId);
     } catch (err) {
@@ -420,6 +650,10 @@ export default function ImpresionEtiquetasPage() {
                             )}
                           </tbody>
                         </table>
+                        {etiquetas.length > 0 && (
+                          <ReimprimirRangoForm enCurso={rangoEnCurso === o.OrdenId} progreso={rangoEnCurso === o.OrdenId ? progreso : null}
+                            onEjecutar={(desde, hasta, motivo) => reimprimirRango(o, desde, hasta, motivo)} />
+                        )}
                       </td>
                     </tr>
                   )}
@@ -436,7 +670,14 @@ export default function ImpresionEtiquetasPage() {
 
       {preview && (
         <VistaPreviaModal preview={preview} confirmando={ordenEnCurso === preview.orden.OrdenId}
+          progreso={ordenEnCurso === preview.orden.OrdenId ? progreso : null}
           onConfirmar={confirmarImpresion} onCancelar={() => setPreview(null)} onGuardarDiseno={guardarDisenoEtiqueta} />
+      )}
+
+      {falloEnvio && (
+        <RecuperacionEnvioModal fallo={falloEnvio} progreso={progreso} reintentando={reintentando}
+          onReintentar={reintentarEnvio}
+          onCerrar={() => { setFalloEnvio(null); fetchOrdenes(fecha); }} />
       )}
     </div>
   );

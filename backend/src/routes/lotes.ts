@@ -17,9 +17,11 @@ function getOperador(req: Request): string {
   }
 }
 
-// Formato: <letraAño><díaSemanaISO><semanaISO><primeraParteDePiscina>-<segundaParteDePiscina>-<ciclo>
-// ej. piscina "EM07-E01", martes (2) semana 27 de 2026 (G), ciclo 5 → G227EM07-E01-5
-async function generarCodigoLote(piscinaId: number, fecha: string, cicloNumero?: number) {
+// Formato: <letraAño><díaSemanaISO><semanaISO><primeraParteDePiscina>-<segundaParteDePiscina>-<ciclo>-<clase>
+// ej. piscina "EM07-E01", martes (2) semana 27 de 2026 (G), ciclo 5, clase D30 → G227EM07-E01-5-D30
+// La Clase va al final del código para poder tener varias etapas de proceso (ej. C20 entero y D30
+// descabezado) del mismo ciclo/día sin chocar contra la llave primaria de Lotes (Piscina+Ciclo+Fecha+Clase).
+async function generarCodigoLote(piscinaId: number, fecha: string, clase: string, cicloNumero?: number) {
   const piscinas: any[] = await prisma.$queryRaw`SELECT Nombre FROM Piscina WHERE PiscinaId = ${piscinaId} LIMIT 1`;
   if (!piscinas.length) return null;
   let secuencial: string;
@@ -29,7 +31,7 @@ async function generarCodigoLote(piscinaId: number, fecha: string, cicloNumero?:
     const countRows: any[] = await prisma.$queryRaw`SELECT COUNT(*) AS n FROM Lotes WHERE Fecha = ${fecha}`;
     secuencial = String(Number(countRows[0].n) + 1);
   }
-  return componerCodigoLote(String(piscinas[0].Nombre), fecha, secuencial);
+  return componerCodigoLote(String(piscinas[0].Nombre), fecha, secuencial, clase);
 }
 
 function formatear(rows: any[]) {
@@ -98,7 +100,7 @@ router.post("/", requireAuth, requirePerm("destajo", "crear"), async (req: Reque
     const requiereCiclo = piscinaRequiereCiclo(String(piscinaRows[0].Nombre), String(piscinaRows[0].CodigoFinca));
 
     const cicloNum = (requiereCiclo && CicloNumero) ? Number(CicloNumero) : undefined;
-    const lote = await generarCodigoLote(Number(PiscinaId), Fecha, cicloNum);
+    const lote = await generarCodigoLote(Number(PiscinaId), Fecha, Clase, cicloNum);
     if (!lote) { res.status(404).json({ error: "Piscina no encontrada" }); return; }
 
     let resolvedCicloId: number | null = null;
@@ -123,7 +125,7 @@ router.post("/", requireAuth, requirePerm("destajo", "crear"), async (req: Reque
     `;
     res.status(201).json({ ok: true, Lote: lote });
   } catch (err: any) {
-    if (err.message?.includes("Duplicate")) res.status(400).json({ error: "Ya existe un lote para esta piscina con ese ciclo en esta fecha" });
+    if (err.message?.includes("Duplicate")) res.status(400).json({ error: "Ya existe un lote para esta piscina, ciclo, fecha y clase" });
     else if (err.message?.includes("foreign key")) res.status(400).json({ error: "Piscina, Clase o Talla no válidos" });
     else res.status(500).json({ error: err.message });
   }
