@@ -34,23 +34,6 @@ export default function EtiquetadoPage() {
   const [guardando, setGuardando] = useState(false);
   const [loading, setLoading] = useState(true);
 
-  // Panel "Capturas del día" — vista aparte del flujo Pedido → Línea, para ver/editar/eliminar
-  // de un vistazo todo lo capturado en una fecha sin importar a qué pedido pertenezca.
-  const [fechaFiltro, setFechaFiltro] = useState(hoy());
-  const [capturasDia, setCapturasDia] = useState([]);
-  const [cargandoDia, setCargandoDia] = useState(false);
-
-  const cargarCapturasDia = useCallback(async (fechaConsulta) => {
-    setCargandoDia(true);
-    try {
-      const res = await fetch(`/api/orden-etiquetado?fecha=${fechaConsulta}`, { headers: authHeader() });
-      const data = await res.json();
-      if (Array.isArray(data)) setCapturasDia(data);
-    } finally { setCargandoDia(false); }
-  }, []);
-
-  useEffect(() => { cargarCapturasDia(fechaFiltro); }, [cargarCapturasDia, fechaFiltro]);
-
   useEffect(() => {
     setLoading(true);
     Promise.all([
@@ -143,22 +126,6 @@ export default function EtiquetadoPage() {
 
   const cancelarEdicion = () => { setEditando(null); setForm(FORM_VACIO); };
 
-  // Desde el panel "Capturas del día" (que cruza todos los pedidos) hasta la columna de edición:
-  // reconstruye la navegación Pedido → Línea de siempre y deja la captura lista para editar,
-  // sin que el operador tenga que buscarla a mano.
-  const saltarACaptura = async (row) => {
-    const pedido = pedidos.find(p => p.CodigoPedido === row.CodigoPedido) || { CodigoPedido: row.CodigoPedido, Descripcion: "" };
-    setPedidoSel(pedido);
-    const res = await fetch(`/api/detalle-pedido?pedido=${encodeURIComponent(row.CodigoPedido)}`, { headers: authHeader() });
-    const data = await res.json();
-    if (!Array.isArray(data)) return;
-    setDetalles(data);
-    const detalle = data.find(d => d.DetalleId === row.DetalleId);
-    if (!detalle) return;
-    seleccionarLinea(detalle);
-    handleEditar(row);
-  };
-
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!detalleSel) return;
@@ -185,7 +152,6 @@ export default function EtiquetadoPage() {
           setForm(FORM_VACIO);
         }
         cargarLinea(detalleSel.DetalleId);
-        cargarCapturasDia(fechaFiltro);
       } else {
         const err = await res.json();
         alert("Error: " + err.error);
@@ -198,17 +164,6 @@ export default function EtiquetadoPage() {
     await fetch(`/api/orden-etiquetado/${captura.OrdenId}`, { method: "DELETE", headers: authHeader() });
     if (editando === captura.OrdenId) cancelarEdicion();
     cargarLinea(detalleSel.DetalleId);
-    cargarCapturasDia(fechaFiltro);
-  };
-
-  // Eliminar directo desde el panel "Capturas del día" — puede no haber ninguna línea
-  // seleccionada todavía, así que solo refresca esa línea si coincide con la que ya está abierta.
-  const handleEliminarDia = async (row) => {
-    if (!confirm("¿Eliminar esta captura? Esta acción no se puede deshacer.")) return;
-    await fetch(`/api/orden-etiquetado/${row.OrdenId}`, { method: "DELETE", headers: authHeader() });
-    if (editando === row.OrdenId) cancelarEdicion();
-    cargarCapturasDia(fechaFiltro);
-    if (detalleSel?.DetalleId === row.DetalleId) cargarLinea(detalleSel.DetalleId);
   };
 
   const piscinaSel = piscinas.find(p => String(p.PiscinaId) === String(form.PiscinaId));
@@ -229,67 +184,7 @@ export default function EtiquetadoPage() {
   );
 
   return (
-    <div className="flex flex-col gap-5">
-      {/* Panel "Capturas del día" — cruza todos los pedidos/líneas para la fecha elegida (hoy por defecto) */}
-      <div className="bg-white rounded-xl shadow px-4 py-4">
-        <div className="flex flex-wrap items-center gap-3 mb-3">
-          <h3 className="text-sm font-semibold text-gray-700">Capturas del día</h3>
-          <input type="date" value={fechaFiltro} onChange={e => setFechaFiltro(e.target.value)}
-            className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
-          {fechaFiltro !== hoy() && (
-            <button onClick={() => setFechaFiltro(hoy())} className="text-xs text-blue-600 hover:text-blue-800 underline">Volver a hoy</button>
-          )}
-          <span className="text-sm text-gray-400">{capturasDia.length} captura{capturasDia.length !== 1 ? "s" : ""}</span>
-        </div>
-        {cargandoDia ? (
-          <div className="flex justify-center py-6"><div className="w-6 h-6 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" /></div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="bg-gray-100 text-gray-600 uppercase text-xs tracking-wider">
-                  <th className="px-3 py-2 text-left whitespace-nowrap">Pedido</th>
-                  <th className="px-3 py-2 text-left whitespace-nowrap">Cliente</th>
-                  <th className="px-3 py-2 text-left whitespace-nowrap">Proceso · Talla</th>
-                  <th className="px-3 py-2 text-left whitespace-nowrap">Lote</th>
-                  <th className="px-3 py-2 text-left whitespace-nowrap">Área</th>
-                  <th className="px-3 py-2 text-right whitespace-nowrap">Masters</th>
-                  <th className="px-3 py-2 text-center whitespace-nowrap">Estatus</th>
-                  <th className="px-3 py-2 text-center whitespace-nowrap">Acciones</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100">
-                {capturasDia.map(row => (
-                  <tr key={row.OrdenId} className={`hover:bg-gray-50 transition ${row.Estatus === "Cancelada" ? "opacity-50" : ""}`}>
-                    <td className="px-3 py-2 font-mono font-bold text-gray-700 whitespace-nowrap">{row.CodigoPedido}</td>
-                    <td className="px-3 py-2 whitespace-nowrap">{row.NombreCliente}{row.NombreSubcliente ? ` - ${row.NombreSubcliente}` : ""}</td>
-                    <td className="px-3 py-2 whitespace-nowrap">{row.DescripcionClase} · {row.DescripcionTalla}</td>
-                    <td className="px-3 py-2 font-mono text-gray-700 whitespace-nowrap">{row.Lote}</td>
-                    <td className="px-3 py-2 whitespace-nowrap">{row.NombreArea || <span className="text-gray-400 italic">Sin área</span>}</td>
-                    <td className="px-3 py-2 text-right whitespace-nowrap">{row.CantidadMaster}</td>
-                    <td className="px-3 py-2 text-center whitespace-nowrap">
-                      <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-semibold ${row.Estatus === "Cancelada" ? "bg-red-100 text-red-600" : "bg-yellow-100 text-yellow-700"}`}>
-                        {row.Estatus}
-                      </span>
-                    </td>
-                    <td className="px-3 py-2 text-center whitespace-nowrap">
-                      <div className="flex justify-center gap-2">
-                        <button onClick={() => saltarACaptura(row)} className="text-blue-600 hover:text-blue-800 text-xs font-medium px-2 py-1 rounded hover:bg-blue-50 transition">Editar</button>
-                        <button onClick={() => handleEliminarDia(row)} className="text-red-500 hover:text-red-700 text-xs font-medium px-2 py-1 rounded hover:bg-red-50 transition">Eliminar</button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-                {capturasDia.length === 0 && (
-                  <tr><td colSpan={8} className="px-3 py-6 text-center text-gray-400">Sin capturas para esta fecha</td></tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-
-      <div className="flex flex-col lg:flex-row gap-4">
+    <div className="flex flex-col lg:flex-row gap-4">
       {/* Columna 1: Pedidos */}
       <div className="w-full lg:w-64 shrink-0">
         <input type="text" placeholder="Buscar pedido..." value={busquedaPedido} onChange={e => setBusquedaPedido(e.target.value)}
@@ -496,7 +391,6 @@ export default function EtiquetadoPage() {
             </div>
           </>
         )}
-      </div>
       </div>
     </div>
   );
