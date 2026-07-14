@@ -95,7 +95,12 @@ async function enviarBloques(device, bloques, onProgreso) {
   }
 }
 
-const ANCHO_VISTA = 480; // px en pantalla — la escala hacia puntos ZPL se calcula a partir de esto
+// px en pantalla — límites de la maqueta (no un tamaño fijo): la escala se calcula para que la
+// etiqueta quepa dentro de este recuadro sea cual sea su proporción real, en vez de forzar siempre
+// el mismo ancho en pantalla (eso hacía que una etiqueta angosta y larga como 3x1 se viera gigante
+// y desproporcionada — necesitaba un scroll enorme para verla completa).
+const ANCHO_MAX_VISTA = 420;
+const ALTO_MAX_VISTA = 420;
 
 // Campos disponibles en la etiqueta — espejo de CAMPOS_DISENO/ETIQUETA_CAMPO_LABEL en backend/src/lib/zpl.ts.
 // Los que no son de la orden real (Color/Origen/Congelación/Área/Fecha) vienen ocultos por defecto;
@@ -140,7 +145,8 @@ function VistaPreviaModal({ preview, onConfirmar, onCancelar, confirmando, progr
 
   useEffect(() => { setPosiciones(preview.Posiciones); }, [preview.Posiciones]);
 
-  const escala = ANCHO_VISTA / AnchoPuntos;
+  const escala = Math.min(ANCHO_MAX_VISTA / AnchoPuntos, ALTO_MAX_VISTA / AltoPuntos);
+  const anchoVista = AnchoPuntos * escala;
   const altoVista = AltoPuntos * escala;
 
   const iniciarArrastre = (campo) => (e) => {
@@ -185,7 +191,7 @@ function VistaPreviaModal({ preview, onConfirmar, onCancelar, confirmando, progr
         <div className="px-6 py-5 flex flex-col md:flex-row gap-6 overflow-y-auto">
           <div className="mx-auto md:mx-0 shrink-0">
             <div className="relative border-2 border-gray-800 rounded-sm bg-white select-none"
-              style={{ width: ANCHO_VISTA, height: altoVista }}
+              style={{ width: anchoVista, height: altoVista }}
               onMouseMove={moverArrastre} onMouseUp={soltarArrastre} onMouseLeave={soltarArrastre}>
               {ETIQUETA_CAMPOS.filter(c => posiciones[c.key].Visible).map(c => (
                 <CampoArrastrable key={c.key} nombre={c.key} posiciones={posiciones} escala={escala} editando={editando} onIniciarArrastre={iniciarArrastre}>
@@ -193,7 +199,7 @@ function VistaPreviaModal({ preview, onConfirmar, onCancelar, confirmando, progr
                 </CampoArrastrable>
               ))}
             </div>
-            <p className="text-xs text-gray-400 mt-3 text-center" style={{ width: ANCHO_VISTA }}>
+            <p className="text-xs text-gray-400 mt-3 text-center" style={{ width: Math.max(anchoVista, 220) }}>
               {editando
                 ? "Arrastra cada campo para reposicionarlo."
                 : `Esto es una maqueta de los datos, no el diseño exacto que imprime la Zebra. Al confirmar se imprimirán las ${pendientes} etiqueta${pendientes !== 1 ? "s" : ""} pendientes de esta captura.`}
@@ -330,7 +336,9 @@ export default function ImpresionEtiquetasPage() {
   const [cargandoPreview, setCargandoPreview] = useState(false);
   const [fecha, setFecha] = useState("");
   const [tamanos, setTamanos] = useState([]);
-  const [tamano, setTamano] = useState("4x2");
+  // "3x1" es el rollo que se usa por defecto hoy en planta (jul 2026, mientras se sigue usando ese
+  // tamaño) — el operador puede cambiarlo si carga otro rollo.
+  const [tamano, setTamano] = useState("3x1");
   const [progreso, setProgreso] = useState(null); // { hechas, total } durante un envío por tandas
   const [falloEnvio, setFalloEnvio] = useState(null); // { bloques, enviadas, total, mensaje, ordenId } si un envío quedó a medias
   const [reintentando, setReintentando] = useState(false);

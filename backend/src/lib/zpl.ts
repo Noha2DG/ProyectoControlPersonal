@@ -10,10 +10,18 @@
 // a mano cuál está usando según el rollo físico cargado en la impresora — no hay forma de detectarlo
 // automáticamente desde el software (Browser Print no expone esa info).
 // 1 pulgada = 203 puntos a 203dpi → puntos = mm * (203/25.4), redondeado al entero más cercano.
+// "3x1" es horizontal (más ancha que alta, como dice su nombre: 3 de ancho, 1 de alto) — confirmado
+// directamente por el usuario jul 2026. Hubo un intento previo de invertir Ancho/Alto pensando que el
+// rollo se alimentaba con el lado angosto por delante (basado solo en cómo se veía una foto de un
+// primer intento de impresión, sin poder probarlo contra la impresora real) — resultó equivocado y
+// se revirtió: la forma real es horizontal, no vertical.
+// Medida de "3x1" ajustada jul 2026 con metro sobre la etiqueta física real (orilla a orilla):
+// 78 x 27mm, no 80 x 30mm nominal — los otros 3 tamaños siguen en su medida nominal hasta que se
+// midan también con metro.
 export const TAMANOS_ETIQUETA = {
   "4x2": { label: "4 x 2 pulg (104 x 50.8mm)", AnchoPuntos: 831, AltoPuntos: 406 },
   "4x4": { label: "4 x 4 pulg (104 x 104mm)", AnchoPuntos: 831, AltoPuntos: 831 },
-  "3x1": { label: "3 x 1 pulg (80 x 30mm)", AnchoPuntos: 639, AltoPuntos: 240 },
+  "3x1": { label: "3 x 1 pulg (78 x 27mm)", AnchoPuntos: 623, AltoPuntos: 216 },
   "4x6": { label: "4 x 6 pulg (104 x 148mm)", AnchoPuntos: 831, AltoPuntos: 1183 },
 } as const;
 export type TamanoId = keyof typeof TAMANOS_ETIQUETA;
@@ -60,12 +68,33 @@ export const POSICIONES_DEFECTO: Posiciones = {
   correlativoTexto: { X: 30, Y: 376, Visible: true },
 };
 
-// Deriva posiciones por defecto para cualquier tamaño escalando proporcionalmente las de 4x2 — solo
-// es un punto de partida razonable para que no queden totalmente fuera del área imprimible en
-// tamaños muy distintos (ej. 3x1, mucho más chico); el operador las termina de ajustar arrastrando
-// en "Editar diseño" la primera vez que use ese tamaño.
+// Posiciones de "3x1" ya verificadas contra una impresión física real (jul 2026) — el usuario las
+// ajustó a mano en "Editar diseño"/"Guardar diseño" sobre el lienzo horizontal ya corregido (623x216)
+// y confirmó que así "se ve bien la impresión física". Se copian aquí (además de quedar guardadas en
+// DisenoEtiqueta) para no depender solo del dato mutable en la BD — si esas filas se borraran o se
+// tuviera que recrear la base desde cero, este es el respaldo de la posición que ya funciona, en vez
+// de recalcular una adivinanza proporcional desde 4x2 que habría que volver a ajustar a mano.
+export const POSICIONES_3X1: Posiciones = {
+  pedido: { X: 49, Y: 30, Visible: true },
+  clienteSubcliente: { X: 49, Y: 70, Visible: true },
+  lote: { X: 46, Y: 109, Visible: true },
+  procesoTallaPresentacion: { X: 45, Y: 149, Visible: true },
+  color: { X: 195, Y: 113, Visible: false },
+  origen: { X: 195, Y: 130, Visible: false },
+  congelacion: { X: 337, Y: 130, Visible: false },
+  area: { X: 195, Y: 147, Visible: false },
+  fechaProduccion: { X: 337, Y: 147, Visible: false },
+  qr: { X: 453, Y: 22, Visible: true },
+  correlativoTexto: { X: 459, Y: 163, Visible: true },
+};
+
+// Deriva posiciones por defecto para un tamaño que todavía no tiene diseño propio guardado en
+// DisenoEtiqueta. "3x1" ya tiene un diseño confirmado (POSICIONES_3X1, ver arriba) — para los demás
+// tamaños sin confirmar (4x4/4x6) se sigue escalando proporcionalmente desde 4x2 como punto de
+// partida editable, que el operador termina de ajustar arrastrando en "Editar diseño".
 export function escalarPosicionesDefecto(tamano: TamanoId): Posiciones {
   if (tamano === TAMANO_DEFECTO) return POSICIONES_DEFECTO;
+  if (tamano === "3x1") return POSICIONES_3X1;
   const base = TAMANOS_ETIQUETA[TAMANO_DEFECTO];
   const destino = TAMANOS_ETIQUETA[tamano];
   const escalaX = destino.AnchoPuntos / base.AnchoPuntos;
