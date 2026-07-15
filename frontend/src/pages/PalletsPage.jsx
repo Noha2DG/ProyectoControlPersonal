@@ -201,7 +201,7 @@ function PanelEscaneo({ palletId, onClose, onCambio }) {
 // meta de referencia (no bloquea, se compara contra lo escaneado como Completo/Incompleto/Sobrante).
 function ModalNuevoPallet({ origenes, bodegasVirtuales, onCrear, onClose }) {
   const [origen, setOrigen] = useState("");
-  const [bodegaVirtual, setBodegaVirtual] = useState("");
+  const [areaCodigo, setAreaCodigo] = useState("");
   const [cantidad, setCantidad] = useState("");
   const [error, setError] = useState("");
   const [creando, setCreando] = useState(false);
@@ -211,7 +211,7 @@ function ModalNuevoPallet({ origenes, bodegasVirtuales, onCrear, onClose }) {
     setError("");
     setCreando(true);
     try {
-      await onCrear({ Origen: origen, CantidadMaster: cantidad, BodegaVirtualCodigo: bodegaVirtual });
+      await onCrear({ Origen: origen, CantidadMaster: cantidad, AreaCodigo: areaCodigo });
     } catch (err) {
       setError(err.message);
     } finally {
@@ -227,11 +227,11 @@ function ModalNuevoPallet({ origenes, bodegasVirtuales, onCrear, onClose }) {
         </div>
         <form onSubmit={handleSubmit} className="px-5 py-4 space-y-4">
           <div>
-            <label className="block text-xs font-medium text-gray-500 mb-1">Bodega virtual *</label>
-            <select required value={bodegaVirtual} onChange={e => setBodegaVirtual(e.target.value)} autoFocus
+            <label className="block text-xs font-medium text-gray-500 mb-1">Área donde se está trabajando *</label>
+            <select required value={areaCodigo} onChange={e => setAreaCodigo(e.target.value)} autoFocus
               className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400">
               <option value="">Selecciona...</option>
-              {bodegasVirtuales.map(b => <option key={b.Codigo} value={b.Codigo}>{b.Nombre} ({b.Letra})</option>)}
+              {bodegasVirtuales.map(b => <option key={b.AreaCodigo} value={b.AreaCodigo}>{b.Nombre}</option>)}
             </select>
           </div>
           <div>
@@ -292,11 +292,11 @@ export default function PalletsPage() {
 
   useEffect(() => { fetchPallets(); }, [fetchPallets]);
 
-  const handleCrear = async ({ Origen, CantidadMaster, BodegaVirtualCodigo }) => {
+  const handleCrear = async ({ Origen, CantidadMaster, AreaCodigo }) => {
     const res = await fetch(API, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...authHeader() },
-      body: JSON.stringify({ Origen, CantidadMaster, BodegaVirtualCodigo }),
+      body: JSON.stringify({ Origen, CantidadMaster, AreaCodigo }),
     });
     const data = await leerJSON(res);
     if (!res.ok) throw new Error(data.error || "No se pudo crear el pallet");
@@ -337,7 +337,7 @@ export default function PalletsPage() {
               <tr>
                 <th className="px-4 py-3 text-left">Pallet</th>
                 <th className="px-4 py-3 text-center">Estatus</th>
-                <th className="px-4 py-3 text-left">Bodega virtual</th>
+                <th className="px-4 py-3 text-left">Área</th>
                 <th className="px-4 py-3 text-left">Origen</th>
                 <th className="px-4 py-3 text-right">Masters</th>
                 <th className="px-4 py-3 text-center">Cuadre</th>

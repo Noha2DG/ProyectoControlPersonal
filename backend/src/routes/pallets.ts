@@ -156,17 +156,19 @@ router.get("/:id", requireAuth, requirePerm("bodega", "ver"), async (req: Reques
   }
 });
 
-// POST /api/pallets  { Origen, CantidadMaster, BodegaVirtualCodigo }
+// POST /api/pallets  { Origen, CantidadMaster, AreaCodigo }
 // Crea un pallet vacío y Abierto. Sin Pedido/Cliente/línea de pedido: se arma solo con lo que se
 // escanee después — pero SÍ requiere Origen (informativo, no filtra qué se puede escanear ahí),
-// CantidadMaster (meta de referencia, no bloquea el escaneo) y BodegaVirtualCodigo, de donde sale
-// la letra de su código (ej. "T0001" para Túnel) — el pallet queda ahí antes de pasar a la bodega
-// principal (todavía no existe ese siguiente paso).
+// CantidadMaster (meta de referencia, no bloquea el escaneo) y AreaCodigo — el área REAL donde se
+// está trabajando (Túnel, Masterizado...), no un tipo de bodega elegido a mano. De ahí el sistema
+// resuelve solo la bodega virtual correspondiente (BodegaVirtual.AreaCodigo) y su letra de código
+// (ej. "T0001" para Túnel) — el pallet queda en esa bodega virtual antes de pasar a la bodega
+// física real (asignación de posición + hoja física impresa — todavía no existe ese siguiente paso).
 router.post("/", requireAuth, requirePerm("bodega", "escanear"), async (req: Request, res: Response) => {
   try {
-    const { Origen, CantidadMaster, BodegaVirtualCodigo } = req.body;
+    const { Origen, CantidadMaster, AreaCodigo } = req.body;
     if (!Origen) { res.status(400).json({ error: "El origen es requerido" }); return; }
-    if (!BodegaVirtualCodigo) { res.status(400).json({ error: "La bodega virtual es requerida" }); return; }
+    if (!AreaCodigo) { res.status(400).json({ error: "El área es requerida" }); return; }
     const cantidad = Number(CantidadMaster);
     if (!Number.isInteger(cantidad) || cantidad <= 0) {
       res.status(400).json({ error: "La cantidad de masters del pallet debe ser un entero positivo" });
@@ -180,17 +182,18 @@ router.post("/", requireAuth, requirePerm("bodega", "escanear"), async (req: Req
     // SET x = x + 1 bloquea la fila hasta el commit) — dos pallets creados a la vez en la misma
     // bodega virtual no pueden terminar con el mismo código.
     await prisma.$transaction(async (tx) => {
-      const bvRows: any[] = await tx.$queryRaw`SELECT Letra, Activo FROM BodegaVirtual WHERE Codigo = ${BodegaVirtualCodigo} FOR UPDATE`;
-      if (!bvRows.length) throw new ErrorNegocio(404, "Bodega virtual no encontrada");
-      if (!Number(bvRows[0].Activo)) throw new ErrorNegocio(400, "Esta bodega virtual está inactiva");
+      const bvRows: any[] = await tx.$queryRaw`SELECT Codigo, Letra, Activo FROM BodegaVirtual WHERE AreaCodigo = ${AreaCodigo} FOR UPDATE`;
+      if (!bvRows.length) throw new ErrorNegocio(404, "Esta área todavía no tiene bodega virtual asignada");
+      if (!Number(bvRows[0].Activo)) throw new ErrorNegocio(400, "La bodega virtual de esta área está inactiva");
+      const bodegaVirtualCodigo = String(bvRows[0].Codigo);
 
-      await tx.$executeRaw`UPDATE BodegaVirtual SET UltimoSecuencial = UltimoSecuencial + 1 WHERE Codigo = ${BodegaVirtualCodigo}`;
-      const secRows: any[] = await tx.$queryRaw`SELECT UltimoSecuencial FROM BodegaVirtual WHERE Codigo = ${BodegaVirtualCodigo}`;
+      await tx.$executeRaw`UPDATE BodegaVirtual SET UltimoSecuencial = UltimoSecuencial + 1 WHERE Codigo = ${bodegaVirtualCodigo}`;
+      const secRows: any[] = await tx.$queryRaw`SELECT UltimoSecuencial FROM BodegaVirtual WHERE Codigo = ${bodegaVirtualCodigo}`;
       codigo = String(bvRows[0].Letra) + String(Number(secRows[0].UltimoSecuencial)).padStart(4, "0");
 
       await tx.$executeRaw`
         INSERT INTO Pallets (Codigo, Origen, CantidadMaster, BodegaVirtualCodigo, CreadoPor)
-        VALUES (${codigo}, ${Origen}, ${cantidad}, ${BodegaVirtualCodigo}, ${operador})
+        VALUES (${codigo}, ${Origen}, ${cantidad}, ${bodegaVirtualCodigo}, ${operador})
       `;
       const fila: any[] = await tx.$queryRaw`SELECT LAST_INSERT_ID() AS id`;
       nuevoPalletId = Number(fila[0].id);
