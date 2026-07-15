@@ -129,12 +129,12 @@ router.post("/", requireAuth, requirePerm("destajo", "crear"), async (req: Reque
   }
 });
 
-// PUT /api/lotes/:lote/:clase  { PesoIngreso, Fecha, TallaReferencia?, Activo }
+// PUT /api/lotes/:lote/:clase  { PesoIngreso, Fecha, TallaReferencia?, Activo, CicloNumero? }
 // El texto de Lote puede repetirse entre Clases del mismo Piscina+Ciclo+Fecha (ver
 // project_destajo_lote_clase_en_codigo) — la fila real siempre se identifica por Lote+Clase juntos.
 router.put("/:lote/:clase", requireAuth, requirePerm("destajo", "editar"), async (req: Request, res: Response) => {
   try {
-    const { PesoIngreso, Fecha, TallaReferencia, Activo } = req.body;
+    const { PesoIngreso, Fecha, TallaReferencia, Activo, CicloNumero } = req.body;
     const lote = req.params.lote;
     const clase = req.params.clase;
 
@@ -151,14 +151,65 @@ router.put("/:lote/:clase", requireAuth, requirePerm("destajo", "editar"), async
       return;
     }
 
-    const activo = Activo === false || Activo === 0 ? 0 : 1;
-    await prisma.$executeRaw`
-      UPDATE Lotes SET PesoIngreso = ${Number(PesoIngreso)}, Fecha = ${Fecha}, TallaReferencia = ${TallaReferencia ? Number(TallaReferencia) : null}, Activo = ${activo}
-      WHERE Lote = ${lote} AND Clase = ${clase}
+    // Corrección de ciclo mal capturado (ej. lo dejaron en blanco por error): el texto de Lote lleva
+    // el número de ciclo al final (ver componerCodigoLote), así que corregir el ciclo implica
+    // regenerar el código y mover la llave primaria de Lotes. Eso solo es seguro si todavía no existe
+    // ninguna TransaccionesProduccion apuntando a este Lote+Clase (misma condición que ya usa el
+    // DELETE) — si ya hay transacciones, la FK compuesta (Lote,ClaseOrigen)->Lotes(Lote,Clase) impediría
+    // el cambio y de todas formas ya no sería una simple corrección de captura.
+    let loteFinal = lote;
+    let cicloIdFinal: number | null | undefined = undefined;
+    const actual: any[] = await prisma.$queryRaw`
+      SELECT l.PiscinaId, l.CicloId, p.Nombre AS NombrePiscina, p.CodigoFinca
+      FROM Lotes l JOIN Piscina p ON l.PiscinaId = p.PiscinaId
+      WHERE l.Lote = ${lote} AND l.Clase = ${clase} LIMIT 1
     `;
-    res.json({ ok: true });
+    if (!actual.length) { res.status(404).json({ error: "Lote no encontrado" }); return; }
+    const piscinaId = Number(actual[0].PiscinaId);
+    const requiereCiclo = piscinaRequiereCiclo(String(actual[0].NombrePiscina), String(actual[0].CodigoFinca));
+
+    if (requiereCiclo && CicloNumero) {
+      const cicloActualRows: any[] = actual[0].CicloId
+        ? await prisma.$queryRaw`SELECT Ciclo FROM Ciclo WHERE CicloId = ${actual[0].CicloId} LIMIT 1`
+        : [];
+      const cicloActual = cicloActualRows[0]?.Ciclo ?? null;
+      if (Number(CicloNumero) !== Number(cicloActual)) {
+        const trans: any[] = await prisma.$queryRaw`SELECT COUNT(*) AS n FROM TransaccionesProduccion WHERE Lote = ${lote} AND ClaseOrigen = ${clase}`;
+        if (Number(trans[0].n) > 0) {
+          res.status(400).json({ error: "No se puede corregir el ciclo: este lote ya tiene transacciones de producción registradas" });
+          return;
+        }
+        const nuevoLote = await generarCodigoLote(piscinaId, Fecha, Number(CicloNumero));
+        if (!nuevoLote) { res.status(404).json({ error: "Piscina no encontrada" }); return; }
+        const anio = Number(Fecha.split("-")[0]);
+        await prisma.$executeRaw`
+          INSERT IGNORE INTO Ciclo (PiscinaId, Anio, Ciclo)
+          VALUES (${piscinaId}, ${anio}, ${Number(CicloNumero)})
+        `;
+        const nuevoCicloRows: any[] = await prisma.$queryRaw`
+          SELECT CicloId FROM Ciclo WHERE PiscinaId = ${piscinaId} AND Anio = ${anio} AND Ciclo = ${Number(CicloNumero)} LIMIT 1
+        `;
+        loteFinal = nuevoLote;
+        cicloIdFinal = nuevoCicloRows[0]?.CicloId ? Number(nuevoCicloRows[0].CicloId) : null;
+      }
+    }
+
+    const activo = Activo === false || Activo === 0 ? 0 : 1;
+    if (cicloIdFinal !== undefined) {
+      await prisma.$executeRaw`
+        UPDATE Lotes SET Lote = ${loteFinal}, CicloId = ${cicloIdFinal}, PesoIngreso = ${Number(PesoIngreso)}, Fecha = ${Fecha}, TallaReferencia = ${TallaReferencia ? Number(TallaReferencia) : null}, Activo = ${activo}
+        WHERE Lote = ${lote} AND Clase = ${clase}
+      `;
+    } else {
+      await prisma.$executeRaw`
+        UPDATE Lotes SET PesoIngreso = ${Number(PesoIngreso)}, Fecha = ${Fecha}, TallaReferencia = ${TallaReferencia ? Number(TallaReferencia) : null}, Activo = ${activo}
+        WHERE Lote = ${lote} AND Clase = ${clase}
+      `;
+    }
+    res.json({ ok: true, Lote: loteFinal });
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    if (err.message?.includes("Duplicate")) res.status(400).json({ error: "Ya existe un lote para esta piscina, ciclo, fecha y clase" });
+    else res.status(500).json({ error: err.message });
   }
 });
 

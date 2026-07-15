@@ -120,9 +120,10 @@ function LoteModal({ item, fincas, clases, tallas, onSave, onClose }) {
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1">Lote</label>
             <div className="w-full border border-gray-200 bg-gray-50 rounded-lg px-3 py-2 text-sm font-mono text-gray-600">
-              {isEdit ? item.Lote : (previewLote() || "Seleccione piscina, ciclo y fecha...")}
+              {isEdit ? (previewLote() || item.Lote) : (previewLote() || "Seleccione piscina, ciclo y fecha...")}
             </div>
             {!isEdit && <p className="text-xs text-gray-400 mt-1">Se genera automáticamente al guardar (el secuencial final lo asigna el servidor)</p>}
+            {isEdit && <p className="text-xs text-gray-400 mt-1">Si corriges el ciclo, el código del lote se actualiza al guardar</p>}
           </div>
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1">Finca *</label>
@@ -149,10 +150,6 @@ function LoteModal({ item, fincas, clases, tallas, onSave, onClose }) {
                 <div className="w-full border border-gray-200 bg-gray-50 rounded-lg px-3 py-2 text-sm text-gray-400">
                   Esta piscina no maneja ciclo
                 </div>
-              ) : isEdit ? (
-                <div className="w-full border border-gray-200 bg-gray-50 rounded-lg px-3 py-2 text-sm text-gray-600">
-                  {form.CicloNumero ? `Ciclo ${form.CicloNumero}` : "Sin ciclo"}
-                </div>
               ) : (
                 <input
                   type="number"
@@ -162,6 +159,9 @@ function LoteModal({ item, fincas, clases, tallas, onSave, onClose }) {
                   placeholder="Número de ciclo"
                   className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
                 />
+              )}
+              {isEdit && requiereCiclo && (
+                <p className="text-xs text-gray-400 mt-1">Solo se puede corregir si el lote aún no tiene transacciones registradas</p>
               )}
             </div>
           )}

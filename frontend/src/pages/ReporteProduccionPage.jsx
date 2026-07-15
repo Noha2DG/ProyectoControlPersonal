@@ -345,7 +345,7 @@ export default function ReporteProduccionPage() {
                   {loteAbierto && (
                     <button onClick={() => setLoteAbierto(null)}
                       className="flex items-center gap-1 text-xs font-medium text-blue-700 bg-blue-50 hover:bg-blue-100 px-2 py-1 rounded-full transition">
-                      <span className="font-mono">{loteAbierto}</span>
+                      <span className="font-mono">{loteAbierto.Lote} — {loteAbierto.Clase}</span>
                       <span className="text-blue-400">&times;</span>
                     </button>
                   )}
