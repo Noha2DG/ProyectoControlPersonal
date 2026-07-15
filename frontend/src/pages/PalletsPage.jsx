@@ -152,7 +152,8 @@ function PanelEscaneo({ palletId, onClose, onCambio }) {
                       <th className="px-3 py-2 text-left">Cliente</th>
                       <th className="px-3 py-2 text-left">Lote</th>
                       <th className="px-3 py-2 text-left">Proceso/Talla/Pres.</th>
-                      <th className="px-3 py-2 text-right">Peso</th>
+                      <th className="px-3 py-2 text-right">Kg</th>
+                      <th className="px-3 py-2 text-right">Lb</th>
                       <th className="px-3 py-2 text-left">Hora</th>
                       {abierto && <th className="px-3 py-2 text-center">Acciones</th>}
                     </tr>
@@ -165,7 +166,8 @@ function PanelEscaneo({ palletId, onClose, onCambio }) {
                         <td className="px-3 py-2 whitespace-nowrap">{m.NombreCliente}{m.NombreSubcliente ? `-${m.NombreSubcliente}` : ""}</td>
                         <td className="px-3 py-2 font-mono whitespace-nowrap">{m.Lote}</td>
                         <td className="px-3 py-2 whitespace-nowrap">{m.DescripcionProceso} {m.DescripcionTalla} {m.DescripcionPresentacion}</td>
-                        <td className="px-3 py-2 text-right whitespace-nowrap">{m.PesoMasterKG.toFixed(2)} kg / {m.PesoMasterLb.toFixed(2)} lb</td>
+                        <td className="px-3 py-2 text-right whitespace-nowrap">{m.PesoMasterKG.toFixed(2)}</td>
+                        <td className="px-3 py-2 text-right whitespace-nowrap">{m.PesoMasterLb.toFixed(2)}</td>
                         <td className="px-3 py-2 whitespace-nowrap">{fmtFecha(m.FechaIngreso)}</td>
                         {abierto && (
                           <td className="px-3 py-2 text-center">
@@ -175,7 +177,7 @@ function PanelEscaneo({ palletId, onClose, onCambio }) {
                       </tr>
                     ))}
                     {pallet?.Masters.length === 0 && (
-                      <tr><td colSpan={abierto ? 8 : 7} className="px-3 py-6 text-center text-gray-400">Sin masters escaneados todavía</td></tr>
+                      <tr><td colSpan={abierto ? 9 : 8} className="px-3 py-6 text-center text-gray-400">Sin masters escaneados todavía</td></tr>
                     )}
                   </tbody>
                 </table>
