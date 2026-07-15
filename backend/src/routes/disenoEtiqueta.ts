@@ -3,7 +3,7 @@ import jwt from "jsonwebtoken";
 import prisma from "../lib/prisma.ts";
 import { requireAuth, requirePerm } from "../middleware/auth.ts";
 import {
-  CAMPOS_DISENO, TAMANOS_ETIQUETA, TAMANO_DEFECTO, escalarPosicionesDefecto,
+  CAMPOS_DISENO, TAMANOS_ETIQUETA, TAMANO_DEFECTO, POSICIONES_DEFECTO,
   type Posiciones, type TamanoId,
 } from "../lib/zpl.ts";
 
@@ -26,7 +26,7 @@ function tamanoValido(tamano: any): tamano is TamanoId {
 
 export async function obtenerPosiciones(tamano: TamanoId = TAMANO_DEFECTO): Promise<Posiciones> {
   const rows: any[] = await prisma.$queryRaw`SELECT Campo, X, Y, Visible FROM DisenoEtiqueta WHERE Tamano = ${tamano}`;
-  const posiciones = { ...escalarPosicionesDefecto(tamano) };
+  const posiciones = { ...POSICIONES_DEFECTO };
   for (const r of rows) {
     if ((CAMPOS_DISENO as readonly string[]).includes(r.Campo)) {
       (posiciones as any)[r.Campo] = { X: Number(r.X), Y: Number(r.Y), Visible: Number(r.Visible) === 1 };

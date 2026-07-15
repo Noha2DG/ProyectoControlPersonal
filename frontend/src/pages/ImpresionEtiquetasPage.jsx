@@ -356,9 +356,9 @@ export default function ImpresionEtiquetasPage() {
 
   useEffect(() => { fetchOrdenes(fecha); }, [fetchOrdenes, fecha]);
 
-  // Catálogo de tamaños de etiqueta (4x2/4x4/3x1/4x6, ver TAMANOS_ETIQUETA en backend/src/lib/zpl.ts)
-  // — el operador elige a mano cuál está usando según el rollo físico cargado en la ZT411 en ese
-  // momento, no hay forma de detectarlo automáticamente.
+  // Catálogo de tamaños de etiqueta (ver TAMANOS_ETIQUETA en backend/src/lib/zpl.ts — desde jul 2026
+  // solo "3x1", la única medida verificada físicamente; el selector queda listo para cuando planta
+  // incorpore otro rollo). El operador elige a mano cuál está usando según el rollo físico cargado.
   useEffect(() => {
     fetch("/api/diseno-etiqueta/tamanos", { headers: authHeader() })
       .then(res => res.json())

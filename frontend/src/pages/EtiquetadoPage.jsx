@@ -358,6 +358,7 @@ export default function EtiquetadoPage() {
                     <th className="px-4 py-3 text-left whitespace-nowrap">Congelación</th>
                     <th className="px-4 py-3 text-right whitespace-nowrap">Masters</th>
                     <th className="px-4 py-3 text-center whitespace-nowrap">Estatus</th>
+                    <th className="px-4 py-3 text-center whitespace-nowrap">Impresión</th>
                     <th className="px-4 py-3 text-center whitespace-nowrap">Acciones</th>
                   </tr>
                 </thead>
@@ -376,6 +377,21 @@ export default function EtiquetadoPage() {
                         </span>
                       </td>
                       <td className="px-4 py-3 text-center whitespace-nowrap">
+                        {c.Impresas >= c.CantidadMaster ? (
+                          <span className="inline-block px-2 py-0.5 rounded-full text-xs font-semibold bg-green-100 text-green-700">
+                            Impresas ({c.Impresas}/{c.CantidadMaster})
+                          </span>
+                        ) : c.Impresas > 0 ? (
+                          <span className="inline-block px-2 py-0.5 rounded-full text-xs font-semibold bg-orange-100 text-orange-700">
+                            Parcial ({c.Impresas}/{c.CantidadMaster})
+                          </span>
+                        ) : (
+                          <span className="inline-block px-2 py-0.5 rounded-full text-xs font-semibold bg-gray-100 text-gray-500">
+                            Sin imprimir
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-center whitespace-nowrap">
                         <div className="flex justify-center gap-2">
                           <button onClick={() => handleEditar(c)} className="text-blue-600 hover:text-blue-800 text-xs font-medium px-2 py-1 rounded hover:bg-blue-50 transition">Editar</button>
                           <button onClick={() => handleEliminar(c)} className="text-red-500 hover:text-red-700 text-xs font-medium px-2 py-1 rounded hover:bg-red-50 transition">Eliminar</button>
@@ -384,7 +400,7 @@ export default function EtiquetadoPage() {
                     </tr>
                   ))}
                   {capturas.length === 0 && (
-                    <tr><td colSpan={8} className="px-4 py-8 text-center text-gray-400">Sin capturas para esta línea</td></tr>
+                    <tr><td colSpan={9} className="px-4 py-8 text-center text-gray-400">Sin capturas para esta línea</td></tr>
                   )}
                 </tbody>
               </table>
