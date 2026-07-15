@@ -114,10 +114,13 @@ router.get("/", requireAuth, requirePerm("bodega", "ver"), async (req: Request, 
     if (fecha) { condiciones.push("DATE(p.CreadoEn) = ?"); params.push(fecha); }
     const where = condiciones.length ? `WHERE ${condiciones.join(" AND ")}` : "";
     const rows: any[] = await prisma.$queryRawUnsafe(`
-      SELECT p.PalletId, p.Estatus, p.Origen, org.Descripcion AS DescripcionOrigen, p.CantidadMaster,
+      SELECT p.PalletId, p.Codigo, p.Estatus, p.Origen, org.Descripcion AS DescripcionOrigen, p.CantidadMaster,
+             p.BodegaVirtualCodigo, bv.Nombre AS NombreBodegaVirtual,
              p.CreadoPor, p.CreadoEn, p.CerradoPor, p.CerradoEn,
              (SELECT COUNT(*) FROM Masters m WHERE m.PalletId = p.PalletId) AS CantidadMasters
-      FROM Pallets p LEFT JOIN Origen org ON p.Origen = org.Codigo
+      FROM Pallets p
+      LEFT JOIN Origen org ON p.Origen = org.Codigo
+      LEFT JOIN BodegaVirtual bv ON p.BodegaVirtualCodigo = bv.Codigo
       ${where} ORDER BY p.PalletId DESC LIMIT 500
     `, ...params);
     res.json(rows.map(r => {
@@ -135,8 +138,11 @@ router.get("/:id", requireAuth, requirePerm("bodega", "ver"), async (req: Reques
   try {
     const palletId = Number(req.params.id);
     const rows: any[] = await prisma.$queryRaw`
-      SELECT p.*, org.Descripcion AS DescripcionOrigen FROM Pallets p
-      LEFT JOIN Origen org ON p.Origen = org.Codigo WHERE p.PalletId = ${palletId} LIMIT 1
+      SELECT p.*, org.Descripcion AS DescripcionOrigen, bv.Nombre AS NombreBodegaVirtual
+      FROM Pallets p
+      LEFT JOIN Origen org ON p.Origen = org.Codigo
+      LEFT JOIN BodegaVirtual bv ON p.BodegaVirtualCodigo = bv.Codigo
+      WHERE p.PalletId = ${palletId} LIMIT 1
     `;
     if (!rows.length) { res.status(404).json({ error: "Pallet no encontrado" }); return; }
     const masters = await obtenerMastersDePallet(palletId);
@@ -150,14 +156,17 @@ router.get("/:id", requireAuth, requirePerm("bodega", "ver"), async (req: Reques
   }
 });
 
-// POST /api/pallets  { Origen, CantidadMaster }
-// Crea un pallet vacío y Abierto. Sin Pedido/Cliente/Área: se arma solo con lo que se escanee
-// después — pero SÍ requiere Origen (informativo, no filtra qué se puede escanear ahí) y
-// CantidadMaster (meta de referencia de cuántos masters llevará el polín, no bloquea el escaneo).
+// POST /api/pallets  { Origen, CantidadMaster, BodegaVirtualCodigo }
+// Crea un pallet vacío y Abierto. Sin Pedido/Cliente/línea de pedido: se arma solo con lo que se
+// escanee después — pero SÍ requiere Origen (informativo, no filtra qué se puede escanear ahí),
+// CantidadMaster (meta de referencia, no bloquea el escaneo) y BodegaVirtualCodigo, de donde sale
+// la letra de su código (ej. "T0001" para Túnel) — el pallet queda ahí antes de pasar a la bodega
+// principal (todavía no existe ese siguiente paso).
 router.post("/", requireAuth, requirePerm("bodega", "escanear"), async (req: Request, res: Response) => {
   try {
-    const { Origen, CantidadMaster } = req.body;
+    const { Origen, CantidadMaster, BodegaVirtualCodigo } = req.body;
     if (!Origen) { res.status(400).json({ error: "El origen es requerido" }); return; }
+    if (!BodegaVirtualCodigo) { res.status(400).json({ error: "La bodega virtual es requerida" }); return; }
     const cantidad = Number(CantidadMaster);
     if (!Number.isInteger(cantidad) || cantidad <= 0) {
       res.status(400).json({ error: "La cantidad de masters del pallet debe ser un entero positivo" });
@@ -165,10 +174,31 @@ router.post("/", requireAuth, requirePerm("bodega", "escanear"), async (req: Req
     }
 
     const operador = getOperador(req);
-    await prisma.$executeRaw`INSERT INTO Pallets (Origen, CantidadMaster, CreadoPor) VALUES (${Origen}, ${cantidad}, ${operador})`;
-    const fila: any[] = await prisma.$queryRaw`SELECT LAST_INSERT_ID() AS id`;
-    res.status(201).json({ ok: true, PalletId: Number(fila[0].id) });
+    let nuevoPalletId = 0;
+    let codigo = "";
+    // El secuencial de la bodega virtual se incrementa dentro de la transacción (UPDATE ...
+    // SET x = x + 1 bloquea la fila hasta el commit) — dos pallets creados a la vez en la misma
+    // bodega virtual no pueden terminar con el mismo código.
+    await prisma.$transaction(async (tx) => {
+      const bvRows: any[] = await tx.$queryRaw`SELECT Letra, Activo FROM BodegaVirtual WHERE Codigo = ${BodegaVirtualCodigo} FOR UPDATE`;
+      if (!bvRows.length) throw new ErrorNegocio(404, "Bodega virtual no encontrada");
+      if (!Number(bvRows[0].Activo)) throw new ErrorNegocio(400, "Esta bodega virtual está inactiva");
+
+      await tx.$executeRaw`UPDATE BodegaVirtual SET UltimoSecuencial = UltimoSecuencial + 1 WHERE Codigo = ${BodegaVirtualCodigo}`;
+      const secRows: any[] = await tx.$queryRaw`SELECT UltimoSecuencial FROM BodegaVirtual WHERE Codigo = ${BodegaVirtualCodigo}`;
+      codigo = String(bvRows[0].Letra) + String(Number(secRows[0].UltimoSecuencial)).padStart(4, "0");
+
+      await tx.$executeRaw`
+        INSERT INTO Pallets (Codigo, Origen, CantidadMaster, BodegaVirtualCodigo, CreadoPor)
+        VALUES (${codigo}, ${Origen}, ${cantidad}, ${BodegaVirtualCodigo}, ${operador})
+      `;
+      const fila: any[] = await tx.$queryRaw`SELECT LAST_INSERT_ID() AS id`;
+      nuevoPalletId = Number(fila[0].id);
+    });
+
+    res.status(201).json({ ok: true, PalletId: nuevoPalletId, Codigo: codigo });
   } catch (err: any) {
+    if (err instanceof ErrorNegocio) { res.status(err.status).json({ error: err.message }); return; }
     if (err.message?.includes("foreign key")) { res.status(400).json({ error: "El origen no existe" }); return; }
     res.status(500).json({ error: err.message });
   }

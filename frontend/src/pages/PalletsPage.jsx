@@ -99,7 +99,7 @@ function PanelEscaneo({ palletId, onClose, onCambio }) {
       <div className="bg-white rounded-xl shadow-xl w-full max-w-2xl max-h-full flex flex-col" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200 shrink-0">
           <div className="flex items-center gap-2 flex-wrap">
-            <h3 className="text-lg font-bold text-gray-800">Pallet #{palletId}</h3>
+            <h3 className="text-lg font-bold text-gray-800">Pallet {pallet?.Codigo || `#${palletId}`}</h3>
             {pallet && (
               <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${ESTATUS_BADGE[pallet.Estatus] || "bg-gray-100 text-gray-600"}`}>
                 {pallet.Estatus}
@@ -111,6 +111,7 @@ function PanelEscaneo({ palletId, onClose, onCambio }) {
               </span>
             )}
             {pallet?.DescripcionOrigen && <span className="text-xs text-gray-400">Origen: {pallet.DescripcionOrigen}</span>}
+            {pallet?.NombreBodegaVirtual && <span className="text-xs text-gray-400">· {pallet.NombreBodegaVirtual}</span>}
           </div>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-700 text-xl leading-none">&times;</button>
         </div>
@@ -198,8 +199,9 @@ function PanelEscaneo({ palletId, onClose, onCambio }) {
 // Se pide Origen y la cantidad de masters que se planea que lleve el polín ANTES de abrir el
 // escaneo — Origen es solo informativo (no filtra qué se puede escanear ahí) y la cantidad es una
 // meta de referencia (no bloquea, se compara contra lo escaneado como Completo/Incompleto/Sobrante).
-function ModalNuevoPallet({ origenes, onCrear, onClose }) {
+function ModalNuevoPallet({ origenes, bodegasVirtuales, onCrear, onClose }) {
   const [origen, setOrigen] = useState("");
+  const [bodegaVirtual, setBodegaVirtual] = useState("");
   const [cantidad, setCantidad] = useState("");
   const [error, setError] = useState("");
   const [creando, setCreando] = useState(false);
@@ -209,7 +211,7 @@ function ModalNuevoPallet({ origenes, onCrear, onClose }) {
     setError("");
     setCreando(true);
     try {
-      await onCrear({ Origen: origen, CantidadMaster: cantidad });
+      await onCrear({ Origen: origen, CantidadMaster: cantidad, BodegaVirtualCodigo: bodegaVirtual });
     } catch (err) {
       setError(err.message);
     } finally {
@@ -225,8 +227,16 @@ function ModalNuevoPallet({ origenes, onCrear, onClose }) {
         </div>
         <form onSubmit={handleSubmit} className="px-5 py-4 space-y-4">
           <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Bodega virtual *</label>
+            <select required value={bodegaVirtual} onChange={e => setBodegaVirtual(e.target.value)} autoFocus
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400">
+              <option value="">Selecciona...</option>
+              {bodegasVirtuales.map(b => <option key={b.Codigo} value={b.Codigo}>{b.Nombre} ({b.Letra})</option>)}
+            </select>
+          </div>
+          <div>
             <label className="block text-xs font-medium text-gray-500 mb-1">Origen *</label>
-            <select required value={origen} onChange={e => setOrigen(e.target.value)} autoFocus
+            <select required value={origen} onChange={e => setOrigen(e.target.value)}
               className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400">
               <option value="">Selecciona...</option>
               {origenes.map(o => <option key={o.Codigo} value={o.Codigo}>{o.Descripcion}</option>)}
@@ -257,11 +267,15 @@ export default function PalletsPage() {
   const [filtroFecha, setFiltroFecha] = useState("");
   const [panelId, setPanelId] = useState(null);
   const [origenes, setOrigenes] = useState([]);
+  const [bodegasVirtuales, setBodegasVirtuales] = useState([]);
   const [modalNuevo, setModalNuevo] = useState(false);
 
   useEffect(() => {
     fetch("/api/origen", { headers: authHeader() }).then(r => r.json()).then(data => {
       if (Array.isArray(data)) setOrigenes(data.filter(o => o.Activo));
+    });
+    fetch("/api/bodega-virtual", { headers: authHeader() }).then(r => r.json()).then(data => {
+      if (Array.isArray(data)) setBodegasVirtuales(data.filter(b => b.Activo));
     });
   }, []);
 
@@ -278,11 +292,11 @@ export default function PalletsPage() {
 
   useEffect(() => { fetchPallets(); }, [fetchPallets]);
 
-  const handleCrear = async ({ Origen, CantidadMaster }) => {
+  const handleCrear = async ({ Origen, CantidadMaster, BodegaVirtualCodigo }) => {
     const res = await fetch(API, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...authHeader() },
-      body: JSON.stringify({ Origen, CantidadMaster }),
+      body: JSON.stringify({ Origen, CantidadMaster, BodegaVirtualCodigo }),
     });
     const data = await leerJSON(res);
     if (!res.ok) throw new Error(data.error || "No se pudo crear el pallet");
@@ -323,6 +337,7 @@ export default function PalletsPage() {
               <tr>
                 <th className="px-4 py-3 text-left">Pallet</th>
                 <th className="px-4 py-3 text-center">Estatus</th>
+                <th className="px-4 py-3 text-left">Bodega virtual</th>
                 <th className="px-4 py-3 text-left">Origen</th>
                 <th className="px-4 py-3 text-right">Masters</th>
                 <th className="px-4 py-3 text-center">Cuadre</th>
@@ -333,17 +348,18 @@ export default function PalletsPage() {
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan={8} className="px-4 py-8 text-center text-gray-400">Cargando…</td></tr>
+                <tr><td colSpan={9} className="px-4 py-8 text-center text-gray-400">Cargando…</td></tr>
               ) : pallets.length === 0 ? (
-                <tr><td colSpan={8} className="px-4 py-8 text-center text-gray-400">Sin pallets para este filtro</td></tr>
+                <tr><td colSpan={9} className="px-4 py-8 text-center text-gray-400">Sin pallets para este filtro</td></tr>
               ) : pallets.map(p => (
                 <tr key={p.PalletId} className="border-t border-gray-100 hover:bg-gray-50">
-                  <td className="px-4 py-3 font-mono font-semibold">#{p.PalletId}</td>
+                  <td className="px-4 py-3 font-mono font-semibold">{p.Codigo || `#${p.PalletId}`}</td>
                   <td className="px-4 py-3 text-center">
                     <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${ESTATUS_BADGE[p.Estatus] || "bg-gray-100 text-gray-600"}`}>
                       {p.Estatus}
                     </span>
                   </td>
+                  <td className="px-4 py-3 whitespace-nowrap">{p.NombreBodegaVirtual || "-"}</td>
                   <td className="px-4 py-3 whitespace-nowrap">{p.DescripcionOrigen || "-"}</td>
                   <td className="px-4 py-3 text-right font-mono">{p.CantidadMasters}{p.CantidadMaster != null ? ` / ${p.CantidadMaster}` : ""}</td>
                   <td className="px-4 py-3 text-center">
@@ -372,7 +388,7 @@ export default function PalletsPage() {
         </div>
       </div>
 
-      {modalNuevo && <ModalNuevoPallet origenes={origenes} onCrear={handleCrear} onClose={() => setModalNuevo(false)} />}
+      {modalNuevo && <ModalNuevoPallet origenes={origenes} bodegasVirtuales={bodegasVirtuales} onCrear={handleCrear} onClose={() => setModalNuevo(false)} />}
 
       {panelId != null && (
         <PanelEscaneo palletId={panelId} onClose={() => { setPanelId(null); fetchPallets(); }} onCambio={fetchPallets} />
