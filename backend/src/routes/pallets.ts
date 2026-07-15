@@ -36,12 +36,16 @@ function getOperador(req: Request): string {
 // al vuelo desde EtiquetaImpresa→OrdenEtiquetado→DetallePedido — el Pallet no guarda nada de esto
 // (ver project_ordenetiquetado_design: "no está ligado a pedido o cliente, se le cargan los datos
 // de cada master").
+// PesoKG/PesoLb en Presentacion son POR CAJA, no por master (confirmado contra la Descripcion real,
+// ej. "AS" = 2 cajas de 10kg = "20 kg" total, PesoKG=10 → 10*2=20 coincide) — el peso del master
+// completo es PesoKG/PesoLb * CajasXMaster, no el campo solo.
 const MASTER_SELECT = `
   SELECT m.MasterId, m.PalletId, m.EtiquetaId, m.IngresadoPor, m.FechaIngreso,
          oe.OrdenId, oe.Lote, oe.FechaProduccion, oe.AreaCodigo, ar.Nombre AS NombreArea,
          dp.DetalleId, dp.CodigoPedido, dp.Clase, pc.Descripcion AS DescripcionProceso,
          dp.Talla, ta.Descripcion AS DescripcionTalla,
          dp.Presentacion, pr.Descripcion AS DescripcionPresentacion,
+         pr.PesoKG * pr.CajasXMaster AS PesoMasterKG, pr.PesoLb * pr.CajasXMaster AS PesoMasterLb,
          cli.RazonSocial AS NombreCliente, sub.RazonSocial AS NombreSubcliente
   FROM Masters m
   JOIN EtiquetaImpresa ei ON m.EtiquetaId = ei.EtiquetaId
@@ -72,6 +76,7 @@ function formatearMaster(r: any) {
     ...r,
     MasterId: Number(r.MasterId), PalletId: Number(r.PalletId), EtiquetaId: Number(r.EtiquetaId),
     OrdenId: Number(r.OrdenId), DetalleId: Number(r.DetalleId), Talla: Number(r.Talla),
+    PesoMasterKG: Number(r.PesoMasterKG), PesoMasterLb: Number(r.PesoMasterLb),
     Correlativo: "E" + Number(r.EtiquetaId),
     FechaProduccion: r.FechaProduccion ? new Date(r.FechaProduccion).toISOString().slice(0, 10) : null,
   };
