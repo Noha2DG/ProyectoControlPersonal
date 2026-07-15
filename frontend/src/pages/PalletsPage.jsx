@@ -123,7 +123,17 @@ function PanelEscaneo({ palletId, onClose, onCambio }) {
             <>
               {abierto && (
                 <form onSubmit={handleEscanear} className="mb-3">
-                  <label className="block text-xs font-medium text-gray-500 mb-1">Escanear QR del master</label>
+                  <div className="flex items-end justify-between gap-3 mb-1">
+                    <label className="block text-xs font-medium text-gray-500">Escanear QR del master</label>
+                    <div className="text-center px-3 py-1 rounded-lg bg-blue-50 border border-blue-100">
+                      <div className="text-sm font-bold text-blue-700">
+                        {pallet?.Masters.length ?? 0} master{pallet?.Masters.length === 1 ? "" : "s"}
+                      </div>
+                      <div className="text-[10px] text-blue-500 whitespace-nowrap">
+                        {(pallet?.Masters.reduce((acc, m) => acc + m.PesoMasterKG, 0) ?? 0).toFixed(2)} kg acumulados
+                      </div>
+                    </div>
+                  </div>
                   <input ref={inputRef} type="text" value={correlativo} onChange={e => setCorrelativo(e.target.value)}
                     autoFocus disabled={enviando}
                     placeholder="Apunta el lector aquí..."
