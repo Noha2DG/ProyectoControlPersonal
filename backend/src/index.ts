@@ -30,6 +30,7 @@ import pesajeDetalleRouter from "./routes/pesajeDetalle.ts";
 import ordenEtiquetadoRouter from "./routes/ordenEtiquetado.ts";
 import etiquetaImpresaRouter from "./routes/etiquetaImpresa.ts";
 import disenoEtiquetaRouter from "./routes/disenoEtiqueta.ts";
+import palletsRouter from "./routes/pallets.ts";
 import reportesRouter from "./routes/reportes.ts";
 import { requireAuth } from "./middleware/auth.ts";
 import { barridoCorteMedianoche } from "./lib/corteMedianoche.ts";
@@ -77,6 +78,7 @@ app.use("/api/unidades-congelacion", congelacionRouter);
 app.use("/api/orden-etiquetado", ordenEtiquetadoRouter);
 app.use("/api/etiqueta-impresa", etiquetaImpresaRouter);
 app.use("/api/diseno-etiqueta", disenoEtiquetaRouter);
+app.use("/api/pallets", palletsRouter);
 app.use("/api/reportes", reportesRouter);
 
 // Sirve el frontend ya compilado (frontend/dist) para no necesitar un segundo servicio en Railway.

@@ -21,6 +21,7 @@ const MODULOS = [
   // ── Destajo (producción)
   { key: "destajo",        label: "Destajo — Materia Prima y Pesaje", acciones: ["ver","crear","editar","eliminar"], bajaElimKey: "eliminar", grupo: "Operación" },
   { key: "etiquetado",     label: "Etiquetado — Orden de Trabajo",   acciones: ["ver","crear","editar","eliminar","imprimir"], bajaElimKey: "eliminar", grupo: "Operación" },
+  { key: "bodega",         label: "Bodega — Pallets y Escaneo",      acciones: ["ver","escanear","editar","eliminar"], bajaElimKey: "eliminar", grupo: "Operación" },
   // ── Configuración
   { key: "areas",          label: "Áreas",                          acciones: ["ver","crear","editar","eliminar"], bajaElimKey: "eliminar", grupo: "Config"   },
   { key: "permisos",       label: "Permisos",                       acciones: ["ver","crear","editar","eliminar"], bajaElimKey: "eliminar", grupo: "Config"   },
@@ -39,6 +40,7 @@ const EMPTY_PERMISOS = {
   planificacion:  { ver: false, editar: false },
   destajo:        { ver: false, crear: false, editar: false, eliminar: false },
   etiquetado:     { ver: false, crear: false, editar: false, eliminar: false },
+  bodega:         { ver: false, escanear: false, editar: false, eliminar: false },
   areas:          { ver: false, crear: false, editar: false, eliminar: false },
   permisos:       { ver: false, crear: false, editar: false, eliminar: false },
   tipos_permiso:  { ver: false, crear: false, editar: false, eliminar: false },
@@ -57,6 +59,7 @@ const PRESETS = {
     planificacion:  { ver: true,  editar: true  },
     destajo:        { ver: true,  crear: true,  editar: true,  eliminar: true  },
     etiquetado:     { ver: true,  crear: true,  editar: true,  eliminar: true, imprimir: true },
+    bodega:         { ver: true,  escanear: true, editar: true, eliminar: true },
     areas:          { ver: true,  crear: true,  editar: true,  eliminar: true  },
     permisos:       { ver: true,  crear: true,  editar: true,  eliminar: true  },
     tipos_permiso:  { ver: true,  crear: true,  editar: true,  eliminar: true  },
@@ -73,6 +76,7 @@ const PRESETS = {
     planificacion:  { ver: false, editar: false },
     destajo:        { ver: false, crear: false, editar: false, eliminar: false },
     etiquetado:     { ver: false, crear: false, editar: false, eliminar: false, imprimir: false },
+    bodega:         { ver: false, escanear: false, editar: false, eliminar: false },
     areas:          { ver: false, crear: false, editar: false, eliminar: false },
     permisos:       { ver: false, crear: false, editar: false, eliminar: false },
     tipos_permiso:  { ver: false, crear: false, editar: false, eliminar: false },
@@ -89,6 +93,7 @@ const PRESETS = {
     planificacion:  { ver: false, editar: false },
     destajo:        { ver: false, crear: false, editar: false, eliminar: false },
     etiquetado:     { ver: false, crear: false, editar: false, eliminar: false, imprimir: false },
+    bodega:         { ver: false, escanear: false, editar: false, eliminar: false },
     areas:          { ver: false, crear: false, editar: false, eliminar: false },
     permisos:       { ver: false, crear: false, editar: false, eliminar: false },
     tipos_permiso:  { ver: false, crear: false, editar: false, eliminar: false },
@@ -105,6 +110,7 @@ const PRESETS = {
     planificacion:  { ver: false, editar: false },
     destajo:        { ver: false, crear: false, editar: false, eliminar: false },
     etiquetado:     { ver: false, crear: false, editar: false, eliminar: false, imprimir: false },
+    bodega:         { ver: false, escanear: false, editar: false, eliminar: false },
     areas:          { ver: false, crear: false, editar: false, eliminar: false },
     permisos:       { ver: false, crear: false, editar: false, eliminar: false },
     tipos_permiso:  { ver: false, crear: false, editar: false, eliminar: false },
@@ -121,6 +127,7 @@ const PRESETS = {
     planificacion:  { ver: false, editar: false },
     destajo:        { ver: false, crear: false, editar: false, eliminar: false },
     etiquetado:     { ver: false, crear: false, editar: false, eliminar: false, imprimir: false },
+    bodega:         { ver: false, escanear: false, editar: false, eliminar: false },
     areas:          { ver: false, crear: false, editar: false, eliminar: false },
     permisos:       { ver: false, crear: false, editar: false, eliminar: false },
     tipos_permiso:  { ver: false, crear: false, editar: false, eliminar: false },
@@ -140,6 +147,7 @@ function mergePermisos(stored) {
     planificacion:  { ...EMPTY_PERMISOS.planificacion,  ...(stored?.planificacion  || {}) },
     destajo:        { ...EMPTY_PERMISOS.destajo,        ...(stored?.destajo        || {}) },
     etiquetado:     { ...EMPTY_PERMISOS.etiquetado,     ...(stored?.etiquetado     || {}) },
+    bodega:         { ...EMPTY_PERMISOS.bodega,         ...(stored?.bodega         || {}) },
     areas:          { ...EMPTY_PERMISOS.areas,          ...(stored?.areas          || {}) },
     permisos:       { ...EMPTY_PERMISOS.permisos,       ...(stored?.permisos       || {}) },
     tipos_permiso:  { ...EMPTY_PERMISOS.tipos_permiso,  ...(stored?.tipos_permiso  || {}) },
@@ -149,7 +157,7 @@ function mergePermisos(stored) {
 }
 
 function derivarRol(p) {
-  const soloPantallas = !p?.empleados?.ver && !p?.movimientos?.ver && !p?.transferencias?.ver && !p?.areas?.ver && !p?.permisos?.ver && !p?.tipos_permiso?.ver && !p?.usuarios?.ver && !p?.catalogos?.ver && !p?.destajo?.ver && !p?.etiquetado?.ver;
+  const soloPantallas = !p?.empleados?.ver && !p?.movimientos?.ver && !p?.transferencias?.ver && !p?.areas?.ver && !p?.permisos?.ver && !p?.tipos_permiso?.ver && !p?.usuarios?.ver && !p?.catalogos?.ver && !p?.destajo?.ver && !p?.etiquetado?.ver && !p?.bodega?.ver;
   if (soloPantallas && (p?.kiosco?.ver || p?.kiosco_areas?.ver || p?.equipo?.ver)) return "kiosco";
   return "readonly";
 }
