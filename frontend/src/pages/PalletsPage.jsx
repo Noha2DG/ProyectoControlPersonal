@@ -9,6 +9,12 @@ const ESTATUS_BADGE = {
   Cancelado: "bg-gray-100 text-gray-500",
 };
 
+const CUADRE_BADGE = {
+  Completo:   "bg-green-100 text-green-700",
+  Incompleto: "bg-orange-100 text-orange-700",
+  Sobrante:   "bg-red-100 text-red-700",
+};
+
 function fmtFecha(iso) {
   return iso ? new Date(iso).toLocaleString("es-GT", { dateStyle: "short", timeStyle: "short" }) : "-";
 }
@@ -92,13 +98,19 @@ function PanelEscaneo({ palletId, onClose, onCambio }) {
     <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={onClose}>
       <div className="bg-white rounded-xl shadow-xl w-full max-w-2xl max-h-full flex flex-col" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200 shrink-0">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <h3 className="text-lg font-bold text-gray-800">Pallet #{palletId}</h3>
             {pallet && (
               <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${ESTATUS_BADGE[pallet.Estatus] || "bg-gray-100 text-gray-600"}`}>
                 {pallet.Estatus}
               </span>
             )}
+            {pallet?.Cuadre && (
+              <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${CUADRE_BADGE[pallet.Cuadre] || "bg-gray-100 text-gray-600"}`}>
+                {pallet.Cuadre}
+              </span>
+            )}
+            {pallet?.DescripcionOrigen && <span className="text-xs text-gray-400">Origen: {pallet.DescripcionOrigen}</span>}
           </div>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-700 text-xl leading-none">&times;</button>
         </div>
@@ -125,7 +137,9 @@ function PanelEscaneo({ palletId, onClose, onCambio }) {
               )}
 
               <div className="flex items-center justify-between mb-2">
-                <span className="text-sm font-medium text-gray-600">{pallet?.Masters.length ?? 0} master{pallet?.Masters.length === 1 ? "" : "s"} escaneado{pallet?.Masters.length === 1 ? "" : "s"}</span>
+                <span className="text-sm font-medium text-gray-600">
+                  {pallet?.Masters.length ?? 0}{pallet?.CantidadMaster != null ? ` / ${pallet.CantidadMaster}` : ""} master{pallet?.Masters.length === 1 ? "" : "s"} escaneado{pallet?.Masters.length === 1 ? "" : "s"}
+                </span>
               </div>
 
               <div className="overflow-x-auto border border-gray-200 rounded-lg">
@@ -181,12 +195,75 @@ function PanelEscaneo({ palletId, onClose, onCambio }) {
   );
 }
 
+// Se pide Origen y la cantidad de masters que se planea que lleve el polín ANTES de abrir el
+// escaneo — Origen es solo informativo (no filtra qué se puede escanear ahí) y la cantidad es una
+// meta de referencia (no bloquea, se compara contra lo escaneado como Completo/Incompleto/Sobrante).
+function ModalNuevoPallet({ origenes, onCrear, onClose }) {
+  const [origen, setOrigen] = useState("");
+  const [cantidad, setCantidad] = useState("");
+  const [error, setError] = useState("");
+  const [creando, setCreando] = useState(false);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError("");
+    setCreando(true);
+    try {
+      await onCrear({ Origen: origen, CantidadMaster: cantidad });
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setCreando(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-white rounded-xl shadow-xl w-full max-w-sm" onClick={e => e.stopPropagation()}>
+        <div className="px-5 py-4 border-b border-gray-200">
+          <h3 className="text-lg font-bold text-gray-800">Nuevo pallet</h3>
+        </div>
+        <form onSubmit={handleSubmit} className="px-5 py-4 space-y-4">
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Origen *</label>
+            <select required value={origen} onChange={e => setOrigen(e.target.value)} autoFocus
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400">
+              <option value="">Selecciona...</option>
+              {origenes.map(o => <option key={o.Codigo} value={o.Codigo}>{o.Descripcion}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Cantidad de masters que llevará el pallet *</label>
+            <input required type="number" min="1" step="1" value={cantidad} onChange={e => setCantidad(e.target.value)}
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
+          </div>
+          {error && <p className="text-sm text-red-600">{error}</p>}
+          <div className="flex justify-end gap-2 pt-1">
+            <button type="button" onClick={onClose} className="px-4 py-2 rounded-lg text-sm font-medium text-gray-600 hover:bg-gray-100 transition">Cancelar</button>
+            <button type="submit" disabled={creando} className="px-4 py-2 rounded-lg text-sm font-semibold bg-blue-600 text-white hover:bg-blue-700 transition disabled:opacity-50">
+              {creando ? "Creando..." : "Crear y escanear"}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 export default function PalletsPage() {
   const [pallets, setPallets] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filtroEstatus, setFiltroEstatus] = useState("");
   const [filtroFecha, setFiltroFecha] = useState("");
   const [panelId, setPanelId] = useState(null);
+  const [origenes, setOrigenes] = useState([]);
+  const [modalNuevo, setModalNuevo] = useState(false);
+
+  useEffect(() => {
+    fetch("/api/origen", { headers: authHeader() }).then(r => r.json()).then(data => {
+      if (Array.isArray(data)) setOrigenes(data.filter(o => o.Activo));
+    });
+  }, []);
 
   const fetchPallets = useCallback(async () => {
     setLoading(true);
@@ -201,11 +278,17 @@ export default function PalletsPage() {
 
   useEffect(() => { fetchPallets(); }, [fetchPallets]);
 
-  const handleNuevo = async () => {
-    const res = await fetch(API, { method: "POST", headers: authHeader() });
+  const handleCrear = async ({ Origen, CantidadMaster }) => {
+    const res = await fetch(API, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeader() },
+      body: JSON.stringify({ Origen, CantidadMaster }),
+    });
     const data = await leerJSON(res);
-    if (res.ok) { setPanelId(data.PalletId); fetchPallets(); }
-    else alert("Error: " + (data.error || "No se pudo crear el pallet"));
+    if (!res.ok) throw new Error(data.error || "No se pudo crear el pallet");
+    setModalNuevo(false);
+    setPanelId(data.PalletId);
+    fetchPallets();
   };
 
   const handleEliminar = async (id) => {
@@ -228,7 +311,7 @@ export default function PalletsPage() {
         <input type="date" value={filtroFecha} onChange={e => setFiltroFecha(e.target.value)}
           className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
         <span className="text-sm text-gray-500 ml-auto">{pallets.length} pallet{pallets.length !== 1 ? "s" : ""}</span>
-        <button onClick={handleNuevo} className="bg-blue-600 text-white font-semibold px-4 py-2 rounded-lg hover:bg-blue-700 transition text-sm">
+        <button onClick={() => setModalNuevo(true)} className="bg-blue-600 text-white font-semibold px-4 py-2 rounded-lg hover:bg-blue-700 transition text-sm">
           + Nuevo pallet
         </button>
       </div>
@@ -240,7 +323,9 @@ export default function PalletsPage() {
               <tr>
                 <th className="px-4 py-3 text-left">Pallet</th>
                 <th className="px-4 py-3 text-center">Estatus</th>
+                <th className="px-4 py-3 text-left">Origen</th>
                 <th className="px-4 py-3 text-right">Masters</th>
+                <th className="px-4 py-3 text-center">Cuadre</th>
                 <th className="px-4 py-3 text-left">Creado</th>
                 <th className="px-4 py-3 text-left">Cerrado</th>
                 <th className="px-4 py-3 text-center">Acciones</th>
@@ -248,9 +333,9 @@ export default function PalletsPage() {
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan={6} className="px-4 py-8 text-center text-gray-400">Cargando…</td></tr>
+                <tr><td colSpan={8} className="px-4 py-8 text-center text-gray-400">Cargando…</td></tr>
               ) : pallets.length === 0 ? (
-                <tr><td colSpan={6} className="px-4 py-8 text-center text-gray-400">Sin pallets para este filtro</td></tr>
+                <tr><td colSpan={8} className="px-4 py-8 text-center text-gray-400">Sin pallets para este filtro</td></tr>
               ) : pallets.map(p => (
                 <tr key={p.PalletId} className="border-t border-gray-100 hover:bg-gray-50">
                   <td className="px-4 py-3 font-mono font-semibold">#{p.PalletId}</td>
@@ -259,7 +344,15 @@ export default function PalletsPage() {
                       {p.Estatus}
                     </span>
                   </td>
-                  <td className="px-4 py-3 text-right">{p.CantidadMasters}</td>
+                  <td className="px-4 py-3 whitespace-nowrap">{p.DescripcionOrigen || "-"}</td>
+                  <td className="px-4 py-3 text-right font-mono">{p.CantidadMasters}{p.CantidadMaster != null ? ` / ${p.CantidadMaster}` : ""}</td>
+                  <td className="px-4 py-3 text-center">
+                    {p.Cuadre && (
+                      <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${CUADRE_BADGE[p.Cuadre] || "bg-gray-100 text-gray-600"}`}>
+                        {p.Cuadre}
+                      </span>
+                    )}
+                  </td>
                   <td className="px-4 py-3 whitespace-nowrap text-gray-500">{p.CreadoPor} · {fmtFecha(p.CreadoEn)}</td>
                   <td className="px-4 py-3 whitespace-nowrap text-gray-500">{p.CerradoEn ? `${p.CerradoPor} · ${fmtFecha(p.CerradoEn)}` : "-"}</td>
                   <td className="px-4 py-3 text-center">
@@ -278,6 +371,8 @@ export default function PalletsPage() {
           </table>
         </div>
       </div>
+
+      {modalNuevo && <ModalNuevoPallet origenes={origenes} onCrear={handleCrear} onClose={() => setModalNuevo(false)} />}
 
       {panelId != null && (
         <PanelEscaneo palletId={panelId} onClose={() => { setPanelId(null); fetchPallets(); }} onCambio={fetchPallets} />

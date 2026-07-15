@@ -57,6 +57,16 @@ const MASTER_SELECT = `
   LEFT JOIN Areas ar ON oe.AreaCodigo = ar.Codigo
 `;
 
+// Cuadre = meta de referencia, no bloquea el escaneo (decisión jul 2026): compara lo realmente
+// escaneado contra CantidadMaster (la cantidad que se planeó que llevaría el polín al crearlo).
+// Mismo patrón que el cierre de captura de Etiquetado. Si el pallet no tiene CantidadMaster (los
+// creados antes de esta decisión) no aplica.
+function calcularCuadre(cantidadMaster: number | null, escaneados: number): string | null {
+  if (cantidadMaster == null) return null;
+  if (escaneados === cantidadMaster) return "Completo";
+  return escaneados < cantidadMaster ? "Incompleto" : "Sobrante";
+}
+
 function formatearMaster(r: any) {
   return {
     ...r,
@@ -104,11 +114,17 @@ router.get("/", requireAuth, requirePerm("bodega", "ver"), async (req: Request, 
     if (fecha) { condiciones.push("DATE(p.CreadoEn) = ?"); params.push(fecha); }
     const where = condiciones.length ? `WHERE ${condiciones.join(" AND ")}` : "";
     const rows: any[] = await prisma.$queryRawUnsafe(`
-      SELECT p.PalletId, p.Estatus, p.CreadoPor, p.CreadoEn, p.CerradoPor, p.CerradoEn,
+      SELECT p.PalletId, p.Estatus, p.Origen, org.Descripcion AS DescripcionOrigen, p.CantidadMaster,
+             p.CreadoPor, p.CreadoEn, p.CerradoPor, p.CerradoEn,
              (SELECT COUNT(*) FROM Masters m WHERE m.PalletId = p.PalletId) AS CantidadMasters
-      FROM Pallets p ${where} ORDER BY p.PalletId DESC LIMIT 500
+      FROM Pallets p LEFT JOIN Origen org ON p.Origen = org.Codigo
+      ${where} ORDER BY p.PalletId DESC LIMIT 500
     `, ...params);
-    res.json(rows.map(r => ({ ...r, PalletId: Number(r.PalletId), CantidadMasters: Number(r.CantidadMasters) })));
+    res.json(rows.map(r => {
+      const cantidadMaster = r.CantidadMaster == null ? null : Number(r.CantidadMaster);
+      const cantidadMasters = Number(r.CantidadMasters);
+      return { ...r, PalletId: Number(r.PalletId), CantidadMaster: cantidadMaster, CantidadMasters: cantidadMasters, Cuadre: calcularCuadre(cantidadMaster, cantidadMasters) };
+    }));
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -118,24 +134,42 @@ router.get("/", requireAuth, requirePerm("bodega", "ver"), async (req: Request, 
 router.get("/:id", requireAuth, requirePerm("bodega", "ver"), async (req: Request, res: Response) => {
   try {
     const palletId = Number(req.params.id);
-    const rows: any[] = await prisma.$queryRaw`SELECT * FROM Pallets WHERE PalletId = ${palletId} LIMIT 1`;
+    const rows: any[] = await prisma.$queryRaw`
+      SELECT p.*, org.Descripcion AS DescripcionOrigen FROM Pallets p
+      LEFT JOIN Origen org ON p.Origen = org.Codigo WHERE p.PalletId = ${palletId} LIMIT 1
+    `;
     if (!rows.length) { res.status(404).json({ error: "Pallet no encontrado" }); return; }
     const masters = await obtenerMastersDePallet(palletId);
-    res.json({ ...rows[0], PalletId: Number(rows[0].PalletId), Masters: masters });
+    const cantidadMaster = rows[0].CantidadMaster == null ? null : Number(rows[0].CantidadMaster);
+    res.json({
+      ...rows[0], PalletId: Number(rows[0].PalletId), CantidadMaster: cantidadMaster,
+      Masters: masters, Cuadre: calcularCuadre(cantidadMaster, masters.length),
+    });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// POST /api/pallets — crea un pallet vacío y Abierto. Sin Pedido/Cliente/Área: se arma solo con lo
-// que se escanee después.
+// POST /api/pallets  { Origen, CantidadMaster }
+// Crea un pallet vacío y Abierto. Sin Pedido/Cliente/Área: se arma solo con lo que se escanee
+// después — pero SÍ requiere Origen (informativo, no filtra qué se puede escanear ahí) y
+// CantidadMaster (meta de referencia de cuántos masters llevará el polín, no bloquea el escaneo).
 router.post("/", requireAuth, requirePerm("bodega", "escanear"), async (req: Request, res: Response) => {
   try {
+    const { Origen, CantidadMaster } = req.body;
+    if (!Origen) { res.status(400).json({ error: "El origen es requerido" }); return; }
+    const cantidad = Number(CantidadMaster);
+    if (!Number.isInteger(cantidad) || cantidad <= 0) {
+      res.status(400).json({ error: "La cantidad de masters del pallet debe ser un entero positivo" });
+      return;
+    }
+
     const operador = getOperador(req);
-    await prisma.$executeRaw`INSERT INTO Pallets (CreadoPor) VALUES (${operador})`;
+    await prisma.$executeRaw`INSERT INTO Pallets (Origen, CantidadMaster, CreadoPor) VALUES (${Origen}, ${cantidad}, ${operador})`;
     const fila: any[] = await prisma.$queryRaw`SELECT LAST_INSERT_ID() AS id`;
     res.status(201).json({ ok: true, PalletId: Number(fila[0].id) });
   } catch (err: any) {
+    if (err.message?.includes("foreign key")) { res.status(400).json({ error: "El origen no existe" }); return; }
     res.status(500).json({ error: err.message });
   }
 });
