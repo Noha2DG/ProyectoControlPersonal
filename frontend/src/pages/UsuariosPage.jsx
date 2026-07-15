@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { authHeader } from "../context/AuthContext.jsx";
+import { authHeader, useAuth } from "../context/AuthContext.jsx";
 
 const API = "/api/usuarios";
 
@@ -7,150 +7,72 @@ const API = "/api/usuarios";
 // Cada grupo (separador) organiza visualmente la matriz
 const MODULOS = [
   // ── Gestión de personal
-  { key: "empleados",      label: "Empleados",                      acciones: ["ver","crear","editar","baja"],     bajaElimKey: "baja",     grupo: "Personal" },
+  { key: "empleados",      label: "Empleados",                      acciones: ["ver","crear","editar","baja"],     grupo: "Personal" },
   // ── Kioscos físicos (tablets dedicadas)
-  { key: "kiosco",         label: "Kiosco · Entrada / Salida",      acciones: ["ver"],                             bajaElimKey: null,       grupo: "Kioscos"  },
-  { key: "kiosco_areas",   label: "Kiosco · Transferencia de Áreas", acciones: ["ver"],                            bajaElimKey: null,       grupo: "Kioscos"  },
-  { key: "equipo",         label: "Kiosco · Entrega de Uniformes",  acciones: ["ver"],                             bajaElimKey: null,       grupo: "Kioscos"  },
+  { key: "kiosco",         label: "Kiosco · Entrada / Salida",      acciones: ["ver"],                             grupo: "Kioscos"  },
+  { key: "kiosco_areas",   label: "Kiosco · Transferencia de Áreas", acciones: ["ver"],                            grupo: "Kioscos"  },
+  { key: "equipo",         label: "Kiosco · Entrega de Uniformes",  acciones: ["ver"],                             grupo: "Kioscos"  },
   // ── Módulo de Entradas/Salidas (corrección admin)
-  { key: "movimientos",    label: "Entradas / Salidas — Corrección", acciones: ["ver","editar","eliminar"],         bajaElimKey: "eliminar", grupo: "Admin"    },
+  { key: "movimientos",    label: "Entradas / Salidas — Corrección", acciones: ["ver","editar","eliminar"],         grupo: "Admin"    },
   // ── Módulo de Transferencias (corrección + futuras páginas)
-  { key: "transferencias", label: "Transferencias — Corrección",     acciones: ["ver","editar","eliminar"],         bajaElimKey: "eliminar", grupo: "Admin"    },
+  { key: "transferencias", label: "Transferencias — Corrección",     acciones: ["ver","editar","eliminar"],         grupo: "Admin"    },
   // ── Planificación
-  { key: "planificacion",  label: "Planificación por Área",         acciones: ["ver","editar"],                    bajaElimKey: null,       grupo: "Config"   },
+  { key: "planificacion",  label: "Planificación por Área",         acciones: ["ver","editar"],                    grupo: "Config"   },
   // ── Destajo (producción)
-  { key: "destajo",        label: "Destajo — Materia Prima y Pesaje", acciones: ["ver","crear","editar","eliminar"], bajaElimKey: "eliminar", grupo: "Operación" },
-  { key: "etiquetado",     label: "Etiquetado — Orden de Trabajo",   acciones: ["ver","crear","editar","eliminar","imprimir"], bajaElimKey: "eliminar", grupo: "Operación" },
+  { key: "destajo",        label: "Destajo — Materia Prima y Pesaje", acciones: ["ver","crear","editar","eliminar"], grupo: "Operación" },
+  { key: "etiquetado",     label: "Etiquetado — Orden de Trabajo",   acciones: ["ver","crear","editar","eliminar","imprimir"], grupo: "Operación" },
   // ── Configuración
-  { key: "areas",          label: "Áreas",                          acciones: ["ver","crear","editar","eliminar"], bajaElimKey: "eliminar", grupo: "Config"   },
-  { key: "permisos",       label: "Permisos",                       acciones: ["ver","crear","editar","eliminar"], bajaElimKey: "eliminar", grupo: "Config"   },
-  { key: "tipos_permiso",  label: "Tipos de Permiso",                acciones: ["ver","crear","editar","eliminar"], bajaElimKey: "eliminar", grupo: "Config"   },
-  { key: "usuarios",       label: "Usuarios",                       acciones: ["ver","crear","editar","eliminar"], bajaElimKey: "eliminar", grupo: "Config"   },
-  { key: "catalogos",      label: "Catálogos de Producción",        acciones: ["ver","crear","editar","eliminar"], bajaElimKey: "eliminar", grupo: "Config"   },
+  { key: "areas",          label: "Áreas",                          acciones: ["ver","crear","editar","eliminar"], grupo: "Config"   },
+  { key: "permisos",       label: "Permisos",                       acciones: ["ver","crear","editar","eliminar"], grupo: "Config"   },
+  { key: "tipos_permiso",  label: "Tipos de Permiso",                acciones: ["ver","crear","editar","eliminar"], grupo: "Config"   },
+  { key: "usuarios",       label: "Usuarios",                       acciones: ["ver","crear","editar","eliminar"], grupo: "Config"   },
+  { key: "catalogos",      label: "Catálogos de Producción",        acciones: ["ver","crear","editar","eliminar"], grupo: "Config"   },
 ];
 
-const EMPTY_PERMISOS = {
-  empleados:      { ver: false, crear: false, editar: false, baja: false },
-  kiosco:         { ver: false },
-  kiosco_areas:   { ver: false },
-  equipo:         { ver: false },
-  movimientos:    { ver: false, editar: false, eliminar: false },
-  transferencias: { ver: false, editar: false, eliminar: false },
-  planificacion:  { ver: false, editar: false },
-  destajo:        { ver: false, crear: false, editar: false, eliminar: false },
-  etiquetado:     { ver: false, crear: false, editar: false, eliminar: false },
-  areas:          { ver: false, crear: false, editar: false, eliminar: false },
-  permisos:       { ver: false, crear: false, editar: false, eliminar: false },
-  tipos_permiso:  { ver: false, crear: false, editar: false, eliminar: false },
-  usuarios:       { ver: false, crear: false, editar: false, eliminar: false },
-  catalogos:      { ver: false, crear: false, editar: false, eliminar: false },
+// Etiqueta de cada acción en la matriz de permisos — cualquier acción que un módulo
+// declare en su lista `acciones` aparece aquí automáticamente como checkbox propio.
+// (Antes la matriz tenía 4 columnas fijas Ver/Crear/Editar/Baja-Elim y una acción como
+// "escanear" o "imprimir" que no encajaba en ninguna quedaba sin forma de marcarse desde
+// aquí — solo el botón de preset completo la activaba.)
+const ACCION_LABELS = {
+  ver: "Ver", crear: "Crear", editar: "Editar", eliminar: "Eliminar",
+  baja: "Dar de baja", escanear: "Escanear", imprimir: "Imprimir",
 };
 
+// Deriva la matriz de permisos de MODULOS en vez de enumerarla a mano por rol:
+// así un módulo nuevo (como Bodega en su momento) aparece automáticamente con
+// todo en true para "admin" y todo en false para el resto, sin tener que
+// recordar tocar cada preset por separado.
+function permisosPara(valor) {
+  return MODULOS.reduce((acc, m) => {
+    acc[m.key] = Object.fromEntries(m.acciones.map(a => [a, valor]));
+    return acc;
+  }, {});
+}
+
+const EMPTY_PERMISOS = permisosPara(false);
+
+const KIOSCO_KEYS = ["kiosco", "kiosco_areas", "equipo"];
+
 const PRESETS = {
-  admin: {
-    empleados:      { ver: true,  crear: true,  editar: true,  baja: true  },
-    kiosco:         { ver: false },
-    kiosco_areas:   { ver: false },
-    equipo:         { ver: false },
-    movimientos:    { ver: true,  editar: true,  eliminar: true  },
-    transferencias: { ver: true,  editar: true,  eliminar: true  },
-    planificacion:  { ver: true,  editar: true  },
-    destajo:        { ver: true,  crear: true,  editar: true,  eliminar: true  },
-    etiquetado:     { ver: true,  crear: true,  editar: true,  eliminar: true, imprimir: true },
-    areas:          { ver: true,  crear: true,  editar: true,  eliminar: true  },
-    permisos:       { ver: true,  crear: true,  editar: true,  eliminar: true  },
-    tipos_permiso:  { ver: true,  crear: true,  editar: true,  eliminar: true  },
-    usuarios:       { ver: true,  crear: true,  editar: true,  eliminar: true  },
-    catalogos:      { ver: true,  crear: true,  editar: true,  eliminar: true  },
-  },
-  readonly: {
-    empleados:      { ver: true,  crear: false, editar: false, baja: false },
-    kiosco:         { ver: false },
-    kiosco_areas:   { ver: false },
-    equipo:         { ver: false },
-    movimientos:    { ver: false, editar: false, eliminar: false },
-    transferencias: { ver: false, editar: false, eliminar: false },
-    planificacion:  { ver: false, editar: false },
-    destajo:        { ver: false, crear: false, editar: false, eliminar: false },
-    etiquetado:     { ver: false, crear: false, editar: false, eliminar: false, imprimir: false },
-    areas:          { ver: false, crear: false, editar: false, eliminar: false },
-    permisos:       { ver: false, crear: false, editar: false, eliminar: false },
-    tipos_permiso:  { ver: false, crear: false, editar: false, eliminar: false },
-    usuarios:       { ver: false, crear: false, editar: false, eliminar: false },
-    catalogos:      { ver: false, crear: false, editar: false, eliminar: false },
-  },
-  kiosco: {
-    empleados:      { ver: false, crear: false, editar: false, baja: false },
-    kiosco:         { ver: true  },
-    kiosco_areas:   { ver: false },
-    equipo:         { ver: false },
-    movimientos:    { ver: false, editar: false, eliminar: false },
-    transferencias: { ver: false, editar: false, eliminar: false },
-    planificacion:  { ver: false, editar: false },
-    destajo:        { ver: false, crear: false, editar: false, eliminar: false },
-    etiquetado:     { ver: false, crear: false, editar: false, eliminar: false, imprimir: false },
-    areas:          { ver: false, crear: false, editar: false, eliminar: false },
-    permisos:       { ver: false, crear: false, editar: false, eliminar: false },
-    tipos_permiso:  { ver: false, crear: false, editar: false, eliminar: false },
-    usuarios:       { ver: false, crear: false, editar: false, eliminar: false },
-    catalogos:      { ver: false, crear: false, editar: false, eliminar: false },
-  },
-  kiosco_areas: {
-    empleados:      { ver: false, crear: false, editar: false, baja: false },
-    kiosco:         { ver: false },
-    kiosco_areas:   { ver: true  },
-    equipo:         { ver: false },
-    movimientos:    { ver: false, editar: false, eliminar: false },
-    transferencias: { ver: false, editar: false, eliminar: false },
-    planificacion:  { ver: false, editar: false },
-    destajo:        { ver: false, crear: false, editar: false, eliminar: false },
-    etiquetado:     { ver: false, crear: false, editar: false, eliminar: false, imprimir: false },
-    areas:          { ver: false, crear: false, editar: false, eliminar: false },
-    permisos:       { ver: false, crear: false, editar: false, eliminar: false },
-    tipos_permiso:  { ver: false, crear: false, editar: false, eliminar: false },
-    usuarios:       { ver: false, crear: false, editar: false, eliminar: false },
-    catalogos:      { ver: false, crear: false, editar: false, eliminar: false },
-  },
-  equipo: {
-    empleados:      { ver: false, crear: false, editar: false, baja: false },
-    kiosco:         { ver: false },
-    kiosco_areas:   { ver: false },
-    equipo:         { ver: true  },
-    movimientos:    { ver: false, editar: false, eliminar: false },
-    transferencias: { ver: false, editar: false, eliminar: false },
-    planificacion:  { ver: false, editar: false },
-    destajo:        { ver: false, crear: false, editar: false, eliminar: false },
-    etiquetado:     { ver: false, crear: false, editar: false, eliminar: false, imprimir: false },
-    areas:          { ver: false, crear: false, editar: false, eliminar: false },
-    permisos:       { ver: false, crear: false, editar: false, eliminar: false },
-    tipos_permiso:  { ver: false, crear: false, editar: false, eliminar: false },
-    usuarios:       { ver: false, crear: false, editar: false, eliminar: false },
-    catalogos:      { ver: false, crear: false, editar: false, eliminar: false },
-  },
+  admin:        permisosPara(true),
+  readonly:     { ...EMPTY_PERMISOS, empleados: { ...EMPTY_PERMISOS.empleados, ver: true } },
+  kiosco:       { ...EMPTY_PERMISOS, kiosco: { ver: true } },
+  kiosco_areas: { ...EMPTY_PERMISOS, kiosco_areas: { ver: true } },
+  equipo:       { ...EMPTY_PERMISOS, equipo: { ver: true } },
 };
 
 function mergePermisos(stored) {
-  return {
-    empleados:      { ...EMPTY_PERMISOS.empleados,      ...(stored?.empleados      || {}) },
-    kiosco:         { ...EMPTY_PERMISOS.kiosco,         ...(stored?.kiosco         || {}) },
-    kiosco_areas:   { ...EMPTY_PERMISOS.kiosco_areas,   ...(stored?.kiosco_areas   || {}) },
-    equipo:         { ...EMPTY_PERMISOS.equipo,         ...(stored?.equipo         || {}) },
-    movimientos:    { ...EMPTY_PERMISOS.movimientos,    ...(stored?.movimientos    || {}) },
-    transferencias: { ...EMPTY_PERMISOS.transferencias, ...(stored?.transferencias || {}) },
-    planificacion:  { ...EMPTY_PERMISOS.planificacion,  ...(stored?.planificacion  || {}) },
-    destajo:        { ...EMPTY_PERMISOS.destajo,        ...(stored?.destajo        || {}) },
-    etiquetado:     { ...EMPTY_PERMISOS.etiquetado,     ...(stored?.etiquetado     || {}) },
-    areas:          { ...EMPTY_PERMISOS.areas,          ...(stored?.areas          || {}) },
-    permisos:       { ...EMPTY_PERMISOS.permisos,       ...(stored?.permisos       || {}) },
-    tipos_permiso:  { ...EMPTY_PERMISOS.tipos_permiso,  ...(stored?.tipos_permiso  || {}) },
-    usuarios:       { ...EMPTY_PERMISOS.usuarios,       ...(stored?.usuarios       || {}) },
-    catalogos:      { ...EMPTY_PERMISOS.catalogos,      ...(stored?.catalogos      || {}) },
-  };
+  return MODULOS.reduce((acc, m) => {
+    acc[m.key] = { ...EMPTY_PERMISOS[m.key], ...(stored?.[m.key] || {}) };
+    return acc;
+  }, {});
 }
 
 function derivarRol(p) {
-  const soloPantallas = !p?.empleados?.ver && !p?.movimientos?.ver && !p?.transferencias?.ver && !p?.areas?.ver && !p?.permisos?.ver && !p?.tipos_permiso?.ver && !p?.usuarios?.ver && !p?.catalogos?.ver && !p?.destajo?.ver && !p?.etiquetado?.ver;
-  if (soloPantallas && (p?.kiosco?.ver || p?.kiosco_areas?.ver || p?.equipo?.ver)) return "kiosco";
+  if (JSON.stringify(mergePermisos(p)) === JSON.stringify(PRESETS.admin)) return "admin";
+  const soloPantallas = MODULOS.every(m => KIOSCO_KEYS.includes(m.key) || !p?.[m.key]?.ver);
+  if (soloPantallas && KIOSCO_KEYS.some(k => p?.[k]?.ver)) return "kiosco";
   return "readonly";
 }
 
@@ -275,10 +197,7 @@ function UsuarioModal({ usuario, onSave, onClose }) {
                 <thead>
                   <tr className="bg-gray-50 text-gray-500 uppercase tracking-wider">
                     <th className="px-3 py-2 text-left font-semibold">Módulo</th>
-                    <th className="px-3 py-2 text-center">Ver</th>
-                    <th className="px-3 py-2 text-center">Crear</th>
-                    <th className="px-3 py-2 text-center">Editar</th>
-                    <th className="px-3 py-2 text-center">Baja/Elim</th>
+                    <th className="px-3 py-2 text-left font-semibold">Acciones</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -287,47 +206,26 @@ function UsuarioModal({ usuario, onSave, onClose }) {
                     if (m.grupo !== prevGrupo) {
                       acc.push(
                         <tr key={`sep-${m.grupo}`}>
-                          <td colSpan={5} className="px-3 py-1 bg-gray-50 text-gray-400 text-xs font-semibold uppercase tracking-wider border-t border-gray-200">
+                          <td colSpan={2} className="px-3 py-1 bg-gray-50 text-gray-400 text-xs font-semibold uppercase tracking-wider border-t border-gray-200">
                             {m.grupo}
                           </td>
                         </tr>
                       );
                     }
-                    const hasCrear    = m.acciones.includes("crear");
-                    const hasEditar   = m.acciones.includes("editar");
-                    const hasBajaElim = !!m.bajaElimKey;
                     acc.push(
                       <tr key={m.key} className="hover:bg-gray-50 border-t border-gray-100">
-                        <td className="px-3 py-2.5 font-medium text-gray-700 text-xs">{m.label}</td>
-
-                        <td className="px-3 py-2.5 text-center">
-                          <input type="checkbox" checked={hasPerm(m.key, "ver")}
-                            onChange={() => togglePerm(m.key, "ver")}
-                            className="w-4 h-4 accent-blue-600 cursor-pointer" />
-                        </td>
-
-                        <td className="px-3 py-2.5 text-center">
-                          {hasCrear
-                            ? <input type="checkbox" checked={hasPerm(m.key, "crear")}
-                                onChange={() => togglePerm(m.key, "crear")}
-                                className="w-4 h-4 accent-blue-600 cursor-pointer" />
-                            : <span className="text-gray-300 text-sm">—</span>}
-                        </td>
-
-                        <td className="px-3 py-2.5 text-center">
-                          {hasEditar
-                            ? <input type="checkbox" checked={hasPerm(m.key, "editar")}
-                                onChange={() => togglePerm(m.key, "editar")}
-                                className="w-4 h-4 accent-blue-600 cursor-pointer" />
-                            : <span className="text-gray-300 text-sm">—</span>}
-                        </td>
-
-                        <td className="px-3 py-2.5 text-center">
-                          {hasBajaElim
-                            ? <input type="checkbox" checked={hasPerm(m.key, m.bajaElimKey)}
-                                onChange={() => togglePerm(m.key, m.bajaElimKey)}
-                                className="w-4 h-4 accent-blue-600 cursor-pointer" />
-                            : <span className="text-gray-300 text-sm">—</span>}
+                        <td className="px-3 py-2.5 font-medium text-gray-700 text-xs align-top whitespace-nowrap">{m.label}</td>
+                        <td className="px-3 py-2.5">
+                          <div className="flex flex-wrap gap-x-4 gap-y-1.5">
+                            {m.acciones.map(accion => (
+                              <label key={accion} className="flex items-center gap-1.5 text-gray-600 cursor-pointer">
+                                <input type="checkbox" checked={hasPerm(m.key, accion)}
+                                  onChange={() => togglePerm(m.key, accion)}
+                                  className="w-4 h-4 accent-blue-600 cursor-pointer" />
+                                {ACCION_LABELS[accion] ?? accion}
+                              </label>
+                            ))}
+                          </div>
                         </td>
                       </tr>
                     );
@@ -370,6 +268,7 @@ function UsuarioModal({ usuario, onSave, onClose }) {
 
 // ── Página principal ─────────────────────────────────────────────────
 export default function UsuariosPage() {
+  const { user, refreshUser } = useAuth();
   const [usuarios, setUsuarios] = useState([]);
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState({ open: false, usuario: null });
@@ -399,6 +298,9 @@ export default function UsuariosPage() {
     const data = await res.json();
     if (!res.ok) throw new Error(data.error);
     setModal({ open: false, usuario: null });
+    // Si te editaste a ti mismo, la sesión activa sigue autorizando con el rol/permisos
+    // viejos (van embebidos en el JWT) hasta reemitir el token.
+    if (isEdit && modal.usuario.id === user?.id) await refreshUser();
     fetchUsuarios();
   };
 

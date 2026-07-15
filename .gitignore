@@ -10,8 +10,8 @@ CLAUDE.md
 backend/uploads/fotos/*
 !backend/uploads/fotos/.gitkeep
 
-# Respaldos de datos de empleados (contienen datos sensibles) — nunca al historial de git
-backend/backup_empleados_*.json
+# Respaldos de datos (contienen datos sensibles) — nunca al historial de git
+backend/backup_*.json
 
 # Logs de sesiones de prueba con el navegador (webapp-testing / Playwright MCP)
 .playwright-mcp/
