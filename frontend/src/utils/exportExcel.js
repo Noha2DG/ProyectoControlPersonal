@@ -153,6 +153,64 @@ export function exportarEficiencias(porPersona, desde, hasta) {
   XLSX.writeFile(wb, `Eficiencias_${desde}_a_${hasta}.xlsx`);
 }
 
+export function exportarLbHora(filas, desde, hasta) {
+  const datos = filas.map(f => ({
+    "Id Empleado":  f.IdEmpleado,
+    "Nombre":       f.Nombre,
+    "Área":         f.Area ?? "",
+    "Lb":           +f.Lb.toFixed(2),
+    "Horas":        +f.Horas.toFixed(2),
+    "Lb/Hora":      f.LbPorHora != null ? +f.LbPorHora.toFixed(1) : "",
+    "# Pesadas":    f.NumPesadas,
+  }));
+
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.json_to_sheet(datos);
+  autoWidth(ws, datos);
+  XLSX.utils.book_append_sheet(wb, ws, "Lb-Hora");
+
+  XLSX.writeFile(wb, `LbHora_${desde}_a_${hasta}.xlsx`);
+}
+
+export function exportarLbHoraPorTalla(filas, desde, hasta) {
+  const datos = filas.map(f => ({
+    "Id Empleado":  f.IdEmpleado,
+    "Nombre":       f.Nombre,
+    "Producto":     f.Producto,
+    "Talla":        f.Talla,
+    "Descripción Talla": f.DescripcionTalla,
+    "Lb":           +f.Lb.toFixed(2),
+    "Horas":        +f.Horas.toFixed(2),
+    "Lb/Hora":      f.LbPorHora != null ? +f.LbPorHora.toFixed(1) : "",
+    "# Pesadas":    f.NumPesadas,
+  }));
+
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.json_to_sheet(datos);
+  autoWidth(ws, datos);
+  XLSX.utils.book_append_sheet(wb, ws, "Por Talla");
+
+  XLSX.writeFile(wb, `LbHoraPorTalla_${desde}_a_${hasta}.xlsx`);
+}
+
+export function exportarLbPorPersona(filas, desde, hasta) {
+  const datos = filas.map(f => ({
+    "Puesto":                     f.Puesto,
+    "Id Empleado":                f.IdEmpleado,
+    "Nombre":                     f.Nombre,
+    "Descabezado (Lb)":           +f.LbDescabezado.toFixed(2),
+    "Pelado y Devenado (Lb)":     +f.LbPelado.toFixed(2),
+    "Total (Lb)":                 +f.LbTotal.toFixed(2),
+  }));
+
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.json_to_sheet(datos);
+  autoWidth(ws, datos);
+  XLSX.utils.book_append_sheet(wb, ws, "Lb-Persona");
+
+  XLSX.writeFile(wb, `LbPorPersona_${desde}_a_${hasta}.xlsx`);
+}
+
 function autoWidth(ws, data) {
   if (!data.length) return;
   const cols = Object.keys(data[0]).map(key => ({

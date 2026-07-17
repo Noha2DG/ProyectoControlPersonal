@@ -6,6 +6,13 @@ import { requireAuth, requirePerm } from "../middleware/auth.ts";
 
 const router = Router();
 
+// Familia (Clase.Familia, FK real a la tabla Familia — no una convención de texto) que le corresponde
+// a cada área de destajo: D = CULTIVO COLA (Descabezado), E = CULTIVO PELADO (Pelado y Devenado).
+// Confirmado contra datos reales: sin este chequeo, ~9.6% de los pesajes en Descabezado y ~1.1% en
+// Pelado y Devenado quedaban contra la transacción de la otra área (Producto distinto al que
+// físicamente se estaba trabajando).
+const FAMILIA_ESPERADA_POR_AREA: Record<string, string> = { DS: "E", DU: "D" };
+
 function getOperador(req: Request): string {
   try {
     const header = req.headers.authorization;
@@ -41,7 +48,7 @@ async function resolverTermo(tx: any, transaccionId: number, numeroTermo: string
 // y evita leer un Estado que cambió justo después de leerlo afuera.
 async function bloquearTransaccionAbierta(tx: any, transaccionId: number) {
   const trans: any[] = await tx.$queryRaw`
-    SELECT Lote, ClaseOrigen, AlmacenOrigen, Estado FROM TransaccionesProduccion WHERE TransaccionId = ${transaccionId} LIMIT 1 FOR UPDATE
+    SELECT Lote, ClaseOrigen, ClasePT, AlmacenOrigen, Estado FROM TransaccionesProduccion WHERE TransaccionId = ${transaccionId} LIMIT 1 FOR UPDATE
   `;
   if (!trans.length) return { error: "Transacción no encontrada", status: 404 };
   if (trans[0].Estado !== "Abierta") return { error: "La transacción está cerrada", status: 400 };
@@ -139,6 +146,19 @@ router.post("/", requireAuth, requirePerm("destajo", "crear"), async (req: Reque
     const resultado = await prisma.$transaction(async (tx) => {
       const bloqueo = await bloquearTransaccionAbierta(tx, Number(TransaccionId));
       if ("error" in bloqueo) return bloqueo;
+
+      // La transacción debe ser del Producto que corresponde al área donde está físicamente la persona
+      // (Descabezado no puede pesar Pelado y viceversa, aunque ambas sean áreas de destajo válidas).
+      const familiaEsperada = FAMILIA_ESPERADA_POR_AREA[areaActual[0].CodigoArea];
+      if (familiaEsperada) {
+        const clase: any[] = await tx.$queryRaw`SELECT Familia, Descripcion FROM Clase WHERE Clase = ${bloqueo.trans.ClasePT} LIMIT 1`;
+        if (clase.length && clase[0].Familia !== familiaEsperada) {
+          return {
+            error: `Esta transacción es de ${clase[0].Descripcion} — no corresponde al área ${areaActual[0].NombreArea}`,
+            status: 400,
+          };
+        }
+      }
 
       const disponibilidad = await verificarDisponibilidad(tx, bloqueo.trans.Lote, bloqueo.trans.ClaseOrigen, Number(Peso));
       if (!disponibilidad.ok) return disponibilidad;
