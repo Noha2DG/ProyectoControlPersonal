@@ -1,7 +1,11 @@
 import { useState, useEffect } from "react";
 import { authHeader } from "../context/AuthContext.jsx";
+import { useColWidths, Th, Colgroup } from "../components/ResizableTh.jsx";
 
 const API = "/api/presentacion";
+
+const COL_DEFAULTS = { codigo: 90, descripcion: 180, abreviatura: 110, tipoMedida: 110, pesoKG: 90, pesoLb: 90, cajasXMaster: 110, estado: 100, acciones: 150 };
+const COLS = Object.keys(COL_DEFAULTS);
 const EMPTY = { Codigo: "", Descripcion: "", Abreviatura: "", TipoMedida: "Kilos", PesoKG: "", PesoLb: "", CajasXMaster: "" };
 
 const LB_PER_KG = 2.2046226218;
@@ -90,6 +94,7 @@ export default function PresentacionPage() {
   const [modal, setModal] = useState({ open: false, item: null });
   const [filtro, setFiltro] = useState("Activo");
   const [busqueda, setBusqueda] = useState("");
+  const [widths, startResize] = useColWidths("presentacion", COL_DEFAULTS);
 
   const fetchItems = async () => {
     setLoading(true);
@@ -157,18 +162,19 @@ export default function PresentacionPage() {
         <div className="flex justify-center py-16"><div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" /></div>
       ) : (
         <div className="bg-white rounded-xl shadow overflow-hidden overflow-x-auto">
-          <table className="w-full text-sm">
+          <table className="w-full text-sm table-fixed">
+            <Colgroup columns={COLS} widths={widths} />
             <thead>
               <tr className="bg-gray-100 text-gray-600 uppercase text-xs tracking-wider">
-                <th className="px-4 py-3 text-left">Código</th>
-                <th className="px-4 py-3 text-left">Descripción</th>
-                <th className="px-4 py-3 text-left whitespace-nowrap">Abreviatura</th>
-                <th className="px-4 py-3 text-left whitespace-nowrap">Tipo Medida</th>
-                <th className="px-4 py-3 text-right whitespace-nowrap">Peso KG</th>
-                <th className="px-4 py-3 text-right whitespace-nowrap">Peso Lb</th>
-                <th className="px-4 py-3 text-right whitespace-nowrap">Cajas x Master</th>
-                <th className="px-4 py-3 text-center">Estado</th>
-                <th className="px-4 py-3 text-center">Acciones</th>
+                <Th width={widths.codigo} onResizeStart={startResize("codigo")} className="px-4 py-3 text-left">Código</Th>
+                <Th width={widths.descripcion} onResizeStart={startResize("descripcion")} className="px-4 py-3 text-left">Descripción</Th>
+                <Th width={widths.abreviatura} onResizeStart={startResize("abreviatura")} className="px-4 py-3 text-left whitespace-nowrap">Abreviatura</Th>
+                <Th width={widths.tipoMedida} onResizeStart={startResize("tipoMedida")} className="px-4 py-3 text-left whitespace-nowrap">Tipo Medida</Th>
+                <Th width={widths.pesoKG} onResizeStart={startResize("pesoKG")} className="px-4 py-3 text-right whitespace-nowrap">Peso KG</Th>
+                <Th width={widths.pesoLb} onResizeStart={startResize("pesoLb")} className="px-4 py-3 text-right whitespace-nowrap">Peso Lb</Th>
+                <Th width={widths.cajasXMaster} onResizeStart={startResize("cajasXMaster")} className="px-4 py-3 text-right whitespace-nowrap">Cajas x Master</Th>
+                <Th width={widths.estado} onResizeStart={startResize("estado")} className="px-4 py-3 text-center">Estado</Th>
+                <Th width={widths.acciones} onResizeStart={startResize("acciones")} className="px-4 py-3 text-center">Acciones</Th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">

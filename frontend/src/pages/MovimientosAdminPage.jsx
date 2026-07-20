@@ -2,8 +2,12 @@ import { useState, useEffect, useCallback } from "react";
 import { authHeader } from "../context/AuthContext.jsx";
 import { exportarMovimientos } from "../utils/exportExcel.js";
 import EmpleadoAutocomplete from "../components/EmpleadoAutocomplete.jsx";
+import { useColWidths, Th, Colgroup } from "../components/ResizableTh.jsx";
 
 const TIPOS = ["Entrada", "Salida"];
+
+const COL_DEFAULTS = { fecha: 100, codigo: 100, nombre: 190, tipo: 100, hora: 90, dia: 100, operador: 130, acciones: 110 };
+const COLS = Object.keys(COL_DEFAULTS);
 
 function ahoraInputGT() {
   return new Date().toLocaleString("sv-SE", { timeZone: "America/Guatemala" }).slice(0, 16).replace(" ", "T");
@@ -78,6 +82,7 @@ export default function MovimientosAdminPage() {
   const [empleados, setEmpleados] = useState([]);
   const [loading, setLoading]   = useState(false);
   const [modal, setModal] = useState({ open: false, registro: null });
+  const [widths, startResize] = useColWidths("movimientos", COL_DEFAULTS);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -157,17 +162,18 @@ export default function MovimientosAdminPage() {
         <div className="flex justify-center py-16"><div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" /></div>
       ) : (
         <div className="bg-white rounded-xl shadow overflow-hidden">
-          <table className="w-full text-sm">
+          <table className="w-full text-sm table-fixed">
+            <Colgroup columns={COLS} widths={widths} />
             <thead>
               <tr className="bg-gray-100 text-gray-600 uppercase text-xs tracking-wider">
-                <th className="px-4 py-3 text-left">Fecha</th>
-                <th className="px-4 py-3 text-left">Código</th>
-                <th className="px-4 py-3 text-left">Nombre</th>
-                <th className="px-4 py-3 text-center">Tipo</th>
-                <th className="px-4 py-3 text-center">Hora</th>
-                <th className="px-4 py-3 text-center">Día</th>
-                <th className="px-4 py-3 text-center">Operador</th>
-                <th className="px-4 py-3 text-center">Acciones</th>
+                <Th width={widths.fecha} onResizeStart={startResize("fecha")} className="px-4 py-3 text-left">Fecha</Th>
+                <Th width={widths.codigo} onResizeStart={startResize("codigo")} className="px-4 py-3 text-left">Código</Th>
+                <Th width={widths.nombre} onResizeStart={startResize("nombre")} className="px-4 py-3 text-left">Nombre</Th>
+                <Th width={widths.tipo} onResizeStart={startResize("tipo")} className="px-4 py-3 text-center">Tipo</Th>
+                <Th width={widths.hora} onResizeStart={startResize("hora")} className="px-4 py-3 text-center">Hora</Th>
+                <Th width={widths.dia} onResizeStart={startResize("dia")} className="px-4 py-3 text-center">Día</Th>
+                <Th width={widths.operador} onResizeStart={startResize("operador")} className="px-4 py-3 text-center">Operador</Th>
+                <Th width={widths.acciones} onResizeStart={startResize("acciones")} className="px-4 py-3 text-center">Acciones</Th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">

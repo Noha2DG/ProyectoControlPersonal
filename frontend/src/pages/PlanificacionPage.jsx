@@ -2,9 +2,15 @@ import { useState, useEffect, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { authHeader } from "../context/AuthContext.jsx";
 import AsistenciaDiariaModal from "../components/AsistenciaDiariaModal.jsx";
+import { useColWidths, Th, Colgroup } from "../components/ResizableTh.jsx";
 
 const API = "/api/planificacion";
 const AREAS_LIBRES = ["TT"]; // exentas de planificación, siempre disponibles
+
+const PLAN_COL_DEFAULTS = { area: 100, nombre: 200, formaPago: 150, cupos: 130, ocupacion: 130, estado: 150 };
+const PLAN_COLS_BASE = ["area", "nombre", "formaPago", "cupos"];
+const RESUMEN_COL_DEFAULTS = { area: 260, planificado: 130, escaneado: 130, ver: 130 };
+const RESUMEN_COLS = Object.keys(RESUMEN_COL_DEFAULTS);
 
 export default function PlanificacionPage() {
   const hoy = new Date().toLocaleDateString("sv-SE", { timeZone: "America/Guatemala" });
@@ -16,6 +22,8 @@ export default function PlanificacionPage() {
   const [modalResumen, setModalResumen] = useState(false);
   const [modalAsistencia, setModalAsistencia] = useState(false);
   const [busqueda, setBusqueda]   = useState("");
+  const [widths, startResize] = useColWidths("planificacion", PLAN_COL_DEFAULTS);
+  const PLAN_COLS = fecha === hoy ? [...PLAN_COLS_BASE, "ocupacion", "estado"] : [...PLAN_COLS_BASE, "estado"];
 
   const fetchPlan = useCallback(async () => {
     setLoading(true);
@@ -154,15 +162,16 @@ export default function PlanificacionPage() {
         </div>
       ) : (
         <div className="bg-white rounded-xl shadow overflow-hidden">
-          <table className="w-full text-sm">
+          <table className="w-full text-sm table-fixed">
+            <Colgroup columns={PLAN_COLS} widths={widths} />
             <thead>
               <tr className="bg-gray-100 text-gray-600 uppercase text-xs tracking-wider">
-                <th className="px-5 py-3 text-left">Área</th>
-                <th className="px-5 py-3 text-left">Nombre</th>
-                <th className="px-5 py-3 text-left">Forma de Pago</th>
-                <th className="px-5 py-3 text-center w-32">Cupos</th>
-                {fecha === hoy && <th className="px-5 py-3 text-center w-32">Ocupación</th>}
-                <th className="px-5 py-3 text-center w-28">Estado</th>
+                <Th width={widths.area} onResizeStart={startResize("area")} className="px-5 py-3 text-left">Área</Th>
+                <Th width={widths.nombre} onResizeStart={startResize("nombre")} className="px-5 py-3 text-left">Nombre</Th>
+                <Th width={widths.formaPago} onResizeStart={startResize("formaPago")} className="px-5 py-3 text-left">Forma de Pago</Th>
+                <Th width={widths.cupos} onResizeStart={startResize("cupos")} className="px-5 py-3 text-center">Cupos</Th>
+                {fecha === hoy && <Th width={widths.ocupacion} onResizeStart={startResize("ocupacion")} className="px-5 py-3 text-center">Ocupación</Th>}
+                <Th width={widths.estado} onResizeStart={startResize("estado")} className="px-5 py-3 text-center">Estado</Th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
@@ -254,6 +263,8 @@ function ResumenModal({ areas, fecha, totalPlanificado, totalOcupado, onClose })
   const [vistaArea, setVistaArea]         = useState(null); // área seleccionada para ver empleados
   const [transferencias, setTransferencias] = useState([]);
   const [cargandoEmp, setCargandoEmp]     = useState(false);
+  const [widthsLibre, startResizeLibre] = useColWidths("resumen_libre", RESUMEN_COL_DEFAULTS);
+  const [widthsAreas, startResizeAreas] = useColWidths("resumen_areas", RESUMEN_COL_DEFAULTS);
 
   // Cargar transferencias del día al abrir el modal
   useEffect(() => {
@@ -368,13 +379,14 @@ function ResumenModal({ areas, fecha, totalPlanificado, totalOcupado, onClose })
         {/* Área libre — tabla fija arriba, fuera del scroll */}
         {areasLibresModal.length > 0 && (
           <div className="border-b border-gray-100 bg-purple-50/50 shrink-0">
-            <table className="w-full text-sm">
+            <table className="w-full text-sm table-fixed">
+              <Colgroup columns={RESUMEN_COLS} widths={widthsLibre} />
               <thead>
                 <tr className="text-purple-400 uppercase text-[11px] tracking-wider">
-                  <th className="px-6 pt-3 pb-1.5 text-left font-semibold">Área libre (sin restricción)</th>
-                  <th className="px-3 pt-3 pb-1.5 text-center font-semibold w-32">Planificado</th>
-                  <th className="px-3 pt-3 pb-1.5 text-center font-semibold w-32">Escaneado</th>
-                  <th className="px-6 pt-3 pb-1.5 text-right font-semibold w-32"></th>
+                  <Th width={widthsLibre.area} onResizeStart={startResizeLibre("area")} className="px-6 pt-3 pb-1.5 text-left font-semibold">Área libre (sin restricción)</Th>
+                  <Th width={widthsLibre.planificado} onResizeStart={startResizeLibre("planificado")} className="px-3 pt-3 pb-1.5 text-center font-semibold">Planificado</Th>
+                  <Th width={widthsLibre.escaneado} onResizeStart={startResizeLibre("escaneado")} className="px-3 pt-3 pb-1.5 text-center font-semibold">Escaneado</Th>
+                  <Th width={widthsLibre.ver} onResizeStart={startResizeLibre("ver")} className="px-6 pt-3 pb-1.5 text-right font-semibold"></Th>
                 </tr>
               </thead>
               <tbody>
@@ -407,13 +419,14 @@ function ResumenModal({ areas, fecha, totalPlanificado, totalOcupado, onClose })
             </div>
           )}
 
-          <table className="w-full text-sm">
+          <table className="w-full text-sm table-fixed">
+            <Colgroup columns={RESUMEN_COLS} widths={widthsAreas} />
             <thead className="sticky top-0 bg-gray-100 z-10">
               <tr className="text-gray-600 uppercase text-xs tracking-wider">
-                <th className="px-6 py-3 text-left">Área</th>
-                <th className="px-3 py-3 text-center w-32">Planificado</th>
-                <th className="px-3 py-3 text-center w-32">Escaneado</th>
-                <th className="px-6 py-3 text-right w-32"></th>
+                <Th width={widthsAreas.area} onResizeStart={startResizeAreas("area")} className="px-6 py-3 text-left">Área</Th>
+                <Th width={widthsAreas.planificado} onResizeStart={startResizeAreas("planificado")} className="px-3 py-3 text-center">Planificado</Th>
+                <Th width={widthsAreas.escaneado} onResizeStart={startResizeAreas("escaneado")} className="px-3 py-3 text-center">Escaneado</Th>
+                <Th width={widthsAreas.ver} onResizeStart={startResizeAreas("ver")} className="px-6 py-3 text-right"></Th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">

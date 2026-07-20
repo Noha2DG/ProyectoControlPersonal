@@ -1,5 +1,11 @@
 import { useState, useEffect, useCallback } from "react";
 import { authHeader } from "../context/AuthContext.jsx";
+import { useColWidths, Th, Colgroup } from "../components/ResizableTh.jsx";
+
+const PISCINA_COL_DEFAULTS = { piscina: 160, estado: 110, acciones: 150 };
+const PISCINA_COLS = Object.keys(PISCINA_COL_DEFAULTS);
+const CICLO_COL_DEFAULTS = { anio: 100, ciclo: 100, estado: 110, acciones: 150 };
+const CICLO_COLS = Object.keys(CICLO_COL_DEFAULTS);
 
 function PiscinaModal({ item, codigoFinca, onSave, onClose }) {
   const isEdit = !!item;
@@ -78,6 +84,8 @@ export default function PiscinaCicloPage() {
   const [loadingCiclos, setLoadingCiclos] = useState(false);
   const [modalPiscina, setModalPiscina] = useState({ open: false, item: null });
   const [modalCiclo, setModalCiclo] = useState({ open: false, item: null });
+  const [widthsPiscina, startResizePiscina] = useColWidths("piscinas", PISCINA_COL_DEFAULTS);
+  const [widthsCiclo, startResizeCiclo] = useColWidths("ciclos", CICLO_COL_DEFAULTS);
 
   useEffect(() => {
     fetch("/api/finca", { headers: authHeader() }).then(r => r.json()).then(d => {
@@ -178,12 +186,13 @@ export default function PiscinaCicloPage() {
         ) : (
           <div className="bg-white rounded-xl shadow overflow-hidden">
             <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+            <table className="w-full text-sm table-fixed">
+              <Colgroup columns={PISCINA_COLS} widths={widthsPiscina} />
               <thead>
                 <tr className="bg-gray-100 text-gray-600 uppercase text-xs tracking-wider">
-                  <th className="px-4 py-3 text-left whitespace-nowrap">Piscina</th>
-                  <th className="px-4 py-3 text-center whitespace-nowrap">Estado</th>
-                  <th className="px-4 py-3 text-center whitespace-nowrap">Acciones</th>
+                  <Th width={widthsPiscina.piscina} onResizeStart={startResizePiscina("piscina")} className="px-4 py-3 text-left whitespace-nowrap">Piscina</Th>
+                  <Th width={widthsPiscina.estado} onResizeStart={startResizePiscina("estado")} className="px-4 py-3 text-center whitespace-nowrap">Estado</Th>
+                  <Th width={widthsPiscina.acciones} onResizeStart={startResizePiscina("acciones")} className="px-4 py-3 text-center whitespace-nowrap">Acciones</Th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
@@ -238,13 +247,14 @@ export default function PiscinaCicloPage() {
         ) : (
           <div className="bg-white rounded-xl shadow overflow-hidden">
             <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+            <table className="w-full text-sm table-fixed">
+              <Colgroup columns={CICLO_COLS} widths={widthsCiclo} />
               <thead>
                 <tr className="bg-gray-100 text-gray-600 uppercase text-xs tracking-wider">
-                  <th className="px-4 py-3 text-left whitespace-nowrap">Año</th>
-                  <th className="px-4 py-3 text-left whitespace-nowrap">Ciclo</th>
-                  <th className="px-4 py-3 text-center whitespace-nowrap">Estado</th>
-                  <th className="px-4 py-3 text-center whitespace-nowrap">Acciones</th>
+                  <Th width={widthsCiclo.anio} onResizeStart={startResizeCiclo("anio")} className="px-4 py-3 text-left whitespace-nowrap">Año</Th>
+                  <Th width={widthsCiclo.ciclo} onResizeStart={startResizeCiclo("ciclo")} className="px-4 py-3 text-left whitespace-nowrap">Ciclo</Th>
+                  <Th width={widthsCiclo.estado} onResizeStart={startResizeCiclo("estado")} className="px-4 py-3 text-center whitespace-nowrap">Estado</Th>
+                  <Th width={widthsCiclo.acciones} onResizeStart={startResizeCiclo("acciones")} className="px-4 py-3 text-center whitespace-nowrap">Acciones</Th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">

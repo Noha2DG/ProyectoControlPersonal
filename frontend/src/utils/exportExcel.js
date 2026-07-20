@@ -211,11 +211,12 @@ export function exportarLbPorPersona(filas, desde, hasta) {
   XLSX.writeFile(wb, `LbPorPersona_${desde}_a_${hasta}.xlsx`);
 }
 
-export function exportarPermisos(registros, fecha) {
+export function exportarPermisos(registros, fecha, hasta) {
   const filas = registros.map(r => ({
     "Fecha":            r.Fecha,
     "Código":           r.CodigoEmpleado,
     "Nombre":           r.NombreCompleto,
+    "Etalent":          r.CodigoEtalent ?? "",
     "Tipo de Permiso":  r.descripcion,
     "Observación":      r.Observacion ?? "",
     "Registrado por":   r.RegistradoPor ?? "",
@@ -225,7 +226,7 @@ export function exportarPermisos(registros, fecha) {
   const ws = XLSX.utils.json_to_sheet(filas);
   autoWidth(ws, filas);
   XLSX.utils.book_append_sheet(wb, ws, "Permisos");
-  XLSX.writeFile(wb, `Permisos_desde_${fecha}.xlsx`);
+  XLSX.writeFile(wb, hasta ? `Permisos_${fecha}_a_${hasta}.xlsx` : `Permisos_desde_${fecha}.xlsx`);
 }
 
 function autoWidth(ws, data) {

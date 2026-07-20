@@ -1,6 +1,12 @@
 import { useState, useEffect, useCallback } from "react";
 import { authHeader } from "../context/AuthContext.jsx";
 import { piscinaRequiereCiclo } from "../utils/codigoLote.js";
+import { useColWidths, Th, Colgroup } from "../components/ResizableTh.jsx";
+
+const LOTE_COL_DEFAULTS = { lote: 130, finca: 140, ciclo: 90, clase: 90, talla: 130, peso: 130, acciones: 130 };
+const LOTE_COLS = Object.keys(LOTE_COL_DEFAULTS);
+const TRANS_COL_DEFAULTS = { proceso: 130, talla: 130, fecha: 110, procesado: 100, estado: 100, acciones: 110 };
+const TRANS_COLS = Object.keys(TRANS_COL_DEFAULTS);
 
 function hoy() { return new Date().toLocaleDateString("sv-SE"); }
 
@@ -304,6 +310,8 @@ export default function MateriaPrimaPage() {
   const [modalLote, setModalLote] = useState({ open: false, item: null });
   const [modalTrans, setModalTrans] = useState(false);
   const [busqueda, setBusqueda] = useState("");
+  const [widthsLote, startResizeLote] = useColWidths("materiaprima_lotes", LOTE_COL_DEFAULTS);
+  const [widthsTrans, startResizeTrans] = useColWidths("materiaprima_trans", TRANS_COL_DEFAULTS);
 
   const fetchLotes = useCallback(async () => {
     setLoading(true);
@@ -435,16 +443,17 @@ export default function MateriaPrimaPage() {
           <div className="flex justify-center py-10"><div className="w-6 h-6 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" /></div>
         ) : (
           <div className="bg-white rounded-xl shadow overflow-x-auto max-h-[600px] overflow-y-auto">
-            <table className="w-full text-sm">
+            <table className="w-full text-sm table-fixed">
+              <Colgroup columns={LOTE_COLS} widths={widthsLote} />
               <thead>
                 <tr className="bg-gray-100 text-gray-600 uppercase text-xs tracking-wider">
-                  <th className="px-3 py-3 text-left whitespace-nowrap">Lote</th>
-                  <th className="px-3 py-3 text-left whitespace-nowrap">Finca</th>
-                  <th className="px-3 py-3 text-center whitespace-nowrap">Ciclo</th>
-                  <th className="px-3 py-3 text-left whitespace-nowrap">Clase</th>
-                  <th className="px-3 py-3 text-left whitespace-nowrap">Talla</th>
-                  <th className="px-3 py-3 text-right whitespace-nowrap">Peso de Ingreso</th>
-                  <th className="px-3 py-3 text-center whitespace-nowrap">Acciones</th>
+                  <Th width={widthsLote.lote} onResizeStart={startResizeLote("lote")} className="px-3 py-3 text-left whitespace-nowrap">Lote</Th>
+                  <Th width={widthsLote.finca} onResizeStart={startResizeLote("finca")} className="px-3 py-3 text-left whitespace-nowrap">Finca</Th>
+                  <Th width={widthsLote.ciclo} onResizeStart={startResizeLote("ciclo")} className="px-3 py-3 text-center whitespace-nowrap">Ciclo</Th>
+                  <Th width={widthsLote.clase} onResizeStart={startResizeLote("clase")} className="px-3 py-3 text-left whitespace-nowrap">Clase</Th>
+                  <Th width={widthsLote.talla} onResizeStart={startResizeLote("talla")} className="px-3 py-3 text-left whitespace-nowrap">Talla</Th>
+                  <Th width={widthsLote.peso} onResizeStart={startResizeLote("peso")} className="px-3 py-3 text-right whitespace-nowrap">Peso de Ingreso</Th>
+                  <Th width={widthsLote.acciones} onResizeStart={startResizeLote("acciones")} className="px-3 py-3 text-center whitespace-nowrap">Acciones</Th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
@@ -515,15 +524,16 @@ export default function MateriaPrimaPage() {
               <div className="flex justify-center py-10"><div className="w-6 h-6 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" /></div>
             ) : (
               <div className="bg-white rounded-xl shadow overflow-x-auto">
-                <table className="w-full text-sm">
+                <table className="w-full text-sm table-fixed">
+                  <Colgroup columns={TRANS_COLS} widths={widthsTrans} />
                   <thead>
                     <tr className="bg-gray-100 text-gray-600 uppercase text-xs tracking-wider">
-                      <th className="px-3 py-3 text-left whitespace-nowrap">Proceso</th>
-                      <th className="px-3 py-3 text-left whitespace-nowrap">Talla</th>
-                      <th className="px-3 py-3 text-center whitespace-nowrap">F. Producción</th>
-                      <th className="px-3 py-3 text-right whitespace-nowrap">Procesado</th>
-                      <th className="px-3 py-3 text-center whitespace-nowrap">Estado</th>
-                      <th className="px-3 py-3 text-center whitespace-nowrap">Acciones</th>
+                      <Th width={widthsTrans.proceso} onResizeStart={startResizeTrans("proceso")} className="px-3 py-3 text-left whitespace-nowrap">Proceso</Th>
+                      <Th width={widthsTrans.talla} onResizeStart={startResizeTrans("talla")} className="px-3 py-3 text-left whitespace-nowrap">Talla</Th>
+                      <Th width={widthsTrans.fecha} onResizeStart={startResizeTrans("fecha")} className="px-3 py-3 text-center whitespace-nowrap">F. Producción</Th>
+                      <Th width={widthsTrans.procesado} onResizeStart={startResizeTrans("procesado")} className="px-3 py-3 text-right whitespace-nowrap">Procesado</Th>
+                      <Th width={widthsTrans.estado} onResizeStart={startResizeTrans("estado")} className="px-3 py-3 text-center whitespace-nowrap">Estado</Th>
+                      <Th width={widthsTrans.acciones} onResizeStart={startResizeTrans("acciones")} className="px-3 py-3 text-center whitespace-nowrap">Acciones</Th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">

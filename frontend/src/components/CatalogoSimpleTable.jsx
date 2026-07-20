@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { authHeader } from "../context/AuthContext.jsx";
+import { useColWidths, Th, Colgroup } from "./ResizableTh.jsx";
 
 function CatalogoModal({ item, pk, pkLabel, pkType, camposExtra, onSave, onClose }) {
   const isEdit = !!item;
@@ -79,6 +80,10 @@ export default function CatalogoSimpleTable({ api, pk, pkLabel = "Código", pkTy
   const [filtro, setFiltro] = useState("Activo");
   const [busqueda, setBusqueda] = useState("");
 
+  const COL_DEFAULTS = { [pk]: 110, descripcion: 240, ...Object.fromEntries(camposExtra.map(c => [c.campo, 140])), estado: 100, acciones: 150 };
+  const COLS = [pk, "descripcion", ...camposExtra.map(c => c.campo), "estado", "acciones"];
+  const [widths, startResize] = useColWidths(`catalogo:${api}`, COL_DEFAULTS);
+
   const fetchItems = async () => {
     setLoading(true);
     try {
@@ -146,14 +151,17 @@ export default function CatalogoSimpleTable({ api, pk, pkLabel = "Código", pkTy
         <div className="flex justify-center py-16"><div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" /></div>
       ) : (
         <div className="bg-white rounded-xl shadow overflow-hidden">
-          <table className="w-full text-sm">
+          <table className="w-full text-sm table-fixed">
+            <Colgroup columns={COLS} widths={widths} />
             <thead>
               <tr className="bg-gray-100 text-gray-600 uppercase text-xs tracking-wider">
-                <th className="px-4 py-3 text-left">{pkLabel}</th>
-                <th className="px-4 py-3 text-left">Descripción</th>
-                {camposExtra.map(c => <th key={c.campo} className="px-4 py-3 text-left">{c.label}</th>)}
-                <th className="px-4 py-3 text-center">Estado</th>
-                <th className="px-4 py-3 text-center">Acciones</th>
+                <Th width={widths[pk]} onResizeStart={startResize(pk)} className="px-4 py-3 text-left">{pkLabel}</Th>
+                <Th width={widths.descripcion} onResizeStart={startResize("descripcion")} className="px-4 py-3 text-left">Descripción</Th>
+                {camposExtra.map(c => (
+                  <Th key={c.campo} width={widths[c.campo]} onResizeStart={startResize(c.campo)} className="px-4 py-3 text-left">{c.label}</Th>
+                ))}
+                <Th width={widths.estado} onResizeStart={startResize("estado")} className="px-4 py-3 text-center">Estado</Th>
+                <Th width={widths.acciones} onResizeStart={startResize("acciones")} className="px-4 py-3 text-center">Acciones</Th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">

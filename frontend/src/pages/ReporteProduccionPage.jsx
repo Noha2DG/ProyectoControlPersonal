@@ -1,6 +1,29 @@
 import { useState, useEffect, useCallback, Fragment } from "react";
 import { authHeader } from "../context/AuthContext.jsx";
 import { exportarReporteGeneral, exportarReporteTermos, exportarEficiencias, exportarLbHora, exportarLbHoraPorTalla, exportarLbPorPersona } from "../utils/exportExcel.js";
+import { useColWidths, Th, Colgroup } from "../components/ResizableTh.jsx";
+
+const LOTE_DET_COL_DEFAULTS = { talla: 160, producto: 180, estado: 110, procesado: 100, pesajes: 90 };
+const LOTE_DET_COLS = Object.keys(LOTE_DET_COL_DEFAULTS);
+const TERMO_DET_COL_DEFAULTS = { lote: 110, talla: 150, proceso: 130, fecha: 110, kg: 90 };
+const TERMO_DET_COLS = Object.keys(TERMO_DET_COL_DEFAULTS);
+const TALLA_DET_COL_DEFAULTS = { id: 100, nombre: 150, lb: 90, horas: 90, lbhora: 90, pesadas: 90 };
+const TALLA_DET_COLS = Object.keys(TALLA_DET_COL_DEFAULTS);
+
+const POR_LOTE_COL_DEFAULTS = { expand: 30, lote: 130, finca: 130, clase: 150, fecha: 100, ingreso: 100, procesado: 100, pendiente: 100, rend: 90, transac: 90 };
+const POR_LOTE_COLS = Object.keys(POR_LOTE_COL_DEFAULTS);
+const POR_TALLA_GEN_COL_DEFAULTS = { talla: 220, kg: 100, pct: 90 };
+const POR_TALLA_GEN_COLS = Object.keys(POR_TALLA_GEN_COL_DEFAULTS);
+const TERMOS_COL_DEFAULTS = { expand: 24, termo: 110, detalle: 220, kg: 110 };
+const TERMOS_COLS = Object.keys(TERMOS_COL_DEFAULTS);
+const EFICIENCIAS_COL_DEFAULTS = { id: 100, nombre: 150, area: 110, fecha: 100, hora: 80, lote: 120, producto: 130, talla: 150, kilos: 100 };
+const EFICIENCIAS_COLS = Object.keys(EFICIENCIAS_COL_DEFAULTS);
+const LBHORA_COL_DEFAULTS = { id: 100, nombre: 150, area: 110, lb: 90, horas: 90, lbhora: 90, pesadas: 90 };
+const LBHORA_COLS = Object.keys(LBHORA_COL_DEFAULTS);
+const PORTALLA_COL_DEFAULTS = { expand: 24, productoTalla: 220, lbTotal: 100, lbHoraProm: 110, numPersonas: 100 };
+const PORTALLA_COLS = Object.keys(PORTALLA_COL_DEFAULTS);
+const LBPERSONA_COL_DEFAULTS = { puesto: 80, id: 100, nombre: 150, descabezado: 130, pelado: 150, total: 100 };
+const LBPERSONA_COLS = Object.keys(LBPERSONA_COL_DEFAULTS);
 
 function hoy() { return new Date().toLocaleDateString("sv-SE"); }
 
@@ -215,6 +238,7 @@ function gruposPorProductoTalla(filas) {
 }
 
 function FilaLote({ l, detalle, abierta, onToggle }) {
+  const [widths, startResize] = useColWidths("reporte_lote_detalle", LOTE_DET_COL_DEFAULTS);
   return (
     <>
       <tr onClick={onToggle} className="cursor-pointer hover:bg-gray-50 transition">
@@ -241,14 +265,15 @@ function FilaLote({ l, detalle, abierta, onToggle }) {
             {detalle.length === 0 ? (
               <p className="text-sm text-gray-400">Sin transacciones para este lote</p>
             ) : (
-              <table className="w-full text-xs">
+              <table className="w-full text-xs table-fixed">
+                <Colgroup columns={LOTE_DET_COLS} widths={widths} />
                 <thead>
                   <tr className="text-gray-500 uppercase tracking-wider">
-                    <th className="px-2 py-1 text-left">Talla</th>
-                    <th className="px-2 py-1 text-left">Producto Terminado</th>
-                    <th className="px-2 py-1 text-center">Estado</th>
-                    <th className="px-2 py-1 text-right">Procesado</th>
-                    <th className="px-2 py-1 text-right">Pesajes</th>
+                    <Th width={widths.talla} onResizeStart={startResize("talla")} className="px-2 py-1 text-left">Talla</Th>
+                    <Th width={widths.producto} onResizeStart={startResize("producto")} className="px-2 py-1 text-left">Producto Terminado</Th>
+                    <Th width={widths.estado} onResizeStart={startResize("estado")} className="px-2 py-1 text-center">Estado</Th>
+                    <Th width={widths.procesado} onResizeStart={startResize("procesado")} className="px-2 py-1 text-right">Procesado</Th>
+                    <Th width={widths.pesajes} onResizeStart={startResize("pesajes")} className="px-2 py-1 text-right">Pesajes</Th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-200">
@@ -276,6 +301,7 @@ function FilaLote({ l, detalle, abierta, onToggle }) {
 }
 
 function FilaTermo({ numeroTermo, cargas, abierta, onToggle }) {
+  const [widths, startResize] = useColWidths("reporte_termo_detalle", TERMO_DET_COL_DEFAULTS);
   const subtotal = cargas.reduce((s, c) => s + c.Procesado, 0);
   return (
     <>
@@ -292,14 +318,15 @@ function FilaTermo({ numeroTermo, cargas, abierta, onToggle }) {
       {abierta && (
         <tr>
           <td colSpan={4} className="bg-gray-50 px-3 py-2">
-            <table className="w-full text-xs">
+            <table className="w-full text-xs table-fixed">
+              <Colgroup columns={TERMO_DET_COLS} widths={widths} />
               <thead>
                 <tr className="text-gray-500 uppercase tracking-wider">
-                  <th className="px-2 py-1 text-left">Lote</th>
-                  <th className="px-2 py-1 text-left">Talla</th>
-                  <th className="px-2 py-1 text-left">Proceso</th>
-                  <th className="px-2 py-1 text-center">Fecha Proceso</th>
-                  <th className="px-2 py-1 text-right">Kg</th>
+                  <Th width={widths.lote} onResizeStart={startResize("lote")} className="px-2 py-1 text-left">Lote</Th>
+                  <Th width={widths.talla} onResizeStart={startResize("talla")} className="px-2 py-1 text-left">Talla</Th>
+                  <Th width={widths.proceso} onResizeStart={startResize("proceso")} className="px-2 py-1 text-left">Proceso</Th>
+                  <Th width={widths.fecha} onResizeStart={startResize("fecha")} className="px-2 py-1 text-center">Fecha Proceso</Th>
+                  <Th width={widths.kg} onResizeStart={startResize("kg")} className="px-2 py-1 text-right">Kg</Th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-200">
@@ -322,6 +349,7 @@ function FilaTermo({ numeroTermo, cargas, abierta, onToggle }) {
 }
 
 function FilaProductoTalla({ g, abierta, onToggle }) {
+  const [widths, startResize] = useColWidths("reporte_portalla_detalle", TALLA_DET_COL_DEFAULTS);
   return (
     <>
       <tr onClick={onToggle}
@@ -347,15 +375,16 @@ function FilaProductoTalla({ g, abierta, onToggle }) {
       {abierta && (
         <tr>
           <td colSpan={5} className="bg-gray-50 px-3 py-2">
-            <table className="w-full text-xs">
+            <table className="w-full text-xs table-fixed">
+              <Colgroup columns={TALLA_DET_COLS} widths={widths} />
               <thead>
                 <tr className="text-gray-500 uppercase tracking-wider">
-                  <th className="px-2 py-1 text-left">Id Empleado</th>
-                  <th className="px-2 py-1 text-left w-36">Nombre</th>
-                  <th className="px-2 py-1 text-right">Lb</th>
-                  <th className="px-2 py-1 text-right">Horas</th>
-                  <th className="px-2 py-1 text-right">Lb/Hora</th>
-                  <th className="px-2 py-1 text-center"># Pesadas</th>
+                  <Th width={widths.id} onResizeStart={startResize("id")} className="px-2 py-1 text-left">Id Empleado</Th>
+                  <Th width={widths.nombre} onResizeStart={startResize("nombre")} className="px-2 py-1 text-left">Nombre</Th>
+                  <Th width={widths.lb} onResizeStart={startResize("lb")} className="px-2 py-1 text-right">Lb</Th>
+                  <Th width={widths.horas} onResizeStart={startResize("horas")} className="px-2 py-1 text-right">Horas</Th>
+                  <Th width={widths.lbhora} onResizeStart={startResize("lbhora")} className="px-2 py-1 text-right">Lb/Hora</Th>
+                  <Th width={widths.pesadas} onResizeStart={startResize("pesadas")} className="px-2 py-1 text-center"># Pesadas</Th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-200">
@@ -392,6 +421,13 @@ export default function ReporteProduccionPage() {
   const [loteAbierto, setLoteAbierto] = useState(null);
   const [termoAbierto, setTermoAbierto] = useState(null);
   const [tallaAbierta, setTallaAbierta] = useState(null);
+  const [widthsPorLote, startResizePorLote] = useColWidths("reporte_por_lote", POR_LOTE_COL_DEFAULTS);
+  const [widthsPorTallaGen, startResizePorTallaGen] = useColWidths("reporte_por_talla_general", POR_TALLA_GEN_COL_DEFAULTS);
+  const [widthsTermos, startResizeTermos] = useColWidths("reporte_termos", TERMOS_COL_DEFAULTS);
+  const [widthsEficiencias, startResizeEficiencias] = useColWidths("reporte_eficiencias", EFICIENCIAS_COL_DEFAULTS);
+  const [widthsLbHora, startResizeLbHora] = useColWidths("reporte_lbhora", LBHORA_COL_DEFAULTS);
+  const [widthsPortalla, startResizePortalla] = useColWidths("reporte_portalla", PORTALLA_COL_DEFAULTS);
+  const [widthsLbPersona, startResizeLbPersona] = useColWidths("reporte_lbpersona", LBPERSONA_COL_DEFAULTS);
 
   useEffect(() => {
     fetch("/api/finca", { headers: authHeader() }).then(r => r.json())
@@ -576,19 +612,20 @@ export default function ReporteProduccionPage() {
               <div className="col-span-2 min-w-0">
                 <h3 className="text-sm font-semibold text-gray-700 mb-2">Materia Prima y Procesado por Lote</h3>
                 <div className="bg-white rounded-xl shadow overflow-hidden overflow-x-auto">
-                  <table className="w-full text-sm">
+                  <table className="w-full text-sm table-fixed">
+                    <Colgroup columns={POR_LOTE_COLS} widths={widthsPorLote} />
                     <thead>
                       <tr className="bg-gray-100 text-gray-600 uppercase text-xs tracking-wider">
-                        <th className="px-3 py-3"></th>
-                        <th className="px-3 py-3 text-left">Lote</th>
-                        <th className="px-3 py-3 text-left">Finca</th>
-                        <th className="px-3 py-3 text-left">Clase MP</th>
-                        <th className="px-3 py-3 text-center">Fecha</th>
-                        <th className="px-3 py-3 text-right">Ingreso</th>
-                        <th className="px-3 py-3 text-right">Procesado</th>
-                        <th className="px-3 py-3 text-right">Pendiente</th>
-                        <th className="px-3 py-3 text-right">Rend.</th>
-                        <th className="px-3 py-3 text-center">Transac.</th>
+                        <Th width={widthsPorLote.expand} onResizeStart={startResizePorLote("expand")} className="px-3 py-3"></Th>
+                        <Th width={widthsPorLote.lote} onResizeStart={startResizePorLote("lote")} className="px-3 py-3 text-left">Lote</Th>
+                        <Th width={widthsPorLote.finca} onResizeStart={startResizePorLote("finca")} className="px-3 py-3 text-left">Finca</Th>
+                        <Th width={widthsPorLote.clase} onResizeStart={startResizePorLote("clase")} className="px-3 py-3 text-left">Clase MP</Th>
+                        <Th width={widthsPorLote.fecha} onResizeStart={startResizePorLote("fecha")} className="px-3 py-3 text-center">Fecha</Th>
+                        <Th width={widthsPorLote.ingreso} onResizeStart={startResizePorLote("ingreso")} className="px-3 py-3 text-right">Ingreso</Th>
+                        <Th width={widthsPorLote.procesado} onResizeStart={startResizePorLote("procesado")} className="px-3 py-3 text-right">Procesado</Th>
+                        <Th width={widthsPorLote.pendiente} onResizeStart={startResizePorLote("pendiente")} className="px-3 py-3 text-right">Pendiente</Th>
+                        <Th width={widthsPorLote.rend} onResizeStart={startResizePorLote("rend")} className="px-3 py-3 text-right">Rend.</Th>
+                        <Th width={widthsPorLote.transac} onResizeStart={startResizePorLote("transac")} className="px-3 py-3 text-center">Transac.</Th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100">
@@ -646,12 +683,13 @@ export default function ReporteProduccionPage() {
                   )}
                 </div>
                 <div className="bg-white rounded-xl shadow overflow-hidden">
-                  <table className="w-full text-sm">
+                  <table className="w-full text-sm table-fixed">
+                    <Colgroup columns={POR_TALLA_GEN_COLS} widths={widthsPorTallaGen} />
                     <thead>
                       <tr className="bg-gray-100 text-gray-600 uppercase text-xs tracking-wider">
-                        <th className="px-3 py-3 text-left">Talla</th>
-                        <th className="px-3 py-3 text-right">Kg</th>
-                        <th className="px-3 py-3 text-right">%</th>
+                        <Th width={widthsPorTallaGen.talla} onResizeStart={startResizePorTallaGen("talla")} className="px-3 py-3 text-left">Talla</Th>
+                        <Th width={widthsPorTallaGen.kg} onResizeStart={startResizePorTallaGen("kg")} className="px-3 py-3 text-right">Kg</Th>
+                        <Th width={widthsPorTallaGen.pct} onResizeStart={startResizePorTallaGen("pct")} className="px-3 py-3 text-right">%</Th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100">
@@ -690,13 +728,14 @@ export default function ReporteProduccionPage() {
             <div>
               <h3 className="text-xs font-semibold text-gray-700 mb-1.5">Procesado por Termo</h3>
               <div className="bg-white rounded-lg shadow overflow-hidden overflow-x-auto">
-                <table className="w-full text-xs">
+                <table className="w-full text-xs table-fixed">
+                  <Colgroup columns={TERMOS_COLS} widths={widthsTermos} />
                   <thead>
                     <tr className="bg-gray-100 text-gray-600 uppercase text-[10px] tracking-wider">
-                      <th className="px-2 py-1.5 w-6"></th>
-                      <th className="px-2 py-1.5 text-left whitespace-nowrap w-28">Termo</th>
-                      <th className="px-2 py-1.5 text-left whitespace-nowrap">Detalle</th>
-                      <th className="px-2 py-1.5 text-right whitespace-nowrap w-28">Kg Procesados</th>
+                      <Th width={widthsTermos.expand} onResizeStart={startResizeTermos("expand")} className="px-2 py-1.5"></Th>
+                      <Th width={widthsTermos.termo} onResizeStart={startResizeTermos("termo")} className="px-2 py-1.5 text-left whitespace-nowrap">Termo</Th>
+                      <Th width={widthsTermos.detalle} onResizeStart={startResizeTermos("detalle")} className="px-2 py-1.5 text-left whitespace-nowrap">Detalle</Th>
+                      <Th width={widthsTermos.kg} onResizeStart={startResizeTermos("kg")} className="px-2 py-1.5 text-right whitespace-nowrap">Kg Procesados</Th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
@@ -727,18 +766,19 @@ export default function ReporteProduccionPage() {
             <div>
               <h3 className="text-xs font-semibold text-gray-700 mb-1.5">Pesajes por Persona</h3>
               <div className="bg-white rounded-lg shadow overflow-hidden overflow-x-auto max-h-[600px] overflow-y-auto">
-                <table className="w-full text-xs">
+                <table className="w-full text-xs table-fixed">
+                  <Colgroup columns={EFICIENCIAS_COLS} widths={widthsEficiencias} />
                   <thead>
                     <tr className="bg-gray-100 text-gray-600 uppercase text-[10px] tracking-wider">
-                      <th className="px-2 py-1.5 text-left whitespace-nowrap">Id Empleado</th>
-                      <th className="px-2 py-1.5 text-left w-36">Nombre</th>
-                      <th className="px-2 py-1.5 text-left whitespace-nowrap">Área</th>
-                      <th className="px-2 py-1.5 text-center whitespace-nowrap">Fecha</th>
-                      <th className="px-2 py-1.5 text-center whitespace-nowrap">Hora</th>
-                      <th className="px-2 py-1.5 text-left whitespace-nowrap">Lote</th>
-                      <th className="px-2 py-1.5 text-left whitespace-nowrap">Producto</th>
-                      <th className="px-2 py-1.5 text-left whitespace-nowrap">Talla</th>
-                      <th className="px-2 py-1.5 text-right whitespace-nowrap">Kilos</th>
+                      <Th width={widthsEficiencias.id} onResizeStart={startResizeEficiencias("id")} className="px-2 py-1.5 text-left whitespace-nowrap">Id Empleado</Th>
+                      <Th width={widthsEficiencias.nombre} onResizeStart={startResizeEficiencias("nombre")} className="px-2 py-1.5 text-left">Nombre</Th>
+                      <Th width={widthsEficiencias.area} onResizeStart={startResizeEficiencias("area")} className="px-2 py-1.5 text-left whitespace-nowrap">Área</Th>
+                      <Th width={widthsEficiencias.fecha} onResizeStart={startResizeEficiencias("fecha")} className="px-2 py-1.5 text-center whitespace-nowrap">Fecha</Th>
+                      <Th width={widthsEficiencias.hora} onResizeStart={startResizeEficiencias("hora")} className="px-2 py-1.5 text-center whitespace-nowrap">Hora</Th>
+                      <Th width={widthsEficiencias.lote} onResizeStart={startResizeEficiencias("lote")} className="px-2 py-1.5 text-left whitespace-nowrap">Lote</Th>
+                      <Th width={widthsEficiencias.producto} onResizeStart={startResizeEficiencias("producto")} className="px-2 py-1.5 text-left whitespace-nowrap">Producto</Th>
+                      <Th width={widthsEficiencias.talla} onResizeStart={startResizeEficiencias("talla")} className="px-2 py-1.5 text-left whitespace-nowrap">Talla</Th>
+                      <Th width={widthsEficiencias.kilos} onResizeStart={startResizeEficiencias("kilos")} className="px-2 py-1.5 text-right whitespace-nowrap">Kilos</Th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
@@ -773,16 +813,17 @@ export default function ReporteProduccionPage() {
                 {" "}<span className="text-amber-600">●</span> = menos de {CONFIANZA_MIN_PESADAS} pesadas o menos de {CONFIANZA_MIN_HORAS} h válidas — dato real, pero de baja confianza.
               </p>
               <div className="bg-white rounded-lg shadow overflow-hidden overflow-x-auto max-h-[600px] overflow-y-auto">
-                <table className="w-full text-xs">
+                <table className="w-full text-xs table-fixed">
+                  <Colgroup columns={LBHORA_COLS} widths={widthsLbHora} />
                   <thead>
                     <tr className="bg-gray-100 text-gray-600 uppercase text-[10px] tracking-wider">
-                      <th className="px-2 py-1.5 text-left whitespace-nowrap">Id Empleado</th>
-                      <th className="px-2 py-1.5 text-left w-36">Nombre</th>
-                      <th className="px-2 py-1.5 text-left whitespace-nowrap">Área</th>
-                      <th className="px-2 py-1.5 text-right whitespace-nowrap">Lb</th>
-                      <th className="px-2 py-1.5 text-right whitespace-nowrap">Horas</th>
-                      <th className="px-2 py-1.5 text-right whitespace-nowrap">Lb/Hora</th>
-                      <th className="px-2 py-1.5 text-center whitespace-nowrap"># Pesadas</th>
+                      <Th width={widthsLbHora.id} onResizeStart={startResizeLbHora("id")} className="px-2 py-1.5 text-left whitespace-nowrap">Id Empleado</Th>
+                      <Th width={widthsLbHora.nombre} onResizeStart={startResizeLbHora("nombre")} className="px-2 py-1.5 text-left">Nombre</Th>
+                      <Th width={widthsLbHora.area} onResizeStart={startResizeLbHora("area")} className="px-2 py-1.5 text-left whitespace-nowrap">Área</Th>
+                      <Th width={widthsLbHora.lb} onResizeStart={startResizeLbHora("lb")} className="px-2 py-1.5 text-right whitespace-nowrap">Lb</Th>
+                      <Th width={widthsLbHora.horas} onResizeStart={startResizeLbHora("horas")} className="px-2 py-1.5 text-right whitespace-nowrap">Horas</Th>
+                      <Th width={widthsLbHora.lbhora} onResizeStart={startResizeLbHora("lbhora")} className="px-2 py-1.5 text-right whitespace-nowrap">Lb/Hora</Th>
+                      <Th width={widthsLbHora.pesadas} onResizeStart={startResizeLbHora("pesadas")} className="px-2 py-1.5 text-center whitespace-nowrap"># Pesadas</Th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
@@ -835,14 +876,15 @@ export default function ReporteProduccionPage() {
                 {" "}"Bajo Volumen" marca una talla que junto con su Producto no llega al {(UMBRAL_TALLA_SECUNDARIA_PORCENTAJE * 100).toFixed(0)}% de las libras de ese mismo Producto — producción incidental de la clasificación, no la talla objetivo.
               </p>
               <div className="bg-white rounded-lg shadow overflow-hidden overflow-x-auto max-h-[600px] overflow-y-auto">
-                <table className="w-full text-xs">
+                <table className="w-full text-xs table-fixed">
+                  <Colgroup columns={PORTALLA_COLS} widths={widthsPortalla} />
                   <thead>
                     <tr className="bg-gray-100 text-gray-600 uppercase text-[10px] tracking-wider">
-                      <th className="px-2 py-1.5 w-6"></th>
-                      <th className="px-2 py-1.5 text-left whitespace-nowrap">Producto — Talla</th>
-                      <th className="px-2 py-1.5 text-right whitespace-nowrap">Lb Total</th>
-                      <th className="px-2 py-1.5 text-right whitespace-nowrap">Lb/Hora Prom.</th>
-                      <th className="px-2 py-1.5 text-center whitespace-nowrap"># Personas</th>
+                      <Th width={widthsPortalla.expand} onResizeStart={startResizePortalla("expand")} className="px-2 py-1.5"></Th>
+                      <Th width={widthsPortalla.productoTalla} onResizeStart={startResizePortalla("productoTalla")} className="px-2 py-1.5 text-left whitespace-nowrap">Producto — Talla</Th>
+                      <Th width={widthsPortalla.lbTotal} onResizeStart={startResizePortalla("lbTotal")} className="px-2 py-1.5 text-right whitespace-nowrap">Lb Total</Th>
+                      <Th width={widthsPortalla.lbHoraProm} onResizeStart={startResizePortalla("lbHoraProm")} className="px-2 py-1.5 text-right whitespace-nowrap">Lb/Hora Prom.</Th>
+                      <Th width={widthsPortalla.numPersonas} onResizeStart={startResizePortalla("numPersonas")} className="px-2 py-1.5 text-center whitespace-nowrap"># Personas</Th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
@@ -874,15 +916,16 @@ export default function ReporteProduccionPage() {
                 {" "}<span className="px-1.5 py-0.5 rounded bg-red-50 border border-red-200">rojo</span> = tercio inferior — no un monto fijo de libras, para no tener que ajustarlo cada día según el volumen.
               </p>
               <div className="bg-white rounded-lg shadow overflow-hidden overflow-x-auto max-h-[600px] overflow-y-auto">
-                <table className="text-xs">
+                <table className="w-full text-xs table-fixed">
+                  <Colgroup columns={LBPERSONA_COLS} widths={widthsLbPersona} />
                   <thead>
                     <tr className="bg-gray-100 text-gray-600 uppercase text-[10px] tracking-wider">
-                      <th className="px-2 py-1.5 text-center whitespace-nowrap">Puesto</th>
-                      <th className="px-2 py-1.5 text-left whitespace-nowrap">Id Empleado</th>
-                      <th className="px-2 py-1.5 text-left w-36">Nombre</th>
-                      <th className="px-2 py-1.5 text-right whitespace-nowrap">Descabezado (Lb)</th>
-                      <th className="px-2 py-1.5 text-right whitespace-nowrap">Pelado y Devenado (Lb)</th>
-                      <th className="px-2 py-1.5 text-right whitespace-nowrap">Total (Lb)</th>
+                      <Th width={widthsLbPersona.puesto} onResizeStart={startResizeLbPersona("puesto")} className="px-2 py-1.5 text-center whitespace-nowrap">Puesto</Th>
+                      <Th width={widthsLbPersona.id} onResizeStart={startResizeLbPersona("id")} className="px-2 py-1.5 text-left whitespace-nowrap">Id Empleado</Th>
+                      <Th width={widthsLbPersona.nombre} onResizeStart={startResizeLbPersona("nombre")} className="px-2 py-1.5 text-left">Nombre</Th>
+                      <Th width={widthsLbPersona.descabezado} onResizeStart={startResizeLbPersona("descabezado")} className="px-2 py-1.5 text-right whitespace-nowrap">Descabezado (Lb)</Th>
+                      <Th width={widthsLbPersona.pelado} onResizeStart={startResizeLbPersona("pelado")} className="px-2 py-1.5 text-right whitespace-nowrap">Pelado y Devenado (Lb)</Th>
+                      <Th width={widthsLbPersona.total} onResizeStart={startResizeLbPersona("total")} className="px-2 py-1.5 text-right whitespace-nowrap">Total (Lb)</Th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">

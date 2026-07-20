@@ -1,8 +1,12 @@
 import { useState, useEffect } from "react";
 import { authHeader } from "../context/AuthContext.jsx";
+import { useColWidths, Th, Colgroup } from "../components/ResizableTh.jsx";
 
 const API = "/api/areas";
 const FORMAS_PAGO = ["Paga por Tiempo", "Paga por Obra", "No Genera Paga"];
+
+const COL_DEFAULTS = { codigo: 100, nombre: 220, forma: 170, estado: 110, acciones: 150 };
+const COLS = Object.keys(COL_DEFAULTS);
 
 const EMPTY = { Codigo: "", Nombre: "", FormaPago: "" };
 
@@ -79,6 +83,7 @@ export default function AreasPage() {
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState({ open: false, area: null });
   const [filtro, setFiltro] = useState("Activa");
+  const [widths, startResize] = useColWidths("areas", COL_DEFAULTS);
 
   const fetchAreas = async () => {
     setLoading(true);
@@ -144,14 +149,15 @@ export default function AreasPage() {
         <div className="flex justify-center py-16"><div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" /></div>
       ) : (
         <div className="bg-white rounded-xl shadow overflow-hidden">
-          <table className="w-full text-sm">
+          <table className="w-full text-sm table-fixed">
+            <Colgroup columns={COLS} widths={widths} />
             <thead>
               <tr className="bg-gray-100 text-gray-600 uppercase text-xs tracking-wider">
-                <th className="px-4 py-3 text-left">Código</th>
-                <th className="px-4 py-3 text-left">Nombre</th>
-                <th className="px-4 py-3 text-left">Forma de Pago</th>
-                <th className="px-4 py-3 text-center">Estado</th>
-                <th className="px-4 py-3 text-center">Acciones</th>
+                <Th width={widths.codigo} onResizeStart={startResize("codigo")} className="px-4 py-3 text-left">Código</Th>
+                <Th width={widths.nombre} onResizeStart={startResize("nombre")} className="px-4 py-3 text-left">Nombre</Th>
+                <Th width={widths.forma} onResizeStart={startResize("forma")} className="px-4 py-3 text-left">Forma de Pago</Th>
+                <Th width={widths.estado} onResizeStart={startResize("estado")} className="px-4 py-3 text-center">Estado</Th>
+                <Th width={widths.acciones} onResizeStart={startResize("acciones")} className="px-4 py-3 text-center">Acciones</Th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
