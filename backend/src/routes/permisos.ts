@@ -42,8 +42,8 @@ router.get("/", requireAuth, requirePerm("permisos", "ver"), async (req: Request
         FROM Permisos p
         JOIN Empleados e ON p.CodigoEmpleado = e.Codigo
         JOIN TipoPermiso tp ON p.codigoPermiso = tp.codigoPermiso
-        WHERE p.Fecha = ${fecha}
-        ORDER BY p.id DESC
+        WHERE p.Fecha >= ${fecha}
+        ORDER BY p.Fecha ASC, p.id DESC
       `;
     } else {
       rows = await prisma.$queryRaw`
