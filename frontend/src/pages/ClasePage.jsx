@@ -1,8 +1,12 @@
 import { useState, useEffect } from "react";
 import { authHeader } from "../context/AuthContext.jsx";
+import { useColWidths, Th, Colgroup } from "../components/ResizableTh.jsx";
 
 const API = "/api/clase";
 const EMPTY = { Clase: "", Familia: "", Proceso: "", Descripcion: "", TipoClase: "PRODUCTO FINAL" };
+
+const COL_DEFAULTS = { clase: 100, familia: 110, proceso: 110, descripcion: 220, estado: 100, acciones: 150 };
+const COLS = Object.keys(COL_DEFAULTS);
 
 function ClaseModal({ item, familias, procesos, onSave, onClose }) {
   const isEdit = !!item;
@@ -67,6 +71,7 @@ export default function ClasePage() {
   const [modal, setModal] = useState({ open: false, item: null });
   const [filtro, setFiltro] = useState("Activo");
   const [busqueda, setBusqueda] = useState("");
+  const [widths, startResize] = useColWidths("clase", COL_DEFAULTS);
 
   const fetchAll = async () => {
     setLoading(true);
@@ -140,15 +145,16 @@ export default function ClasePage() {
         <div className="flex justify-center py-16"><div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" /></div>
       ) : (
         <div className="bg-white rounded-xl shadow overflow-hidden">
-          <table className="w-full text-sm">
+          <table className="w-full text-sm table-fixed">
+            <Colgroup columns={COLS} widths={widths} />
             <thead>
               <tr className="bg-gray-100 text-gray-600 uppercase text-xs tracking-wider">
-                <th className="px-4 py-3 text-left">Clase</th>
-                <th className="px-4 py-3 text-left">Familia</th>
-                <th className="px-4 py-3 text-left">Proceso</th>
-                <th className="px-4 py-3 text-left">Descripción</th>
-                <th className="px-4 py-3 text-center">Estado</th>
-                <th className="px-4 py-3 text-center">Acciones</th>
+                <Th width={widths.clase} onResizeStart={startResize("clase")} className="px-4 py-3 text-left">Clase</Th>
+                <Th width={widths.familia} onResizeStart={startResize("familia")} className="px-4 py-3 text-left">Familia</Th>
+                <Th width={widths.proceso} onResizeStart={startResize("proceso")} className="px-4 py-3 text-left">Proceso</Th>
+                <Th width={widths.descripcion} onResizeStart={startResize("descripcion")} className="px-4 py-3 text-left">Descripción</Th>
+                <Th width={widths.estado} onResizeStart={startResize("estado")} className="px-4 py-3 text-center">Estado</Th>
+                <Th width={widths.acciones} onResizeStart={startResize("acciones")} className="px-4 py-3 text-center">Acciones</Th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">

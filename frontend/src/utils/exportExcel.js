@@ -1,6 +1,6 @@
 import * as XLSX from "xlsx";
 
-export function exportarTransferencias(registros, fecha) {
+export function exportarTransferencias(registros, fecha, permisos = []) {
   const detalle = registros.map(r => ({
     "Fecha":          r.Fecha ? r.Fecha.split("-").reverse().join("/") : fecha,
     "Código":         r.Codigo,
@@ -56,6 +56,18 @@ export function exportarTransferencias(registros, fecha) {
   const wsResumen = XLSX.utils.json_to_sheet(resumen);
   autoWidth(wsResumen, resumen);
   XLSX.utils.book_append_sheet(wb, wsResumen, "Resumen por Empleado");
+
+  const filasPermisos = permisos.map(p => ({
+    "Fecha":            p.Fecha,
+    "Código":           p.CodigoEmpleado,
+    "Nombre":           p.NombreCompleto,
+    "Tipo de Permiso":  p.descripcion,
+    "Observación":      p.Observacion ?? "",
+    "Registrado por":   p.RegistradoPor ?? "",
+  }));
+  const wsPermisos = XLSX.utils.json_to_sheet(filasPermisos);
+  autoWidth(wsPermisos, filasPermisos);
+  XLSX.utils.book_append_sheet(wb, wsPermisos, "Permisos");
 
   XLSX.writeFile(wb, `Transferencias_desde_${fecha}.xlsx`);
 }
@@ -211,11 +223,12 @@ export function exportarLbPorPersona(filas, desde, hasta) {
   XLSX.writeFile(wb, `LbPorPersona_${desde}_a_${hasta}.xlsx`);
 }
 
-export function exportarPermisos(registros, fecha) {
+export function exportarPermisos(registros, fecha, hasta) {
   const filas = registros.map(r => ({
     "Fecha":            r.Fecha,
     "Código":           r.CodigoEmpleado,
     "Nombre":           r.NombreCompleto,
+    "Etalent":          r.CodigoEtalent ?? "",
     "Tipo de Permiso":  r.descripcion,
     "Observación":      r.Observacion ?? "",
     "Registrado por":   r.RegistradoPor ?? "",
@@ -225,7 +238,7 @@ export function exportarPermisos(registros, fecha) {
   const ws = XLSX.utils.json_to_sheet(filas);
   autoWidth(ws, filas);
   XLSX.utils.book_append_sheet(wb, ws, "Permisos");
-  XLSX.writeFile(wb, `Permisos_desde_${fecha}.xlsx`);
+  XLSX.writeFile(wb, hasta ? `Permisos_${fecha}_a_${hasta}.xlsx` : `Permisos_desde_${fecha}.xlsx`);
 }
 
 function autoWidth(ws, data) {

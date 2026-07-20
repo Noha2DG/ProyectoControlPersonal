@@ -1,3 +1,8 @@
+import { useColWidths, Th, Colgroup } from "./ResizableTh.jsx";
+
+const COL_DEFAULTS = { codigo: 110, nombre: 220, ingreso: 110, sexo: 90, civil: 130, dpi: 150, etalent: 110, estado: 100, acciones: 130 };
+const BASE_COLS = ["codigo", "nombre", "ingreso", "sexo", "civil", "dpi", "etalent", "estado"];
+
 const fmt = (dateStr) => {
   if (!dateStr) return "-";
   const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(dateStr));
@@ -8,6 +13,9 @@ const fmt = (dateStr) => {
 };
 
 export default function EmpleadosTable({ empleados, loading, isAdmin, onEdit, onBaja, onReactivar }) {
+  const [widths, startResize] = useColWidths("empleados", COL_DEFAULTS);
+  const COLS = isAdmin ? [...BASE_COLS, "acciones"] : BASE_COLS;
+
   if (loading) {
     return (
       <div className="flex justify-center items-center py-20">
@@ -27,18 +35,19 @@ export default function EmpleadosTable({ empleados, loading, isAdmin, onEdit, on
   return (
     <div className="bg-white rounded-xl shadow overflow-hidden">
       <div className="overflow-x-auto">
-        <table className="w-full text-sm">
+        <table className="w-full text-sm table-fixed">
+          <Colgroup columns={COLS} widths={widths} />
           <thead>
             <tr className="bg-gray-100 text-gray-600 uppercase text-xs tracking-wider">
-              <th className="px-4 py-3 text-left">Código</th>
-              <th className="px-4 py-3 text-left">Nombre Completo</th>
-              <th className="px-4 py-3 text-left">F. Ingreso</th>
-              <th className="px-4 py-3 text-left">Sexo</th>
-              <th className="px-4 py-3 text-left">Estado Civil</th>
-              <th className="px-4 py-3 text-left">DPI</th>
-              <th className="px-4 py-3 text-left">Etalent</th>
-              <th className="px-4 py-3 text-center">Estado</th>
-              {isAdmin && <th className="px-4 py-3 text-center">Acciones</th>}
+              <Th width={widths.codigo} onResizeStart={startResize("codigo")} className="px-4 py-3 text-left">Código</Th>
+              <Th width={widths.nombre} onResizeStart={startResize("nombre")} className="px-4 py-3 text-left">Nombre Completo</Th>
+              <Th width={widths.ingreso} onResizeStart={startResize("ingreso")} className="px-4 py-3 text-left">F. Ingreso</Th>
+              <Th width={widths.sexo} onResizeStart={startResize("sexo")} className="px-4 py-3 text-left">Sexo</Th>
+              <Th width={widths.civil} onResizeStart={startResize("civil")} className="px-4 py-3 text-left">Estado Civil</Th>
+              <Th width={widths.dpi} onResizeStart={startResize("dpi")} className="px-4 py-3 text-left">DPI</Th>
+              <Th width={widths.etalent} onResizeStart={startResize("etalent")} className="px-4 py-3 text-left">Etalent</Th>
+              <Th width={widths.estado} onResizeStart={startResize("estado")} className="px-4 py-3 text-center">Estado</Th>
+              {isAdmin && <Th width={widths.acciones} onResizeStart={startResize("acciones")} className="px-4 py-3 text-center">Acciones</Th>}
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">

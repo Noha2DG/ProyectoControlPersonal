@@ -3,7 +3,7 @@ import jwt from "jsonwebtoken";
 import prisma from "../lib/prisma.ts";
 import { nowGT, hoyInicioGT, diaSemanaDe } from "../lib/dateGT.ts";
 import { requireAuth, requirePerm } from "../middleware/auth.ts";
-import { aplicarCorteMedianoche } from "../lib/corteMedianoche.ts";
+import { aplicarCorteMedianoche, LIMITE_HORAS_JORNADA } from "../lib/corteMedianoche.ts";
 
 const router = Router();
 
@@ -120,6 +120,36 @@ router.get("/hoy", requireAuth, async (_req: Request, res: Response) => {
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// GET /api/movimientos/ciclos-abiertos → empleados cuyo último movimiento es Entrada y lleva
+// LIMITE_HORAS_JORNADA horas o más sin Salida. El corte de medianoche los deja así a propósito
+// (ver corteMedianoche.ts) para que un supervisor los revise — este endpoint es la lista de esa revisión.
+router.get("/ciclos-abiertos", requireAuth, requirePerm("movimientos", "ver"), async (_req: Request, res: Response) => {
+  try {
+    const abiertos: any[] = await prisma.$queryRaw`
+      SELECT m1.Codigo,
+             COALESCE(NULLIF(m1.NombreEmpleado,''), NULLIF(CONCAT_WS(' ', e.PrimerNombre, e.SegundoNombre, e.PrimerApellido, e.SegundoApellido), ''), m1.Codigo) AS NombreEmpleado,
+             DATE_FORMAT(m1.FechaHora, '%Y-%m-%d %H:%i:%s') AS FechaHora
+      FROM Movimientos m1
+      INNER JOIN (
+        SELECT Codigo, MAX(FechaHora) AS UltimaFecha FROM Movimientos GROUP BY Codigo
+      ) m2 ON m1.Codigo = m2.Codigo AND m1.FechaHora = m2.UltimaFecha
+      LEFT JOIN Empleados e ON m1.Codigo = e.Codigo
+      WHERE m1.Tipo = 'Entrada'
+    `;
+    const ahora = Date.parse(nowGT().replace(" ", "T"));
+    const resultado = abiertos
+      .map(r => ({
+        Codigo: r.Codigo,
+        NombreEmpleado: r.NombreEmpleado,
+        FechaHora: r.FechaHora,
+        HorasAbierto: (ahora - Date.parse(r.FechaHora.replace(" ", "T"))) / 3600000,
+      }))
+      .filter(r => r.HorasAbierto >= LIMITE_HORAS_JORNADA)
+      .sort((a, b) => b.HorasAbierto - a.HorasAbierto);
+    res.json(resultado);
+  } catch (err: any) { res.status(500).json({ error: err.message }); }
 });
 
 // GET /api/movimientos?fecha=YYYY-MM-DD → registros desde esa fecha en adelante

@@ -1,5 +1,9 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { authHeader } from "../context/AuthContext.jsx";
+import { useColWidths, Th, Colgroup } from "../components/ResizableTh.jsx";
+
+const COL_DEFAULTS = { empleado: 110, nombre: 190, termo: 90, peso: 100, hora: 90, acciones: 110 };
+const COLS = Object.keys(COL_DEFAULTS);
 
 function SelectorTransacciones({ transacciones, seleccionada, onSelect, onCerrar }) {
   const [busqueda, setBusqueda] = useState("");
@@ -91,6 +95,7 @@ export default function PesajePage() {
   const [areaActualError, setAreaActualError] = useState(undefined);
   const [guardando, setGuardando] = useState(false);
   const [modalEditar, setModalEditar] = useState(null);
+  const [widths, startResize] = useColWidths("pesajes", COL_DEFAULTS);
 
   const termoRef = useRef(null);
   const codigoRef = useRef(null);
@@ -365,15 +370,16 @@ export default function PesajePage() {
           <div className="flex justify-center py-10"><div className="w-6 h-6 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" /></div>
         ) : (
           <div className="bg-white rounded-xl shadow overflow-x-auto max-h-[640px] overflow-y-auto">
-            <table className="w-full text-sm">
+            <table className="w-full text-sm table-fixed">
+              <Colgroup columns={COLS} widths={widths} />
               <thead>
                 <tr className="bg-gray-100 text-gray-600 uppercase text-xs tracking-wider">
-                  <th className="px-3 py-3 text-left whitespace-nowrap">Empleado</th>
-                  <th className="px-3 py-3 text-left whitespace-nowrap">Nombre</th>
-                  <th className="px-3 py-3 text-center whitespace-nowrap">Termo</th>
-                  <th className="px-3 py-3 text-right whitespace-nowrap">Peso</th>
-                  <th className="px-3 py-3 text-center whitespace-nowrap">Hora</th>
-                  <th className="px-3 py-3 text-center whitespace-nowrap">Acciones</th>
+                  <Th width={widths.empleado} onResizeStart={startResize("empleado")} className="px-3 py-3 text-left whitespace-nowrap">Empleado</Th>
+                  <Th width={widths.nombre} onResizeStart={startResize("nombre")} className="px-3 py-3 text-left whitespace-nowrap">Nombre</Th>
+                  <Th width={widths.termo} onResizeStart={startResize("termo")} className="px-3 py-3 text-center whitespace-nowrap">Termo</Th>
+                  <Th width={widths.peso} onResizeStart={startResize("peso")} className="px-3 py-3 text-right whitespace-nowrap">Peso</Th>
+                  <Th width={widths.hora} onResizeStart={startResize("hora")} className="px-3 py-3 text-center whitespace-nowrap">Hora</Th>
+                  <Th width={widths.acciones} onResizeStart={startResize("acciones")} className="px-3 py-3 text-center whitespace-nowrap">Acciones</Th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">

@@ -1,6 +1,10 @@
 import { useState, useEffect, useCallback } from "react";
 import { authHeader } from "../context/AuthContext.jsx";
 import { exportarPermisos } from "../utils/exportExcel.js";
+import { useColWidths, Th, Colgroup } from "../components/ResizableTh.jsx";
+
+const COL_DEFAULTS = { fecha: 110, codigo: 100, nombre: 200, etalent: 110, tipo: 170, obs: 260, registrado: 140, acciones: 110 };
+const COLS = Object.keys(COL_DEFAULTS);
 
 const API = "/api/permisos";
 
@@ -139,21 +143,24 @@ function PermisoModal({ permiso, empleados, tipos, onSave, onClose }) {
 
 export default function PermisosPage() {
   const [fecha, setFecha] = useState(hoyGT());
+  const [hasta, setHasta] = useState("");
   const [permisos, setPermisos] = useState([]);
   const [empleados, setEmpleados] = useState([]);
   const [tipos, setTipos] = useState([]);
   const [loading, setLoading] = useState(true);
   const [busqueda, setBusqueda] = useState("");
   const [modal, setModal] = useState({ open: false, permiso: null });
+  const [widths, startResize] = useColWidths("permisos", COL_DEFAULTS);
 
   const fetchPermisos = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch(`${API}?fecha=${fecha}`, { headers: authHeader() });
+      const params = new URLSearchParams({ fecha, ...(hasta ? { hasta } : {}) });
+      const res = await fetch(`${API}?${params}`, { headers: authHeader() });
       const data = await res.json();
       if (Array.isArray(data)) setPermisos(data);
     } finally { setLoading(false); }
-  }, [fecha]);
+  }, [fecha, hasta]);
 
   useEffect(() => { fetchPermisos(); }, [fetchPermisos]);
 
@@ -194,13 +201,21 @@ export default function PermisosPage() {
           <input type="date" value={fecha} onChange={e => setFecha(e.target.value)}
             className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
         </div>
+        <div className="flex items-center gap-2">
+          <label className="text-sm text-gray-600 font-medium">Hasta:</label>
+          <input type="date" value={hasta} min={fecha} onChange={e => setHasta(e.target.value)}
+            className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
+          {hasta && (
+            <button onClick={() => setHasta("")} className="text-xs text-gray-500 hover:text-gray-700 underline">Quitar</button>
+          )}
+        </div>
         <input type="text" placeholder="Buscar empleado o código..."
           value={busqueda} onChange={e => setBusqueda(e.target.value)}
           className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm w-64 focus:outline-none focus:ring-2 focus:ring-blue-400" />
         <span className="text-sm text-gray-500 ml-auto">{filtrados.length} permiso{filtrados.length !== 1 ? "s" : ""}</span>
         {filtrados.length > 0 && (
           <button
-            onClick={() => exportarPermisos(filtrados, fecha)}
+            onClick={() => exportarPermisos(filtrados, fecha, hasta)}
             className="flex items-center gap-1.5 bg-green-600 hover:bg-green-700 text-white text-sm font-semibold px-3 py-1.5 rounded-lg transition">
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
@@ -220,26 +235,29 @@ export default function PermisosPage() {
         <div className="flex justify-center py-16"><div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" /></div>
       ) : (
         <div className="bg-white rounded-xl shadow overflow-hidden">
-          <table className="w-full text-sm">
+          <table className="w-full text-sm table-fixed">
+            <Colgroup columns={COLS} widths={widths} />
             <thead>
               <tr className="bg-gray-100 text-gray-600 uppercase text-xs tracking-wider">
-                <th className="px-4 py-3 text-left">Fecha</th>
-                <th className="px-4 py-3 text-left">Código</th>
-                <th className="px-4 py-3 text-left">Nombre</th>
-                <th className="px-4 py-3 text-left">Tipo de Permiso</th>
-                <th className="px-4 py-3 text-left">Observación</th>
-                <th className="px-4 py-3 text-left">Registrado por</th>
-                <th className="px-4 py-3 text-center">Acciones</th>
+                <Th width={widths.fecha} onResizeStart={startResize("fecha")} className="px-4 py-3 text-left">Fecha</Th>
+                <Th width={widths.codigo} onResizeStart={startResize("codigo")} className="px-4 py-3 text-left">Código</Th>
+                <Th width={widths.nombre} onResizeStart={startResize("nombre")} className="px-4 py-3 text-left">Nombre</Th>
+                <Th width={widths.etalent} onResizeStart={startResize("etalent")} className="px-4 py-3 text-left">Etalent</Th>
+                <Th width={widths.tipo} onResizeStart={startResize("tipo")} className="px-4 py-3 text-left">Tipo de Permiso</Th>
+                <Th width={widths.obs} onResizeStart={startResize("obs")} className="px-4 py-3 text-left">Observación</Th>
+                <Th width={widths.registrado} onResizeStart={startResize("registrado")} className="px-4 py-3 text-left">Registrado por</Th>
+                <Th width={widths.acciones} onResizeStart={startResize("acciones")} className="px-4 py-3 text-center">Acciones</Th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
               {filtrados.length === 0 ? (
-                <tr><td colSpan={7} className="px-4 py-10 text-center text-gray-400">Sin permisos desde esta fecha</td></tr>
+                <tr><td colSpan={8} className="px-4 py-10 text-center text-gray-400">{hasta ? "Sin permisos en este rango de fechas" : "Sin permisos desde esta fecha"}</td></tr>
               ) : filtrados.map(p => (
                 <tr key={p.id} className="hover:bg-gray-50 transition">
                   <td className="px-4 py-2.5 text-gray-700 text-xs">{p.Fecha}</td>
                   <td className="px-4 py-2.5 font-mono font-bold text-gray-700">{p.CodigoEmpleado}</td>
                   <td className="px-4 py-2.5 text-gray-900 text-xs">{p.NombreCompleto}</td>
+                  <td className="px-4 py-2.5 font-mono text-gray-500 text-xs">{p.CodigoEtalent || "—"}</td>
                   <td className="px-4 py-2.5 text-gray-700 text-xs">{p.descripcion}</td>
                   <td className="px-4 py-2.5 text-gray-500 text-xs">{p.Observacion || "—"}</td>
                   <td className="px-4 py-2.5 text-gray-500 text-xs">{p.RegistradoPor}</td>

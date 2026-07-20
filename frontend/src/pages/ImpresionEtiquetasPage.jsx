@@ -1,5 +1,11 @@
 import { useState, useEffect, useCallback, useRef, Fragment } from "react";
 import { authHeader } from "../context/AuthContext.jsx";
+import { useColWidths, Th, Colgroup } from "../components/ResizableTh.jsx";
+
+const COL_DEFAULTS = { fecha: 120, pedido: 110, cliente: 150, claseTalla: 150, lote: 130, declarado: 100, impresas: 100, acciones: 220 };
+const COLS = Object.keys(COL_DEFAULTS);
+const HIST_COL_DEFAULTS = { correlativo: 100, tamano: 90, estatus: 90, impresoPor: 110, fecha: 130, veces: 100, acciones: 110 };
+const HIST_COLS = Object.keys(HIST_COL_DEFAULTS);
 
 // Busca la impresora Zebra en Browser Print (SDK cargado global en index.html). Se vuelve a llamar
 // justo antes de cada impresión (no se reusa un device guardado de cuando se entró a la pantalla):
@@ -343,6 +349,8 @@ export default function ImpresionEtiquetasPage() {
   const [falloEnvio, setFalloEnvio] = useState(null); // { bloques, enviadas, total, mensaje, ordenId } si un envío quedó a medias
   const [reintentando, setReintentando] = useState(false);
   const [rangoEnCurso, setRangoEnCurso] = useState(null); // OrdenId con reimpresión de rango en marcha
+  const [widths, startResize] = useColWidths("etiquetas_ordenes", COL_DEFAULTS);
+  const [widthsHist, startResizeHist] = useColWidths("etiquetas_historial", HIST_COL_DEFAULTS);
 
   const fetchOrdenes = useCallback(async (fechaFiltro) => {
     setLoading(true);
@@ -581,17 +589,18 @@ export default function ImpresionEtiquetasPage() {
         <div className="flex justify-center py-16"><div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" /></div>
       ) : (
         <div className="bg-white rounded-xl shadow overflow-x-auto">
-          <table className="w-full text-sm">
+          <table className="w-full text-sm table-fixed">
+            <Colgroup columns={COLS} widths={widths} />
             <thead>
               <tr className="bg-gray-100 text-gray-600 uppercase text-xs tracking-wider">
-                <th className="px-4 py-3 text-left whitespace-nowrap">Fecha Producción</th>
-                <th className="px-4 py-3 text-left whitespace-nowrap">Pedido</th>
-                <th className="px-4 py-3 text-left whitespace-nowrap">Cliente</th>
-                <th className="px-4 py-3 text-left whitespace-nowrap">Clase · Talla</th>
-                <th className="px-4 py-3 text-left whitespace-nowrap">Lote</th>
-                <th className="px-4 py-3 text-right whitespace-nowrap">Declarado</th>
-                <th className="px-4 py-3 text-right whitespace-nowrap">Impresas</th>
-                <th className="px-4 py-3 text-center whitespace-nowrap">Acciones</th>
+                <Th width={widths.fecha} onResizeStart={startResize("fecha")} className="px-4 py-3 text-left whitespace-nowrap">Fecha Producción</Th>
+                <Th width={widths.pedido} onResizeStart={startResize("pedido")} className="px-4 py-3 text-left whitespace-nowrap">Pedido</Th>
+                <Th width={widths.cliente} onResizeStart={startResize("cliente")} className="px-4 py-3 text-left whitespace-nowrap">Cliente</Th>
+                <Th width={widths.claseTalla} onResizeStart={startResize("claseTalla")} className="px-4 py-3 text-left whitespace-nowrap">Clase · Talla</Th>
+                <Th width={widths.lote} onResizeStart={startResize("lote")} className="px-4 py-3 text-left whitespace-nowrap">Lote</Th>
+                <Th width={widths.declarado} onResizeStart={startResize("declarado")} className="px-4 py-3 text-right whitespace-nowrap">Declarado</Th>
+                <Th width={widths.impresas} onResizeStart={startResize("impresas")} className="px-4 py-3 text-right whitespace-nowrap">Impresas</Th>
+                <Th width={widths.acciones} onResizeStart={startResize("acciones")} className="px-4 py-3 text-center whitespace-nowrap">Acciones</Th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
@@ -627,16 +636,17 @@ export default function ImpresionEtiquetasPage() {
                   {expandidoId === o.OrdenId && (
                     <tr>
                       <td colSpan={8} className="px-4 py-3 bg-gray-50">
-                        <table className="w-full text-xs">
+                        <table className="w-full text-xs table-fixed">
+                          <Colgroup columns={HIST_COLS} widths={widthsHist} />
                           <thead>
                             <tr className="text-gray-500 uppercase tracking-wider">
-                              <th className="px-2 py-1 text-left">Correlativo</th>
-                              <th className="px-2 py-1 text-left">Tamaño</th>
-                              <th className="px-2 py-1 text-left">Estatus</th>
-                              <th className="px-2 py-1 text-left">Impreso por</th>
-                              <th className="px-2 py-1 text-left">Fecha</th>
-                              <th className="px-2 py-1 text-right">Veces impresa</th>
-                              <th className="px-2 py-1 text-center">Acciones</th>
+                              <Th width={widthsHist.correlativo} onResizeStart={startResizeHist("correlativo")} className="px-2 py-1 text-left">Correlativo</Th>
+                              <Th width={widthsHist.tamano} onResizeStart={startResizeHist("tamano")} className="px-2 py-1 text-left">Tamaño</Th>
+                              <Th width={widthsHist.estatus} onResizeStart={startResizeHist("estatus")} className="px-2 py-1 text-left">Estatus</Th>
+                              <Th width={widthsHist.impresoPor} onResizeStart={startResizeHist("impresoPor")} className="px-2 py-1 text-left">Impreso por</Th>
+                              <Th width={widthsHist.fecha} onResizeStart={startResizeHist("fecha")} className="px-2 py-1 text-left">Fecha</Th>
+                              <Th width={widthsHist.veces} onResizeStart={startResizeHist("veces")} className="px-2 py-1 text-right">Veces impresa</Th>
+                              <Th width={widthsHist.acciones} onResizeStart={startResizeHist("acciones")} className="px-2 py-1 text-center">Acciones</Th>
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-gray-200">

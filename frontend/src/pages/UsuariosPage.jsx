@@ -1,7 +1,11 @@
 import { useState, useEffect } from "react";
 import { authHeader, useAuth } from "../context/AuthContext.jsx";
+import { useColWidths, Th, Colgroup } from "../components/ResizableTh.jsx";
 
 const API = "/api/usuarios";
+
+const COL_DEFAULTS = { usuario: 130, nombre: 190, rol: 130, modulos: 260, estado: 100, acciones: 110 };
+const COLS = Object.keys(COL_DEFAULTS);
 
 // ── Estructura de módulos y acciones ──────────────────────────────────
 // Cada grupo (separador) organiza visualmente la matriz
@@ -274,6 +278,7 @@ export default function UsuariosPage() {
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState({ open: false, usuario: null });
   const [confirmDelete, setConfirmDelete] = useState(null);
+  const [widths, startResize] = useColWidths("usuarios", COL_DEFAULTS);
 
   const fetchUsuarios = async () => {
     setLoading(true);
@@ -340,15 +345,16 @@ export default function UsuariosPage() {
         </div>
       ) : (
         <div className="bg-white rounded-xl shadow overflow-hidden">
-          <table className="w-full text-sm">
+          <table className="w-full text-sm table-fixed">
+            <Colgroup columns={COLS} widths={widths} />
             <thead>
               <tr className="bg-gray-100 text-gray-600 uppercase text-xs tracking-wider">
-                <th className="px-5 py-3 text-left">Usuario</th>
-                <th className="px-5 py-3 text-left">Nombre</th>
-                <th className="px-5 py-3 text-left">Rol</th>
-                <th className="px-5 py-3 text-left">Acceso a módulos</th>
-                <th className="px-5 py-3 text-center">Estado</th>
-                <th className="px-5 py-3 text-center">Acciones</th>
+                <Th width={widths.usuario} onResizeStart={startResize("usuario")} className="px-5 py-3 text-left">Usuario</Th>
+                <Th width={widths.nombre} onResizeStart={startResize("nombre")} className="px-5 py-3 text-left">Nombre</Th>
+                <Th width={widths.rol} onResizeStart={startResize("rol")} className="px-5 py-3 text-left">Rol</Th>
+                <Th width={widths.modulos} onResizeStart={startResize("modulos")} className="px-5 py-3 text-left">Acceso a módulos</Th>
+                <Th width={widths.estado} onResizeStart={startResize("estado")} className="px-5 py-3 text-center">Estado</Th>
+                <Th width={widths.acciones} onResizeStart={startResize("acciones")} className="px-5 py-3 text-center">Acciones</Th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">

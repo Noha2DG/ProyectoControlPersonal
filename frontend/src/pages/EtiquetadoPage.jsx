@@ -1,8 +1,12 @@
 import { useState, useEffect, useCallback } from "react";
 import { authHeader } from "../context/AuthContext.jsx";
 import { componerCodigoLote, piscinaRequiereCiclo } from "../utils/codigoLote.js";
+import { useColWidths, Th, Colgroup } from "../components/ResizableTh.jsx";
 
 const hoy = () => new Date().toLocaleDateString("sv-SE");
+
+const COL_DEFAULTS = { fecha: 100, lote: 140, area: 100, origen: 110, congelacion: 120, masters: 90, estatus: 110, impresion: 140, acciones: 130 };
+const COLS = Object.keys(COL_DEFAULTS);
 
 // Áreas de la tabla Areas relevantes para Etiquetado — el catálogo completo trae áreas de todo
 // el resto de la planta (RRHH, cafetería, etc.) que no aplican aquí.
@@ -33,6 +37,7 @@ export default function EtiquetadoPage() {
   const [form, setForm] = useState(FORM_VACIO);
   const [guardando, setGuardando] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [widths, startResize] = useColWidths("etiquetado", COL_DEFAULTS);
 
   useEffect(() => {
     setLoading(true);
@@ -348,18 +353,19 @@ export default function EtiquetadoPage() {
 
             {/* Histórico de capturas de esta línea */}
             <div className="bg-white rounded-xl shadow overflow-x-auto">
-              <table className="w-full text-sm">
+              <table className="w-full text-sm table-fixed">
+                <Colgroup columns={COLS} widths={widths} />
                 <thead>
                   <tr className="bg-gray-100 text-gray-600 uppercase text-xs tracking-wider">
-                    <th className="px-4 py-3 text-left whitespace-nowrap">Fecha</th>
-                    <th className="px-4 py-3 text-left whitespace-nowrap">Lote</th>
-                    <th className="px-4 py-3 text-left whitespace-nowrap">Área</th>
-                    <th className="px-4 py-3 text-left whitespace-nowrap">Origen</th>
-                    <th className="px-4 py-3 text-left whitespace-nowrap">Congelación</th>
-                    <th className="px-4 py-3 text-right whitespace-nowrap">Masters</th>
-                    <th className="px-4 py-3 text-center whitespace-nowrap">Estatus</th>
-                    <th className="px-4 py-3 text-center whitespace-nowrap">Impresión</th>
-                    <th className="px-4 py-3 text-center whitespace-nowrap">Acciones</th>
+                    <Th width={widths.fecha} onResizeStart={startResize("fecha")} className="px-4 py-3 text-left whitespace-nowrap">Fecha</Th>
+                    <Th width={widths.lote} onResizeStart={startResize("lote")} className="px-4 py-3 text-left whitespace-nowrap">Lote</Th>
+                    <Th width={widths.area} onResizeStart={startResize("area")} className="px-4 py-3 text-left whitespace-nowrap">Área</Th>
+                    <Th width={widths.origen} onResizeStart={startResize("origen")} className="px-4 py-3 text-left whitespace-nowrap">Origen</Th>
+                    <Th width={widths.congelacion} onResizeStart={startResize("congelacion")} className="px-4 py-3 text-left whitespace-nowrap">Congelación</Th>
+                    <Th width={widths.masters} onResizeStart={startResize("masters")} className="px-4 py-3 text-right whitespace-nowrap">Masters</Th>
+                    <Th width={widths.estatus} onResizeStart={startResize("estatus")} className="px-4 py-3 text-center whitespace-nowrap">Estatus</Th>
+                    <Th width={widths.impresion} onResizeStart={startResize("impresion")} className="px-4 py-3 text-center whitespace-nowrap">Impresión</Th>
+                    <Th width={widths.acciones} onResizeStart={startResize("acciones")} className="px-4 py-3 text-center whitespace-nowrap">Acciones</Th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">

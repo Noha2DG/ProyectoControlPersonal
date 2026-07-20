@@ -16,18 +16,20 @@ function getOperador(req: Request): string {
   }
 }
 
-// GET /api/permisos?fecha=YYYY-MM-DD
+// GET /api/permisos?fecha=YYYY-MM-DD[&hasta=YYYY-MM-DD] → por defecto desde esa fecha en adelante;
+//   con "hasta" queda acotado al rango [fecha, hasta]
 // GET /api/permisos?codigo=CODIGO&desde=YYYY-MM-DD → permisos de un empleado desde esa fecha en adelante
 router.get("/", requireAuth, requirePerm("permisos", "ver"), async (req: Request, res: Response) => {
   try {
     const fecha  = req.query.fecha  as string | undefined;
+    const hasta  = req.query.hasta  as string | undefined;
     const codigo = req.query.codigo as string | undefined;
     const desde  = req.query.desde  as string | undefined;
 
     let rows: any[];
     if (codigo && desde) {
       rows = await prisma.$queryRaw`
-        SELECT p.id, p.CodigoEmpleado, CONCAT_WS(' ', e.PrimerNombre, e.SegundoNombre, e.PrimerApellido, e.SegundoApellido) AS NombreCompleto, p.codigoPermiso, tp.descripcion,
+        SELECT p.id, p.CodigoEmpleado, CONCAT_WS(' ', e.PrimerNombre, e.SegundoNombre, e.PrimerApellido, e.SegundoApellido) AS NombreCompleto, e.CodigoEtalent, p.codigoPermiso, tp.descripcion,
                DATE_FORMAT(p.Fecha, '%Y-%m-%d') AS Fecha, p.Observacion, p.RegistradoPor
         FROM Permisos p
         JOIN Empleados e ON p.CodigoEmpleado = e.Codigo
@@ -35,24 +37,34 @@ router.get("/", requireAuth, requirePerm("permisos", "ver"), async (req: Request
         WHERE p.CodigoEmpleado = ${codigo} AND p.Fecha >= ${desde}
         ORDER BY p.Fecha ASC
       `;
+    } else if (fecha && hasta) {
+      rows = await prisma.$queryRaw`
+        SELECT p.id, p.CodigoEmpleado, CONCAT_WS(' ', e.PrimerNombre, e.SegundoNombre, e.PrimerApellido, e.SegundoApellido) AS NombreCompleto, e.CodigoEtalent, p.codigoPermiso, tp.descripcion,
+               DATE_FORMAT(p.Fecha, '%Y-%m-%d') AS Fecha, p.Observacion, p.RegistradoPor
+        FROM Permisos p
+        JOIN Empleados e ON p.CodigoEmpleado = e.Codigo
+        JOIN TipoPermiso tp ON p.codigoPermiso = tp.codigoPermiso
+        WHERE p.Fecha BETWEEN ${fecha} AND ${hasta}
+        ORDER BY CONCAT_WS(' ', e.PrimerNombre, e.SegundoNombre, e.PrimerApellido, e.SegundoApellido) ASC
+      `;
     } else if (fecha) {
       rows = await prisma.$queryRaw`
-        SELECT p.id, p.CodigoEmpleado, CONCAT_WS(' ', e.PrimerNombre, e.SegundoNombre, e.PrimerApellido, e.SegundoApellido) AS NombreCompleto, p.codigoPermiso, tp.descripcion,
+        SELECT p.id, p.CodigoEmpleado, CONCAT_WS(' ', e.PrimerNombre, e.SegundoNombre, e.PrimerApellido, e.SegundoApellido) AS NombreCompleto, e.CodigoEtalent, p.codigoPermiso, tp.descripcion,
                DATE_FORMAT(p.Fecha, '%Y-%m-%d') AS Fecha, p.Observacion, p.RegistradoPor
         FROM Permisos p
         JOIN Empleados e ON p.CodigoEmpleado = e.Codigo
         JOIN TipoPermiso tp ON p.codigoPermiso = tp.codigoPermiso
         WHERE p.Fecha >= ${fecha}
-        ORDER BY p.Fecha ASC, p.id DESC
+        ORDER BY CONCAT_WS(' ', e.PrimerNombre, e.SegundoNombre, e.PrimerApellido, e.SegundoApellido) ASC
       `;
     } else {
       rows = await prisma.$queryRaw`
-        SELECT p.id, p.CodigoEmpleado, CONCAT_WS(' ', e.PrimerNombre, e.SegundoNombre, e.PrimerApellido, e.SegundoApellido) AS NombreCompleto, p.codigoPermiso, tp.descripcion,
+        SELECT p.id, p.CodigoEmpleado, CONCAT_WS(' ', e.PrimerNombre, e.SegundoNombre, e.PrimerApellido, e.SegundoApellido) AS NombreCompleto, e.CodigoEtalent, p.codigoPermiso, tp.descripcion,
                DATE_FORMAT(p.Fecha, '%Y-%m-%d') AS Fecha, p.Observacion, p.RegistradoPor
         FROM Permisos p
         JOIN Empleados e ON p.CodigoEmpleado = e.Codigo
         JOIN TipoPermiso tp ON p.codigoPermiso = tp.codigoPermiso
-        ORDER BY p.id DESC
+        ORDER BY CONCAT_WS(' ', e.PrimerNombre, e.SegundoNombre, e.PrimerApellido, e.SegundoApellido) ASC
         LIMIT 200
       `;
     }

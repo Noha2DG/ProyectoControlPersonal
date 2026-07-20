@@ -2,7 +2,7 @@ import prisma from "./prisma.ts";
 import { nowGT, hoyInicioGT, diaSemanaDe } from "./dateGT.ts";
 
 const OPERADOR_SISTEMA = "Sistema";
-const LIMITE_HORAS_JORNADA = 15; // más allá de esto, se asume olvido de marcar salida, no turno real
+export const LIMITE_HORAS_JORNADA = 15; // más allá de esto, se asume olvido de marcar salida, no turno real
 
 /**
  * Si la última Entrada del empleado quedó abierta en un día calendario anterior

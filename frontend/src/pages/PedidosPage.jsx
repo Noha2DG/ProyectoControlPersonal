@@ -1,7 +1,13 @@
 import { useState, useEffect, useCallback } from "react";
 import { authHeader } from "../context/AuthContext.jsx";
+import { useColWidths, Th, Colgroup } from "../components/ResizableTh.jsx";
 
 const ESTATUS = ["Proceso", "Terminado"];
+
+const PEDIDOS_COL_DEFAULTS = { pedido: 130, descripcion: 220, estatus: 110, editar: 90 };
+const PEDIDOS_COLS = Object.keys(PEDIDOS_COL_DEFAULTS);
+const DETALLE_COL_DEFAULTS = { clase: 90, talla: 90, presentacion: 130, cajas: 90, kg: 90, acciones: 130 };
+const DETALLE_COLS = Object.keys(DETALLE_COL_DEFAULTS);
 
 // Combo de texto con búsqueda — para catálogos largos (Clase, Talla, Presentación, Empaques)
 function ComboBuscable({ options, value, onChange, placeholder, required }) {
@@ -289,6 +295,8 @@ export default function PedidosPage() {
   const [modalPedido, setModalPedido] = useState({ open: false, item: null });
   const [modalDetalle, setModalDetalle] = useState({ open: false, item: null });
   const [busqueda, setBusqueda] = useState("");
+  const [widthsPedidos, startResizePedidos] = useColWidths("pedidos", PEDIDOS_COL_DEFAULTS);
+  const [widthsDetalle, startResizeDetalle] = useColWidths("pedidos_detalle", DETALLE_COL_DEFAULTS);
 
   const fetchPedidos = useCallback(async () => {
     setLoading(true);
@@ -381,13 +389,14 @@ export default function PedidosPage() {
           <div className="flex justify-center py-10"><div className="w-6 h-6 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" /></div>
         ) : (
           <div className="bg-white rounded-xl shadow overflow-x-auto max-h-[600px] overflow-y-auto">
-            <table className="w-full text-sm">
+            <table className="w-full text-sm table-fixed">
+              <Colgroup columns={PEDIDOS_COLS} widths={widthsPedidos} />
               <thead>
                 <tr className="bg-gray-100 text-gray-600 uppercase text-xs tracking-wider">
-                  <th className="px-4 py-3 text-left whitespace-nowrap">Pedido</th>
-                  <th className="px-4 py-3 text-left whitespace-nowrap">Descripción</th>
-                  <th className="px-4 py-3 text-center whitespace-nowrap">Estatus</th>
-                  <th className="px-4 py-3 text-center whitespace-nowrap">Editar</th>
+                  <Th width={widthsPedidos.pedido} onResizeStart={startResizePedidos("pedido")} className="px-4 py-3 text-left whitespace-nowrap">Pedido</Th>
+                  <Th width={widthsPedidos.descripcion} onResizeStart={startResizePedidos("descripcion")} className="px-4 py-3 text-left whitespace-nowrap">Descripción</Th>
+                  <Th width={widthsPedidos.estatus} onResizeStart={startResizePedidos("estatus")} className="px-4 py-3 text-center whitespace-nowrap">Estatus</Th>
+                  <Th width={widthsPedidos.editar} onResizeStart={startResizePedidos("editar")} className="px-4 py-3 text-center whitespace-nowrap">Editar</Th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
@@ -431,15 +440,16 @@ export default function PedidosPage() {
           <div className="flex justify-center py-10"><div className="w-6 h-6 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" /></div>
         ) : (
           <div className="bg-white rounded-xl shadow overflow-x-auto">
-            <table className="w-full text-sm">
+            <table className="w-full text-sm table-fixed">
+              <Colgroup columns={DETALLE_COLS} widths={widthsDetalle} />
               <thead>
                 <tr className="bg-gray-100 text-gray-600 uppercase text-xs tracking-wider">
-                  <th className="px-4 py-3 text-left whitespace-nowrap">Clase</th>
-                  <th className="px-4 py-3 text-left whitespace-nowrap">Talla</th>
-                  <th className="px-4 py-3 text-left whitespace-nowrap">Presentación</th>
-                  <th className="px-4 py-3 text-right whitespace-nowrap">Cajas</th>
-                  <th className="px-4 py-3 text-right whitespace-nowrap">Kg</th>
-                  <th className="px-4 py-3 text-center whitespace-nowrap">Acciones</th>
+                  <Th width={widthsDetalle.clase} onResizeStart={startResizeDetalle("clase")} className="px-4 py-3 text-left whitespace-nowrap">Clase</Th>
+                  <Th width={widthsDetalle.talla} onResizeStart={startResizeDetalle("talla")} className="px-4 py-3 text-left whitespace-nowrap">Talla</Th>
+                  <Th width={widthsDetalle.presentacion} onResizeStart={startResizeDetalle("presentacion")} className="px-4 py-3 text-left whitespace-nowrap">Presentación</Th>
+                  <Th width={widthsDetalle.cajas} onResizeStart={startResizeDetalle("cajas")} className="px-4 py-3 text-right whitespace-nowrap">Cajas</Th>
+                  <Th width={widthsDetalle.kg} onResizeStart={startResizeDetalle("kg")} className="px-4 py-3 text-right whitespace-nowrap">Kg</Th>
+                  <Th width={widthsDetalle.acciones} onResizeStart={startResizeDetalle("acciones")} className="px-4 py-3 text-center whitespace-nowrap">Acciones</Th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">

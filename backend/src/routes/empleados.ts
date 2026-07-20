@@ -25,6 +25,15 @@ async function dpiEnUso(dpi: number, excluirCodigo?: string): Promise<boolean> {
   return rows.length > 0;
 }
 
+// Verifica si un Código Etalent (distinto de vacío/0, el valor por defecto) ya está en uso por otro empleado
+async function codigoEtalentEnUso(codigoEtalent: string, excluirCodigo?: string): Promise<boolean> {
+  if (!codigoEtalent || codigoEtalent === "0") return false;
+  const rows: any[] = excluirCodigo
+    ? await prisma.$queryRaw`SELECT Codigo FROM Empleados WHERE CodigoEtalent = ${codigoEtalent} AND Codigo != ${excluirCodigo} LIMIT 1`
+    : await prisma.$queryRaw`SELECT Codigo FROM Empleados WHERE CodigoEtalent = ${codigoEtalent} LIMIT 1`;
+  return rows.length > 0;
+}
+
 // Convierte fechas MySQL (incluyendo 0000-00-00) a string legible o null
 function safeDate(val: any): string | null {
   if (!val) return null;
@@ -112,6 +121,10 @@ router.post("/", requirePerm("empleados", "crear"), async (req: Request, res: Re
       res.status(400).json({ error: "El número de DPI ya está registrado para otro empleado" });
       return;
     }
+    if (await codigoEtalentEnUso(CodigoEtalent)) {
+      res.status(400).json({ error: "El Código Etalent ya está registrado para otro empleado" });
+      return;
+    }
     const fi = FechaIngreso || new Date().toISOString().split("T")[0];
     const operador = getOperador(req);
     const cols = ["Codigo", "FechaIngreso", "FechaBaja", "Sexo", "EstadoCivil", "Estado", "CodigoEtalent", "DPI", ...DETALLE_CAMPOS];
@@ -168,6 +181,10 @@ router.put("/:codigo", requirePerm("empleados", "editar"), async (req: Request, 
       const dpiNum = Number(DPI) || 0;
       if (await dpiEnUso(dpiNum, codigo)) {
         res.status(400).json({ error: "El número de DPI ya está registrado para otro empleado" });
+        return;
+      }
+      if (await codigoEtalentEnUso(CodigoEtalent, codigo)) {
+        res.status(400).json({ error: "El Código Etalent ya está registrado para otro empleado" });
         return;
       }
       const fi = FechaIngreso || "1970-01-01";
