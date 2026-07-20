@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, Fragment } from "react";
+import { createPortal } from "react-dom";
 import { authHeader } from "../context/AuthContext.jsx";
 import { exportarReporteGeneral, exportarReporteTermos, exportarEficiencias, exportarLbHora, exportarLbHoraPorTalla, exportarLbPorPersona } from "../utils/exportExcel.js";
 import { useColWidths, Th, Colgroup } from "../components/ResizableTh.jsx";
@@ -26,6 +27,7 @@ const LBPERSONA_COL_DEFAULTS = { puesto: 80, id: 100, nombre: 150, descabezado: 
 const LBPERSONA_COLS = Object.keys(LBPERSONA_COL_DEFAULTS);
 
 function hoy() { return new Date().toLocaleDateString("sv-SE"); }
+const fechaCorta = (f) => f ? f.split("-").reverse().join("/") : "";
 
 // estado es solo para el color del botón (ver render): "listo" = gris, "progreso" = ámbar mientras
 // se sigue ajustando Lb/Hora y Por Talla.
@@ -483,6 +485,12 @@ export default function ReporteProduccionPage() {
   const gruposPorTalla = gruposPorProductoTalla(filasPorTalla);
   const filasLbPersona = calcularLbPorPersona(reporte?.porPersona ?? []);
 
+  // Solo para la hoja imprimible (Descargar PDF) — encabezado con el rango, filtros activos y sello de hora.
+  const tituloSubTab = SUB_TABS.find(t => t.key === subTab)?.label ?? "";
+  const nombreFincaSeleccionada = fincas.find(f => f.Codigo === finca)?.Descripcion;
+  const rangoFechasTexto = desde === hasta ? fechaCorta(desde) : `${fechaCorta(desde)} — ${fechaCorta(hasta)}`;
+  const impresoEn = new Date().toLocaleString("sv-SE", { timeZone: "America/Guatemala", hour12: false }).slice(0, 16);
+
   const gruposPorFinca = () => {
     const mapa = new Map();
     for (const l of reporte?.porLote ?? []) {
@@ -518,6 +526,7 @@ export default function ReporteProduccionPage() {
   };
 
   return (
+    <>
     <div>
       {/* Filtros */}
       <div className="flex flex-wrap items-end gap-2 mb-3 bg-white border border-gray-200 rounded-lg p-2.5 shadow-sm">
@@ -572,10 +581,19 @@ export default function ReporteProduccionPage() {
         </div>
 
         {reporte && (
-          <button onClick={exportar}
-            className="ml-auto bg-green-600 text-white text-sm font-semibold px-3 py-1.5 rounded-lg hover:bg-green-700 transition">
-            Exportar Excel
-          </button>
+          <div className="ml-auto flex gap-2">
+            <button onClick={() => window.print()}
+              className="flex items-center gap-1.5 bg-red-600 text-white text-sm font-semibold px-3 py-1.5 rounded-lg hover:bg-red-700 transition">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6.72 13.829c-.24.03-.48.062-.72.096m.72-.096a42.415 42.415 0 0110.56 0m-10.56 0L6.34 18m10.94-4.171c.24.03.48.062.72.096m-.72-.096L17.66 18m0 0l.229 2.523a1.125 1.125 0 01-1.12 1.227H7.231c-.662 0-1.18-.568-1.12-1.227L6.34 18m11.318 0h1.091A2.25 2.25 0 0021 15.75V9.456c0-1.081-.768-2.015-1.837-2.175a48.055 48.055 0 00-1.913-.247M6.34 18H5.25A2.25 2.25 0 013 15.75V9.456c0-1.081.768-2.015 1.837-2.175a48.041 48.041 0 011.913-.247m10.5 0a48.536 48.536 0 00-10.5 0m10.5 0V3.375c0-.621-.504-1.125-1.125-1.125h-8.25c-.621 0-1.125.504-1.125 1.125v3.659M18 10.5h.008v.008H18V10.5zm-3 0h.008v.008H15V10.5z" />
+              </svg>
+              Descargar PDF
+            </button>
+            <button onClick={exportar}
+              className="bg-green-600 text-white text-sm font-semibold px-3 py-1.5 rounded-lg hover:bg-green-700 transition">
+              Exportar Excel
+            </button>
+          </div>
         )}
       </div>
 
@@ -950,5 +968,247 @@ export default function ReporteProduccionPage() {
         </>
       )}
     </div>
+
+    {/* Hoja imprimible (Descargar PDF) — se monta en #print-root (fuera de #root) para que solo
+        ella quede en el documento cuando #root se oculta al imprimir (ver index.css). Muestra el
+        reporte de la pestaña activa, en su vista de resumen (sin filas expandidas). */}
+    {reporte && createPortal(
+      <div className="hidden print:block font-sans text-slate-700">
+        <div className="flex items-end justify-between border-b-[3px] border-slate-900 pb-2 mb-2">
+          <div className="flex items-center gap-2">
+            <img src="/favicon.png" alt="" className="w-8 h-8 shrink-0" />
+            <div>
+              <p className="text-lg font-extrabold italic text-blue-700 tracking-tight">ORO BI</p>
+              <h1 className="text-xl font-extrabold uppercase text-slate-900 tracking-tight">Destajo — {tituloSubTab}</h1>
+              <p className="text-[10px] text-gray-500 mt-0.5">
+                {rangoFechasTexto}
+                {finca && <> · Finca <span className="font-mono font-bold text-blue-700">{finca}</span>{nombreFincaSeleccionada && <> — {nombreFincaSeleccionada}</>}</>}
+                {areaLbHora && SUB_TABS_CON_AREA.includes(subTab) && <> · Área <span className="font-mono font-bold text-blue-700">{areaLbHora}</span></>}
+              </p>
+            </div>
+          </div>
+          <p className="text-[10px] text-gray-400 font-mono mt-0.5">impreso {impresoEn}</p>
+        </div>
+
+        {subTab === "general" && (
+          <>
+            <table className="print-table w-full border-collapse text-[11px] leading-tight mb-4">
+              <thead>
+                <tr>
+                  <th className="text-left font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Lote</th>
+                  <th className="text-left font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Finca</th>
+                  <th className="text-left font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Clase MP</th>
+                  <th className="text-center font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Fecha</th>
+                  <th className="text-right font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Ingreso</th>
+                  <th className="text-right font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Procesado</th>
+                  <th className="text-right font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Pendiente</th>
+                  <th className="text-right font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Rend.</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(reporte.porLote ?? []).map(l => (
+                  <tr key={`${l.Lote}-${l.Clase}`} className="border-b border-gray-100">
+                    <td className="py-0.5 px-1 font-mono font-bold text-blue-700">{l.Lote}</td>
+                    <td className="py-0.5 px-1">{l.NombreFinca}</td>
+                    <td className="py-0.5 px-1 font-mono">{l.Clase} — {l.DescripcionClase}</td>
+                    <td className="py-0.5 px-1 text-center tabular-nums">{l.Fecha?.slice(0, 10)}</td>
+                    <td className="py-0.5 px-1 text-right tabular-nums">{l.PesoIngreso.toFixed(2)}</td>
+                    <td className="py-0.5 px-1 text-right font-semibold tabular-nums">{l.Procesado.toFixed(2)}</td>
+                    <td className="py-0.5 px-1 text-right tabular-nums">{l.Pendiente.toFixed(2)}</td>
+                    <td className="py-0.5 px-1 text-right tabular-nums">{l.Rendimiento.toFixed(1)}%</td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr className="font-bold border-t-2 border-slate-900">
+                  <td className="py-1 px-1" colSpan={4}>Total General</td>
+                  <td className="py-1 px-1 text-right tabular-nums">{reporte.totales.PesoIngreso.toFixed(2)}</td>
+                  <td className="py-1 px-1 text-right tabular-nums">{reporte.totales.Procesado.toFixed(2)}</td>
+                  <td className="py-1 px-1 text-right tabular-nums">{reporte.totales.Pendiente.toFixed(2)}</td>
+                  <td className="py-1 px-1 text-right tabular-nums">{reporte.totales.Rendimiento.toFixed(1)}%</td>
+                </tr>
+              </tfoot>
+            </table>
+
+            <h2 className="text-xs font-bold uppercase tracking-wider text-slate-900 mb-1">Procesado por Talla</h2>
+            <table className="print-table w-full border-collapse text-[11px] leading-tight">
+              <thead>
+                <tr>
+                  <th className="text-left font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Talla</th>
+                  <th className="text-right font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Kg</th>
+                  <th className="text-right font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">%</th>
+                </tr>
+              </thead>
+              <tbody>
+                {tallasMostradas.map(t => (
+                  <tr key={t.Talla} className="border-b border-gray-100">
+                    <td className="py-0.5 px-1"><span className="font-mono">{t.Talla}</span> — {t.DescripcionTalla}</td>
+                    <td className="py-0.5 px-1 text-right font-semibold tabular-nums">{t.Procesado.toFixed(2)}</td>
+                    <td className="py-0.5 px-1 text-right tabular-nums">{totalProcesadoTalla > 0 ? (t.Procesado / totalProcesadoTalla * 100).toFixed(1) : "0.0"}%</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </>
+        )}
+
+        {subTab === "termos" && (
+          <table className="print-table w-full border-collapse text-[11px] leading-tight">
+            <thead>
+              <tr>
+                <th className="text-left font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Termo</th>
+                <th className="text-left font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Cargas</th>
+                <th className="text-right font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Kg Procesados</th>
+              </tr>
+            </thead>
+            <tbody>
+              {gruposPorTermo().map(([numeroTermo, cargas]) => {
+                const subtotal = cargas.reduce((s, c) => s + c.Procesado, 0);
+                return (
+                  <tr key={numeroTermo} className="border-b border-gray-100">
+                    <td className="py-0.5 px-1 font-mono font-bold">Termo {numeroTermo}</td>
+                    <td className="py-0.5 px-1">{cargas.length} carga{cargas.length !== 1 ? "s" : ""}</td>
+                    <td className="py-0.5 px-1 text-right font-semibold tabular-nums">{subtotal.toFixed(2)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+            <tfoot>
+              <tr className="font-bold border-t-2 border-slate-900">
+                <td className="py-1 px-1" colSpan={2}>Total General</td>
+                <td className="py-1 px-1 text-right tabular-nums">{totalProcesadoTermo.toFixed(2)}</td>
+              </tr>
+            </tfoot>
+          </table>
+        )}
+
+        {subTab === "eficiencias" && (
+          <table className="print-table w-full border-collapse text-[10px] leading-tight">
+            <thead>
+              <tr>
+                <th className="text-left font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Id</th>
+                <th className="text-left font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Nombre</th>
+                <th className="text-left font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Área</th>
+                <th className="text-center font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Fecha</th>
+                <th className="text-center font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Hora</th>
+                <th className="text-left font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Lote</th>
+                <th className="text-left font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Producto</th>
+                <th className="text-left font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Talla</th>
+                <th className="text-right font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Kilos</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(reporte.porPersona ?? []).map((p, i) => (
+                <tr key={i} className="border-b border-gray-100">
+                  <td className="py-0.5 px-1 font-mono">{p.IdEmpleado}</td>
+                  <td className="py-0.5 px-1">{p.Nombre}</td>
+                  <td className="py-0.5 px-1">{p.Area || "—"}</td>
+                  <td className="py-0.5 px-1 text-center tabular-nums">{p.FechaHora?.slice(0, 10)}</td>
+                  <td className="py-0.5 px-1 text-center tabular-nums">{p.FechaHora?.slice(11, 16)}</td>
+                  <td className="py-0.5 px-1 font-mono">{p.Lote}</td>
+                  <td className="py-0.5 px-1">{p.Producto}</td>
+                  <td className="py-0.5 px-1">{p.Talla} — {p.DescripcionTalla}</td>
+                  <td className="py-0.5 px-1 text-right font-semibold tabular-nums">{p.Kilos.toFixed(2)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+
+        {subTab === "lbhora" && (() => {
+          const total = totalLbHora(filasLbHora);
+          return (
+            <table className="print-table w-full border-collapse text-[11px] leading-tight">
+              <thead>
+                <tr>
+                  <th className="text-left font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Id</th>
+                  <th className="text-left font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Nombre</th>
+                  <th className="text-left font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Área</th>
+                  <th className="text-right font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Lb</th>
+                  <th className="text-right font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Horas</th>
+                  <th className="text-right font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Lb/Hora</th>
+                  <th className="text-center font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1"># Pesadas</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filasLbHora.map(f => (
+                  <tr key={`${f.IdEmpleado}-${f.Area}`} className="border-b border-gray-100">
+                    <td className="py-0.5 px-1 font-mono">{f.IdEmpleado}</td>
+                    <td className="py-0.5 px-1">{f.Nombre}</td>
+                    <td className="py-0.5 px-1">{f.Area || "—"}</td>
+                    <td className="py-0.5 px-1 text-right tabular-nums">{f.Lb.toFixed(2)}</td>
+                    <td className="py-0.5 px-1 text-right tabular-nums">{f.Horas.toFixed(2)}</td>
+                    <td className="py-0.5 px-1 text-right font-semibold tabular-nums">{f.LbPorHora != null ? f.LbPorHora.toFixed(1) : "—"}</td>
+                    <td className="py-0.5 px-1 text-center tabular-nums">{f.NumPesadas}</td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr className="font-bold border-t-2 border-slate-900">
+                  <td className="py-1 px-1" colSpan={3}>Total General</td>
+                  <td className="py-1 px-1 text-right tabular-nums">{total.TotalLb.toFixed(2)}</td>
+                  <td className="py-1 px-1"></td>
+                  <td className="py-1 px-1 text-right tabular-nums">{total.PromedioLbHora != null ? total.PromedioLbHora.toFixed(1) : "—"}</td>
+                  <td className="py-1 px-1"></td>
+                </tr>
+              </tfoot>
+            </table>
+          );
+        })()}
+
+        {subTab === "portalla" && (
+          <table className="print-table w-full border-collapse text-[11px] leading-tight">
+            <thead>
+              <tr>
+                <th className="text-left font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Producto — Talla</th>
+                <th className="text-right font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Lb Total</th>
+                <th className="text-right font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Lb/Hora Prom.</th>
+                <th className="text-center font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1"># Personas</th>
+              </tr>
+            </thead>
+            <tbody>
+              {gruposPorTalla.map(g => (
+                <tr key={`${g.Producto}-${g.Talla}`} className="border-b border-gray-100">
+                  <td className="py-0.5 px-1">{g.Producto} — {g.Talla} ({g.DescripcionTalla}){g.esSecundaria && " (Bajo Volumen)"}</td>
+                  <td className="py-0.5 px-1 text-right font-semibold tabular-nums">{g.resumen.TotalLb.toFixed(2)}</td>
+                  <td className="py-0.5 px-1 text-right tabular-nums">{g.resumen.PromedioLbHora != null ? g.resumen.PromedioLbHora.toFixed(1) : "—"}</td>
+                  <td className="py-0.5 px-1 text-center tabular-nums">{g.resumen.NumPersonas}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+
+        {subTab === "lbpersona" && (
+          <table className="print-table w-full border-collapse text-[11px] leading-tight">
+            <thead>
+              <tr>
+                <th className="text-center font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Puesto</th>
+                <th className="text-left font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Id</th>
+                <th className="text-left font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Nombre</th>
+                <th className="text-right font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Descabezado (Lb)</th>
+                <th className="text-right font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Pelado y Devenado (Lb)</th>
+                <th className="text-right font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Total (Lb)</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filasLbPersona.map(f => (
+                <tr key={f.IdEmpleado} className={`border-b border-gray-100 ${FILA_SEMAFORO[f.Semaforo]}`}
+                  style={{ WebkitPrintColorAdjust: "exact", printColorAdjust: "exact" }}>
+                  <td className="py-0.5 px-1 text-center tabular-nums">{f.Puesto}</td>
+                  <td className="py-0.5 px-1 font-mono">{f.IdEmpleado}</td>
+                  <td className="py-0.5 px-1">{f.Nombre}</td>
+                  <td className="py-0.5 px-1 text-right tabular-nums">{f.LbDescabezado > 0 ? f.LbDescabezado.toFixed(2) : "—"}</td>
+                  <td className="py-0.5 px-1 text-right tabular-nums">{f.LbPelado > 0 ? f.LbPelado.toFixed(2) : "—"}</td>
+                  <td className="py-0.5 px-1 text-right font-semibold tabular-nums">{f.LbTotal.toFixed(2)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>,
+      document.getElementById("print-root")
+    )}
+    </>
   );
 }

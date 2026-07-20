@@ -1,6 +1,6 @@
 import * as XLSX from "xlsx";
 
-export function exportarTransferencias(registros, fecha) {
+export function exportarTransferencias(registros, fecha, permisos = []) {
   const detalle = registros.map(r => ({
     "Fecha":          r.Fecha ? r.Fecha.split("-").reverse().join("/") : fecha,
     "Código":         r.Codigo,
@@ -56,6 +56,18 @@ export function exportarTransferencias(registros, fecha) {
   const wsResumen = XLSX.utils.json_to_sheet(resumen);
   autoWidth(wsResumen, resumen);
   XLSX.utils.book_append_sheet(wb, wsResumen, "Resumen por Empleado");
+
+  const filasPermisos = permisos.map(p => ({
+    "Fecha":            p.Fecha,
+    "Código":           p.CodigoEmpleado,
+    "Nombre":           p.NombreCompleto,
+    "Tipo de Permiso":  p.descripcion,
+    "Observación":      p.Observacion ?? "",
+    "Registrado por":   p.RegistradoPor ?? "",
+  }));
+  const wsPermisos = XLSX.utils.json_to_sheet(filasPermisos);
+  autoWidth(wsPermisos, filasPermisos);
+  XLSX.utils.book_append_sheet(wb, wsPermisos, "Permisos");
 
   XLSX.writeFile(wb, `Transferencias_desde_${fecha}.xlsx`);
 }

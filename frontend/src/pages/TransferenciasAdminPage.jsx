@@ -145,6 +145,18 @@ export default function TransferenciasAdminPage() {
     else { const e = await res.json(); alert("Error: " + e.error); }
   };
 
+  // El Excel lleva una hoja aparte con los Permisos desde la misma fecha del filtro "Desde"
+  // (todos los empleados, no solo el buscado en pantalla — ver GET /api/permisos?fecha=).
+  const handleExportar = async () => {
+    let permisos = [];
+    try {
+      const res = await fetch(`/api/permisos?fecha=${fecha}`, { headers: authHeader() });
+      const data = await res.json();
+      if (Array.isArray(data)) permisos = data;
+    } catch { /* si falla, se exporta igual sin la hoja de permisos */ }
+    exportarTransferencias(filtrados, fecha, permisos);
+  };
+
   const areas = [...new Map(
     registros.filter(r => r.CodigoArea).map(r => [r.CodigoArea, r.NombreArea])
   ).entries()].sort((a, b) => a[0].localeCompare(b[0]));
@@ -265,7 +277,7 @@ export default function TransferenciasAdminPage() {
               Imprimir
             </button>
             <button
-              onClick={() => exportarTransferencias(filtrados, fecha)}
+              onClick={handleExportar}
               className="flex items-center gap-1.5 bg-green-600 hover:bg-green-700 text-white text-sm font-semibold px-3 py-1.5 rounded-lg transition">
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
@@ -362,16 +374,19 @@ export default function TransferenciasAdminPage() {
     {createPortal(
     <div className="hidden print:block font-sans text-slate-700">
       <div className="flex items-end justify-between border-b-[3px] border-slate-900 pb-2 mb-2">
-        <div>
-          <p className="text-[10px] font-bold uppercase tracking-widest text-blue-700">EsteroMar · Control de Personal</p>
-          <h1 className="text-xl font-extrabold uppercase text-slate-900 tracking-tight">Transferencias</h1>
-          <p className="text-[10px] text-gray-500 mt-0.5">
-            {fechasUnicas.length === 1
-              ? fechasUnicas[0]?.split("-").reverse().join("/")
-              : `Desde ${fecha.split("-").reverse().join("/")}`}
-            {areaFiltro && <> · Área <span className="font-mono font-bold text-blue-700">{areaFiltro}</span> — {nombreAreaFiltro}</>}
-            {busqueda && <> · «{busqueda}»</>}
-          </p>
+        <div className="flex items-center gap-2">
+          <img src="/favicon.png" alt="" className="w-8 h-8 shrink-0" />
+          <div>
+            <p className="text-lg font-extrabold italic text-blue-700 tracking-tight">ORO BI</p>
+            <h1 className="text-xl font-extrabold uppercase text-slate-900 tracking-tight">Transferencias</h1>
+            <p className="text-[10px] text-gray-500 mt-0.5">
+              {fechasUnicas.length === 1
+                ? fechasUnicas[0]?.split("-").reverse().join("/")
+                : `Desde ${fecha.split("-").reverse().join("/")}`}
+              {areaFiltro && <> · Área <span className="font-mono font-bold text-blue-700">{areaFiltro}</span> — {nombreAreaFiltro}</>}
+              {busqueda && <> · «{busqueda}»</>}
+            </p>
+          </div>
         </div>
         <div className="text-right">
           <p className="text-sm font-bold text-slate-900 tabular-nums">{filtrados.length} registro{filtrados.length !== 1 ? "s" : ""}</p>

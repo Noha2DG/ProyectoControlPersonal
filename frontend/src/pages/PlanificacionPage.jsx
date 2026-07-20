@@ -512,9 +512,12 @@ function ResumenModal({ areas, fecha, totalPlanificado, totalOcupado, onClose })
     {createPortal(
     <div className="hidden print:block font-sans text-slate-700">
       <div className="flex items-end justify-between border-b-[3px] border-slate-900 pb-2 mb-3">
-        <div>
-          <p className="text-[10px] font-bold uppercase tracking-widest text-blue-700">EsteroMar · Control de Personal</p>
-          <h1 className="text-xl font-extrabold uppercase text-slate-900 tracking-tight">Resumen del día</h1>
+        <div className="flex items-center gap-2">
+          <img src="/favicon.png" alt="" className="w-8 h-8 shrink-0" />
+          <div>
+            <p className="text-lg font-extrabold italic text-blue-700 tracking-tight">ORO BI</p>
+            <h1 className="text-xl font-extrabold uppercase text-slate-900 tracking-tight">Resumen del día</h1>
+          </div>
         </div>
         <div className="text-right">
           <p className="text-sm font-bold text-slate-900 capitalize">{fechaLargaImpresion}</p>

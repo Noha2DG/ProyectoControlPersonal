@@ -9,16 +9,27 @@ const TIPOS = ["Entrada", "Salida"];
 const COL_DEFAULTS = { fecha: 100, codigo: 100, nombre: 190, tipo: 100, hora: 90, dia: 100, operador: 130, acciones: 110 };
 const COLS = Object.keys(COL_DEFAULTS);
 
+// Debe coincidir con LIMITE_HORAS_JORNADA en backend/src/lib/corteMedianoche.ts — más allá de esto,
+// el corte de medianoche deja el ciclo abierto a propósito para que un supervisor lo revise.
+const LIMITE_HORAS_JORNADA = 15;
+
 function ahoraInputGT() {
   return new Date().toLocaleString("sv-SE", { timeZone: "America/Guatemala" }).slice(0, 16).replace(" ", "T");
 }
 
-function RegistroModal({ registro, empleados, onSave, onClose }) {
+function formatHorasAbierto(h) {
+  const horas = Math.floor(h);
+  const dias = Math.floor(horas / 24);
+  if (dias >= 1) return `${dias}d ${horas % 24}h`;
+  return `${horas}h`;
+}
+
+function RegistroModal({ registro, cierre, empleados, onSave, onClose }) {
   const isEdit = !!registro;
   const [form, setForm] = useState({
-    Codigo: registro?.Codigo || "",
+    Codigo: registro?.Codigo || cierre?.Codigo || "",
     FechaHora: registro?.FechaHoraInput || ahoraInputGT(),
-    Tipo: registro?.Tipo || "Entrada",
+    Tipo: registro?.Tipo || (cierre ? "Salida" : "Entrada"),
   });
 
   const handleSubmit = e => {
@@ -31,10 +42,15 @@ function RegistroModal({ registro, empleados, onSave, onClose }) {
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
       <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm mx-4">
         <div className="px-6 py-4 border-b flex items-center justify-between">
-          <h2 className="text-base font-semibold text-gray-800">{isEdit ? "Corregir Registro" : "Registrar Movimiento Manual"}</h2>
+          <h2 className="text-base font-semibold text-gray-800">{cierre ? "Cerrar ciclo abierto" : isEdit ? "Corregir Registro" : "Registrar Movimiento Manual"}</h2>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl">&times;</button>
         </div>
         <form onSubmit={handleSubmit} className="px-6 py-5 space-y-4">
+          {cierre && (
+            <div className="bg-amber-50 border border-amber-300 text-amber-800 rounded-lg px-3 py-2 text-xs">
+              ⚠️ Esta Salida se registra manualmente para cerrar el ciclo abierto de <span className="font-semibold">{cierre.NombreEmpleado}</span> — no corresponde a un escaneo real del gafete.
+            </div>
+          )}
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1">Empleado</label>
             <EmpleadoAutocomplete
@@ -81,8 +97,9 @@ export default function MovimientosAdminPage() {
   const [registros, setRegistros] = useState([]);
   const [empleados, setEmpleados] = useState([]);
   const [loading, setLoading]   = useState(false);
-  const [modal, setModal] = useState({ open: false, registro: null });
+  const [modal, setModal] = useState({ open: false, registro: null, cierre: null });
   const [widths, startResize] = useColWidths("movimientos", COL_DEFAULTS);
+  const [ciclosAbiertos, setCiclosAbiertos] = useState([]);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -93,7 +110,14 @@ export default function MovimientosAdminPage() {
     } finally { setLoading(false); }
   }, [fecha]);
 
+  const fetchCiclosAbiertos = useCallback(async () => {
+    const res = await fetch("/api/movimientos/ciclos-abiertos", { headers: authHeader() });
+    const data = await res.json();
+    if (Array.isArray(data)) setCiclosAbiertos(data);
+  }, []);
+
   useEffect(() => { fetchData(); }, [fetchData]);
+  useEffect(() => { fetchCiclosAbiertos(); }, [fetchCiclosAbiertos]);
 
   useEffect(() => {
     fetch("/api/empleados", { headers: authHeader() }).then(r => r.json())
@@ -107,14 +131,16 @@ export default function MovimientosAdminPage() {
       headers: { "Content-Type": "application/json", ...authHeader() },
       body: JSON.stringify(form),
     });
-    if (res.ok) { setModal({ open: false, registro: null }); fetchData(); }
+    if (res.ok) { setModal({ open: false, registro: null, cierre: null }); fetchData(); fetchCiclosAbiertos(); }
     else { const e = await res.json(); alert("Error: " + e.error); }
   };
+
+  const abrirCierre = (c) => setModal({ open: true, registro: null, cierre: { Codigo: c.Codigo, NombreEmpleado: c.NombreEmpleado } });
 
   const handleDelete = async (id, nombre) => {
     if (!confirm(`¿Eliminar el registro de ${nombre}?`)) return;
     const res = await fetch(`/api/movimientos/${id}`, { method: "DELETE", headers: authHeader() });
-    if (res.ok) fetchData();
+    if (res.ok) { fetchData(); fetchCiclosAbiertos(); }
     else { const e = await res.json(); alert("Error: " + e.error); }
   };
 
@@ -140,7 +166,7 @@ export default function MovimientosAdminPage() {
           Actualizar
         </button>
         <button
-          onClick={() => setModal({ open: true, registro: null })}
+          onClick={() => setModal({ open: true, registro: null, cierre: null })}
           className="bg-blue-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-blue-700 transition"
         >
           + Registrar manual
@@ -157,6 +183,29 @@ export default function MovimientosAdminPage() {
           </button>
         )}
       </div>
+
+      {ciclosAbiertos.length > 0 && (
+        <div className="mb-4 bg-amber-50 border border-amber-300 text-amber-800 rounded-lg px-4 py-2.5 text-sm">
+          <p className="font-semibold mb-1.5">
+            ⚠️ {ciclosAbiertos.length} empleado{ciclosAbiertos.length !== 1 ? "s" : ""} con ciclo abierto hace más de {LIMITE_HORAS_JORNADA} horas sin marcar Salida — probable olvido, no un turno real:
+          </p>
+          <ul className="space-y-1">
+            {ciclosAbiertos.map(c => (
+              <li key={c.Codigo} className="flex items-center gap-2 flex-wrap">
+                <span className="font-mono font-bold">{c.Codigo}</span>
+                <span>{c.NombreEmpleado}</span>
+                <span className="text-amber-600 text-xs">
+                  entró {c.FechaHora?.slice(0, 16)} · {formatHorasAbierto(c.HorasAbierto)} abierto
+                </span>
+                <button onClick={() => abrirCierre(c)}
+                  className="ml-auto text-xs font-semibold text-blue-700 hover:underline">
+                  Cerrar ahora
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {loading ? (
         <div className="flex justify-center py-16"><div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" /></div>
@@ -194,7 +243,7 @@ export default function MovimientosAdminPage() {
                   <td className="px-4 py-2.5 text-center text-gray-500 text-xs">{r.Operador}</td>
                   <td className="px-4 py-2.5 text-center">
                     <div className="flex justify-center gap-2">
-                      <button onClick={() => setModal({ open: true, registro: r })}
+                      <button onClick={() => setModal({ open: true, registro: r, cierre: null })}
                         className="text-blue-600 hover:text-blue-800 text-xs font-medium px-2 py-1 rounded hover:bg-blue-50 transition">
                         Editar
                       </button>
@@ -212,7 +261,8 @@ export default function MovimientosAdminPage() {
       )}
 
       {modal.open && (
-        <RegistroModal registro={modal.registro} empleados={empleados} onSave={handleSave} onClose={() => setModal({ open: false, registro: null })} />
+        <RegistroModal registro={modal.registro} cierre={modal.cierre} empleados={empleados} onSave={handleSave}
+          onClose={() => setModal({ open: false, registro: null, cierre: null })} />
       )}
     </div>
   );
