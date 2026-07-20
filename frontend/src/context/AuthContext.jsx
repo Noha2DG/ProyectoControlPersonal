@@ -35,8 +35,24 @@ export function AuthProvider({ children }) {
     setUser(null);
   };
 
+  // Reemite el token con el rol/permisos actuales de la BD — necesario tras editar la
+  // propia cuenta, porque rol/permisos viajan embebidos en el JWT de la sesión activa.
+  const refreshUser = async () => {
+    const token = localStorage.getItem("cp_token");
+    if (!token) return;
+    const res = await fetch("/api/auth/refresh", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) return;
+    const data = await res.json();
+    localStorage.setItem("cp_token", data.token);
+    localStorage.setItem("cp_user", JSON.stringify(data.user));
+    setUser(data.user);
+  };
+
   return (
-    <AuthContext.Provider value={{ user, loading, login, logout }}>
+    <AuthContext.Provider value={{ user, loading, login, logout, refreshUser }}>
       {children}
     </AuthContext.Provider>
   );

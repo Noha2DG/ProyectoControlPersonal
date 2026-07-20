@@ -227,7 +227,7 @@ function Dashboard() {
     <div className="min-h-screen bg-gray-100 flex flex-col">
 
       {/* Header */}
-      <header className="bg-blue-700 text-white shadow-md z-10 shrink-0">
+      <header className="bg-blue-800 text-white shadow-md z-10 shrink-0">
         <div className="px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <button onClick={() => setSidebarOpen(o => !o)}
@@ -242,10 +242,10 @@ function Dashboard() {
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-4">
             {perm("kiosco", "ver") && (
               <a href="#/kiosco" onClick={() => { window.location.hash = "#/kiosco"; }}
-                className="hidden sm:flex items-center gap-1.5 text-blue-200 hover:text-white text-xs border border-blue-500 px-2.5 py-1.5 rounded-lg transition">
+                className="hidden sm:flex items-center gap-1.5 text-blue-200 hover:text-white text-xs border border-blue-200 px-2.5 py-1.5 rounded-lg transition">
                 <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
@@ -254,20 +254,20 @@ function Dashboard() {
             )}
             {perm("kiosco_areas", "ver") && (
               <a href="#/transferencias" onClick={() => { window.location.hash = "#/transferencias"; }}
-                className="hidden sm:flex items-center gap-1.5 text-blue-200 hover:text-white text-xs border border-blue-500 px-2.5 py-1.5 rounded-lg transition">
+                className="hidden sm:flex items-center gap-1.5 text-blue-200 hover:text-white text-xs border border-blue-200 px-2.5 py-1.5 rounded-lg transition">
                 <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
                 </svg>
-                Kiosco Áreas
+                Transferencias Áreas
               </a>
             )}
             {perm("equipo", "ver") && (
               <a href="#/equipo" onClick={() => { window.location.hash = "#/equipo"; }}
-                className="hidden sm:flex items-center gap-1.5 text-blue-200 hover:text-white text-xs border border-blue-500 px-2.5 py-1.5 rounded-lg transition">
+                className="hidden sm:flex items-center gap-1.5 text-blue-200 hover:text-white text-xs border border-blue-200 px-2.5 py-1.5 rounded-lg transition">
                 <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
                 </svg>
-                Kiosco Uniformes
+                Asignación Uniformes
               </a>
             )}
 

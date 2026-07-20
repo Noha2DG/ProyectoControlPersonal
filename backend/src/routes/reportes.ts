@@ -101,6 +101,11 @@ router.get("/produccion", requireAuth, requirePerm("destajo", "ver"), async (req
                 AND tr.FechaHora <= pd.FechaHora
                 AND (tr.FechaSalida IS NULL OR tr.FechaSalida >= pd.FechaHora)
               ORDER BY tr.FechaHora DESC LIMIT 1) AS Area,
+             (SELECT tr.FechaHora FROM Transferencias tr
+              WHERE tr.Codigo = pd.Codigo
+                AND tr.FechaHora <= pd.FechaHora
+                AND (tr.FechaSalida IS NULL OR tr.FechaSalida >= pd.FechaHora)
+              ORDER BY tr.FechaHora DESC LIMIT 1) AS EntradaArea,
              tp.Lote, pd.FechaHora, tp.ClasePT, cl.Descripcion AS Producto, tp.Talla, ta.Descripcion AS DescripcionTalla,
              pd.Peso AS Kilos
       FROM PesajeDetalle pd

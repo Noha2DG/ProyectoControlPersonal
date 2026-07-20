@@ -75,15 +75,16 @@ router.post("/", async (req: Request, res: Response) => {
       ? { Codigo: prevTransf[0].CodigoArea, Nombre: prevTransf[0].NombreArea }
       : null;
 
-    const tieneEntrada = movHoy.some((m: any) => m.Tipo === "Entrada");
-    const tieneSalida  = movHoy.some((m: any) => m.Tipo === "Salida");
+    // Se evalúa el ÚLTIMO movimiento del día (no "existe algún Entrada/Salida"): en
+    // turno nocturno un empleado puede tener Salida de madrugada y luego Entrada esa
+    // misma noche para su siguiente turno, y ese Entrada posterior debe habilitarlo.
+    const ultimoTipoHoy = movHoy.length ? movHoy[movHoy.length - 1].Tipo : null;
 
-    if (!tieneEntrada) {
-      res.status(400).json({ error: "No tiene entrada general registrada hoy" });
-      return;
-    }
-    if (tieneSalida) {
-      res.status(400).json({ error: "Ya marcó salida general, no puede registrar transferencia" });
+    if (ultimoTipoHoy !== "Entrada") {
+      const error = ultimoTipoHoy === "Salida"
+        ? "Ya marcó salida general, no puede registrar transferencia"
+        : "No tiene entrada general registrada hoy";
+      res.status(400).json({ error });
       return;
     }
 
