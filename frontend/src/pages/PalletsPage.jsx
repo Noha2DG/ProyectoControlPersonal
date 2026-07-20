@@ -1,7 +1,13 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { authHeader } from "../context/AuthContext.jsx";
+import { useColWidths, Th, Colgroup } from "../components/ResizableTh.jsx";
 
 const API = "/api/pallets";
+
+const MASTERS_COL_DEFAULTS = { correlativo: 100, pedido: 100, cliente: 150, lote: 110, procesoTallaPres: 170, kg: 80, lb: 80, hora: 130, acciones: 90 };
+const MASTERS_COLS_BASE = ["correlativo", "pedido", "cliente", "lote", "procesoTallaPres", "kg", "lb", "hora"];
+const PALLETS_COL_DEFAULTS = { pallet: 110, estatus: 100, area: 130, origen: 130, masters: 110, cuadre: 110, creado: 170, cerrado: 170, acciones: 130 };
+const PALLETS_COLS = Object.keys(PALLETS_COL_DEFAULTS);
 
 const ESTATUS_BADGE = {
   Abierto:   "bg-blue-100 text-blue-700",
@@ -33,6 +39,7 @@ function PanelEscaneo({ palletId, onClose, onCambio }) {
   const [mensaje, setMensaje] = useState(null); // { ok: bool, texto }
   const [enviando, setEnviando] = useState(false);
   const inputRef = useRef(null);
+  const [widths, startResize] = useColWidths("pallet_masters", MASTERS_COL_DEFAULTS);
 
   const fetchDetalle = useCallback(async () => {
     const res = await fetch(`${API}/${palletId}`, { headers: authHeader() });
@@ -44,6 +51,7 @@ function PanelEscaneo({ palletId, onClose, onCambio }) {
   useEffect(() => { if (pallet?.Estatus === "Abierto") inputRef.current?.focus(); }, [pallet?.Estatus, mensaje]);
 
   const abierto = pallet?.Estatus === "Abierto";
+  const MASTERS_COLS = abierto ? [...MASTERS_COLS_BASE, "acciones"] : MASTERS_COLS_BASE;
 
   const handleEscanear = async (e) => {
     e.preventDefault();
@@ -154,18 +162,19 @@ function PanelEscaneo({ palletId, onClose, onCambio }) {
               </div>
 
               <div className="overflow-x-auto border border-gray-200 rounded-lg">
-                <table className="w-full text-xs">
+                <table className="w-full text-xs table-fixed">
+                  <Colgroup columns={MASTERS_COLS} widths={widths} />
                   <thead className="bg-gray-50 text-gray-500">
                     <tr>
-                      <th className="px-3 py-2 text-left">Correlativo</th>
-                      <th className="px-3 py-2 text-left">Pedido</th>
-                      <th className="px-3 py-2 text-left">Cliente</th>
-                      <th className="px-3 py-2 text-left">Lote</th>
-                      <th className="px-3 py-2 text-left">Proceso/Talla/Pres.</th>
-                      <th className="px-3 py-2 text-right">Kg</th>
-                      <th className="px-3 py-2 text-right">Lb</th>
-                      <th className="px-3 py-2 text-left">Hora</th>
-                      {abierto && <th className="px-3 py-2 text-center">Acciones</th>}
+                      <Th width={widths.correlativo} onResizeStart={startResize("correlativo")} className="px-3 py-2 text-left">Correlativo</Th>
+                      <Th width={widths.pedido} onResizeStart={startResize("pedido")} className="px-3 py-2 text-left">Pedido</Th>
+                      <Th width={widths.cliente} onResizeStart={startResize("cliente")} className="px-3 py-2 text-left">Cliente</Th>
+                      <Th width={widths.lote} onResizeStart={startResize("lote")} className="px-3 py-2 text-left">Lote</Th>
+                      <Th width={widths.procesoTallaPres} onResizeStart={startResize("procesoTallaPres")} className="px-3 py-2 text-left">Proceso/Talla/Pres.</Th>
+                      <Th width={widths.kg} onResizeStart={startResize("kg")} className="px-3 py-2 text-right">Kg</Th>
+                      <Th width={widths.lb} onResizeStart={startResize("lb")} className="px-3 py-2 text-right">Lb</Th>
+                      <Th width={widths.hora} onResizeStart={startResize("hora")} className="px-3 py-2 text-left">Hora</Th>
+                      {abierto && <Th width={widths.acciones} onResizeStart={startResize("acciones")} className="px-3 py-2 text-center">Acciones</Th>}
                     </tr>
                   </thead>
                   <tbody>
@@ -283,6 +292,7 @@ export default function PalletsPage() {
   const [origenes, setOrigenes] = useState([]);
   const [bodegasVirtuales, setBodegasVirtuales] = useState([]);
   const [modalNuevo, setModalNuevo] = useState(false);
+  const [widthsPallets, startResizePallets] = useColWidths("pallets", PALLETS_COL_DEFAULTS);
 
   useEffect(() => {
     fetch("/api/origen", { headers: authHeader() }).then(r => r.json()).then(data => {
@@ -346,18 +356,19 @@ export default function PalletsPage() {
 
       <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full text-sm">
+          <table className="w-full text-sm table-fixed">
+            <Colgroup columns={PALLETS_COLS} widths={widthsPallets} />
             <thead className="bg-gray-50 text-gray-500 border-b border-gray-200">
               <tr>
-                <th className="px-4 py-3 text-left">Pallet</th>
-                <th className="px-4 py-3 text-center">Estatus</th>
-                <th className="px-4 py-3 text-left">Área</th>
-                <th className="px-4 py-3 text-left">Origen</th>
-                <th className="px-4 py-3 text-right">Masters</th>
-                <th className="px-4 py-3 text-center">Cuadre</th>
-                <th className="px-4 py-3 text-left">Creado</th>
-                <th className="px-4 py-3 text-left">Cerrado</th>
-                <th className="px-4 py-3 text-center">Acciones</th>
+                <Th width={widthsPallets.pallet} onResizeStart={startResizePallets("pallet")} className="px-4 py-3 text-left">Pallet</Th>
+                <Th width={widthsPallets.estatus} onResizeStart={startResizePallets("estatus")} className="px-4 py-3 text-center">Estatus</Th>
+                <Th width={widthsPallets.area} onResizeStart={startResizePallets("area")} className="px-4 py-3 text-left">Área</Th>
+                <Th width={widthsPallets.origen} onResizeStart={startResizePallets("origen")} className="px-4 py-3 text-left">Origen</Th>
+                <Th width={widthsPallets.masters} onResizeStart={startResizePallets("masters")} className="px-4 py-3 text-right">Masters</Th>
+                <Th width={widthsPallets.cuadre} onResizeStart={startResizePallets("cuadre")} className="px-4 py-3 text-center">Cuadre</Th>
+                <Th width={widthsPallets.creado} onResizeStart={startResizePallets("creado")} className="px-4 py-3 text-left">Creado</Th>
+                <Th width={widthsPallets.cerrado} onResizeStart={startResizePallets("cerrado")} className="px-4 py-3 text-left">Cerrado</Th>
+                <Th width={widthsPallets.acciones} onResizeStart={startResizePallets("acciones")} className="px-4 py-3 text-center">Acciones</Th>
               </tr>
             </thead>
             <tbody>
