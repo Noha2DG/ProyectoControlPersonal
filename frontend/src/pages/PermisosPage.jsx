@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { authHeader } from "../context/AuthContext.jsx";
+import { exportarPermisos } from "../utils/exportExcel.js";
 
 const API = "/api/permisos";
 
@@ -189,7 +190,7 @@ export default function PermisosPage() {
     <div>
       <div className="flex flex-wrap gap-3 items-center mb-4">
         <div className="flex items-center gap-2">
-          <label className="text-sm text-gray-600 font-medium">Fecha:</label>
+          <label className="text-sm text-gray-600 font-medium">Desde:</label>
           <input type="date" value={fecha} onChange={e => setFecha(e.target.value)}
             className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
         </div>
@@ -197,6 +198,16 @@ export default function PermisosPage() {
           value={busqueda} onChange={e => setBusqueda(e.target.value)}
           className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm w-64 focus:outline-none focus:ring-2 focus:ring-blue-400" />
         <span className="text-sm text-gray-500 ml-auto">{filtrados.length} permiso{filtrados.length !== 1 ? "s" : ""}</span>
+        {filtrados.length > 0 && (
+          <button
+            onClick={() => exportarPermisos(filtrados, fecha)}
+            className="flex items-center gap-1.5 bg-green-600 hover:bg-green-700 text-white text-sm font-semibold px-3 py-1.5 rounded-lg transition">
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+            </svg>
+            Exportar Excel
+          </button>
+        )}
         <button
           onClick={() => setModal({ open: true, permiso: null })}
           className="bg-blue-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-blue-700 transition"
@@ -212,6 +223,7 @@ export default function PermisosPage() {
           <table className="w-full text-sm">
             <thead>
               <tr className="bg-gray-100 text-gray-600 uppercase text-xs tracking-wider">
+                <th className="px-4 py-3 text-left">Fecha</th>
                 <th className="px-4 py-3 text-left">Código</th>
                 <th className="px-4 py-3 text-left">Nombre</th>
                 <th className="px-4 py-3 text-left">Tipo de Permiso</th>
@@ -222,9 +234,10 @@ export default function PermisosPage() {
             </thead>
             <tbody className="divide-y divide-gray-100">
               {filtrados.length === 0 ? (
-                <tr><td colSpan={6} className="px-4 py-10 text-center text-gray-400">Sin permisos para esta fecha</td></tr>
+                <tr><td colSpan={7} className="px-4 py-10 text-center text-gray-400">Sin permisos desde esta fecha</td></tr>
               ) : filtrados.map(p => (
                 <tr key={p.id} className="hover:bg-gray-50 transition">
+                  <td className="px-4 py-2.5 text-gray-700 text-xs">{p.Fecha}</td>
                   <td className="px-4 py-2.5 font-mono font-bold text-gray-700">{p.CodigoEmpleado}</td>
                   <td className="px-4 py-2.5 text-gray-900 text-xs">{p.NombreCompleto}</td>
                   <td className="px-4 py-2.5 text-gray-700 text-xs">{p.descripcion}</td>

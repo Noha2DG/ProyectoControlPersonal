@@ -1,5 +1,12 @@
 @import "tailwindcss";
 
+/* Tablas con columnas redimensionables (ver ResizableTh.jsx): evita que texto largo
+   sin espacios (códigos, etc.) se desborde de una columna angosta. */
+table.table-fixed td,
+table.table-fixed th {
+  overflow-wrap: break-word;
+}
+
 /* Al imprimir, solo se muestra lo que se monta en #print-root (ver PlanificacionPage.jsx) —
    evita el bug de position:fixed repitiéndose en cada hoja y de contenido oculto que sigue
    contando para la paginación. */
