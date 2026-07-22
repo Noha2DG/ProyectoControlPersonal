@@ -1,6 +1,5 @@
 import { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
-import crypto from "crypto";
 
 export interface Permisos {
   empleados?:      { ver?: boolean; crear?: boolean; editar?: boolean; baja?: boolean };
@@ -46,35 +45,6 @@ export function requireAuth(req: AuthRequest, res: Response, next: NextFunction)
   } catch {
     res.status(401).json({ error: "Token inválido o expirado" });
   }
-}
-
-const REPORT_API_KEY = process.env.REPORT_API_KEY;
-
-// Comparación a tiempo constante — evita que un atacante infiera la clave midiendo cuánto tarda el
-// rechazo carácter por carácter. Buffer.from + timingSafeEqual exige igual longitud, así que se
-// descarta el caso de longitudes distintas antes (timingSafeEqual lanza en vez de devolver false).
-function claveReporteValida(recibida: string): boolean {
-  if (!REPORT_API_KEY) return false;
-  const a = Buffer.from(recibida);
-  const b = Buffer.from(REPORT_API_KEY);
-  return a.length === b.length && crypto.timingSafeEqual(a, b);
-}
-
-// Autenticación para consumidores que no pueden sostener una sesión de usuario (Excel/Power Query
-// refrescando un reporte por horas o días, sin que nadie vuelva a iniciar sesión): una API key
-// estática por header, atada a un "usuario" sintético de solo lectura con EXACTAMENTE los permisos
-// que la propia ruta declara — nunca admin, nunca más que lo que ese reporte necesita. Si la key no
-// viene o no coincide, cae al login normal por JWT (mismo comportamiento de siempre para el resto).
-export function requireAuthOrApiKey(permisos: Permisos) {
-  return (req: AuthRequest, res: Response, next: NextFunction) => {
-    const apiKey = req.headers["x-report-key"];
-    if (typeof apiKey === "string" && claveReporteValida(apiKey)) {
-      req.user = { id: 0, username: "reporte-api", nombre: "Reporte API", rol: "readonly", permisos };
-      next();
-      return;
-    }
-    requireAuth(req, res, next);
-  };
 }
 
 export function requireAdmin(req: AuthRequest, res: Response, next: NextFunction) {

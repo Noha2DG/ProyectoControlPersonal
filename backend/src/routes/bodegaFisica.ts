@@ -1,7 +1,7 @@
 import { Router, Request, Response } from "express";
 import jwt from "jsonwebtoken";
 import prisma from "../lib/prisma.ts";
-import { requireAuth, requirePerm, requireAuthOrApiKey } from "../middleware/auth.ts";
+import { requireAuth, requirePerm } from "../middleware/auth.ts";
 
 // Bodega física: posiciones en racks para pallets Cerrados (ver createBodegaFisica.ts para el
 // modelo y las decisiones). La ocupación vive en Pallets.PosicionId (UNIQUE = candado real);
@@ -135,7 +135,7 @@ router.get("/pendientes", requireAuth, requirePerm("bodega", "ver"), async (_req
 // FÍSICAMENTE cada polín hoy). Una fila por Polín × línea de pedido, mismo grano que la hoja cruda
 // del equipo de producción. Al no depender de PosicionId para incluir la fila (solo para calcular
 // Estatus/Posición), el día que exista la salida por remisión esta vista se sigue actualizando sola.
-router.get("/existencias", requireAuthOrApiKey({ bodega: { ver: true } }), requirePerm("bodega", "ver"), async (_req: Request, res: Response) => {
+router.get("/existencias", requireAuth, requirePerm("bodega", "ver"), async (_req: Request, res: Response) => {
   try {
     const rows: any[] = await prisma.$queryRaw`
       SELECT ped.CodigoPedido AS Pedido, cli.RazonSocial AS Cliente, sub.RazonSocial AS Subcliente,
