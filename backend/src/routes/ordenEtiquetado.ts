@@ -3,6 +3,7 @@ import jwt from "jsonwebtoken";
 import prisma from "../lib/prisma.ts";
 import { requireAuth, requirePerm } from "../middleware/auth.ts";
 import { componerCodigoLote, piscinaRequiereCiclo } from "../lib/codigoLote.ts";
+import { calcularTechoLinea, calcularTechoLineaBatch } from "../lib/masters.ts";
 
 const router = Router();
 
@@ -35,7 +36,20 @@ function formatear(rows: any[]) {
     Talla: Number(r.Talla),
     CantidadMaster: Number(r.CantidadMaster),
     Impresas: Number(r.Impresas),
+    Anuladas: Number(r.Anuladas),
+    Escaneadas: Number(r.Escaneadas),
   }));
+}
+
+// Objetivo/Escaneado de la LÍNEA de pedido (no de esta captura puntual) — se agrega aparte porque
+// varias capturas pueden compartir el mismo DetalleId; un solo batch evita repetir la consulta por
+// cada fila que caiga en la misma línea. Ver calcularTechoLineaBatch en lib/masters.ts.
+async function agregarTechoLinea(rows: any[]) {
+  const techos = await calcularTechoLineaBatch(prisma, rows.map(r => Number(r.DetalleId)));
+  return rows.map(r => {
+    const techo = techos.get(Number(r.DetalleId));
+    return { ...r, ObjetivoLinea: techo?.Objetivo ?? null, EscaneadoLinea: techo?.Escaneado ?? null };
+  });
 }
 
 const SELECT_ORDEN = `
@@ -44,16 +58,19 @@ const SELECT_ORDEN = `
          oe.Origen, org.Descripcion AS DescripcionOrigen,
          oe.Congelacion, cong.Descripcion AS DescripcionCongelacion,
          oe.CantidadMaster, oe.Estatus, oe.RegistradoPor, oe.CreadoEn,
-         dp.CodigoPedido, dp.Clase, cl.Descripcion AS DescripcionClase,
+         dp.CodigoPedido, dp.Clase, cl.Descripcion AS DescripcionClase, pc.Descripcion AS DescripcionProceso,
          dp.Talla, ta.Descripcion AS DescripcionTalla,
          dp.Presentacion, pr.Descripcion AS DescripcionPresentacion,
          emM.Descripcion AS DescripcionEmpaqueMaster, emA.Descripcion AS DescripcionEmpaqueAccesorio,
          f.Codigo AS CodigoFinca, f.Descripcion AS NombreFinca, pi.Nombre AS NombrePiscina,
          cli.RazonSocial AS NombreCliente, sub.RazonSocial AS NombreSubcliente,
-         (SELECT COUNT(*) FROM EtiquetaImpresa ei WHERE ei.OrdenId = oe.OrdenId AND ei.Estatus = 'Activa') AS Impresas
+         (SELECT COUNT(*) FROM EtiquetaImpresa ei WHERE ei.OrdenId = oe.OrdenId AND ei.Estatus = 'Activa') AS Impresas,
+         (SELECT COUNT(*) FROM EtiquetaImpresa ei WHERE ei.OrdenId = oe.OrdenId AND ei.Estatus = 'Anulada') AS Anuladas,
+         (SELECT COUNT(*) FROM Masters m JOIN EtiquetaImpresa ei ON m.EtiquetaId = ei.EtiquetaId WHERE ei.OrdenId = oe.OrdenId) AS Escaneadas
   FROM OrdenEtiquetado oe
   JOIN DetallePedido dp ON oe.DetalleId = dp.DetalleId
   JOIN Clase cl ON dp.Clase = cl.Clase
+  JOIN Procesos pc ON cl.Proceso = pc.Proceso
   JOIN Tallas ta ON dp.Talla = ta.Codigo
   JOIN Presentacion pr ON dp.Presentacion = pr.Codigo
   JOIN Empaques emM ON dp.EmpaqueMaster = emM.Codigo
@@ -84,16 +101,19 @@ router.get("/", requireAuth, requirePerm("etiquetado", "ver"), async (req: Reque
     } else {
       rows = await prisma.$queryRawUnsafe(`${SELECT_ORDEN} ORDER BY oe.OrdenId DESC LIMIT 500`);
     }
-    res.json(formatear(rows));
+    res.json(formatear(await agregarTechoLinea(rows)));
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
 });
 
 // Objetivo = CEILING(CantidadCajas / CajasXMaster) de la línea de pedido.
-// Acumulado = suma de CantidadMaster ya declarados en otras capturas de esa misma línea
-// (todavía no hay evento de "escaneado en bodega" — ver project_ordenetiquetado_design;
-// mientras ese módulo no exista, el techo se valida contra lo declarado como aproximación).
+// Acumulado = suma de CantidadMaster ya declarados en otras capturas de esa misma línea — el candado
+// real que bloquea declarar de más SIGUE siendo este (declarado), sin cambios: revisado jul 2026 con
+// el usuario y se dejó así a propósito, para no acoplar cuánto se puede trabajar cada día al ritmo de
+// escaneo de bodega. Escaneado (Bodega ya existe, a diferencia de cuando se escribió este comentario
+// originalmente) se agrega aparte, solo informativo — hoy lo consume la pantalla de captura para
+// mostrar avance real, reusando el mismo cálculo que ya usa Bodega/el reporte de Impresión.
 async function calcularResumen(detalleId: number, excluirOrdenId?: number) {
   const detalle: any[] = await prisma.$queryRaw`
     SELECT dp.CantidadCajas, pr.CajasXMaster
@@ -113,7 +133,8 @@ async function calcularResumen(detalleId: number, excluirOrdenId?: number) {
         WHERE DetalleId = ${detalleId} AND Estatus != 'Cancelada'
       `;
   const acumulado = Number(acumRows[0].acumulado);
-  return { Objetivo: objetivo, Acumulado: acumulado, Pendiente: objetivo - acumulado };
+  const techo = await calcularTechoLinea(prisma, detalleId);
+  return { Objetivo: objetivo, Acumulado: acumulado, Pendiente: objetivo - acumulado, Escaneado: techo?.Escaneado ?? 0 };
 }
 
 // GET /api/orden-etiquetado/resumen/:detalleId
@@ -200,9 +221,40 @@ router.put("/:id", requireAuth, requirePerm("etiquetado", "editar"), async (req:
       res.status(400).json({ error: "La cantidad de master debe ser un entero positivo" });
       return;
     }
+
+    // No se puede bajar la cantidad por debajo de lo que esta captura ya tiene impreso (Activas) —
+    // sin este candado quedaría "Impresas" mostrando más que "Declarado" en la tabla, sin ninguna
+    // razón real que lo justifique (mismo criterio que ya se usaba a nivel de línea completa).
+    const impresasRows: any[] = await prisma.$queryRaw`SELECT COUNT(*) AS n FROM EtiquetaImpresa WHERE OrdenId = ${id} AND Estatus = 'Activa'`;
+    const impresas = Number(impresasRows[0].n);
+    if (cantidad < impresas) {
+      res.status(400).json({ error: `No se puede bajar la cantidad a ${cantidad} — esta captura ya tiene ${impresas} etiquetas activas impresas.` });
+      return;
+    }
+
     if (Estatus && !["Pendiente", "Cancelada"].includes(Estatus)) {
       res.status(400).json({ error: "Estatus inválido" });
       return;
+    }
+
+    // Candado de posicionamiento: si algún master de esta captura ya está en un pallet con posición
+    // física, cancelar la captura contradice ese sellado (todo el proceso anterior queda bloqueado
+    // al posicionar) — misma regla que anular/reimprimir sus etiquetas.
+    if (Estatus === "Cancelada") {
+      const posicionados: any[] = await prisma.$queryRaw`
+        SELECT p.Codigo AS PalletCodigo, po.Codigo AS PosicionCodigo
+        FROM Masters m
+        JOIN EtiquetaImpresa ei ON m.EtiquetaId = ei.EtiquetaId
+        JOIN Pallets p ON m.PalletId = p.PalletId
+        JOIN Posiciones po ON p.PosicionId = po.PosicionId
+        WHERE ei.OrdenId = ${id} LIMIT 1
+      `;
+      if (posicionados.length) {
+        res.status(400).json({
+          error: `No se puede cancelar: esta captura tiene masters en el pallet ${posicionados[0].PalletCodigo}, ya posicionado en bodega física (${posicionados[0].PosicionCodigo}) — su contenido está sellado.`,
+        });
+        return;
+      }
     }
 
     const piscina = await obtenerPiscina(Number(PiscinaId));

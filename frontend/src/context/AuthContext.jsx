@@ -60,6 +60,17 @@ export function AuthProvider({ children }) {
 
 export const useAuth = () => useContext(AuthContext);
 
+// Misma regla que tienePermiso() en el backend (middleware/auth.ts) — se repite aquí
+// porque el frontend no puede llamar directo a esa función. Debe existir un mirror en
+// ambos lados: el backend es quien realmente bloquea, esto solo oculta la UI para que
+// un usuario "solo Ver" no vea botones que el servidor le va a rechazar igual.
+export function usePuede(mod, accion) {
+  const { user } = useAuth();
+  if (!user) return false;
+  if (user.rol === "admin" && !user.permisos) return true;
+  return !!user.permisos?.[mod]?.[accion];
+}
+
 export function authHeader() {
   const token = localStorage.getItem("cp_token");
   return token ? { Authorization: `Bearer ${token}` } : {};

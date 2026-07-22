@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { authHeader } from "../context/AuthContext.jsx";
+import { authHeader, usePuede } from "../context/AuthContext.jsx";
 import { useColWidths, Th, Colgroup } from "../components/ResizableTh.jsx";
 
 const ESTATUS = ["Proceso", "Terminado"];
@@ -282,6 +282,9 @@ function DetalleModal({ item, codigoPedido, clases, tallas, presentaciones, empa
 const ESTATUS_BADGE = { Proceso: "bg-yellow-100 text-yellow-700", Terminado: "bg-green-100 text-green-700" };
 
 export default function PedidosPage() {
+  const puedeCrear = usePuede("catalogos", "crear");
+  const puedeEditar = usePuede("catalogos", "editar");
+  const puedeEliminar = usePuede("catalogos", "eliminar");
   const [pedidos, setPedidos] = useState([]);
   const [clientes, setClientes] = useState([]);
   const [clases, setClases] = useState([]);
@@ -379,10 +382,12 @@ export default function PedidosPage() {
           <input type="text" placeholder="Buscar pedido..." value={busqueda} onChange={e => setBusqueda(e.target.value)}
             className="border border-gray-300 rounded-lg px-3 py-2 text-sm w-52 focus:outline-none focus:ring-2 focus:ring-blue-400" />
           <span className="text-sm text-gray-500 ml-auto">{pedidosFiltrados.length} pedido{pedidosFiltrados.length !== 1 ? "s" : ""}</span>
-          <button onClick={() => setModalPedido({ open: true, item: null })}
-            className="bg-blue-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-blue-700 transition">
-            + Nuevo Pedido
-          </button>
+          {puedeCrear && (
+            <button onClick={() => setModalPedido({ open: true, item: null })}
+              className="bg-blue-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-blue-700 transition">
+              + Nuevo Pedido
+            </button>
+          )}
         </div>
 
         {loading ? (
@@ -411,8 +416,10 @@ export default function PedidosPage() {
                       </span>
                     </td>
                     <td className="px-4 py-3 text-center whitespace-nowrap" onClick={e => e.stopPropagation()}>
-                      <button onClick={() => setModalPedido({ open: true, item: p })}
-                        className="text-blue-600 hover:text-blue-800 text-xs font-medium px-2 py-1 rounded hover:bg-blue-50 transition">Editar</button>
+                      {puedeEditar && (
+                        <button onClick={() => setModalPedido({ open: true, item: p })}
+                          className="text-blue-600 hover:text-blue-800 text-xs font-medium px-2 py-1 rounded hover:bg-blue-50 transition">Editar</button>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -428,10 +435,12 @@ export default function PedidosPage() {
           <h3 className="text-sm font-medium text-gray-600">
             Detalle {pedidoSel ? <span className="font-mono font-bold text-gray-800">— {pedidoSel.CodigoPedido}</span> : ""}
           </h3>
-          <button onClick={() => setModalDetalle({ open: true, item: null })} disabled={!pedidoSel}
-            className="ml-auto bg-blue-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-blue-700 transition disabled:opacity-50">
-            + Nueva Línea
-          </button>
+          {puedeCrear && (
+            <button onClick={() => setModalDetalle({ open: true, item: null })} disabled={!pedidoSel}
+              className="ml-auto bg-blue-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-blue-700 transition disabled:opacity-50">
+              + Nueva Línea
+            </button>
+          )}
         </div>
 
         {!pedidoSel ? (
@@ -462,10 +471,14 @@ export default function PedidosPage() {
                     <td className="px-4 py-3 text-right whitespace-nowrap">{d.KgPedido}</td>
                     <td className="px-4 py-3 text-center whitespace-nowrap">
                       <div className="flex justify-center gap-2">
-                        <button onClick={() => setModalDetalle({ open: true, item: d })}
-                          className="text-blue-600 hover:text-blue-800 text-xs font-medium px-2 py-1 rounded hover:bg-blue-50 transition">Editar</button>
-                        <button onClick={() => handleDeleteDetalle(d)}
-                          className="text-red-500 hover:text-red-700 text-xs font-medium px-2 py-1 rounded hover:bg-red-50 transition">Eliminar</button>
+                        {puedeEditar && (
+                          <button onClick={() => setModalDetalle({ open: true, item: d })}
+                            className="text-blue-600 hover:text-blue-800 text-xs font-medium px-2 py-1 rounded hover:bg-blue-50 transition">Editar</button>
+                        )}
+                        {puedeEliminar && (
+                          <button onClick={() => handleDeleteDetalle(d)}
+                            className="text-red-500 hover:text-red-700 text-xs font-medium px-2 py-1 rounded hover:bg-red-50 transition">Eliminar</button>
+                        )}
                       </div>
                     </td>
                   </tr>

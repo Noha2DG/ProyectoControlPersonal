@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { authHeader } from "../context/AuthContext.jsx";
+import { authHeader, usePuede } from "../context/AuthContext.jsx";
 import { useColWidths, Th, Colgroup } from "./ResizableTh.jsx";
 
 function CatalogoModal({ item, pk, pkLabel, pkType, camposExtra, onSave, onClose }) {
@@ -74,6 +74,9 @@ function CatalogoModal({ item, pk, pkLabel, pkType, camposExtra, onSave, onClose
 // api: ruta base, ej "/api/familia". pk: nombre del campo llave, ej "Codigo".
 // camposExtra: [{ campo: "TipoEmpaque", label: "Tipo de Empaque", opciones: ["Individual","Master"] }]
 export default function CatalogoSimpleTable({ api, pk, pkLabel = "Código", pkType = "text", nuevoLabel = "+ Nuevo", camposExtra = [] }) {
+  const puedeCrear = usePuede("catalogos", "crear");
+  const puedeEditar = usePuede("catalogos", "editar");
+  const puedeEliminar = usePuede("catalogos", "eliminar");
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState({ open: false, item: null });
@@ -141,10 +144,12 @@ export default function CatalogoSimpleTable({ api, pk, pkLabel = "Código", pkTy
           ))}
         </div>
         <span className="text-sm text-gray-500 ml-auto">{filtrados.length} registro{filtrados.length !== 1 ? "s" : ""}</span>
-        <button onClick={() => setModal({ open: true, item: null })}
-          className="bg-blue-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-blue-700 transition">
-          {nuevoLabel}
-        </button>
+        {puedeCrear && (
+          <button onClick={() => setModal({ open: true, item: null })}
+            className="bg-blue-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-blue-700 transition">
+            {nuevoLabel}
+          </button>
+        )}
       </div>
 
       {loading ? (
@@ -177,14 +182,18 @@ export default function CatalogoSimpleTable({ api, pk, pkLabel = "Código", pkTy
                   </td>
                   <td className="px-4 py-3 text-center">
                     <div className="flex justify-center gap-2">
-                      <button onClick={() => setModal({ open: true, item })}
-                        className="text-blue-600 hover:text-blue-800 text-xs font-medium px-2 py-1 rounded hover:bg-blue-50 transition">
-                        Editar
-                      </button>
-                      <button onClick={() => handleToggle(item)}
-                        className={`text-xs font-medium px-2 py-1 rounded transition ${item.Activo ? "text-red-500 hover:text-red-700 hover:bg-red-50" : "text-green-600 hover:text-green-800 hover:bg-green-50"}`}>
-                        {item.Activo ? "Desactivar" : "Activar"}
-                      </button>
+                      {puedeEditar && (
+                        <button onClick={() => setModal({ open: true, item })}
+                          className="text-blue-600 hover:text-blue-800 text-xs font-medium px-2 py-1 rounded hover:bg-blue-50 transition">
+                          Editar
+                        </button>
+                      )}
+                      {((item.Activo && puedeEliminar) || (!item.Activo && puedeEditar)) && (
+                        <button onClick={() => handleToggle(item)}
+                          className={`text-xs font-medium px-2 py-1 rounded transition ${item.Activo ? "text-red-500 hover:text-red-700 hover:bg-red-50" : "text-green-600 hover:text-green-800 hover:bg-green-50"}`}>
+                          {item.Activo ? "Desactivar" : "Activar"}
+                        </button>
+                      )}
                     </div>
                   </td>
                 </tr>

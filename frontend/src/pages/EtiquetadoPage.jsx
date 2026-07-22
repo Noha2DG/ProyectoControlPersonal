@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { authHeader } from "../context/AuthContext.jsx";
+import { authHeader, usePuede } from "../context/AuthContext.jsx";
 import { componerCodigoLote, piscinaRequiereCiclo } from "../utils/codigoLote.js";
 import { useColWidths, Th, Colgroup } from "../components/ResizableTh.jsx";
 
@@ -15,6 +15,9 @@ const AREAS_ETIQUETADO = ["EF", "ES", "MV", "EY", "RE"]; // Tunel, Masterizado E
 const FORM_VACIO = { Finca: "", PiscinaId: "", Ciclo: "", AreaCodigo: "", FechaProduccion: hoy(), Color: "SC", Origen: "", Congelacion: "", CantidadMaster: "" };
 
 export default function EtiquetadoPage() {
+  const puedeCrear = usePuede("etiquetado", "crear");
+  const puedeEditar = usePuede("etiquetado", "editar");
+  const puedeEliminar = usePuede("etiquetado", "eliminar");
   const [pedidos, setPedidos] = useState([]);
   const [busquedaPedido, setBusquedaPedido] = useState("");
   const [pedidoSel, setPedidoSel] = useState(null);
@@ -242,13 +245,17 @@ export default function EtiquetadoPage() {
                 Master: {descEmpaque(detalleSel.EmpaqueMaster)}{detalleSel.EmpaqueAccesorio ? ` · Caja: ${descEmpaque(detalleSel.EmpaqueAccesorio)}` : ""}
               </div>
               {resumen && (() => {
-                const pct = resumen.Acumulado / Math.max(1, resumen.Objetivo);
+                // Este resumen muestra el avance REAL (escaneado en bodega), no lo declarado — el
+                // candado que bloquea declarar de más sigue comparando contra lo declarado sin
+                // cambios (ver calcularResumen en ordenEtiquetado.ts), esto es solo visualización.
+                const pendienteEscaneado = resumen.Objetivo - resumen.Escaneado;
+                const pct = resumen.Escaneado / Math.max(1, resumen.Objetivo);
                 const colorBarra = pct >= 1 ? "bg-green-500" : pct >= 0.5 ? "bg-yellow-400" : "bg-red-500";
                 return (
                   <div className="flex items-center gap-4 text-sm">
                     <span><span className="font-semibold text-gray-800">{resumen.Objetivo}</span> <span className="text-gray-400">pedido</span></span>
-                    <span><span className="font-semibold text-blue-700">{resumen.Acumulado}</span> <span className="text-gray-400">declarados</span></span>
-                    <span><span className={`font-semibold ${resumen.Pendiente <= 0 ? "text-green-600" : "text-orange-600"}`}>{resumen.Pendiente}</span> <span className="text-gray-400">pendientes</span></span>
+                    <span><span className="font-semibold text-blue-700">{resumen.Escaneado}</span> <span className="text-gray-400">escaneados</span></span>
+                    <span><span className={`font-semibold ${pendienteEscaneado <= 0 ? "text-green-600" : "text-orange-600"}`}>{pendienteEscaneado}</span> <span className="text-gray-400">pendientes</span></span>
                     <div className="flex-1 h-2 bg-gray-100 rounded-full overflow-hidden">
                       <div className={`h-full transition-colors ${colorBarra}`} style={{ width: `${Math.min(100, pct * 100)}%` }} />
                     </div>
@@ -258,6 +265,7 @@ export default function EtiquetadoPage() {
             </div>
 
             {/* Formulario de captura */}
+            {(editando ? puedeEditar : puedeCrear) && (
             <form onSubmit={handleSubmit} className="bg-white rounded-xl shadow px-4 py-4 mb-4 space-y-3">
               <h4 className="text-sm font-semibold text-gray-700">{editando ? "Editar captura" : "Nueva captura"}</h4>
               <div className="grid grid-cols-2 gap-3">
@@ -350,6 +358,7 @@ export default function EtiquetadoPage() {
                 </button>
               </div>
             </form>
+            )}
 
             {/* Histórico de capturas de esta línea */}
             <div className="bg-white rounded-xl shadow overflow-x-auto">
@@ -399,8 +408,12 @@ export default function EtiquetadoPage() {
                       </td>
                       <td className="px-4 py-3 text-center whitespace-nowrap">
                         <div className="flex justify-center gap-2">
-                          <button onClick={() => handleEditar(c)} className="text-blue-600 hover:text-blue-800 text-xs font-medium px-2 py-1 rounded hover:bg-blue-50 transition">Editar</button>
-                          <button onClick={() => handleEliminar(c)} className="text-red-500 hover:text-red-700 text-xs font-medium px-2 py-1 rounded hover:bg-red-50 transition">Eliminar</button>
+                          {puedeEditar && (
+                            <button onClick={() => handleEditar(c)} className="text-blue-600 hover:text-blue-800 text-xs font-medium px-2 py-1 rounded hover:bg-blue-50 transition">Editar</button>
+                          )}
+                          {puedeEliminar && (
+                            <button onClick={() => handleEliminar(c)} className="text-red-500 hover:text-red-700 text-xs font-medium px-2 py-1 rounded hover:bg-red-50 transition">Eliminar</button>
+                          )}
                         </div>
                       </td>
                     </tr>

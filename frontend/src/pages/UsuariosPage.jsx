@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { authHeader, useAuth } from "../context/AuthContext.jsx";
+import { authHeader, useAuth, usePuede } from "../context/AuthContext.jsx";
 import { useColWidths, Th, Colgroup } from "../components/ResizableTh.jsx";
 
 const API = "/api/usuarios";
@@ -274,6 +274,9 @@ function UsuarioModal({ usuario, onSave, onClose }) {
 // ── Página principal ─────────────────────────────────────────────────
 export default function UsuariosPage() {
   const { user, refreshUser } = useAuth();
+  const puedeCrear = usePuede("usuarios", "crear");
+  const puedeEditar = usePuede("usuarios", "editar");
+  const puedeEliminar = usePuede("usuarios", "eliminar");
   const [usuarios, setUsuarios] = useState([]);
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState({ open: false, usuario: null });
@@ -333,10 +336,12 @@ export default function UsuariosPage() {
           <h2 className="text-lg font-bold text-gray-800">Usuarios del sistema</h2>
           <p className="text-sm text-gray-500">Gestión de acceso y permisos</p>
         </div>
-        <button onClick={() => setModal({ open: true, usuario: null })}
-          className="bg-blue-600 text-white font-semibold px-4 py-2 rounded-lg hover:bg-blue-700 transition text-sm">
-          + Nuevo usuario
-        </button>
+        {puedeCrear && (
+          <button onClick={() => setModal({ open: true, usuario: null })}
+            className="bg-blue-600 text-white font-semibold px-4 py-2 rounded-lg hover:bg-blue-700 transition text-sm">
+            + Nuevo usuario
+          </button>
+        )}
       </div>
 
       {loading ? (
@@ -395,14 +400,18 @@ export default function UsuariosPage() {
                     </td>
                     <td className="px-5 py-3 text-center">
                       <div className="flex justify-center gap-2">
-                        <button onClick={() => setModal({ open: true, usuario: u })}
-                          className="text-blue-600 hover:text-blue-800 text-xs font-medium px-2 py-1 rounded hover:bg-blue-50 transition">
-                          Editar
-                        </button>
-                        <button onClick={() => setConfirmDelete(u)}
-                          className="text-red-500 hover:text-red-700 text-xs font-medium px-2 py-1 rounded hover:bg-red-50 transition">
-                          Eliminar
-                        </button>
+                        {puedeEditar && (
+                          <button onClick={() => setModal({ open: true, usuario: u })}
+                            className="text-blue-600 hover:text-blue-800 text-xs font-medium px-2 py-1 rounded hover:bg-blue-50 transition">
+                            Editar
+                          </button>
+                        )}
+                        {puedeEliminar && u.id !== user?.id && (
+                          <button onClick={() => setConfirmDelete(u)}
+                            className="text-red-500 hover:text-red-700 text-xs font-medium px-2 py-1 rounded hover:bg-red-50 transition">
+                            Eliminar
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>

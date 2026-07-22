@@ -16,6 +16,8 @@ import DestajoPage from "./pages/DestajoPage.jsx";
 import EtiquetadoPage from "./pages/EtiquetadoPage.jsx";
 import ImpresionEtiquetasPage from "./pages/ImpresionEtiquetasPage.jsx";
 import PalletsPage from "./pages/PalletsPage.jsx";
+import BodegaFisicaPage from "./pages/BodegaFisicaPage.jsx";
+import ExistenciaBodegaPage from "./pages/ExistenciaBodegaPage.jsx";
 import EmpleadosTable from "./components/EmpleadosTable.jsx";
 import EmpleadoModal from "./components/EmpleadoModal.jsx";
 import BajaModal from "./components/BajaModal.jsx";
@@ -54,6 +56,8 @@ const Icon = {
   etiquetado: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M9.568 3H5.25A2.25 2.25 0 003 5.25v4.318c0 .597.237 1.169.659 1.591l9.581 9.581a2.25 2.25 0 003.182 0l4.318-4.318a2.25 2.25 0 000-3.182L10.16 3.66A2.25 2.25 0 008.568 3zM6 6h.008v.008H6V6z" />,
   imprimir: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M6.72 13.829c-.24.03-.48.062-.72.096m.72-.096a42.415 42.415 0 0110.56 0m-10.56 0L6.34 18m10.94-4.171c.24.03.48.062.72.096m-.72-.096L17.66 18m0 0l.229 2.523a1.125 1.125 0 01-1.12 1.227H7.231c-.662 0-1.18-.568-1.12-1.227L6.34 18m11.318 0h1.091A2.25 2.25 0 0021 15.75V9.456c0-1.081-.768-2.015-1.837-2.175a48.055 48.055 0 00-1.913-.247M6.34 18H5.25A2.25 2.25 0 013 15.75V9.456c0-1.081.768-2.015 1.837-2.175a48.041 48.041 0 011.913-.247m10.5 0a48.536 48.536 0 00-10.5 0m10.5 0V3.375c0-.621-.504-1.125-1.125-1.125h-8.25c-.621 0-1.125.504-1.125 1.125v3.659M18 10.5h.008v.008H18V10.5zm-3 0h.008v.008H15V10.5z" />,
   bodega: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M20.25 7.5l-8.25-4.5-8.25 4.5m16.5 0l-8.25 4.5m8.25-4.5v9l-8.25 4.5m0-9L3.75 7.5m8.25 4.5v9M3.75 7.5v9l8.25 4.5M12 12.75l4.5-2.475M12 12.75l-4.5-2.475" />,
+  ubicaciones: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M15 10.5a3 3 0 11-6 0 3 3 0 016 0zM19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1115 0z" />,
+  existencias: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M3.75 3.75v16.5h16.5M7.5 15.75l3-3 3 3 4.5-4.5" />,
 };
 
 // ── Sección Empleados ──────────────────────────────────────────────
@@ -183,6 +187,8 @@ function Dashboard() {
   if (perm("etiquetado",     "ver")) nav.push({ key: "etiquetado", label: "Etiquetado",          icon: "etiquetado" });
   if (perm("etiquetado",     "imprimir")) nav.push({ key: "imprimirEtiquetas", label: "Impresión de Etiquetas", icon: "imprimir" });
   if (perm("bodega",        "ver")) nav.push({ key: "bodega",     label: "Bodega — Pallets",     icon: "bodega"   });
+  if (perm("bodega",        "ver")) nav.push({ key: "bodegaFisica", label: "Bodega — Ubicaciones", icon: "ubicaciones" });
+  if (perm("bodega",        "ver")) nav.push({ key: "bodegaExistencias", label: "Bodega — Existencias", icon: "existencias" });
   if (perm("areas",          "ver")) nav.push({ key: "areas",     label: "Áreas",               icon: "areas"    });
   if (perm("permisos",       "ver")) nav.push({ key: "permisos",  label: "Permisos",            icon: "permisos" });
   if (perm("tipos_permiso",  "ver")) nav.push({ key: "tiposPermiso", label: "Tipos de Permiso", icon: "tiposPermiso" });
@@ -208,6 +214,8 @@ function Dashboard() {
     etiquetado: "Etiquetado — Orden de Trabajo",
     imprimirEtiquetas: "Impresión de Etiquetas",
     bodega:    "Bodega — Pallets y Escaneo",
+    bodegaFisica: "Bodega — Recepción y Ubicaciones",
+    bodegaExistencias: "Bodega — Existencias",
     areas:     "Áreas",
     permisos:  "Permisos",
     tiposPermiso: "Tipos de Permiso",
@@ -337,6 +345,8 @@ function Dashboard() {
             {seccion === "etiquetado" && perm("etiquetado",    "ver") && <EtiquetadoPage />}
             {seccion === "imprimirEtiquetas" && perm("etiquetado", "imprimir") && <ImpresionEtiquetasPage />}
             {seccion === "bodega"   && perm("bodega",          "ver") && <PalletsPage />}
+            {seccion === "bodegaFisica" && perm("bodega",      "ver") && <BodegaFisicaPage />}
+            {seccion === "bodegaExistencias" && perm("bodega", "ver") && <ExistenciaBodegaPage />}
             {seccion === "areas"    && perm("areas",          "ver") && <AreasPage />}
             {seccion === "permisos" && perm("permisos",       "ver") && <PermisosPage />}
             {seccion === "tiposPermiso" && perm("tipos_permiso", "ver") && <TiposPermisoPage />}

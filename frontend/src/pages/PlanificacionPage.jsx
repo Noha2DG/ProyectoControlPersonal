@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { createPortal } from "react-dom";
-import { authHeader } from "../context/AuthContext.jsx";
+import { authHeader, usePuede } from "../context/AuthContext.jsx";
 import AsistenciaDiariaModal from "../components/AsistenciaDiariaModal.jsx";
 import { useColWidths, Th, Colgroup } from "../components/ResizableTh.jsx";
 
@@ -13,6 +13,7 @@ const RESUMEN_COL_DEFAULTS = { area: 260, planificado: 130, escaneado: 130, ver:
 const RESUMEN_COLS = Object.keys(RESUMEN_COL_DEFAULTS);
 
 export default function PlanificacionPage() {
+  const puedeEditar = usePuede("planificacion", "editar");
   const hoy = new Date().toLocaleDateString("sv-SE", { timeZone: "America/Guatemala" });
   const [fecha, setFecha]   = useState(hoy);
   const [areas, setAreas]   = useState([]);  // [{ CodigoArea, Nombre, FormaPago, Cantidad, ocupacion, disponible }]
@@ -97,10 +98,12 @@ export default function PlanificacionPage() {
             className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
         </div>
 
-        <button onClick={copiarAyer}
-          className="text-sm px-3 py-1.5 rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 transition">
-          Copiar de ayer
-        </button>
+        {puedeEditar && (
+          <button onClick={copiarAyer}
+            className="text-sm px-3 py-1.5 rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 transition">
+            Copiar de ayer
+          </button>
+        )}
 
         <input type="text" placeholder="Buscar área (código o nombre)..."
           value={busqueda} onChange={e => setBusqueda(e.target.value)}
@@ -129,11 +132,13 @@ export default function PlanificacionPage() {
               Guardado
             </span>
           )}
-          <button onClick={guardar} disabled={guardando}
-            className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-5 py-1.5 rounded-lg text-sm transition disabled:opacity-60 flex items-center gap-2">
-            {guardando && <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />}
-            Guardar planificación
-          </button>
+          {puedeEditar && (
+            <button onClick={guardar} disabled={guardando}
+              className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-5 py-1.5 rounded-lg text-sm transition disabled:opacity-60 flex items-center gap-2">
+              {guardando && <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />}
+              Guardar planificación
+            </button>
+          )}
         </div>
       </div>
 
@@ -197,8 +202,9 @@ export default function PlanificacionPage() {
                         <input
                           type="number" min="0" max="999"
                           value={a.Cantidad}
+                          disabled={!puedeEditar}
                           onChange={e => setCantidad(a.CodigoArea, e.target.value)}
-                          className="w-20 border border-gray-300 rounded-lg px-2 py-1 text-sm text-center font-semibold focus:outline-none focus:ring-2 focus:ring-blue-400"
+                          className="w-20 border border-gray-300 rounded-lg px-2 py-1 text-sm text-center font-semibold focus:outline-none focus:ring-2 focus:ring-blue-400 disabled:bg-gray-100 disabled:text-gray-400"
                         />
                       )}
                     </td>

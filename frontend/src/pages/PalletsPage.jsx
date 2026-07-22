@@ -1,6 +1,10 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { authHeader } from "../context/AuthContext.jsx";
+import { authHeader, usePuede } from "../context/AuthContext.jsx";
 import { useColWidths, Th, Colgroup } from "../components/ResizableTh.jsx";
+import ConsultarEtiquetaModal from "../components/ConsultarEtiquetaModal.jsx";
+import AvisoModal from "../components/AvisoModal.jsx";
+import HojaPalletModal from "../components/HojaPalletModal.jsx";
+import { useAviso } from "../hooks/useAviso.js";
 
 const API = "/api/pallets";
 
@@ -33,11 +37,16 @@ async function leerJSON(res) {
 // llena un pallet, lo cierra, recién ahí abre el siguiente). El input queda enfocado para que el
 // lector 2D USB/Bluetooth (que escribe como si fuera teclado + Enter) alimente el escaneo sin mouse.
 function PanelEscaneo({ palletId, onClose, onCambio }) {
+  const puedeEscanear = usePuede("bodega", "escanear");
+  const puedeEditar = usePuede("bodega", "editar");
+  const { aviso, mostrarAlerta, pedirConfirmacion, cerrar } = useAviso();
   const [pallet, setPallet] = useState(null);
   const [loading, setLoading] = useState(true);
   const [correlativo, setCorrelativo] = useState("");
   const [mensaje, setMensaje] = useState(null); // { ok: bool, texto }
   const [enviando, setEnviando] = useState(false);
+  const [mostrarConsulta, setMostrarConsulta] = useState(false);
+  const [mostrarHoja, setMostrarHoja] = useState(false);
   const inputRef = useRef(null);
   const [widths, startResize] = useColWidths("pallet_masters", MASTERS_COL_DEFAULTS);
 
@@ -51,7 +60,8 @@ function PanelEscaneo({ palletId, onClose, onCambio }) {
   useEffect(() => { if (pallet?.Estatus === "Abierto") inputRef.current?.focus(); }, [pallet?.Estatus, mensaje]);
 
   const abierto = pallet?.Estatus === "Abierto";
-  const MASTERS_COLS = abierto ? [...MASTERS_COLS_BASE, "acciones"] : MASTERS_COLS_BASE;
+  const puedeQuitar = abierto && puedeEditar;
+  const MASTERS_COLS = puedeQuitar ? [...MASTERS_COLS_BASE, "acciones"] : MASTERS_COLS_BASE;
 
   const handleEscanear = async (e) => {
     e.preventDefault();
@@ -80,48 +90,67 @@ function PanelEscaneo({ palletId, onClose, onCambio }) {
   };
 
   const handleQuitar = async (masterId, correlativoTexto) => {
-    if (!window.confirm(`¿Quitar ${correlativoTexto} de este pallet? Podrá volver a escanearse.`)) return;
+    const confirmado = await pedirConfirmacion(`¿Quitar ${correlativoTexto} de este pallet? Podrá volver a escanearse.`, { textoConfirmar: "Quitar" });
+    if (!confirmado) return;
     const res = await fetch(`${API}/${palletId}/masters/${masterId}`, { method: "DELETE", headers: authHeader() });
     const data = await leerJSON(res);
     if (res.ok) { await fetchDetalle(); onCambio?.(); }
-    else alert("Error: " + (data.error || "No se pudo quitar el master"));
+    else await mostrarAlerta("Error: " + (data.error || "No se pudo quitar el master"));
   };
 
   const handleCerrar = async () => {
-    if (!window.confirm("¿Cerrar este pallet? No se podrán escanear más masters aquí.")) return;
+    const confirmado = await pedirConfirmacion("¿Cerrar este pallet? No se podrán escanear más masters aquí.", { textoConfirmar: "Cerrar pallet" });
+    if (!confirmado) return;
     const res = await fetch(`${API}/${palletId}/cerrar`, { method: "POST", headers: authHeader() });
     const data = await leerJSON(res);
     if (res.ok) { await fetchDetalle(); onCambio?.(); }
-    else alert("Error: " + (data.error || "No se pudo cerrar el pallet"));
+    else await mostrarAlerta("Error: " + (data.error || "No se pudo cerrar el pallet"));
   };
 
   const handleReabrir = async () => {
     const res = await fetch(`${API}/${palletId}/reabrir`, { method: "PUT", headers: authHeader() });
     const data = await leerJSON(res);
     if (res.ok) { await fetchDetalle(); onCambio?.(); }
-    else alert("Error: " + (data.error || "No se pudo reabrir el pallet"));
+    else await mostrarAlerta("Error: " + (data.error || "No se pudo reabrir el pallet"));
   };
 
   return (
+    <>
     <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={onClose}>
       <div className="bg-white rounded-xl shadow-xl w-full max-w-2xl max-h-full flex flex-col" onClick={e => e.stopPropagation()}>
-        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200 shrink-0">
-          <div className="flex items-center gap-2 flex-wrap">
-            <h3 className="text-lg font-bold text-gray-800">Pallet {pallet?.Codigo || `#${palletId}`}</h3>
-            {pallet && (
-              <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${ESTATUS_BADGE[pallet.Estatus] || "bg-gray-100 text-gray-600"}`}>
-                {pallet.Estatus}
-              </span>
-            )}
-            {pallet?.Cuadre && (
-              <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${CUADRE_BADGE[pallet.Cuadre] || "bg-gray-100 text-gray-600"}`}>
-                {pallet.Cuadre}
-              </span>
-            )}
-            {pallet?.DescripcionOrigen && <span className="text-xs text-gray-400">Origen: {pallet.DescripcionOrigen}</span>}
-            {pallet?.NombreBodegaVirtual && <span className="text-xs text-gray-400">· {pallet.NombreBodegaVirtual}</span>}
+        <div className="border-b border-gray-200 shrink-0">
+          <div className="flex items-center justify-between px-5 py-4">
+            <div className="flex items-center gap-2 flex-wrap">
+              <h3 className="text-lg font-bold text-gray-800">Pallet {pallet?.Codigo || `#${palletId}`}</h3>
+              {pallet && (
+                <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${ESTATUS_BADGE[pallet.Estatus] || "bg-gray-100 text-gray-600"}`}>
+                  {pallet.Estatus}
+                </span>
+              )}
+              {pallet?.Cuadre && (
+                <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${CUADRE_BADGE[pallet.Cuadre] || "bg-gray-100 text-gray-600"}`}>
+                  {pallet.Cuadre}
+                </span>
+              )}
+              {pallet?.DescripcionOrigen && <span className="text-xs text-gray-400">Origen: {pallet.DescripcionOrigen}</span>}
+              {pallet?.NombreBodegaVirtual && <span className="text-xs text-gray-400">· {pallet.NombreBodegaVirtual}</span>}
+            </div>
+            <button onClick={onClose} className="text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-lg p-2 text-xl leading-none transition">&times;</button>
           </div>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-700 text-xl leading-none">&times;</button>
+          {/* Fila propia, con botones grandes tipo táctil — pensado para tablet/teléfono en piso de
+              planta, no para links de texto chicos difíciles de presionar con el dedo. */}
+          <div className="flex flex-wrap gap-2 px-5 pb-4">
+            <button onClick={() => setMostrarConsulta(true)}
+              className="px-4 py-2.5 text-sm font-semibold text-blue-700 bg-blue-50 border border-blue-200 rounded-lg hover:bg-blue-100 active:bg-blue-200 transition">
+              Consultar etiqueta
+            </button>
+            {pallet?.Estatus === "Cerrado" && (
+              <button onClick={() => setMostrarHoja(true)}
+                className="px-4 py-2.5 text-sm font-semibold text-purple-700 bg-purple-50 border border-purple-200 rounded-lg hover:bg-purple-100 active:bg-purple-200 transition">
+                Imprimir hoja
+              </button>
+            )}
+          </div>
         </div>
 
         <div className="px-5 py-4 overflow-y-auto flex-1">
@@ -129,7 +158,12 @@ function PanelEscaneo({ palletId, onClose, onCambio }) {
             <p className="text-gray-400 text-sm">Cargando…</p>
           ) : (
             <>
-              {abierto && (
+              {abierto && !puedeEscanear && (
+                <div className="mb-3 text-sm px-3 py-2 rounded-lg bg-amber-50 text-amber-700 border border-amber-200">
+                  No tienes permiso para escanear masters en este pallet.
+                </div>
+              )}
+              {abierto && puedeEscanear && (
                 <form onSubmit={handleEscanear} className="mb-3">
                   <div className="flex items-end justify-between gap-3 mb-1">
                     <label className="block text-xs font-medium text-gray-500">Escanear QR del master</label>
@@ -174,7 +208,7 @@ function PanelEscaneo({ palletId, onClose, onCambio }) {
                       <Th width={widths.kg} onResizeStart={startResize("kg")} className="px-3 py-2 text-right">Kg</Th>
                       <Th width={widths.lb} onResizeStart={startResize("lb")} className="px-3 py-2 text-right">Lb</Th>
                       <Th width={widths.hora} onResizeStart={startResize("hora")} className="px-3 py-2 text-left">Hora</Th>
-                      {abierto && <Th width={widths.acciones} onResizeStart={startResize("acciones")} className="px-3 py-2 text-center">Acciones</Th>}
+                      {puedeQuitar && <Th width={widths.acciones} onResizeStart={startResize("acciones")} className="px-3 py-2 text-center">Acciones</Th>}
                     </tr>
                   </thead>
                   <tbody>
@@ -188,7 +222,7 @@ function PanelEscaneo({ palletId, onClose, onCambio }) {
                         <td className="px-3 py-2 text-right whitespace-nowrap">{m.PesoMasterKG.toFixed(2)}</td>
                         <td className="px-3 py-2 text-right whitespace-nowrap">{m.PesoMasterLb.toFixed(2)}</td>
                         <td className="px-3 py-2 whitespace-nowrap">{fmtFecha(m.FechaIngreso)}</td>
-                        {abierto && (
+                        {puedeQuitar && (
                           <td className="px-3 py-2 text-center">
                             <button onClick={() => handleQuitar(m.MasterId, m.Correlativo)} className="text-red-600 hover:text-red-800 font-medium">Quitar</button>
                           </td>
@@ -196,7 +230,7 @@ function PanelEscaneo({ palletId, onClose, onCambio }) {
                       </tr>
                     ))}
                     {pallet?.Masters.length === 0 && (
-                      <tr><td colSpan={abierto ? 9 : 8} className="px-3 py-6 text-center text-gray-400">Sin masters escaneados todavía</td></tr>
+                      <tr><td colSpan={puedeQuitar ? 9 : 8} className="px-3 py-6 text-center text-gray-400">Sin masters escaneados todavía</td></tr>
                     )}
                   </tbody>
                 </table>
@@ -207,15 +241,19 @@ function PanelEscaneo({ palletId, onClose, onCambio }) {
 
         <div className="px-5 py-3 border-t border-gray-200 flex justify-end gap-2 shrink-0">
           <button onClick={onClose} className="px-4 py-2 rounded-lg text-sm font-medium text-gray-600 hover:bg-gray-100 transition">Volver a la lista</button>
-          {abierto && (
+          {abierto && puedeEscanear && (
             <button onClick={handleCerrar} className="px-4 py-2 rounded-lg text-sm font-semibold bg-blue-600 text-white hover:bg-blue-700 transition">Cerrar pallet</button>
           )}
-          {pallet?.Estatus === "Cerrado" && (
+          {pallet?.Estatus === "Cerrado" && puedeEditar && (
             <button onClick={handleReabrir} className="px-4 py-2 rounded-lg text-sm font-semibold bg-orange-500 text-white hover:bg-orange-600 transition">Reabrir pallet</button>
           )}
         </div>
       </div>
     </div>
+    {mostrarConsulta && <ConsultarEtiquetaModal onCerrar={() => setMostrarConsulta(false)} />}
+    {mostrarHoja && <HojaPalletModal palletId={palletId} onCerrar={() => setMostrarHoja(false)} />}
+    {aviso && <AvisoModal {...aviso} onCerrar={() => cerrar(true)} onCancelar={() => cerrar(false)} />}
+    </>
   );
 }
 
@@ -284,6 +322,9 @@ function ModalNuevoPallet({ origenes, bodegasVirtuales, onCrear, onClose }) {
 }
 
 export default function PalletsPage() {
+  const puedeEscanear = usePuede("bodega", "escanear");
+  const puedeEliminar = usePuede("bodega", "eliminar");
+  const { aviso, mostrarAlerta, pedirConfirmacion, cerrar } = useAviso();
   const [pallets, setPallets] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filtroEstatus, setFiltroEstatus] = useState("");
@@ -330,11 +371,12 @@ export default function PalletsPage() {
   };
 
   const handleEliminar = async (id) => {
-    if (!window.confirm(`¿Eliminar el pallet #${id}? Solo es posible si está vacío.`)) return;
+    const confirmado = await pedirConfirmacion(`¿Eliminar el pallet #${id}? Solo es posible si está vacío.`, { textoConfirmar: "Eliminar" });
+    if (!confirmado) return;
     const res = await fetch(`${API}/${id}`, { method: "DELETE", headers: authHeader() });
     const data = await leerJSON(res);
     if (res.ok) fetchPallets();
-    else alert("Error: " + (data.error || "No se pudo eliminar el pallet"));
+    else await mostrarAlerta("Error: " + (data.error || "No se pudo eliminar el pallet"));
   };
 
   return (
@@ -349,9 +391,11 @@ export default function PalletsPage() {
         <input type="date" value={filtroFecha} onChange={e => setFiltroFecha(e.target.value)}
           className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
         <span className="text-sm text-gray-500 ml-auto">{pallets.length} pallet{pallets.length !== 1 ? "s" : ""}</span>
-        <button onClick={() => setModalNuevo(true)} className="bg-blue-600 text-white font-semibold px-4 py-2 rounded-lg hover:bg-blue-700 transition text-sm">
-          + Nuevo pallet
-        </button>
+        {puedeEscanear && (
+          <button onClick={() => setModalNuevo(true)} className="bg-blue-600 text-white font-semibold px-4 py-2 rounded-lg hover:bg-blue-700 transition text-sm">
+            + Nuevo pallet
+          </button>
+        )}
       </div>
 
       <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
@@ -401,7 +445,7 @@ export default function PalletsPage() {
                       <button onClick={() => setPanelId(p.PalletId)} className="text-blue-600 hover:text-blue-800 text-xs font-medium px-2 py-1 rounded hover:bg-blue-50 transition">
                         {p.Estatus === "Abierto" ? "Escanear" : "Ver"}
                       </button>
-                      {p.Estatus === "Abierto" && p.CantidadMasters === 0 && (
+                      {p.Estatus === "Abierto" && p.CantidadMasters === 0 && puedeEliminar && (
                         <button onClick={() => handleEliminar(p.PalletId)} className="text-red-600 hover:text-red-800 text-xs font-medium px-2 py-1 rounded hover:bg-red-50 transition">Eliminar</button>
                       )}
                     </div>
@@ -418,6 +462,8 @@ export default function PalletsPage() {
       {panelId != null && (
         <PanelEscaneo palletId={panelId} onClose={() => { setPanelId(null); fetchPallets(); }} onCambio={fetchPallets} />
       )}
+
+      {aviso && <AvisoModal {...aviso} onCerrar={() => cerrar(true)} onCancelar={() => cerrar(false)} />}
     </>
   );
 }

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { authHeader } from "../context/AuthContext.jsx";
+import { authHeader, usePuede } from "../context/AuthContext.jsx";
 import { useColWidths, Th, Colgroup } from "../components/ResizableTh.jsx";
 
 const PAISES = ["GT", "US", "MX", "TW"];
@@ -85,6 +85,9 @@ function SubclienteModal({ item, codigoCliente, onSave, onClose }) {
 }
 
 export default function ClientesPage() {
+  const puedeCrear = usePuede("catalogos", "crear");
+  const puedeEditar = usePuede("catalogos", "editar");
+  const puedeEliminar = usePuede("catalogos", "eliminar");
   const [clientes, setClientes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [clienteSel, setClienteSel] = useState(null);
@@ -179,10 +182,12 @@ export default function ClientesPage() {
           <input type="text" placeholder="Buscar cliente..." value={busqueda} onChange={e => setBusqueda(e.target.value)}
             className="border border-gray-300 rounded-lg px-3 py-2 text-sm w-52 focus:outline-none focus:ring-2 focus:ring-blue-400" />
           <span className="text-sm text-gray-500 ml-auto">{clientesFiltrados.length} cliente{clientesFiltrados.length !== 1 ? "s" : ""}</span>
-          <button onClick={() => setModalCliente({ open: true, item: null })}
-            className="bg-blue-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-blue-700 transition">
-            + Nuevo Cliente
-          </button>
+          {puedeCrear && (
+            <button onClick={() => setModalCliente({ open: true, item: null })}
+              className="bg-blue-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-blue-700 transition">
+              + Nuevo Cliente
+            </button>
+          )}
         </div>
 
         {loading ? (
@@ -215,12 +220,16 @@ export default function ClientesPage() {
                     </td>
                     <td className="px-4 py-3 text-center whitespace-nowrap" onClick={e => e.stopPropagation()}>
                       <div className="flex justify-center gap-2">
-                        <button onClick={() => setModalCliente({ open: true, item: c })}
-                          className="text-blue-600 hover:text-blue-800 text-xs font-medium px-2 py-1 rounded hover:bg-blue-50 transition">Editar</button>
-                        <button onClick={() => handleToggleCliente(c)}
-                          className={`text-xs font-medium px-2 py-1 rounded transition ${c.Activo ? "text-red-500 hover:text-red-700 hover:bg-red-50" : "text-green-600 hover:text-green-800 hover:bg-green-50"}`}>
-                          {c.Activo ? "Desactivar" : "Activar"}
-                        </button>
+                        {puedeEditar && (
+                          <button onClick={() => setModalCliente({ open: true, item: c })}
+                            className="text-blue-600 hover:text-blue-800 text-xs font-medium px-2 py-1 rounded hover:bg-blue-50 transition">Editar</button>
+                        )}
+                        {((c.Activo && puedeEliminar) || (!c.Activo && puedeEditar)) && (
+                          <button onClick={() => handleToggleCliente(c)}
+                            className={`text-xs font-medium px-2 py-1 rounded transition ${c.Activo ? "text-red-500 hover:text-red-700 hover:bg-red-50" : "text-green-600 hover:text-green-800 hover:bg-green-50"}`}>
+                            {c.Activo ? "Desactivar" : "Activar"}
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -238,10 +247,12 @@ export default function ClientesPage() {
           <h3 className="text-sm font-medium text-gray-600">
             Subclientes {clienteSel ? <span className="font-semibold text-gray-800">— {clienteSel.RazonSocial}</span> : ""}
           </h3>
-          <button onClick={() => setModalSub({ open: true, item: null })} disabled={!clienteSel}
-            className="ml-auto bg-blue-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-blue-700 transition disabled:opacity-50">
-            + Nuevo Subcliente
-          </button>
+          {puedeCrear && (
+            <button onClick={() => setModalSub({ open: true, item: null })} disabled={!clienteSel}
+              className="ml-auto bg-blue-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-blue-700 transition disabled:opacity-50">
+              + Nuevo Subcliente
+            </button>
+          )}
         </div>
 
         {!clienteSel ? (
@@ -273,12 +284,16 @@ export default function ClientesPage() {
                     </td>
                     <td className="px-4 py-3 text-center whitespace-nowrap">
                       <div className="flex justify-center gap-2">
-                        <button onClick={() => setModalSub({ open: true, item: s })}
-                          className="text-blue-600 hover:text-blue-800 text-xs font-medium px-2 py-1 rounded hover:bg-blue-50 transition">Editar</button>
-                        <button onClick={() => handleToggleSub(s)}
-                          className={`text-xs font-medium px-2 py-1 rounded transition ${s.Activo ? "text-red-500 hover:text-red-700 hover:bg-red-50" : "text-green-600 hover:text-green-800 hover:bg-green-50"}`}>
-                          {s.Activo ? "Desactivar" : "Activar"}
-                        </button>
+                        {puedeEditar && (
+                          <button onClick={() => setModalSub({ open: true, item: s })}
+                            className="text-blue-600 hover:text-blue-800 text-xs font-medium px-2 py-1 rounded hover:bg-blue-50 transition">Editar</button>
+                        )}
+                        {((s.Activo && puedeEliminar) || (!s.Activo && puedeEditar)) && (
+                          <button onClick={() => handleToggleSub(s)}
+                            className={`text-xs font-medium px-2 py-1 rounded transition ${s.Activo ? "text-red-500 hover:text-red-700 hover:bg-red-50" : "text-green-600 hover:text-green-800 hover:bg-green-50"}`}>
+                            {s.Activo ? "Desactivar" : "Activar"}
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>

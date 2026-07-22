@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { authHeader } from "../context/AuthContext.jsx";
+import { authHeader, usePuede } from "../context/AuthContext.jsx";
 import { piscinaRequiereCiclo } from "../utils/codigoLote.js";
 import { useColWidths, Th, Colgroup } from "../components/ResizableTh.jsx";
 
@@ -297,6 +297,9 @@ function TransaccionModal({ lote, procesos, clases, tallas, almacenes, onSave, o
 }
 
 export default function MateriaPrimaPage() {
+  const puedeCrear = usePuede("destajo", "crear");
+  const puedeEditar = usePuede("destajo", "editar");
+  const puedeEliminar = usePuede("destajo", "eliminar");
   const [lotes, setLotes] = useState([]);
   const [fincas, setFincas] = useState([]);
   const [clases, setClases] = useState([]);
@@ -433,10 +436,12 @@ export default function MateriaPrimaPage() {
           <input type="text" placeholder="Buscar lote o finca..." value={busqueda} onChange={e => setBusqueda(e.target.value)}
             className="border border-gray-300 rounded-lg px-3 py-2 text-sm w-52 focus:outline-none focus:ring-2 focus:ring-blue-400" />
           <span className="text-sm text-gray-500 ml-auto">{lotesFiltrados.length} lote{lotesFiltrados.length !== 1 ? "s" : ""}</span>
-          <button onClick={() => setModalLote({ open: true, item: null })}
-            className="bg-blue-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-blue-700 transition">
-            + Nuevo Lote
-          </button>
+          {puedeCrear && (
+            <button onClick={() => setModalLote({ open: true, item: null })}
+              className="bg-blue-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-blue-700 transition">
+              + Nuevo Lote
+            </button>
+          )}
         </div>
 
         {loading ? (
@@ -470,9 +475,11 @@ export default function MateriaPrimaPage() {
                     <td className="px-3 py-3 text-right font-semibold text-gray-700 whitespace-nowrap">{Math.round(l.PesoIngreso)} {l.UM}</td>
                     <td className="px-3 py-3 text-center whitespace-nowrap" onClick={e => e.stopPropagation()}>
                       <div className="flex justify-center gap-2">
-                        <button onClick={() => setModalLote({ open: true, item: l })}
-                          className="text-blue-600 hover:text-blue-800 text-xs font-medium px-2 py-1 rounded hover:bg-blue-50 transition">Editar</button>
-                        {l.Procesado === 0 && (
+                        {puedeEditar && (
+                          <button onClick={() => setModalLote({ open: true, item: l })}
+                            className="text-blue-600 hover:text-blue-800 text-xs font-medium px-2 py-1 rounded hover:bg-blue-50 transition">Editar</button>
+                        )}
+                        {l.Procesado === 0 && puedeEliminar && (
                           <button onClick={() => handleEliminarLote(l)}
                             className="text-red-500 hover:text-red-700 text-xs font-medium px-2 py-1 rounded hover:bg-red-50 transition">Eliminar</button>
                         )}
@@ -495,10 +502,12 @@ export default function MateriaPrimaPage() {
           <h3 className="text-sm font-medium text-gray-600">
             Transacciones {loteSel ? <span className="font-mono font-bold text-gray-800">— {loteSel.Lote}</span> : ""}
           </h3>
-          <button onClick={() => setModalTrans(true)} disabled={!loteSel}
-            className="ml-auto bg-blue-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-blue-700 transition disabled:opacity-50">
-            + Nueva Transacción
-          </button>
+          {puedeCrear && (
+            <button onClick={() => setModalTrans(true)} disabled={!loteSel}
+              className="ml-auto bg-blue-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-blue-700 transition disabled:opacity-50">
+              + Nueva Transacción
+            </button>
+          )}
         </div>
 
         {!loteSel ? (
@@ -550,11 +559,11 @@ export default function MateriaPrimaPage() {
                         </td>
                         <td className="px-3 py-3 text-center whitespace-nowrap">
                           <div className="flex justify-center gap-2">
-                            {t.Estado === "Abierta" && (
+                            {t.Estado === "Abierta" && puedeEditar && (
                               <button onClick={() => handleCerrarTransaccion(t)}
                                 className="text-amber-600 hover:text-amber-700 text-xs font-medium px-2 py-1 rounded hover:bg-amber-50 transition">Cerrar</button>
                             )}
-                            {t.Procesado === 0 && (
+                            {t.Procesado === 0 && puedeEliminar && (
                               <button onClick={() => handleEliminarTransaccion(t)}
                                 className="text-red-500 hover:text-red-700 text-xs font-medium px-2 py-1 rounded hover:bg-red-50 transition">Eliminar</button>
                             )}

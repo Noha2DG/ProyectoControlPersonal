@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { authHeader } from "../context/AuthContext.jsx";
+import { authHeader, usePuede } from "../context/AuthContext.jsx";
 import { useColWidths, Th, Colgroup } from "../components/ResizableTh.jsx";
 
 const API = "/api/areas";
@@ -79,6 +79,9 @@ const FORMA_BADGE = {
 };
 
 export default function AreasPage() {
+  const puedeCrear = usePuede("areas", "crear");
+  const puedeEditar = usePuede("areas", "editar");
+  const puedeEliminar = usePuede("areas", "eliminar");
   const [areas, setAreas] = useState([]);
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState({ open: false, area: null });
@@ -137,12 +140,14 @@ export default function AreasPage() {
           ))}
         </div>
         <span className="text-sm text-gray-500 ml-auto">{areasFiltradas.length} área{areasFiltradas.length !== 1 ? "s" : ""}</span>
-        <button
-          onClick={() => setModal({ open: true, area: null })}
-          className="bg-blue-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-blue-700 transition"
-        >
-          + Nueva Área
-        </button>
+        {puedeCrear && (
+          <button
+            onClick={() => setModal({ open: true, area: null })}
+            className="bg-blue-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-blue-700 transition"
+          >
+            + Nueva Área
+          </button>
+        )}
       </div>
 
       {loading ? (
@@ -179,14 +184,18 @@ export default function AreasPage() {
                   </td>
                   <td className="px-4 py-3 text-center">
                     <div className="flex justify-center gap-2">
-                      <button onClick={() => setModal({ open: true, area })}
-                        className="text-blue-600 hover:text-blue-800 text-xs font-medium px-2 py-1 rounded hover:bg-blue-50 transition">
-                        Editar
-                      </button>
-                      <button onClick={() => handleToggle(area)}
-                        className={`text-xs font-medium px-2 py-1 rounded transition ${area.Activa ? "text-red-500 hover:text-red-700 hover:bg-red-50" : "text-green-600 hover:text-green-800 hover:bg-green-50"}`}>
-                        {area.Activa ? "Desactivar" : "Activar"}
-                      </button>
+                      {puedeEditar && (
+                        <button onClick={() => setModal({ open: true, area })}
+                          className="text-blue-600 hover:text-blue-800 text-xs font-medium px-2 py-1 rounded hover:bg-blue-50 transition">
+                          Editar
+                        </button>
+                      )}
+                      {((area.Activa && puedeEliminar) || (!area.Activa && puedeEditar)) && (
+                        <button onClick={() => handleToggle(area)}
+                          className={`text-xs font-medium px-2 py-1 rounded transition ${area.Activa ? "text-red-500 hover:text-red-700 hover:bg-red-50" : "text-green-600 hover:text-green-800 hover:bg-green-50"}`}>
+                          {area.Activa ? "Desactivar" : "Activar"}
+                        </button>
+                      )}
                     </div>
                   </td>
                 </tr>

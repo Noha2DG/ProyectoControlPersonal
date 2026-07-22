@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { authHeader } from "../context/AuthContext.jsx";
+import { authHeader, usePuede } from "../context/AuthContext.jsx";
 import { useColWidths, Th, Colgroup } from "../components/ResizableTh.jsx";
 
 const API = "/api/tipos-permiso";
@@ -60,6 +60,9 @@ function TipoPermisoModal({ tipo, onSave, onClose }) {
 }
 
 export default function TiposPermisoPage() {
+  const puedeCrear = usePuede("tipos_permiso", "crear");
+  const puedeEditar = usePuede("tipos_permiso", "editar");
+  const puedeEliminar = usePuede("tipos_permiso", "eliminar");
   const [tipos, setTipos] = useState([]);
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState({ open: false, tipo: null });
@@ -118,12 +121,14 @@ export default function TiposPermisoPage() {
           ))}
         </div>
         <span className="text-sm text-gray-500 ml-auto">{tiposFiltrados.length} tipo{tiposFiltrados.length !== 1 ? "s" : ""}</span>
-        <button
-          onClick={() => setModal({ open: true, tipo: null })}
-          className="bg-blue-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-blue-700 transition"
-        >
-          + Nuevo Tipo
-        </button>
+        {puedeCrear && (
+          <button
+            onClick={() => setModal({ open: true, tipo: null })}
+            className="bg-blue-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-blue-700 transition"
+          >
+            + Nuevo Tipo
+          </button>
+        )}
       </div>
 
       {loading ? (
@@ -154,14 +159,18 @@ export default function TiposPermisoPage() {
                   </td>
                   <td className="px-4 py-3 text-center">
                     <div className="flex justify-center gap-2">
-                      <button onClick={() => setModal({ open: true, tipo })}
-                        className="text-blue-600 hover:text-blue-800 text-xs font-medium px-2 py-1 rounded hover:bg-blue-50 transition">
-                        Editar
-                      </button>
-                      <button onClick={() => handleToggle(tipo)}
-                        className={`text-xs font-medium px-2 py-1 rounded transition ${tipo.Activo ? "text-red-500 hover:text-red-700 hover:bg-red-50" : "text-green-600 hover:text-green-800 hover:bg-green-50"}`}>
-                        {tipo.Activo ? "Desactivar" : "Activar"}
-                      </button>
+                      {puedeEditar && (
+                        <button onClick={() => setModal({ open: true, tipo })}
+                          className="text-blue-600 hover:text-blue-800 text-xs font-medium px-2 py-1 rounded hover:bg-blue-50 transition">
+                          Editar
+                        </button>
+                      )}
+                      {((tipo.Activo && puedeEliminar) || (!tipo.Activo && puedeEditar)) && (
+                        <button onClick={() => handleToggle(tipo)}
+                          className={`text-xs font-medium px-2 py-1 rounded transition ${tipo.Activo ? "text-red-500 hover:text-red-700 hover:bg-red-50" : "text-green-600 hover:text-green-800 hover:bg-green-50"}`}>
+                          {tipo.Activo ? "Desactivar" : "Activar"}
+                        </button>
+                      )}
                     </div>
                   </td>
                 </tr>

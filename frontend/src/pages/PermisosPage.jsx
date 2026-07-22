@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { authHeader } from "../context/AuthContext.jsx";
+import { authHeader, usePuede } from "../context/AuthContext.jsx";
 import { exportarPermisos } from "../utils/exportExcel.js";
 import { useColWidths, Th, Colgroup } from "../components/ResizableTh.jsx";
 
@@ -142,6 +142,9 @@ function PermisoModal({ permiso, empleados, tipos, onSave, onClose }) {
 }
 
 export default function PermisosPage() {
+  const puedeCrear = usePuede("permisos", "crear");
+  const puedeEditar = usePuede("permisos", "editar");
+  const puedeEliminar = usePuede("permisos", "eliminar");
   const [fecha, setFecha] = useState(hoyGT());
   const [hasta, setHasta] = useState("");
   const [permisos, setPermisos] = useState([]);
@@ -223,12 +226,14 @@ export default function PermisosPage() {
             Exportar Excel
           </button>
         )}
-        <button
-          onClick={() => setModal({ open: true, permiso: null })}
-          className="bg-blue-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-blue-700 transition"
-        >
-          + Nuevo Permiso
-        </button>
+        {puedeCrear && (
+          <button
+            onClick={() => setModal({ open: true, permiso: null })}
+            className="bg-blue-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-blue-700 transition"
+          >
+            + Nuevo Permiso
+          </button>
+        )}
       </div>
 
       {loading ? (
@@ -263,14 +268,18 @@ export default function PermisosPage() {
                   <td className="px-4 py-2.5 text-gray-500 text-xs">{p.RegistradoPor}</td>
                   <td className="px-4 py-2.5 text-center">
                     <div className="flex justify-center gap-2">
-                      <button onClick={() => setModal({ open: true, permiso: p })}
-                        className="text-blue-600 hover:text-blue-800 text-xs font-medium px-2 py-1 rounded hover:bg-blue-50 transition">
-                        Editar
-                      </button>
-                      <button onClick={() => handleDelete(p)}
-                        className="text-red-500 hover:text-red-700 text-xs font-medium px-2 py-1 rounded hover:bg-red-50 transition">
-                        Eliminar
-                      </button>
+                      {puedeEditar && (
+                        <button onClick={() => setModal({ open: true, permiso: p })}
+                          className="text-blue-600 hover:text-blue-800 text-xs font-medium px-2 py-1 rounded hover:bg-blue-50 transition">
+                          Editar
+                        </button>
+                      )}
+                      {puedeEliminar && (
+                        <button onClick={() => handleDelete(p)}
+                          className="text-red-500 hover:text-red-700 text-xs font-medium px-2 py-1 rounded hover:bg-red-50 transition">
+                          Eliminar
+                        </button>
+                      )}
                     </div>
                   </td>
                 </tr>

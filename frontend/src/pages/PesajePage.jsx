@@ -1,11 +1,11 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { authHeader } from "../context/AuthContext.jsx";
+import { authHeader, usePuede } from "../context/AuthContext.jsx";
 import { useColWidths, Th, Colgroup } from "../components/ResizableTh.jsx";
 
 const COL_DEFAULTS = { empleado: 110, nombre: 190, termo: 90, peso: 100, hora: 90, acciones: 110 };
 const COLS = Object.keys(COL_DEFAULTS);
 
-function SelectorTransacciones({ transacciones, seleccionada, onSelect, onCerrar }) {
+function SelectorTransacciones({ transacciones, seleccionada, onSelect, onCerrar, puedeEditar }) {
   const [busqueda, setBusqueda] = useState("");
   const q = busqueda.toLowerCase();
   const filtradas = transacciones.filter(t =>
@@ -31,10 +31,12 @@ function SelectorTransacciones({ transacciones, seleccionada, onSelect, onCerrar
                 <p className={`text-xs ${activa ? "text-blue-100" : "text-gray-500"}`}>{t.DescripcionProceso} → {t.ClasePT} ({t.DescripcionTalla})</p>
                 <p className={`text-xs font-semibold ${activa ? "text-white" : "text-blue-700"}`}>{t.Procesado.toFixed(1)} kg</p>
               </button>
-              <button onClick={() => onCerrar(t)}
-                className={`mt-1 text-xs font-medium underline ${activa ? "text-blue-100 hover:text-white" : "text-amber-600 hover:text-amber-700"}`}>
-                Cerrar
-              </button>
+              {puedeEditar && (
+                <button onClick={() => onCerrar(t)}
+                  className={`mt-1 text-xs font-medium underline ${activa ? "text-blue-100 hover:text-white" : "text-amber-600 hover:text-amber-700"}`}>
+                  Cerrar
+                </button>
+              )}
             </div>
           );
         })}
@@ -78,6 +80,9 @@ function EditarPesajeModal({ item, onSave, onClose }) {
 }
 
 export default function PesajePage() {
+  const puedeCrear = usePuede("destajo", "crear");
+  const puedeEditar = usePuede("destajo", "editar");
+  const puedeEliminar = usePuede("destajo", "eliminar");
   const [transacciones, setTransacciones] = useState([]);
   const [transSel, setTransSel] = useState(null);
   const [lote, setLote] = useState(null);
@@ -251,7 +256,7 @@ export default function PesajePage() {
 
   return (
     <div>
-      <SelectorTransacciones transacciones={transacciones} seleccionada={transSel} onSelect={seleccionarTransaccion} onCerrar={handleCerrarTransaccion} />
+      <SelectorTransacciones transacciones={transacciones} seleccionada={transSel} onSelect={seleccionarTransaccion} onCerrar={handleCerrarTransaccion} puedeEditar={puedeEditar} />
       <div className="flex flex-col lg:flex-row gap-4">
       {/* Columna captura */}
       <div className="lg:w-[420px] lg:shrink-0 space-y-4">
@@ -325,16 +330,19 @@ export default function PesajePage() {
 
         <div className="bg-white border border-gray-300 rounded-xl shadow-sm p-4 space-y-3">
           <span className="text-xs font-semibold text-gray-500 uppercase">Pesaje por Persona</span>
+          {!puedeCrear && (
+            <p className="text-xs text-amber-600">No tienes permiso para registrar pesajes.</p>
+          )}
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1">Código Empleado *</label>
             <input ref={codigoRef} value={codigoInput} onChange={e => setCodigoInput(e.target.value.toUpperCase())}
-              onKeyDown={handleCodigoKey} disabled={guardando || !numeroTermo} placeholder="Escanear o escribir..." autoComplete="off"
+              onKeyDown={handleCodigoKey} disabled={guardando || !numeroTermo || !puedeCrear} placeholder="Escanear o escribir..." autoComplete="off"
               className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono uppercase text-center focus:outline-none focus:ring-2 focus:ring-blue-400 disabled:opacity-50" />
           </div>
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1">Peso *</label>
             <input ref={pesoRef} type="number" step="0.01" value={peso} onChange={e => setPeso(e.target.value)}
-              onKeyDown={handlePesoKey} disabled={guardando || !numeroTermo}
+              onKeyDown={handlePesoKey} disabled={guardando || !numeroTermo || !puedeCrear}
               placeholder="kg" className="w-full border border-gray-300 rounded-lg px-3 py-2 text-3xl font-bold text-center text-red-600 focus:outline-none focus:ring-2 focus:ring-blue-400 disabled:opacity-50" />
           </div>
           {ultimoEmpleado && !errorMsg && (
@@ -392,10 +400,14 @@ export default function PesajePage() {
                     <td className="px-3 py-2 text-center text-gray-500 whitespace-nowrap">{p.FechaHora?.slice(11, 16)}</td>
                     <td className="px-3 py-2 text-center whitespace-nowrap">
                       <div className="flex justify-center gap-2">
-                        <button onClick={() => setModalEditar(p)}
-                          className="text-blue-600 hover:text-blue-800 text-xs font-medium px-2 py-1 rounded hover:bg-blue-50 transition">Editar</button>
-                        <button onClick={() => handleEliminarPesaje(p)}
-                          className="text-red-500 hover:text-red-700 text-xs font-medium px-2 py-1 rounded hover:bg-red-50 transition">Eliminar</button>
+                        {puedeEditar && (
+                          <button onClick={() => setModalEditar(p)}
+                            className="text-blue-600 hover:text-blue-800 text-xs font-medium px-2 py-1 rounded hover:bg-blue-50 transition">Editar</button>
+                        )}
+                        {puedeEliminar && (
+                          <button onClick={() => handleEliminarPesaje(p)}
+                            className="text-red-500 hover:text-red-700 text-xs font-medium px-2 py-1 rounded hover:bg-red-50 transition">Eliminar</button>
+                        )}
                       </div>
                     </td>
                   </tr>

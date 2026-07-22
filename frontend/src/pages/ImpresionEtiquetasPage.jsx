@@ -1,9 +1,26 @@
 import { useState, useEffect, useCallback, useRef, Fragment } from "react";
-import { authHeader } from "../context/AuthContext.jsx";
+import { authHeader, usePuede } from "../context/AuthContext.jsx";
 import { useColWidths, Th, Colgroup } from "../components/ResizableTh.jsx";
+import ConsultarEtiquetaModal from "../components/ConsultarEtiquetaModal.jsx";
+import AvisoModal from "../components/AvisoModal.jsx";
+import { useAviso } from "../hooks/useAviso.js";
 
-const COL_DEFAULTS = { fecha: 120, pedido: 110, cliente: 150, claseTalla: 150, lote: 130, declarado: 100, impresas: 100, acciones: 220 };
+const COL_DEFAULTS = {
+  fecha: 120, pedido: 110, cliente: 150, proceso: 140, lote: 130, declarado: 100, impresas: 100,
+  anuladas: 100, escaneadas: 100, linea: 140, acciones: 220,
+};
 const COLS = Object.keys(COL_DEFAULTS);
+
+const LINEA_BADGE = {
+  Completo:   "bg-green-100 text-green-700",
+  Incompleto: "bg-orange-100 text-orange-700",
+  Sobrante:   "bg-red-100 text-red-700",
+};
+function cuadreLinea(objetivo, escaneado) {
+  if (objetivo == null || escaneado == null) return null;
+  if (escaneado === objetivo) return "Completo";
+  return escaneado < objetivo ? "Incompleto" : "Sobrante";
+}
 const HIST_COL_DEFAULTS = { correlativo: 100, tamano: 90, estatus: 90, impresoPor: 110, fecha: 130, veces: 100, acciones: 110 };
 const HIST_COLS = Object.keys(HIST_COL_DEFAULTS);
 
@@ -40,6 +57,15 @@ function enviarZPL(device, zpl) {
   return new Promise((resolve, reject) => {
     device.send(zpl, () => resolve(), (err) => reject(new Error(String(err))));
   });
+}
+
+// Detalle legible de los correlativos que reimprimir-bloque excluyó por estar ya escaneados en
+// bodega (su master físico ya llegó a destino, forzarlos desde una recuperación masiva no aplica).
+// Distingue "sellado en bodega física" (ya es inventario) de "solo escaneado" (aún en bodega
+// virtual) — mismo motivo por el que se distingue en la reimpresión individual.
+function formatearSaltadas(saltadas) {
+  return saltadas.map(s => `${s.Correlativo} — pallet ${s.PalletCodigo}${s.NombreArea ? ` (${s.NombreArea})` : ""}` +
+    (s.PosicionCodigo ? ` · sellado en posición ${s.PosicionCodigo}` : "")).join("\n");
 }
 
 // Consulta el estatus de hardware con ~HQES. Es "best effort": si el canal de lectura no responde
@@ -141,7 +167,7 @@ function CampoArrastrable({ nombre, posiciones, escala, editando, onIniciarArras
 // DATOS (cliente/lote/talla correctos) antes de gastar una etiqueta física, y para reposicionar los
 // campos arrastrándolos cuando el diseño real no coincide (guarda las posiciones en DisenoEtiqueta,
 // que es lo que también usa el backend al armar el ZPL real).
-function VistaPreviaModal({ preview, onConfirmar, onCancelar, confirmando, progreso, onGuardarDiseno }) {
+function VistaPreviaModal({ preview, onConfirmar, onCancelar, confirmando, progreso, onGuardarDiseno, puedeImprimir }) {
   const { AnchoPuntos, AltoPuntos, Datos: d } = preview;
   const pendientes = preview.orden.CantidadMaster - preview.orden.Impresas;
   const [editando, setEditando] = useState(false);
@@ -239,19 +265,23 @@ function VistaPreviaModal({ preview, onConfirmar, onCancelar, confirmando, progr
             </>
           ) : (
             <>
-              <button onClick={() => setEditando(true)} className="px-4 py-2 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 transition">
-                Editar diseño
-              </button>
+              {puedeImprimir ? (
+                <button onClick={() => setEditando(true)} className="px-4 py-2 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 transition">
+                  Editar diseño
+                </button>
+              ) : <span />}
               <div className="flex gap-3">
                 <button onClick={onCancelar} className="px-4 py-2 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 transition">
                   Cancelar
                 </button>
-                <button onClick={onConfirmar} disabled={confirmando}
-                  className="px-5 py-2 text-sm bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 transition disabled:opacity-50">
-                  {confirmando
-                    ? (progreso ? `Imprimiendo ${progreso.hechas}/${progreso.total}...` : `Imprimiendo ${pendientes}...`)
-                    : `Confirmar e imprimir (${pendientes})`}
-                </button>
+                {puedeImprimir && (
+                  <button onClick={onConfirmar} disabled={confirmando}
+                    className="px-5 py-2 text-sm bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 transition disabled:opacity-50">
+                    {confirmando
+                      ? (progreso ? `Imprimiendo ${progreso.hechas}/${progreso.total}...` : `Imprimiendo ${pendientes}...`)
+                      : `Confirmar e imprimir (${pendientes})`}
+                  </button>
+                )}
               </div>
             </>
           )}
@@ -329,7 +359,59 @@ function ReimprimirRangoForm({ enCurso, progreso, onEjecutar }) {
   );
 }
 
+// Lista de etiquetas impresas hace más de 24h sin master correspondiente en bodega — la señal más
+// temprana de una etiqueta perdida, pegada a la caja equivocada, o simplemente olvidada en algún
+// rincón de planta. Solo lectura: la corrección real (anular, o investigar y escanearla) se hace
+// desde el historial de la captura o desde Bodega.
+function AtascadasModal({ atascadas, onCerrar }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      onClick={(e) => { if (e.target === e.currentTarget) onCerrar(); }}>
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl flex flex-col max-h-full">
+        <div className="px-6 py-4 border-b flex items-center justify-between shrink-0">
+          <div>
+            <h2 className="text-base font-semibold text-gray-800">Etiquetas impresas sin escanear (+24h)</h2>
+            <p className="text-xs text-gray-400 mt-0.5">Puede ser una etiqueta perdida, mal pegada, o el master sigue en planta — vale la pena revisarlo.</p>
+          </div>
+          <button onClick={onCerrar} className="text-gray-400 hover:text-gray-600 text-xl leading-none">&times;</button>
+        </div>
+        <div className="overflow-y-auto">
+          <table className="w-full text-xs">
+            <thead className="bg-gray-50 text-gray-500 uppercase tracking-wider sticky top-0">
+              <tr>
+                <th className="px-3 py-2 text-left">Correlativo</th>
+                <th className="px-3 py-2 text-left">Pedido</th>
+                <th className="px-3 py-2 text-left">Cliente</th>
+                <th className="px-3 py-2 text-left">Lote</th>
+                <th className="px-3 py-2 text-left">Producto</th>
+                <th className="px-3 py-2 text-left">Impreso por</th>
+                <th className="px-3 py-2 text-right">Hace</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {atascadas.map(a => (
+                <tr key={a.EtiquetaId}>
+                  <td className="px-3 py-2 font-mono">{a.Correlativo}</td>
+                  <td className="px-3 py-2 font-mono">{a.CodigoPedido}</td>
+                  <td className="px-3 py-2 whitespace-nowrap">{a.NombreCliente}{a.NombreSubcliente ? `-${a.NombreSubcliente}` : ""}</td>
+                  <td className="px-3 py-2 font-mono whitespace-nowrap">{a.Lote}</td>
+                  <td className="px-3 py-2 whitespace-nowrap">{a.DescripcionProceso} {a.DescripcionTalla} {a.DescripcionPresentacion}</td>
+                  <td className="px-3 py-2 whitespace-nowrap">{a.RegistradoPor}</td>
+                  <td className="px-3 py-2 text-right whitespace-nowrap text-amber-700 font-semibold">{a.HorasDesdeImpresion}h</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function ImpresionEtiquetasPage() {
+  const puedeImprimir = usePuede("etiquetado", "imprimir");
+  const puedeEditar = usePuede("etiquetado", "editar");
+  const { aviso, mostrarAlerta, pedirConfirmacion, cerrar } = useAviso();
   const [ordenes, setOrdenes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [busqueda, setBusqueda] = useState("");
@@ -337,6 +419,9 @@ export default function ImpresionEtiquetasPage() {
   const [deviceError, setDeviceError] = useState("");
   const [expandidoId, setExpandidoId] = useState(null);
   const [etiquetas, setEtiquetas] = useState([]);
+  const [mostrarConsulta, setMostrarConsulta] = useState(false);
+  const [atascadas, setAtascadas] = useState([]);
+  const [mostrarAtascadas, setMostrarAtascadas] = useState(false);
   const [ordenEnCurso, setOrdenEnCurso] = useState(null);
   const [preview, setPreview] = useState(null); // { orden, Tamano, AnchoPuntos, AltoPuntos, Datos }
   const [cargandoPreview, setCargandoPreview] = useState(false);
@@ -363,6 +448,16 @@ export default function ImpresionEtiquetasPage() {
   }, []);
 
   useEffect(() => { fetchOrdenes(fecha); }, [fetchOrdenes, fecha]);
+
+  // Alerta de etiquetas impresas hace más de 24h sin master correspondiente en bodega — se carga
+  // sola al entrar (no hace falta buscarla) para que el conteo funcione como aviso real, no algo que
+  // solo se ve si a alguien se le ocurre revisar.
+  const fetchAtascadas = useCallback(async () => {
+    const res = await fetch("/api/etiqueta-impresa/atascadas", { headers: authHeader() });
+    const data = await res.json();
+    if (Array.isArray(data)) setAtascadas(data);
+  }, []);
+  useEffect(() => { fetchAtascadas(); }, [fetchAtascadas]);
 
   // Catálogo de tamaños de etiqueta (ver TAMANOS_ETIQUETA en backend/src/lib/zpl.ts — desde jul 2026
   // solo "3x1", la única medida verificada físicamente; el selector queda listo para cuando planta
@@ -394,11 +489,24 @@ export default function ImpresionEtiquetasPage() {
   };
 
   const abrirVistaPrevia = async (orden) => {
+    // Aviso (no bloqueo) si la línea de pedido ya alcanzó su objetivo según lo confirmado en bodega
+    // — mismo principio que la reimpresión de un master ya escaneado: detectar el problema en la
+    // etapa anterior, no recién cuando alguien intente escanear el sobrante. La línea puede tener
+    // una razón legítima para seguir (reemplazo de producto rechazado), por eso solo advierte.
+    if (orden.ObjetivoLinea != null && orden.EscaneadoLinea >= orden.ObjetivoLinea) {
+      const seguir = await pedirConfirmacion(
+        `La línea de este pedido (${orden.CodigoPedido} · ${orden.DescripcionProceso} · ${orden.DescripcionTalla}) ya tiene ` +
+        `${orden.EscaneadoLinea}/${orden.ObjetivoLinea} masters escaneados en bodega — ya alcanzó su objetivo.\n\n` +
+        `¿Continuar de todas formas imprimiendo más etiquetas de esta captura?`,
+        { textoConfirmar: "Continuar de todas formas" }
+      );
+      if (!seguir) return;
+    }
     setCargandoPreview(true);
     try {
       const res = await fetch(`/api/etiqueta-impresa/vista-previa/${orden.OrdenId}?tamano=${tamano}`, { headers: authHeader() });
       const data = await res.json();
-      if (!res.ok) { alert("Error: " + data.error); return; }
+      if (!res.ok) { await mostrarAlerta("Error: " + data.error); return; }
       setPreview({ orden, ...data });
     } finally { setCargandoPreview(false); }
   };
@@ -416,17 +524,25 @@ export default function ImpresionEtiquetasPage() {
         dispositivo = await verificarImpresora();
         setDevice(dispositivo); setDeviceError("");
       } catch (err) {
-        alert("Impresora no lista — no se registró ninguna etiqueta.\n" + err.message);
+        await mostrarAlerta("Impresora no lista — no se registró ninguna etiqueta.\n" + err.message);
         return;
       }
       // 2. Registrar la tanda completa (correlativos + cupo, transacción con candado en backend).
+      // ConfirmarLineaCompleta siempre va en true aquí: si la línea ya estaba completa, el usuario
+      // ya lo confirmó explícitamente en abrirVistaPrevia antes de poder llegar hasta acá (si hubiera
+      // cancelado, "preview" nunca se habría llegado a abrir). El backend igual vuelve a validar esto
+      // por su cuenta — ese respaldo protege contra una llamada directa a la API, no contra este flujo.
       const res = await fetch("/api/etiqueta-impresa", {
         method: "POST",
         headers: { "Content-Type": "application/json", ...authHeader() },
-        body: JSON.stringify({ OrdenId: orden.OrdenId, Tamano: preview.Tamano }),
+        body: JSON.stringify({ OrdenId: orden.OrdenId, Tamano: preview.Tamano, ConfirmarLineaCompleta: true }),
       });
       const data = await res.json();
-      if (!res.ok) { alert("Error: " + data.error); return; }
+      if (res.status === 409 && data.LineaCompleta) {
+        await mostrarAlerta(data.error, "advertencia");
+        return;
+      }
+      if (!res.ok) { await mostrarAlerta("Error: " + data.error); return; }
       // 3. Enviar a la impresora en tandas con progreso; si falla a medias, abrir la ventana de
       // recuperación con exactamente los correlativos que faltaron.
       try {
@@ -440,9 +556,9 @@ export default function ImpresionEtiquetasPage() {
         return;
       }
       setPreview(null);
-      alert(`Se imprimieron las ${data.Cantidad} etiquetas (${data.Bloques[0].Correlativo} a ${data.Bloques[data.Bloques.length - 1].Correlativo}).`);
+      await mostrarAlerta(`Se imprimieron las ${data.Cantidad} etiquetas (${data.Bloques[0].Correlativo} a ${data.Bloques[data.Bloques.length - 1].Correlativo}).`, "exito");
     } catch (err) {
-      alert("No se pudo imprimir: " + err.message);
+      await mostrarAlerta("No se pudo imprimir: " + err.message);
     } finally {
       setOrdenEnCurso(null);
       setProgreso(null);
@@ -462,7 +578,7 @@ export default function ImpresionEtiquetasPage() {
         dispositivo = await verificarImpresora();
         setDevice(dispositivo); setDeviceError("");
       } catch (err) {
-        alert("Impresora no lista: " + err.message);
+        await mostrarAlerta("Impresora no lista: " + err.message);
         return;
       }
       try {
@@ -486,12 +602,27 @@ export default function ImpresionEtiquetasPage() {
     setRangoEnCurso(orden.OrdenId);
     setProgreso(null);
     try {
+      // Chequeo liviano ANTES de tocar la impresora: si TODO el rango ya está escaneado no hay nada
+      // que imprimir, y no tiene sentido gastar la verificación de Browser Print para eso — mismo
+      // criterio que la reimpresión individual (ver handleReimprimir).
+      const chk = await fetch(`/api/etiqueta-impresa/rango-estado?ordenId=${orden.OrdenId}&desde=${desde}&hasta=${hasta}`, { headers: authHeader() });
+      const chkData = await chk.json();
+      if (!chk.ok) { await mostrarAlerta("Error: " + chkData.error); return; }
+      if (!chkData.ParaReimprimir.length) {
+        await mostrarAlerta(
+          "Todas las etiquetas de este rango ya fueron escaneadas en bodega — no hay nada que reimprimir.\n\n" +
+          formatearSaltadas(chkData.Saltadas),
+          "advertencia"
+        );
+        return;
+      }
+
       let dispositivo;
       try {
         dispositivo = await verificarImpresora();
         setDevice(dispositivo); setDeviceError("");
       } catch (err) {
-        alert("Impresora no lista: " + err.message);
+        await mostrarAlerta("Impresora no lista: " + err.message);
         return;
       }
       const res = await fetch("/api/etiqueta-impresa/reimprimir-bloque", {
@@ -500,7 +631,10 @@ export default function ImpresionEtiquetasPage() {
         body: JSON.stringify({ OrdenId: orden.OrdenId, Desde: desde, Hasta: hasta, Motivo: motivo }),
       });
       const data = await res.json();
-      if (!res.ok) { alert("Error: " + data.error); return; }
+      if (!res.ok) {
+        await mostrarAlerta("Error: " + data.error + (data.Saltadas?.length ? "\n\n" + formatearSaltadas(data.Saltadas) : ""));
+        return;
+      }
       try {
         await enviarBloques(dispositivo, data.Bloques, (hechas, total) => setProgreso({ hechas, total }));
       } catch (err) {
@@ -511,9 +645,15 @@ export default function ImpresionEtiquetasPage() {
         return;
       }
       cargarEtiquetas(orden.OrdenId);
-      alert(`Se reimprimieron ${data.Cantidad} etiquetas (${data.Desde} a ${data.Hasta}).`);
+      await mostrarAlerta(
+        `Se reimprimieron ${data.Cantidad} etiquetas (${data.Desde} a ${data.Hasta}).` +
+        (data.Saltadas?.length
+          ? `\n\n${data.Saltadas.length} NO se reimprimieron por estar ya escaneadas en bodega:\n${formatearSaltadas(data.Saltadas)}`
+          : ""),
+        "exito"
+      );
     } catch (err) {
-      alert("No se pudo reimprimir el rango: " + err.message);
+      await mostrarAlerta("No se pudo reimprimir el rango: " + err.message);
     } finally {
       setRangoEnCurso(null);
       setProgreso(null);
@@ -527,7 +667,7 @@ export default function ImpresionEtiquetasPage() {
       body: JSON.stringify(posiciones),
     });
     const data = await res.json();
-    if (!res.ok) { alert("Error: " + data.error); return; }
+    if (!res.ok) { await mostrarAlerta("Error: " + data.error); return; }
     setPreview(p => (p ? { ...p, Posiciones: posiciones } : p));
   };
 
@@ -535,21 +675,98 @@ export default function ImpresionEtiquetasPage() {
     const motivo = prompt("Motivo de la reimpresión (ej. etiqueta dañada al pegar):");
     if (!motivo || !motivo.trim()) return;
     try {
+      // Chequeo liviano ANTES de tocar la impresora: si el master ya está escaneado en bodega, no
+      // tiene sentido gastar la verificación de Browser Print para algo que de todas formas se va a
+      // advertir — y así un problema real de impresora no tapa esta advertencia (lo que pasaba antes,
+      // cuando verificarImpresora() corría primero y cualquier error suyo abortaba todo el flujo).
+      let forzar = false;
+      const chk = await fetch(`/api/etiqueta-impresa/${etiqueta.EtiquetaId}/consultar`, { headers: authHeader() });
+      const chkData = await chk.json();
+      if (chk.ok && chkData.YaEscaneado) {
+        const m = chkData.Master;
+        // Sellado en bodega física: bloqueo TOTAL, sin botón de "forzar" — el backend lo va a
+        // rechazar igual aunque se insista (ver POST /:id/reimprimir), así que ni se ofrece la
+        // opción. Antes esto caía al mismo diálogo de "ya escaneado" con botón de forzar, que
+        // terminaba en otro error si lo presionaban — confuso y engañoso.
+        if (m.PosicionCodigo) {
+          await mostrarAlerta(
+            `Este master está en el pallet ${m.PalletCodigo}, ya posicionado en bodega física (${m.PosicionCodigo}) — ` +
+            `su contenido está sellado y no se puede reimprimir. La única corrección es des-ubicar el pallet desde Bodega Física.`
+          );
+          return;
+        }
+        const detalle = `Pallet ${m.PalletCodigo}${m.NombreArea ? " (" + m.NombreArea + ")" : ""}\n` +
+          `Escaneado: ${new Date(m.FechaIngreso).toLocaleString("es-GT")}${m.IngresadoPor ? " por " + m.IngresadoPor : ""}`;
+        const confirmar = await pedirConfirmacion(
+          `Este master YA fue escaneado en bodega:\n\n${detalle}\n\n` +
+          `Reimprimir puede generar una etiqueta física duplicada circulando. ¿Reimprimir de todas formas?`,
+          { textoConfirmar: "Reimprimir de todas formas" }
+        );
+        if (!confirmar) return;
+        forzar = true;
+      }
+
       // Impresora verificada antes de registrar el evento en el log — mismo criterio que la
       // impresión en bloque: no dejar rastro en BD de algo que físicamente no va a salir.
       const dispositivo = await verificarImpresora();
       setDevice(dispositivo); setDeviceError("");
+
       const res = await fetch(`/api/etiqueta-impresa/${etiqueta.EtiquetaId}/reimprimir`, {
         method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeader() },
+        body: JSON.stringify({ Motivo: motivo.trim(), Forzar: forzar }),
+      });
+      const data = await res.json();
+      // Defensa ante la ventana rara entre el chequeo y este envío (ej. alguien lo escaneó justo en
+      // el medio) — el backend vuelve a validar todo desde cero antes de escribir nada.
+      if (res.status === 409 && data.YaEscaneado) {
+        await mostrarAlerta("Este master se acaba de escanear en bodega justo ahora — vuelve a intentar la reimpresión.");
+        return;
+      }
+      if (!res.ok) { await mostrarAlerta("Error: " + data.error); return; }
+      await enviarZPL(dispositivo, data.Zpl);
+      cargarEtiquetas(etiqueta.OrdenId);
+    } catch (err) {
+      await mostrarAlerta("No se pudo reimprimir: " + err.message);
+    }
+  };
+
+  // Anular saca de circulación una etiqueta cuyo master físico nunca va a llegar a bodega (producto
+  // dañado/reprocesado antes de sellar) — sin esto quedaba "Activa" para siempre, contando como
+  // impresa pero sin poder escanearse jamás. Refresca tanto el historial como la fila de la captura
+  // (Impresas/Anuladas cambian).
+  const handleAnular = async (etiqueta) => {
+    const motivo = prompt("Motivo de la anulación (ej. producto dañado antes de llegar a bodega):");
+    if (!motivo || !motivo.trim()) return;
+    try {
+      const res = await fetch(`/api/etiqueta-impresa/${etiqueta.EtiquetaId}/anular`, {
+        method: "PUT",
         headers: { "Content-Type": "application/json", ...authHeader() },
         body: JSON.stringify({ Motivo: motivo.trim() }),
       });
       const data = await res.json();
-      if (!res.ok) { alert("Error: " + data.error); return; }
-      await enviarZPL(dispositivo, data.Zpl);
+      if (!res.ok) { await mostrarAlerta("Error: " + data.error); return; }
       cargarEtiquetas(etiqueta.OrdenId);
+      fetchOrdenes(fecha);
     } catch (err) {
-      alert("No se pudo reimprimir: " + err.message);
+      await mostrarAlerta("No se pudo anular: " + err.message);
+    }
+  };
+
+  const handleReactivar = async (etiqueta) => {
+    const confirmado = await pedirConfirmacion(
+      `¿Reactivar ${etiqueta.Correlativo}? Volverá a poder reimprimirse y escanearse.`,
+      { textoConfirmar: "Reactivar" }
+    );
+    if (!confirmado) return;
+    try {
+      const res = await fetch(`/api/etiqueta-impresa/${etiqueta.EtiquetaId}/reactivar`, { method: "PUT", headers: authHeader() });
+      const data = await res.json();
+      if (!res.ok) { await mostrarAlerta("Error: " + data.error); return; }
+      cargarEtiquetas(etiqueta.OrdenId);
+      fetchOrdenes(fecha);
+    } catch (err) {
+      await mostrarAlerta("No se pudo reactivar: " + err.message);
     }
   };
 
@@ -580,6 +797,16 @@ export default function ImpresionEtiquetasPage() {
           </select>
         </label>
         <span className="text-sm text-gray-500">{capturas.length} captura{capturas.length !== 1 ? "s" : ""} ({conPendientes} pendiente{conPendientes !== 1 ? "s" : ""} de imprimir)</span>
+        <button onClick={() => setMostrarConsulta(true)}
+          className="text-sm text-blue-600 border border-blue-200 rounded-lg px-3 py-2 hover:bg-blue-50 transition">
+          Consultar etiqueta
+        </button>
+        {atascadas.length > 0 && (
+          <button onClick={() => setMostrarAtascadas(true)}
+            className="text-sm text-amber-700 border border-amber-300 bg-amber-50 rounded-lg px-3 py-2 hover:bg-amber-100 transition font-medium">
+            ⚠ {atascadas.length} sin escanear +24h
+          </button>
+        )}
         <div className={`ml-auto text-xs font-medium px-3 py-1.5 rounded-lg ${device ? "bg-green-100 text-green-700" : "bg-red-100 text-red-600"}`}>
           {device ? `Impresora: ${device.name}` : deviceError || "Buscando impresora..."}
         </div>
@@ -596,34 +823,47 @@ export default function ImpresionEtiquetasPage() {
                 <Th width={widths.fecha} onResizeStart={startResize("fecha")} className="px-4 py-3 text-left whitespace-nowrap">Fecha Producción</Th>
                 <Th width={widths.pedido} onResizeStart={startResize("pedido")} className="px-4 py-3 text-left whitespace-nowrap">Pedido</Th>
                 <Th width={widths.cliente} onResizeStart={startResize("cliente")} className="px-4 py-3 text-left whitespace-nowrap">Cliente</Th>
-                <Th width={widths.claseTalla} onResizeStart={startResize("claseTalla")} className="px-4 py-3 text-left whitespace-nowrap">Clase · Talla</Th>
+                <Th width={widths.proceso} onResizeStart={startResize("proceso")} className="px-4 py-3 text-left whitespace-nowrap">Proceso · Talla</Th>
                 <Th width={widths.lote} onResizeStart={startResize("lote")} className="px-4 py-3 text-left whitespace-nowrap">Lote</Th>
                 <Th width={widths.declarado} onResizeStart={startResize("declarado")} className="px-4 py-3 text-right whitespace-nowrap">Declarado</Th>
                 <Th width={widths.impresas} onResizeStart={startResize("impresas")} className="px-4 py-3 text-right whitespace-nowrap">Impresas</Th>
+                <Th width={widths.anuladas} onResizeStart={startResize("anuladas")} className="px-4 py-3 text-right whitespace-nowrap">Anuladas</Th>
+                <Th width={widths.escaneadas} onResizeStart={startResize("escaneadas")} className="px-4 py-3 text-right whitespace-nowrap">Escaneadas</Th>
+                <Th width={widths.linea} onResizeStart={startResize("linea")} className="px-4 py-3 text-center whitespace-nowrap">Pedido</Th>
                 <Th width={widths.acciones} onResizeStart={startResize("acciones")} className="px-4 py-3 text-center whitespace-nowrap">Acciones</Th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
               {capturas.map(o => {
                 const pend = o.CantidadMaster - o.Impresas;
+                const cuadre = cuadreLinea(o.ObjetivoLinea, o.EscaneadoLinea);
                 return (
                 <Fragment key={o.OrdenId}>
                   <tr className="hover:bg-gray-50 transition">
                     <td className="px-4 py-3 whitespace-nowrap text-gray-500">{String(o.FechaProduccion).slice(0, 10)}</td>
                     <td className="px-4 py-3 font-mono font-bold text-gray-700 whitespace-nowrap">{o.CodigoPedido}</td>
                     <td className="px-4 py-3 whitespace-nowrap">{o.NombreCliente}{o.NombreSubcliente ? ` - ${o.NombreSubcliente}` : ""}</td>
-                    <td className="px-4 py-3 whitespace-nowrap">{o.DescripcionClase} · {o.DescripcionTalla}</td>
+                    <td className="px-4 py-3 whitespace-nowrap">{o.DescripcionProceso} · {o.DescripcionTalla}</td>
                     <td className="px-4 py-3 font-mono text-gray-700 whitespace-nowrap">{o.Lote}</td>
                     <td className="px-4 py-3 text-right whitespace-nowrap">{o.CantidadMaster}</td>
                     <td className="px-4 py-3 text-right whitespace-nowrap">{o.Impresas}</td>
+                    <td className="px-4 py-3 text-right whitespace-nowrap text-gray-400">{o.Anuladas || "-"}</td>
+                    <td className="px-4 py-3 text-right whitespace-nowrap">{o.Escaneadas}</td>
+                    <td className="px-4 py-3 text-center whitespace-nowrap">
+                      {cuadre && (
+                        <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${LINEA_BADGE[cuadre]}`} title={`${o.EscaneadoLinea}/${o.ObjetivoLinea} masters de la línea escaneados en bodega`}>
+                          {o.EscaneadoLinea}/{o.ObjetivoLinea}
+                        </span>
+                      )}
+                    </td>
                     <td className="px-4 py-3 text-center whitespace-nowrap">
                       <div className="flex justify-center gap-2">
-                        {pend > 0 ? (
+                        {pend > 0 && puedeImprimir ? (
                           <button onClick={() => abrirVistaPrevia(o)} disabled={cargandoPreview || ordenEnCurso === o.OrdenId}
                             className="px-3 py-1.5 text-xs bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 transition disabled:opacity-50">
                             {ordenEnCurso === o.OrdenId ? "Imprimiendo..." : `Imprimir pendientes (${pend})`}
                           </button>
-                        ) : (
+                        ) : pend > 0 ? null : (
                           <span className="px-3 py-1.5 text-xs bg-green-100 text-green-700 font-semibold rounded-lg">Completo</span>
                         )}
                         <button onClick={() => toggleExpandir(o)}
@@ -635,7 +875,7 @@ export default function ImpresionEtiquetasPage() {
                   </tr>
                   {expandidoId === o.OrdenId && (
                     <tr>
-                      <td colSpan={8} className="px-4 py-3 bg-gray-50">
+                      <td colSpan={11} className="px-4 py-3 bg-gray-50">
                         <table className="w-full text-xs table-fixed">
                           <Colgroup columns={HIST_COLS} widths={widthsHist} />
                           <thead>
@@ -658,8 +898,16 @@ export default function ImpresionEtiquetasPage() {
                                 <td className="px-2 py-1">{e.RegistradoPor}</td>
                                 <td className="px-2 py-1">{e.CreadoEn?.slice(0, 16).replace("T", " ")}</td>
                                 <td className="px-2 py-1 text-right">{e.VecesImpresa}</td>
-                                <td className="px-2 py-1 text-center">
-                                  <button onClick={() => handleReimprimir(e)} className="text-orange-600 hover:text-orange-800 font-medium">Reimprimir</button>
+                                <td className="px-2 py-1 text-center space-x-2">
+                                  {e.Estatus === "Activa" && puedeImprimir && (
+                                    <button onClick={() => handleReimprimir(e)} className="text-orange-600 hover:text-orange-800 font-medium">Reimprimir</button>
+                                  )}
+                                  {e.Estatus === "Activa" && puedeEditar && (
+                                    <button onClick={() => handleAnular(e)} className="text-red-600 hover:text-red-800 font-medium">Anular</button>
+                                  )}
+                                  {e.Estatus === "Anulada" && puedeEditar && (
+                                    <button onClick={() => handleReactivar(e)} className="text-blue-600 hover:text-blue-800 font-medium">Reactivar</button>
+                                  )}
                                 </td>
                               </tr>
                             ))}
@@ -668,7 +916,7 @@ export default function ImpresionEtiquetasPage() {
                             )}
                           </tbody>
                         </table>
-                        {etiquetas.length > 0 && (
+                        {etiquetas.length > 0 && puedeImprimir && (
                           <ReimprimirRangoForm enCurso={rangoEnCurso === o.OrdenId} progreso={rangoEnCurso === o.OrdenId ? progreso : null}
                             onEjecutar={(desde, hasta, motivo) => reimprimirRango(o, desde, hasta, motivo)} />
                         )}
@@ -679,7 +927,7 @@ export default function ImpresionEtiquetasPage() {
                 );
               })}
               {capturas.length === 0 && (
-                <tr><td colSpan={8} className="px-4 py-8 text-center text-gray-400">Sin capturas para los filtros seleccionados</td></tr>
+                <tr><td colSpan={11} className="px-4 py-8 text-center text-gray-400">Sin capturas para los filtros seleccionados</td></tr>
               )}
             </tbody>
           </table>
@@ -689,7 +937,8 @@ export default function ImpresionEtiquetasPage() {
       {preview && (
         <VistaPreviaModal preview={preview} confirmando={ordenEnCurso === preview.orden.OrdenId}
           progreso={ordenEnCurso === preview.orden.OrdenId ? progreso : null}
-          onConfirmar={confirmarImpresion} onCancelar={() => setPreview(null)} onGuardarDiseno={guardarDisenoEtiqueta} />
+          onConfirmar={confirmarImpresion} onCancelar={() => setPreview(null)} onGuardarDiseno={guardarDisenoEtiqueta}
+          puedeImprimir={puedeImprimir} />
       )}
 
       {falloEnvio && (
@@ -697,6 +946,10 @@ export default function ImpresionEtiquetasPage() {
           onReintentar={reintentarEnvio}
           onCerrar={() => { setFalloEnvio(null); fetchOrdenes(fecha); }} />
       )}
+
+      {mostrarConsulta && <ConsultarEtiquetaModal onCerrar={() => setMostrarConsulta(false)} />}
+      {mostrarAtascadas && <AtascadasModal atascadas={atascadas} onCerrar={() => setMostrarAtascadas(false)} />}
+      {aviso && <AvisoModal {...aviso} onCerrar={() => cerrar(true)} onCancelar={() => cerrar(false)} />}
     </div>
   );
 }

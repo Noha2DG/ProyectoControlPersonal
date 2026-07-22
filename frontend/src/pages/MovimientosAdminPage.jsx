@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { authHeader } from "../context/AuthContext.jsx";
+import { authHeader, usePuede } from "../context/AuthContext.jsx";
 import { exportarMovimientos } from "../utils/exportExcel.js";
 import EmpleadoAutocomplete from "../components/EmpleadoAutocomplete.jsx";
 import { useColWidths, Th, Colgroup } from "../components/ResizableTh.jsx";
@@ -91,6 +91,8 @@ function RegistroModal({ registro, cierre, empleados, onSave, onClose }) {
 }
 
 export default function MovimientosAdminPage() {
+  const puedeEditar = usePuede("movimientos", "editar");
+  const puedeEliminar = usePuede("movimientos", "eliminar");
   const hoy = new Date().toLocaleDateString("sv-SE", { timeZone: "America/Guatemala" });
   const [fecha, setFecha]       = useState(hoy);
   const [busqueda, setBusqueda] = useState("");
@@ -165,12 +167,14 @@ export default function MovimientosAdminPage() {
         <button onClick={fetchData} className="text-blue-600 hover:text-blue-800 text-sm font-medium px-3 py-1.5 rounded-lg hover:bg-blue-50 border border-blue-200 transition">
           Actualizar
         </button>
-        <button
-          onClick={() => setModal({ open: true, registro: null, cierre: null })}
-          className="bg-blue-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-blue-700 transition"
-        >
-          + Registrar manual
-        </button>
+        {puedeEditar && (
+          <button
+            onClick={() => setModal({ open: true, registro: null, cierre: null })}
+            className="bg-blue-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-blue-700 transition"
+          >
+            + Registrar manual
+          </button>
+        )}
         <span className="text-sm text-gray-500 ml-auto">{filtrados.length} registro{filtrados.length !== 1 ? "s" : ""}</span>
         {filtrados.length > 0 && (
           <button
@@ -197,10 +201,12 @@ export default function MovimientosAdminPage() {
                 <span className="text-amber-600 text-xs">
                   entró {c.FechaHora?.slice(0, 16)} · {formatHorasAbierto(c.HorasAbierto)} abierto
                 </span>
-                <button onClick={() => abrirCierre(c)}
-                  className="ml-auto text-xs font-semibold text-blue-700 hover:underline">
-                  Cerrar ahora
-                </button>
+                {puedeEditar && (
+                  <button onClick={() => abrirCierre(c)}
+                    className="ml-auto text-xs font-semibold text-blue-700 hover:underline">
+                    Cerrar ahora
+                  </button>
+                )}
               </li>
             ))}
           </ul>
@@ -243,14 +249,19 @@ export default function MovimientosAdminPage() {
                   <td className="px-4 py-2.5 text-center text-gray-500 text-xs">{r.Operador}</td>
                   <td className="px-4 py-2.5 text-center">
                     <div className="flex justify-center gap-2">
-                      <button onClick={() => setModal({ open: true, registro: r, cierre: null })}
-                        className="text-blue-600 hover:text-blue-800 text-xs font-medium px-2 py-1 rounded hover:bg-blue-50 transition">
-                        Editar
-                      </button>
-                      <button onClick={() => handleDelete(r.id, r.NombreEmpleado)}
-                        className="text-red-500 hover:text-red-700 text-xs font-medium px-2 py-1 rounded hover:bg-red-50 transition">
-                        Eliminar
-                      </button>
+                      {puedeEditar && (
+                        <button onClick={() => setModal({ open: true, registro: r, cierre: null })}
+                          className="text-blue-600 hover:text-blue-800 text-xs font-medium px-2 py-1 rounded hover:bg-blue-50 transition">
+                          Editar
+                        </button>
+                      )}
+                      {puedeEliminar && (
+                        <button onClick={() => handleDelete(r.id, r.NombreEmpleado)}
+                          className="text-red-500 hover:text-red-700 text-xs font-medium px-2 py-1 rounded hover:bg-red-50 transition">
+                          Eliminar
+                        </button>
+                      )}
+                      {!puedeEditar && !puedeEliminar && <span className="text-gray-300 text-xs">—</span>}
                     </div>
                   </td>
                 </tr>

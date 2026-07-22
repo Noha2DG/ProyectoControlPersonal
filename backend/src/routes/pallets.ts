@@ -2,6 +2,7 @@ import { Router, Request, Response } from "express";
 import jwt from "jsonwebtoken";
 import prisma from "../lib/prisma.ts";
 import { requireAuth, requirePerm } from "../middleware/auth.ts";
+import { buscarMasterPorEtiqueta, calcularTechoLinea } from "../lib/masters.ts";
 
 const router = Router();
 
@@ -87,27 +88,6 @@ async function obtenerMastersDePallet(palletId: number) {
   return rows.map(formatearMaster);
 }
 
-// Objetivo = CEILING(CantidadCajas / CajasXMaster) de la línea de pedido (mismo cálculo que ya usa
-// ordenEtiquetado.ts). Escaneado = masters YA confirmados en bodega de esa línea, en cualquier
-// pallet — es el "segundo techo" que quedó pendiente en el diseño de Etiquetado hasta que existiera
-// este evento de escaneo real.
-async function calcularTechoLinea(tx: any, detalleId: number) {
-  const detalle: any[] = await tx.$queryRaw`
-    SELECT dp.CantidadCajas, pr.CajasXMaster
-    FROM DetallePedido dp JOIN Presentacion pr ON dp.Presentacion = pr.Codigo
-    WHERE dp.DetalleId = ${detalleId} LIMIT 1
-  `;
-  if (!detalle.length) return null;
-  const objetivo = Math.ceil(Number(detalle[0].CantidadCajas) / Number(detalle[0].CajasXMaster));
-  const escaneadoRows: any[] = await tx.$queryRaw`
-    SELECT COUNT(*) AS n FROM Masters m
-    JOIN EtiquetaImpresa ei ON m.EtiquetaId = ei.EtiquetaId
-    JOIN OrdenEtiquetado oe ON ei.OrdenId = oe.OrdenId
-    WHERE oe.DetalleId = ${detalleId}
-  `;
-  return { Objetivo: objetivo, Escaneado: Number(escaneadoRows[0].n) };
-}
-
 // GET /api/pallets?estatus=Abierto&fecha=2026-07-14
 router.get("/", requireAuth, requirePerm("bodega", "ver"), async (req: Request, res: Response) => {
   try {
@@ -121,11 +101,13 @@ router.get("/", requireAuth, requirePerm("bodega", "ver"), async (req: Request, 
     const rows: any[] = await prisma.$queryRawUnsafe(`
       SELECT p.PalletId, p.Codigo, p.Estatus, p.Origen, org.Descripcion AS DescripcionOrigen, p.CantidadMaster,
              p.BodegaVirtualCodigo, bv.Nombre AS NombreBodegaVirtual,
+             p.PosicionId, po.Codigo AS PosicionCodigo,
              p.CreadoPor, p.CreadoEn, p.CerradoPor, p.CerradoEn,
              (SELECT COUNT(*) FROM Masters m WHERE m.PalletId = p.PalletId) AS CantidadMasters
       FROM Pallets p
       LEFT JOIN Origen org ON p.Origen = org.Codigo
       LEFT JOIN BodegaVirtual bv ON p.BodegaVirtualCodigo = bv.Codigo
+      LEFT JOIN Posiciones po ON p.PosicionId = po.PosicionId
       ${where} ORDER BY p.PalletId DESC LIMIT 500
     `, ...params);
     res.json(rows.map(r => {
@@ -143,10 +125,12 @@ router.get("/:id", requireAuth, requirePerm("bodega", "ver"), async (req: Reques
   try {
     const palletId = Number(req.params.id);
     const rows: any[] = await prisma.$queryRaw`
-      SELECT p.*, org.Descripcion AS DescripcionOrigen, bv.Nombre AS NombreBodegaVirtual
+      SELECT p.*, org.Descripcion AS DescripcionOrigen, bv.Nombre AS NombreBodegaVirtual,
+             po.Codigo AS PosicionCodigo
       FROM Pallets p
       LEFT JOIN Origen org ON p.Origen = org.Codigo
       LEFT JOIN BodegaVirtual bv ON p.BodegaVirtualCodigo = bv.Codigo
+      LEFT JOIN Posiciones po ON p.PosicionId = po.PosicionId
       WHERE p.PalletId = ${palletId} LIMIT 1
     `;
     if (!rows.length) { res.status(404).json({ error: "Pallet no encontrado" }); return; }
@@ -234,12 +218,10 @@ router.post("/:id/escanear", requireAuth, requirePerm("bodega", "escanear"), asy
       if (!etiquetaRows.length) throw new ErrorNegocio(404, "QR no reconocido");
       if (etiquetaRows[0].Estatus !== "Activa") throw new ErrorNegocio(400, "Esta etiqueta está anulada, no se puede ingresar a bodega");
 
-      const yaEscaneado: any[] = await tx.$queryRaw`
-        SELECT PalletId, FechaIngreso FROM Masters WHERE EtiquetaId = ${etiquetaId} LIMIT 1
-      `;
-      if (yaEscaneado.length) {
-        const fecha = new Date(yaEscaneado[0].FechaIngreso).toLocaleString("es-GT");
-        throw new ErrorNegocio(400, `Este master ya fue escaneado (pallet ${Number(yaEscaneado[0].PalletId)}, ${fecha})`);
+      const yaEscaneado = await buscarMasterPorEtiqueta(tx, etiquetaId);
+      if (yaEscaneado) {
+        const fecha = new Date(yaEscaneado.FechaIngreso).toLocaleString("es-GT");
+        throw new ErrorNegocio(400, `Este master ya fue escaneado (pallet ${yaEscaneado.PalletCodigo}, ${fecha})`);
       }
 
       const ordenRows: any[] = await tx.$queryRaw`SELECT DetalleId FROM OrdenEtiquetado WHERE OrdenId = ${Number(etiquetaRows[0].OrdenId)} LIMIT 1`;
@@ -288,11 +270,24 @@ router.post("/:id/cerrar", requireAuth, requirePerm("bodega", "escanear"), async
 });
 
 // PUT /api/pallets/:id/reabrir — corrección administrativa (ej. se cerró por error).
+// Este es el cerrojo maestro del candado de posicionamiento: un pallet con posición física NUNCA
+// se reabre — al quedar Cerrado para siempre, quitar/escanear masters y (transitivamente) anular
+// sus etiquetas quedan sellados. La única salida es la des-ubicación administrativa en Bodega.
 router.put("/:id/reabrir", requireAuth, requirePerm("bodega", "editar"), async (req: Request, res: Response) => {
   try {
     const palletId = Number(req.params.id);
-    const rows: any[] = await prisma.$queryRaw`SELECT Estatus FROM Pallets WHERE PalletId = ${palletId} LIMIT 1`;
+    const rows: any[] = await prisma.$queryRaw`
+      SELECT p.Estatus, p.PosicionId, po.Codigo AS PosicionCodigo
+      FROM Pallets p LEFT JOIN Posiciones po ON p.PosicionId = po.PosicionId
+      WHERE p.PalletId = ${palletId} LIMIT 1
+    `;
     if (!rows.length) { res.status(404).json({ error: "Pallet no encontrado" }); return; }
+    if (rows[0].PosicionId != null) {
+      res.status(400).json({
+        error: `Este pallet ya está posicionado en la bodega física (${rows[0].PosicionCodigo}) — su contenido está sellado y no se puede reabrir. Si es una corrección, primero des-ubícalo desde Bodega — Ubicaciones.`,
+      });
+      return;
+    }
     if (rows[0].Estatus !== "Cerrado") { res.status(400).json({ error: "Este pallet no está cerrado" }); return; }
 
     await prisma.$executeRaw`

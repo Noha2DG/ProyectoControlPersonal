@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { authHeader } from "../context/AuthContext.jsx";
+import { authHeader, usePuede } from "../context/AuthContext.jsx";
 import { useColWidths, Th, Colgroup } from "../components/ResizableTh.jsx";
 
 const PISCINA_COL_DEFAULTS = { piscina: 160, estado: 110, acciones: 150 };
@@ -75,6 +75,9 @@ function CicloModal({ item, piscinaId, onSave, onClose }) {
 }
 
 export default function PiscinaCicloPage() {
+  const puedeCrear = usePuede("catalogos", "crear");
+  const puedeEditar = usePuede("catalogos", "editar");
+  const puedeEliminar = usePuede("catalogos", "eliminar");
   const [fincas, setFincas] = useState([]);
   const [codigoFinca, setCodigoFinca] = useState("");
   const [piscinas, setPiscinas] = useState([]);
@@ -175,10 +178,12 @@ export default function PiscinaCicloPage() {
             {fincas.map(f => <option key={f.Codigo} value={f.Codigo}>{f.Codigo} — {f.Descripcion}</option>)}
           </select>
           <span className="text-sm text-gray-500 ml-auto">{piscinas.length} piscina{piscinas.length !== 1 ? "s" : ""}</span>
-          <button onClick={() => setModalPiscina({ open: true, item: null })} disabled={!codigoFinca}
-            className="bg-blue-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-blue-700 transition disabled:opacity-50">
-            + Nueva Piscina
-          </button>
+          {puedeCrear && (
+            <button onClick={() => setModalPiscina({ open: true, item: null })} disabled={!codigoFinca}
+              className="bg-blue-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-blue-700 transition disabled:opacity-50">
+              + Nueva Piscina
+            </button>
+          )}
         </div>
 
         {loadingPiscinas ? (
@@ -208,12 +213,16 @@ export default function PiscinaCicloPage() {
                     </td>
                     <td className="px-4 py-3 text-center whitespace-nowrap" onClick={e => e.stopPropagation()}>
                       <div className="flex justify-center gap-2">
-                        <button onClick={() => setModalPiscina({ open: true, item: p })}
-                          className="text-blue-600 hover:text-blue-800 text-xs font-medium px-2 py-1 rounded hover:bg-blue-50 transition">Editar</button>
-                        <button onClick={() => handleTogglePiscina(p)}
-                          className={`text-xs font-medium px-2 py-1 rounded transition ${p.Activo ? "text-red-500 hover:text-red-700 hover:bg-red-50" : "text-green-600 hover:text-green-800 hover:bg-green-50"}`}>
-                          {p.Activo ? "Desactivar" : "Activar"}
-                        </button>
+                        {puedeEditar && (
+                          <button onClick={() => setModalPiscina({ open: true, item: p })}
+                            className="text-blue-600 hover:text-blue-800 text-xs font-medium px-2 py-1 rounded hover:bg-blue-50 transition">Editar</button>
+                        )}
+                        {((p.Activo && puedeEliminar) || (!p.Activo && puedeEditar)) && (
+                          <button onClick={() => handleTogglePiscina(p)}
+                            className={`text-xs font-medium px-2 py-1 rounded transition ${p.Activo ? "text-red-500 hover:text-red-700 hover:bg-red-50" : "text-green-600 hover:text-green-800 hover:bg-green-50"}`}>
+                            {p.Activo ? "Desactivar" : "Activar"}
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -234,10 +243,12 @@ export default function PiscinaCicloPage() {
           <h3 className="text-sm font-medium text-gray-600">
             Ciclos {piscinaSel ? <span className="font-mono font-bold text-gray-800">— {piscinaSel.Nombre}</span> : ""}
           </h3>
-          <button onClick={() => setModalCiclo({ open: true, item: null })} disabled={!piscinaSel}
-            className="ml-auto bg-blue-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-blue-700 transition disabled:opacity-50">
-            + Nuevo Ciclo
-          </button>
+          {puedeCrear && (
+            <button onClick={() => setModalCiclo({ open: true, item: null })} disabled={!piscinaSel}
+              className="ml-auto bg-blue-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-blue-700 transition disabled:opacity-50">
+              + Nuevo Ciclo
+            </button>
+          )}
         </div>
 
         {!piscinaSel ? (
@@ -269,12 +280,16 @@ export default function PiscinaCicloPage() {
                     </td>
                     <td className="px-4 py-3 text-center whitespace-nowrap">
                       <div className="flex justify-center gap-2">
-                        <button onClick={() => setModalCiclo({ open: true, item: c })}
-                          className="text-blue-600 hover:text-blue-800 text-xs font-medium px-2 py-1 rounded hover:bg-blue-50 transition">Editar</button>
-                        <button onClick={() => handleToggleCiclo(c)}
-                          className={`text-xs font-medium px-2 py-1 rounded transition ${c.Activo ? "text-red-500 hover:text-red-700 hover:bg-red-50" : "text-green-600 hover:text-green-800 hover:bg-green-50"}`}>
-                          {c.Activo ? "Desactivar" : "Activar"}
-                        </button>
+                        {puedeEditar && (
+                          <button onClick={() => setModalCiclo({ open: true, item: c })}
+                            className="text-blue-600 hover:text-blue-800 text-xs font-medium px-2 py-1 rounded hover:bg-blue-50 transition">Editar</button>
+                        )}
+                        {((c.Activo && puedeEliminar) || (!c.Activo && puedeEditar)) && (
+                          <button onClick={() => handleToggleCiclo(c)}
+                            className={`text-xs font-medium px-2 py-1 rounded transition ${c.Activo ? "text-red-500 hover:text-red-700 hover:bg-red-50" : "text-green-600 hover:text-green-800 hover:bg-green-50"}`}>
+                            {c.Activo ? "Desactivar" : "Activar"}
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
