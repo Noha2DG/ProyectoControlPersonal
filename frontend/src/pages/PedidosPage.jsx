@@ -73,6 +73,7 @@ function PedidoModal({ item, clientes, onSave, onClose }) {
     Descripcion: item?.Descripcion || "",
     FechaInicio: item?.FechaInicio?.slice(0, 10) || "",
     Estatus: item?.Estatus || "Proceso",
+    EsGeneral: item?.EsGeneral || false,
   });
   const [subclientes, setSubclientes] = useState([]);
   const set = f => e => setForm(p => ({ ...p, [f]: e.target.value }));
@@ -131,6 +132,24 @@ function PedidoModal({ item, clientes, onSave, onClose }) {
               {ESTATUS.map(s => <option key={s} value={s}>{s}</option>)}
             </select>
           </div>
+
+          {/* Pedido general = producto solo para almacenaje, sin cantidades comprometidas. Se define al
+              crear: el backend rechaza cambiarlo si el pedido ya tiene líneas, porque eso reinterpretaría
+              los techos ya aplicados a las capturas existentes. */}
+          <label className="flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2.5 cursor-pointer">
+            <input type="checkbox" checked={!!form.EsGeneral}
+              onChange={e => setForm(p => ({ ...p, EsGeneral: e.target.checked }))}
+              className="mt-0.5 h-4 w-4 accent-amber-600" />
+            <span className="text-sm">
+              <span className="font-semibold text-amber-900">Pedido general (almacenaje)</span>
+              <span className="block text-xs text-amber-700 mt-0.5">
+                Producto aún no comprometido a la venta: sus líneas no llevan cantidad planificada y se
+                etiqueta lo que vaya saliendo, sin tope.
+                {isEdit && " Solo se puede cambiar mientras el pedido no tenga líneas."}
+              </span>
+            </span>
+          </label>
+
           <div className="flex justify-end gap-3 pt-1">
             <button type="button" onClick={onClose} className="px-4 py-2 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 transition">Cancelar</button>
             <button type="submit" className="px-5 py-2 text-sm bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 transition">{isEdit ? "Guardar" : "Crear"}</button>
@@ -143,7 +162,7 @@ function PedidoModal({ item, clientes, onSave, onClose }) {
 
 const round3 = n => Math.round(n * 1000) / 1000;
 
-function DetalleModal({ item, codigoPedido, clases, tallas, presentaciones, empaquesMaster, empaquesIndividual, onSave, onClose }) {
+function DetalleModal({ item, codigoPedido, esGeneral, clases, tallas, presentaciones, empaquesMaster, empaquesIndividual, onSave, onClose }) {
   const isEdit = !!item;
   const [form, setForm] = useState({
     Clase: item?.Clase || "", Talla: item?.Talla || "", Presentacion: item?.Presentacion || "",
@@ -238,35 +257,49 @@ function DetalleModal({ item, codigoPedido, clases, tallas, presentaciones, empa
               placeholder="Sin especificar — buscar empaque..."
               options={empaquesIndividual.map(e => ({ value: e.Codigo, label: `${e.Codigo} — ${e.Descripcion}` }))} />
           </div>
-          <div className="grid grid-cols-3 gap-2">
-            <div>
-              <label className="block text-xs font-medium text-gray-500 mb-1">Cajas *</label>
-              <input required type="number" value={form.CantidadCajas} onChange={setCantidadCajas}
-                className="w-full border border-gray-300 rounded-lg px-2 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
+          {/* En un pedido general no hay cantidad que planificar: el backend guarda el centinela de
+              1 caja y desactiva el techo de la línea, así que pedir cajas/kg/lb aquí solo produciría
+              números que no significan nada. */}
+          {esGeneral ? (
+            <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2.5 text-sm text-amber-800">
+              <span className="font-semibold">Pedido general — sin cantidad planificada.</span>
+              <span className="block text-xs mt-0.5">
+                Se etiqueta lo que vaya saliendo; el avance se mide por lo acumulado, no contra un objetivo.
+              </span>
             </div>
-            <div>
-              <label className="block text-xs font-medium text-gray-500 mb-1">Kg *</label>
-              <input required type="number" step="0.001" value={form.KgPedido} onChange={setKgPedido}
-                className="w-full border border-gray-300 rounded-lg px-2 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-gray-500 mb-1">Lb *</label>
-              <input required type="number" step="0.001" value={form.LibrasPedido} onChange={setLibrasPedido}
-                className="w-full border border-gray-300 rounded-lg px-2 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
-            </div>
-          </div>
+          ) : (
+            <>
+              <div className="grid grid-cols-3 gap-2">
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Cajas *</label>
+                  <input required type="number" value={form.CantidadCajas} onChange={setCantidadCajas}
+                    className="w-full border border-gray-300 rounded-lg px-2 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Kg *</label>
+                  <input required type="number" step="0.001" value={form.KgPedido} onChange={setKgPedido}
+                    className="w-full border border-gray-300 rounded-lg px-2 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Lb *</label>
+                  <input required type="number" step="0.001" value={form.LibrasPedido} onChange={setLibrasPedido}
+                    className="w-full border border-gray-300 rounded-lg px-2 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
+                </div>
+              </div>
 
-          {presentacionSel && (
-            <div className="bg-blue-50 border border-blue-200 rounded-lg px-3 py-2 text-sm text-blue-800">
-              {masters === null ? (
-                <span className="text-blue-400">Ingrese las cajas para calcular los masters</span>
-              ) : (
-                <>
-                  <span className="font-semibold">{masters.toFixed(2)} master{masters !== 1 ? "s" : ""}</span>
-                  <span className="text-blue-500"> ({presentacionSel.CajasXMaster} cajas x master)</span>
-                </>
+              {presentacionSel && (
+                <div className="bg-blue-50 border border-blue-200 rounded-lg px-3 py-2 text-sm text-blue-800">
+                  {masters === null ? (
+                    <span className="text-blue-400">Ingrese las cajas para calcular los masters</span>
+                  ) : (
+                    <>
+                      <span className="font-semibold">{masters.toFixed(2)} master{masters !== 1 ? "s" : ""}</span>
+                      <span className="text-blue-500"> ({presentacionSel.CajasXMaster} cajas x master)</span>
+                    </>
+                  )}
+                </div>
               )}
-            </div>
+            </>
           )}
 
           <div className="flex justify-end gap-3 pt-1">
@@ -345,7 +378,16 @@ export default function PedidosPage() {
       headers: { "Content-Type": "application/json", ...authHeader() },
       body: JSON.stringify(form),
     });
-    if (res.ok) { setModalPedido({ open: false, item: null }); fetchPedidos(); }
+    if (res.ok) {
+      setModalPedido({ open: false, item: null });
+      fetchPedidos();
+      // El pedido abierto en la columna de detalle guarda su propio EsGeneral, y de él dependen el
+      // modal de línea y las columnas de cantidad — hay que resincronizarlo o la vista queda mintiendo
+      // hasta que se vuelva a seleccionar.
+      if (pedidoSel?.CodigoPedido === form.CodigoPedido) {
+        setPedidoSel(prev => ({ ...prev, ...form, EsGeneral: !!form.EsGeneral }));
+      }
+    }
     else { const e = await res.json(); alert("Error: " + e.error); }
   };
 
@@ -409,7 +451,13 @@ export default function PedidosPage() {
                   <tr key={p.CodigoPedido} onClick={() => seleccionarPedido(p)}
                     className={`cursor-pointer transition ${pedidoSel?.CodigoPedido === p.CodigoPedido ? "bg-blue-50" : "hover:bg-gray-50"}`}>
                     <td className="px-4 py-3 font-mono font-bold text-gray-700 whitespace-nowrap">{p.CodigoPedido}</td>
-                    <td className="px-4 py-3 text-gray-900 whitespace-nowrap">{p.Descripcion}</td>
+                    <td className="px-4 py-3 text-gray-900 whitespace-nowrap">
+                      {p.Descripcion}
+                      {p.EsGeneral && (
+                        <span className="ml-2 inline-block px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-700"
+                          title="Pedido general: almacenaje sin cantidades planificadas">General</span>
+                      )}
+                    </td>
                     <td className="px-4 py-3 text-center whitespace-nowrap">
                       <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-semibold ${ESTATUS_BADGE[p.Estatus] || "bg-gray-100 text-gray-600"}`}>
                         {p.Estatus}
@@ -467,8 +515,14 @@ export default function PedidosPage() {
                     <td className="px-4 py-3 font-mono text-gray-700 whitespace-nowrap">{d.Clase}</td>
                     <td className="px-4 py-3 font-mono text-gray-700 whitespace-nowrap">{d.Talla}</td>
                     <td className="px-4 py-3 font-mono text-gray-700 whitespace-nowrap">{d.Presentacion}</td>
-                    <td className="px-4 py-3 text-right whitespace-nowrap">{d.CantidadCajas}</td>
-                    <td className="px-4 py-3 text-right whitespace-nowrap">{d.KgPedido}</td>
+                    {/* El 1 de un pedido general es centinela, no un dato: mostrarlo invitaría a leerlo
+                        como cantidad planificada. */}
+                    <td className="px-4 py-3 text-right whitespace-nowrap">
+                      {pedidoSel.EsGeneral ? <span className="text-gray-300">—</span> : d.CantidadCajas}
+                    </td>
+                    <td className="px-4 py-3 text-right whitespace-nowrap">
+                      {pedidoSel.EsGeneral ? <span className="text-gray-300">—</span> : d.KgPedido}
+                    </td>
                     <td className="px-4 py-3 text-center whitespace-nowrap">
                       <div className="flex justify-center gap-2">
                         {puedeEditar && (
@@ -496,7 +550,7 @@ export default function PedidosPage() {
         <PedidoModal item={modalPedido.item} clientes={clientes} onSave={handleSavePedido} onClose={() => setModalPedido({ open: false, item: null })} />
       )}
       {modalDetalle.open && pedidoSel && (
-        <DetalleModal item={modalDetalle.item} codigoPedido={pedidoSel.CodigoPedido}
+        <DetalleModal item={modalDetalle.item} codigoPedido={pedidoSel.CodigoPedido} esGeneral={pedidoSel.EsGeneral}
           clases={clases} tallas={tallas} presentaciones={presentaciones}
           empaquesMaster={empaquesMaster} empaquesIndividual={empaquesIndividual}
           onSave={handleSaveDetalle} onClose={() => setModalDetalle({ open: false, item: null })} />

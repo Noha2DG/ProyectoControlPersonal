@@ -5,6 +5,7 @@ export interface Permisos {
   empleados?:      { ver?: boolean; crear?: boolean; editar?: boolean; baja?: boolean };
   kiosco?:         { ver?: boolean };
   kiosco_areas?:   { ver?: boolean };
+  kiosco_destajo?: { ver?: boolean };
   equipo?:         { ver?: boolean };
   movimientos?:    { ver?: boolean; editar?: boolean; eliminar?: boolean };
   transferencias?: { ver?: boolean; editar?: boolean; eliminar?: boolean };

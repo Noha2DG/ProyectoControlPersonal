@@ -201,7 +201,14 @@ export default function EtiquetadoPage() {
           {pedidosFiltrados.map(p => (
             <button key={p.CodigoPedido} onClick={() => seleccionarPedido(p)}
               className={`w-full text-left px-3 py-2.5 border-b border-gray-100 transition ${pedidoSel?.CodigoPedido === p.CodigoPedido ? "bg-blue-50" : "hover:bg-gray-50"}`}>
-              <div className="font-mono font-bold text-sm text-gray-700">{p.CodigoPedido}</div>
+              <div className="font-mono font-bold text-sm text-gray-700">
+                {p.CodigoPedido}
+                {p.EsGeneral && (
+                  <span className="ml-2 inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-100 text-amber-700 align-middle">
+                    GENERAL
+                  </span>
+                )}
+              </div>
               <div className="text-xs text-gray-500 truncate">{p.Descripcion}</div>
             </button>
           ))}
@@ -222,7 +229,10 @@ export default function EtiquetadoPage() {
               <button key={d.DetalleId} onClick={() => seleccionarLinea(d)}
                 className={`w-full text-left px-3 py-2.5 border-b border-gray-100 transition ${detalleSel?.DetalleId === d.DetalleId ? "bg-blue-50" : "hover:bg-gray-50"}`}>
                 <div className="text-sm font-semibold text-gray-800">{descProcesoDeClase(d.Clase)} · {descTalla(d.Talla)}</div>
-                <div className="text-xs text-gray-500">{descPresentacion(d.Presentacion)} — {d.CantidadCajas} cajas</div>
+                {/* En un pedido general CantidadCajas es el centinela 1, no una cantidad pedida. */}
+                <div className="text-xs text-gray-500">
+                  {descPresentacion(d.Presentacion)}{pedidoSel?.EsGeneral ? "" : ` — ${d.CantidadCajas} cajas`}
+                </div>
               </button>
             ))}
             {detalles.length === 0 && <div className="px-3 py-8 text-center text-gray-400 text-sm">Sin líneas en este pedido</div>}
@@ -244,7 +254,19 @@ export default function EtiquetadoPage() {
               <div className="text-xs text-gray-400 mb-3">
                 Master: {descEmpaque(detalleSel.EmpaqueMaster)}{detalleSel.EmpaqueAccesorio ? ` · Caja: ${descEmpaque(detalleSel.EmpaqueAccesorio)}` : ""}
               </div>
-              {resumen && (() => {
+              {resumen && resumen.Objetivo == null && (
+                // Pedido general: no hay objetivo, así que no hay porcentaje, pendiente ni barra que
+                // mostrar — solo lo que se acumula. Ver project_pedido_general_design.
+                <div className="flex items-center gap-4 text-sm">
+                  <span className="inline-block px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-700">
+                    Almacenaje
+                  </span>
+                  <span><span className="font-semibold text-gray-800">{resumen.Acumulado}</span> <span className="text-gray-400">declarados</span></span>
+                  <span><span className="font-semibold text-blue-700">{resumen.Escaneado}</span> <span className="text-gray-400">escaneados en bodega</span></span>
+                  <span className="text-xs text-gray-400 italic">sin cantidad planificada</span>
+                </div>
+              )}
+              {resumen && resumen.Objetivo != null && (() => {
                 // Este resumen muestra el avance REAL (escaneado en bodega), no lo declarado — el
                 // candado que bloquea declarar de más sigue comparando contra lo declarado sin
                 // cambios (ver calcularResumen en ordenEtiquetado.ts), esto es solo visualización.

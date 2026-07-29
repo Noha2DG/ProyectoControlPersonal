@@ -2,7 +2,10 @@ import { Router, Request, Response } from "express";
 import jwt from "jsonwebtoken";
 import prisma from "../lib/prisma.ts";
 import { requireAuth, requirePerm, requireAnyPerm, tienePermiso } from "../middleware/auth.ts";
-import { construirZPL, TAMANOS_ETIQUETA, TAMANO_DEFECTO, type Posiciones, type TamanoId } from "../lib/zpl.ts";
+import {
+  construirZPL, TAMANOS_ETIQUETA, TAMANO_DEFECTO, CAMPOS_DISENO,
+  type DatosEtiqueta, type Posiciones, type TamanoId,
+} from "../lib/zpl.ts";
 import { obtenerPosiciones } from "./disenoEtiqueta.ts";
 import { buscarMasterPorEtiqueta, buscarMastersEnRango, calcularTechoLinea } from "../lib/masters.ts";
 
@@ -88,6 +91,33 @@ function armarZPL(orden: any, correlativo: string, posiciones: Posiciones, taman
   return construirZPL(datosDesdeOrden(orden, correlativo), posiciones, tamano);
 }
 
+// Datos de ejemplo para calibrar el diseño (posiciones/tamaño de los campos) sin necesitar un pedido
+// real ni gastar cupo/correlativos — antes esto solo se podía probar abriendo la vista previa de una
+// captura real, y una vez que "Impresas" llegaba al declarado ya no quedaba ningún botón que la abriera.
+const DATOS_PRUEBA: DatosEtiqueta = {
+  correlativo: "E9999",
+  codigoPedido: "PRUEBA-000",
+  cliente: "CLIENTE DE PRUEBA",
+  subcliente: null,
+  proceso: "PROCESO DE PRUEBA",
+  talla: "00/00",
+  presentacion: "00/000 gr (0.0 kg)",
+  lote: "LOTE-PRUEBA-00",
+  color: "COLOR DE PRUEBA",
+  origen: "ORIGEN DE PRUEBA",
+  congelacion: "CONGELACIÓN DE PRUEBA",
+  area: "ÁREA DE PRUEBA",
+  fechaProduccion: new Date().toISOString().slice(0, 10),
+};
+
+function posicionesValidas(body: any): body is Posiciones {
+  if (!body || typeof body !== "object") return false;
+  return CAMPOS_DISENO.every((campo) => {
+    const val = body[campo];
+    return val && Number.isFinite(Number(val.X)) && Number.isFinite(Number(val.Y));
+  });
+}
+
 // GET /api/etiqueta-impresa?orden=123 — histórico de etiquetas impresas de una captura
 router.get("/", requireAuth, requirePerm("etiquetado", "imprimir"), async (req: Request, res: Response) => {
   try {
@@ -133,6 +163,41 @@ router.get("/vista-previa/:ordenId", requireAuth, requirePerm("etiquetado", "imp
   }
 });
 
+// GET /api/etiqueta-impresa/prueba?tamano=3x1
+// Mismo formato que vista-previa, pero con datos de ejemplo (DATOS_PRUEBA) en vez de un pedido real
+// — para abrir el editor de diseño (arrastrar campos) sin depender de que exista una captura con
+// etiquetas pendientes.
+router.get("/prueba", requireAuth, requirePerm("etiquetado", "imprimir"), async (req: Request, res: Response) => {
+  try {
+    const tamano = tamanoValido(req.query.tamano) ? req.query.tamano : TAMANO_DEFECTO;
+    const posiciones = await obtenerPosiciones(tamano);
+    res.json({
+      Tamano: tamano,
+      AnchoPuntos: TAMANOS_ETIQUETA[tamano].AnchoPuntos,
+      AltoPuntos: TAMANOS_ETIQUETA[tamano].AltoPuntos,
+      Posiciones: posiciones,
+      Datos: DATOS_PRUEBA,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/etiqueta-impresa/prueba-zpl  { Tamano, Posiciones }
+// Arma el ZPL de una etiqueta de prueba con las posiciones que mande el frontend — pueden ser las
+// guardadas o las que se están arrastrando en pantalla todavía sin guardar, para poder probar en la
+// impresora física antes de confirmar el diseño con "Guardar diseño". No toca la base de datos.
+router.post("/prueba-zpl", requireAuth, requirePerm("etiquetado", "imprimir"), (req: Request, res: Response) => {
+  try {
+    const tamano = tamanoValido(req.body.Tamano) ? req.body.Tamano : TAMANO_DEFECTO;
+    if (!posicionesValidas(req.body.Posiciones)) { res.status(400).json({ error: "Posiciones inválidas o incompletas" }); return; }
+    const zpl = construirZPL(DATOS_PRUEBA, req.body.Posiciones, tamano);
+    res.json({ Zpl: zpl });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // POST /api/etiqueta-impresa  { OrdenId }
 // Crea TODAS las etiquetas pendientes de esa captura (CantidadMaster - Impresas) de una vez —
 // revisado jul 2026: ya no es una por una bajo demanda, se declara e imprime en bloque al confirmar.
@@ -152,9 +217,10 @@ router.post("/", requireAuth, requirePerm("etiquetado", "imprimir"), async (req:
     // "advertir, no bloquear" de siempre: se detiene con 409 salvo que venga
     // ConfirmarLineaCompleta=true (el frontend ya lo manda así una vez que el usuario confirmó en
     // pantalla). No necesita candado de concurrencia — es informativo, no un cupo que proteger.
+    // Objetivo null = pedido general: no hay objetivo que alcanzar, así que no hay nada que advertir.
     if (!ConfirmarLineaCompleta) {
       const techo = await calcularTechoLinea(prisma, Number(orden.DetalleId));
-      if (techo && techo.Escaneado >= techo.Objetivo) {
+      if (techo && techo.Objetivo !== null && techo.Escaneado >= techo.Objetivo) {
         res.status(409).json({
           error: `La línea de este pedido ya tiene ${techo.Escaneado}/${techo.Objetivo} masters escaneados en bodega — ya alcanzó su objetivo.`,
           LineaCompleta: true, Objetivo: techo.Objetivo, Escaneado: techo.Escaneado,

@@ -234,7 +234,10 @@ router.post("/:id/escanear", requireAuth, requirePerm("bodega", "escanear"), asy
       await tx.$queryRaw`SELECT OrdenId FROM OrdenEtiquetado WHERE DetalleId = ${detalleId} FOR UPDATE`;
       const techo = await calcularTechoLinea(tx, detalleId);
       if (!techo) throw new ErrorNegocio(404, "Línea de pedido no encontrada");
-      if (techo.Escaneado + 1 > techo.Objetivo) {
+      // Objetivo null = pedido general/de almacenaje: no hay cantidad comprometida, así que no hay
+      // techo que romper y el pallet recibe cuanto se produzca (ver project_pedido_general_design).
+      // Este es el único punto de bodega que cambia; el flujo de entrada es el mismo de siempre.
+      if (techo.Objetivo !== null && techo.Escaneado + 1 > techo.Objetivo) {
         throw new ErrorNegocio(400, `Esta línea de pedido ya tiene ${techo.Escaneado} de ${techo.Objetivo} masters escaneados en bodega — no se puede escanear otro más.`);
       }
 

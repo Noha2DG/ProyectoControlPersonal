@@ -13,10 +13,13 @@
 // frontend y DisenoEtiqueta ya están preparados para más de un tamaño.
 // 1 pulgada = 203 puntos a 203dpi → puntos = mm * (203/25.4), redondeado al entero más cercano.
 // "3x1" es horizontal (más ancha que alta, como dice su nombre: 3 de ancho, 1 de alto) — confirmado
-// directamente por el usuario jul 2026. Medida ajustada con metro sobre la etiqueta física real
-// (orilla a orilla): 78 x 27mm, no 80 x 30mm nominal.
+// directamente por el usuario jul 2026. Medida re-verificada con regla sobre la etiqueta física real
+// (orilla a orilla) el 23 jul 2026: 86 x 35mm — la medición anterior (78 x 27mm) quedó chica frente
+// al rollo actual. Esto solo agranda el LIENZO (^PW/^LL); las posiciones guardadas en DisenoEtiqueta
+// no se reajustan solas — hay que reacomodarlas con "Editar diseño" ahora que el lienzo en pantalla
+// sí representa el tamaño físico real.
 export const TAMANOS_ETIQUETA = {
-  "3x1": { label: "3 x 1 pulg (78 x 27mm)", AnchoPuntos: 623, AltoPuntos: 216 },
+  "3x1": { label: "3 x 1 pulg (86 x 35mm)", AnchoPuntos: 687, AltoPuntos: 280 },
 } as const;
 export type TamanoId = keyof typeof TAMANOS_ETIQUETA;
 export const TAMANO_DEFECTO: TamanoId = "3x1";
@@ -111,7 +114,11 @@ export function construirZPL(
     siVisible("congelacion", `${fo("congelacion")}^A0N,22,22^FD${l(d.congelacion || "-")}^FS`),
     siVisible("area", `${fo("area")}^A0N,22,22^FD${l(d.area || "-")}^FS`),
     siVisible("fechaProduccion", `${fo("fechaProduccion")}^A0N,22,22^FD${l(d.fechaProduccion || "-")}^FS`),
-    siVisible("qr", `${fo("qr")}^BQN,2,6^FDQA,${l(d.correlativo)}^FS`),
+    // Magnificación 4 = módulo de 4 puntos → 0.5mm por módulo a 203dpi (8 puntos/mm), el mínimo
+    // práctico para que un lector 2D de mano lo siga leyendo sin falsos negativos. Antes era 6
+    // (0.75mm/módulo, ~15.8mm de lado) — a este tamaño de correlativo corto queda en Versión 1 del
+    // QR de todas formas, así que reducir el módulo es lo único que realmente encoge el cuadro.
+    siVisible("qr", `${fo("qr")}^BQN,2,4^FDQA,${l(d.correlativo)}^FS`),
     siVisible("correlativoTexto", `${fo("correlativoTexto")}^A0N,22,22^FD${l(d.correlativo)}^FS`),
     "^XZ",
   ].filter(Boolean).join("\n");

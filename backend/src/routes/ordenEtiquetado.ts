@@ -38,6 +38,7 @@ function formatear(rows: any[]) {
     Impresas: Number(r.Impresas),
     Anuladas: Number(r.Anuladas),
     Escaneadas: Number(r.Escaneadas),
+    EsGeneral: Number(r.EsGeneral) === 1,
   }));
 }
 
@@ -63,6 +64,7 @@ const SELECT_ORDEN = `
          dp.Presentacion, pr.Descripcion AS DescripcionPresentacion,
          emM.Descripcion AS DescripcionEmpaqueMaster, emA.Descripcion AS DescripcionEmpaqueAccesorio,
          f.Codigo AS CodigoFinca, f.Descripcion AS NombreFinca, pi.Nombre AS NombrePiscina,
+         ped.EsGeneral,
          cli.RazonSocial AS NombreCliente, sub.RazonSocial AS NombreSubcliente,
          (SELECT COUNT(*) FROM EtiquetaImpresa ei WHERE ei.OrdenId = oe.OrdenId AND ei.Estatus = 'Activa') AS Impresas,
          (SELECT COUNT(*) FROM EtiquetaImpresa ei WHERE ei.OrdenId = oe.OrdenId AND ei.Estatus = 'Anulada') AS Anuladas,
@@ -95,7 +97,10 @@ router.get("/", requireAuth, requirePerm("etiquetado", "ver"), async (req: Reque
     if (detalle) {
       rows = await prisma.$queryRawUnsafe(`${SELECT_ORDEN} WHERE oe.DetalleId = ? ORDER BY oe.OrdenId DESC`, detalle);
     } else if (pedido) {
-      rows = await prisma.$queryRawUnsafe(`${SELECT_ORDEN} WHERE dp.CodigoPedido = ? ORDER BY oe.OrdenId DESC`, pedido);
+      // Acotado igual que la rama sin filtro: un pedido general es perpetuo y acumula capturas
+      // indefinidamente, así que esta consulta crecería sin tope. El orden DESC deja arriba las más
+      // recientes, que es lo que se necesita ver (ver project_pedido_general_design).
+      rows = await prisma.$queryRawUnsafe(`${SELECT_ORDEN} WHERE dp.CodigoPedido = ? ORDER BY oe.OrdenId DESC LIMIT 500`, pedido);
     } else if (fecha) {
       rows = await prisma.$queryRawUnsafe(`${SELECT_ORDEN} WHERE oe.FechaProduccion = ? ORDER BY oe.OrdenId DESC`, fecha);
     } else {
@@ -116,12 +121,18 @@ router.get("/", requireAuth, requirePerm("etiquetado", "ver"), async (req: Reque
 // mostrar avance real, reusando el mismo cálculo que ya usa Bodega/el reporte de Impresión.
 async function calcularResumen(detalleId: number, excluirOrdenId?: number) {
   const detalle: any[] = await prisma.$queryRaw`
-    SELECT dp.CantidadCajas, pr.CajasXMaster
-    FROM DetallePedido dp JOIN Presentacion pr ON dp.Presentacion = pr.Codigo
+    SELECT dp.CantidadCajas, pr.CajasXMaster, ped.EsGeneral
+    FROM DetallePedido dp
+    JOIN Presentacion pr ON dp.Presentacion = pr.Codigo
+    JOIN Pedidos ped ON dp.CodigoPedido = ped.CodigoPedido
     WHERE dp.DetalleId = ${detalleId} LIMIT 1
   `;
   if (!detalle.length) return null;
-  const objetivo = Math.ceil(Number(detalle[0].CantidadCajas) / Number(detalle[0].CajasXMaster));
+  // Objetivo null en pedidos generales: sin cantidad planificada no hay techo ni pendiente, solo
+  // acumulado (ver project_pedido_general_design).
+  const objetivo = Number(detalle[0].EsGeneral) === 1
+    ? null
+    : Math.ceil(Number(detalle[0].CantidadCajas) / Number(detalle[0].CajasXMaster));
 
   const acumRows: any[] = excluirOrdenId
     ? await prisma.$queryRaw`
@@ -134,7 +145,12 @@ async function calcularResumen(detalleId: number, excluirOrdenId?: number) {
       `;
   const acumulado = Number(acumRows[0].acumulado);
   const techo = await calcularTechoLinea(prisma, detalleId);
-  return { Objetivo: objetivo, Acumulado: acumulado, Pendiente: objetivo - acumulado, Escaneado: techo?.Escaneado ?? 0 };
+  return {
+    Objetivo: objetivo,
+    Acumulado: acumulado,
+    Pendiente: objetivo === null ? null : objetivo - acumulado,
+    Escaneado: techo?.Escaneado ?? 0,
+  };
 }
 
 // GET /api/orden-etiquetado/resumen/:detalleId
@@ -184,7 +200,8 @@ router.post("/", requireAuth, requirePerm("etiquetado", "crear"), async (req: Re
 
     const resumen = await calcularResumen(Number(DetalleId));
     if (!resumen) { res.status(404).json({ error: "Línea de pedido no encontrada" }); return; }
-    if (resumen.Acumulado + cantidad > resumen.Objetivo) {
+    // Objetivo null = pedido general: se declara cuanto vaya saliendo, sin techo.
+    if (resumen.Objetivo !== null && resumen.Acumulado + cantidad > resumen.Objetivo) {
       res.status(400).json({
         error: `Esta captura dejaría ${resumen.Acumulado + cantidad} masters declarados, pero la línea del pedido solo necesita ${resumen.Objetivo} (ya lleva ${resumen.Acumulado} en otras capturas).`,
       });
@@ -265,7 +282,7 @@ router.put("/:id", requireAuth, requirePerm("etiquetado", "editar"), async (req:
     const lote = componerCodigoLote(String(piscina.Nombre), FechaProduccion, cicloEfectivo);
 
     const resumen = await calcularResumen(Number(actuales[0].DetalleId), id);
-    if (resumen && resumen.Acumulado + cantidad > resumen.Objetivo) {
+    if (resumen && resumen.Objetivo !== null && resumen.Acumulado + cantidad > resumen.Objetivo) {
       res.status(400).json({
         error: `Esta captura dejaría ${resumen.Acumulado + cantidad} masters declarados, pero la línea del pedido solo necesita ${resumen.Objetivo} (ya lleva ${resumen.Acumulado} en otras capturas).`,
       });

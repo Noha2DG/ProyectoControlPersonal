@@ -5,6 +5,11 @@ export function nowGT(): string {
   return new Date().toLocaleString("sv-SE", { timeZone: TZ }).replace("T", " ");
 }
 
+/** Fecha de hoy en Guatemala "YYYY-MM-DD" */
+export function hoyGT(): string {
+  return new Date().toLocaleDateString("sv-SE", { timeZone: TZ });
+}
+
 /** Inicio del día en Guatemala "YYYY-MM-DD 00:00:00" para filtros WHERE */
 export function hoyInicioGT(): string {
   const fecha = new Date().toLocaleDateString("sv-SE", { timeZone: TZ });

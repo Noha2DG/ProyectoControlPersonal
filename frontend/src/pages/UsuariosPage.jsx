@@ -15,6 +15,7 @@ const MODULOS = [
   // ── Kioscos físicos (tablets dedicadas)
   { key: "kiosco",         label: "Kiosco · Entrada / Salida",      acciones: ["ver"],                             grupo: "Kioscos"  },
   { key: "kiosco_areas",   label: "Kiosco · Transferencia de Áreas", acciones: ["ver"],                            grupo: "Kioscos"  },
+  { key: "kiosco_destajo", label: "Kiosco · Mi Producción (Destajo)", acciones: ["ver"],                           grupo: "Kioscos"  },
   { key: "equipo",         label: "Kiosco · Entrega de Uniformes",  acciones: ["ver"],                             grupo: "Kioscos"  },
   // ── Módulo de Entradas/Salidas (corrección admin)
   { key: "movimientos",    label: "Entradas / Salidas — Corrección", acciones: ["ver","editar","eliminar"],         grupo: "Admin"    },
@@ -57,13 +58,14 @@ function permisosPara(valor) {
 
 const EMPTY_PERMISOS = permisosPara(false);
 
-const KIOSCO_KEYS = ["kiosco", "kiosco_areas", "equipo"];
+const KIOSCO_KEYS = ["kiosco", "kiosco_areas", "kiosco_destajo", "equipo"];
 
 const PRESETS = {
   admin:        permisosPara(true),
   readonly:     { ...EMPTY_PERMISOS, empleados: { ...EMPTY_PERMISOS.empleados, ver: true } },
   kiosco:       { ...EMPTY_PERMISOS, kiosco: { ver: true } },
   kiosco_areas: { ...EMPTY_PERMISOS, kiosco_areas: { ver: true } },
+  kiosco_destajo: { ...EMPTY_PERMISOS, kiosco_destajo: { ver: true } },
   equipo:       { ...EMPTY_PERMISOS, equipo: { ver: true } },
 };
 
@@ -182,6 +184,7 @@ function UsuarioModal({ usuario, onSave, onClose }) {
                 { key: "readonly",    label: "Solo lectura"    },
                 { key: "kiosco",      label: "Kiosco E/S"      },
                 { key: "kiosco_areas",label: "Kiosco Áreas"    },
+                { key: "kiosco_destajo", label: "Kiosco Mi Producción" },
                 { key: "equipo",      label: "Kiosco Uniformes"},
               ].map(p => (
                 <button key={p.key} type="button" onClick={() => applyPreset(p.key)}

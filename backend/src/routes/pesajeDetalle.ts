@@ -3,6 +3,7 @@ import jwt from "jsonwebtoken";
 import { Prisma } from "@prisma/client";
 import prisma from "../lib/prisma.ts";
 import { requireAuth, requirePerm } from "../middleware/auth.ts";
+import { hoyGT } from "../lib/dateGT.ts";
 
 const router = Router();
 
@@ -12,6 +13,10 @@ const router = Router();
 // Pelado y Devenado quedaban contra la transacción de la otra área (Producto distinto al que
 // físicamente se estaba trabajando).
 const FAMILIA_ESPERADA_POR_AREA: Record<string, string> = { DS: "E", DU: "D" };
+
+// Las únicas áreas donde se pesa a destajo — se derivan del mapa de arriba para no tener dos listas
+// que se puedan desincronizar.
+const AREAS_DESTAJO = Object.keys(FAMILIA_ESPERADA_POR_AREA);
 
 function getOperador(req: Request): string {
   try {
@@ -108,6 +113,115 @@ router.get("/", requireAuth, requirePerm("destajo", "ver"), async (req: Request,
   }
 });
 
+// GET /api/pesaje/mi-dia/:codigo — consulta de la pantalla de planta: lo que UNA persona lleva
+// procesado HOY. Es la misma consulta `porPersona` del reporte (routes/reportes.ts) acotada a un
+// empleado y al día de Guatemala, con los mismos dos subselects contra Transferencias para resolver
+// el Área y la hora de entrada al área vigentes al momento de cada pesada.
+//
+// Devuelve las pesadas crudas: las libras y el Lb/Hora los calcula el frontend con utils/destajo.js,
+// el mismo módulo que usa el Reporte de Producción — así el número que ve el operario en la pantalla
+// y el que ve administración en el reporte no pueden separarse.
+//
+// La hora viaja ya formateada como texto (DATE_FORMAT) porque las columnas DATETIME guardan hora
+// local de Guatemala y Prisma las devuelve como Date en UTC: formatearlas en el navegador correría
+// la hora 6 horas. FechaHora sí va cruda, pero solo se usa para restas entre pesadas, donde el
+// corrimiento se cancela.
+router.get("/mi-dia/:codigo", requireAuth, requirePerm("kiosco_destajo", "ver"), async (req: Request, res: Response) => {
+  try {
+    const codigo = String(req.params.codigo || "").trim().toUpperCase();
+    if (!codigo) { res.status(400).json({ error: "Código requerido" }); return; }
+    const hoy = hoyGT();
+
+    const empleados: any[] = await prisma.$queryRaw`
+      SELECT Codigo, CONCAT_WS(' ', PrimerNombre, SegundoNombre, PrimerApellido, SegundoApellido) AS Nombre, Estado
+      FROM Empleados WHERE Codigo = ${codigo} LIMIT 1
+    `;
+    if (!empleados.length) { res.status(404).json({ error: "Carnet no reconocido" }); return; }
+    if (empleados[0].Estado !== "Activo") { res.status(400).json({ error: "El empleado no está activo" }); return; }
+
+    // Área donde está parada la persona ahora mismo (su transferencia abierta). Sirve para el
+    // encabezado y para distinguir "todavía no has pesado hoy" de "tu área no trabaja por destajo".
+    const areaActual: any[] = await prisma.$queryRaw`
+      SELECT t.CodigoArea, a.Nombre AS NombreArea, a.FormaPago,
+             DATE_FORMAT(t.FechaHora, '%H:%i') AS HoraEntradaArea,
+             DATE(t.FechaHora) = ${hoy} AS EntradaEsDeHoy
+      FROM Transferencias t
+      JOIN Areas a ON t.CodigoArea = a.Codigo
+      WHERE t.Codigo = ${codigo} AND t.FechaSalida IS NULL
+      ORDER BY t.FechaHora DESC LIMIT 1
+    `;
+
+    const pesadas: any[] = await prisma.$queryRaw`
+      SELECT pd.FechaHora, DATE_FORMAT(pd.FechaHora, '%H:%i') AS Hora,
+             t.NumeroTermo, tp.Lote, tp.ClasePT, cl.Descripcion AS Producto,
+             tp.Talla, ta.Descripcion AS DescripcionTalla, pd.Peso AS Kilos,
+             (SELECT a.Nombre FROM Transferencias tr
+              JOIN Areas a ON tr.CodigoArea = a.Codigo
+              WHERE tr.Codigo = pd.Codigo
+                AND tr.FechaHora <= pd.FechaHora
+                AND (tr.FechaSalida IS NULL OR tr.FechaSalida >= pd.FechaHora)
+              ORDER BY tr.FechaHora DESC LIMIT 1) AS Area,
+             (SELECT tr.FechaHora FROM Transferencias tr
+              WHERE tr.Codigo = pd.Codigo
+                AND tr.FechaHora <= pd.FechaHora
+                AND (tr.FechaSalida IS NULL OR tr.FechaSalida >= pd.FechaHora)
+              ORDER BY tr.FechaHora DESC LIMIT 1) AS EntradaArea
+      FROM PesajeDetalle pd
+      JOIN Termos t ON pd.TermoId = t.TermoId
+      JOIN TransaccionesProduccion tp ON pd.TransaccionId = tp.TransaccionId
+      JOIN Clase cl ON tp.ClasePT = cl.Clase
+      JOIN Tallas ta ON tp.Talla = ta.Codigo
+      WHERE pd.Codigo = ${codigo} AND DATE(pd.FechaHora) = ${hoy}
+      ORDER BY pd.FechaHora ASC
+    `;
+
+    // Puesto del día. Se resuelve aquí y no en el navegador a propósito: la pantalla está en planta
+    // y solo debe recibir la posición de quien escaneó, nunca la tabla con la producción de los demás.
+    // Basta con sumar Peso sin filtrar por área — solo se puede pesar estando en DS o DU (ver el POST).
+    const ranking: any[] = await prisma.$queryRaw`
+      SELECT Codigo, SUM(Peso) AS Kilos FROM PesajeDetalle
+      WHERE DATE(FechaHora) = ${hoy}
+      GROUP BY Codigo ORDER BY Kilos DESC
+    `;
+    const indice = ranking.findIndex(r => r.Codigo === codigo);
+
+    const ayer: any[] = await prisma.$queryRaw`
+      SELECT COALESCE(SUM(Peso), 0) AS Kilos FROM PesajeDetalle
+      WHERE Codigo = ${codigo} AND DATE(FechaHora) = DATE_SUB(${hoy}, INTERVAL 1 DAY)
+    `;
+
+    const area = areaActual[0];
+    res.json({
+      fecha: hoy,
+      empleado: {
+        Codigo: empleados[0].Codigo,
+        Nombre: empleados[0].Nombre,
+        Area: area?.NombreArea ?? null,
+        CodigoArea: area?.CodigoArea ?? null,
+        EsAreaDestajo: area ? AREAS_DESTAJO.includes(area.CodigoArea) : false,
+        // La entrada al área solo se muestra si es de hoy: Transferencias puede quedar abierta varios
+        // días y una hora de anteayer confundiría más de lo que informa (mismo criterio que Lb/Hora).
+        // La comparación se hace en SQL a propósito — DATE() vuelve como Date de JS y compararla
+        // contra el texto "YYYY-MM-DD" en Node exige un formateo que es fácil equivocar.
+        HoraEntradaArea: area && Number(area.EntradaEsDeHoy) === 1 ? area.HoraEntradaArea : null,
+      },
+      // IdEmpleado/Nombre en cada fila porque utils/destajo.js agrupa por persona (viene del reporte,
+      // donde las filas son de muchas personas a la vez).
+      pesadas: pesadas.map(p => ({
+        ...p,
+        IdEmpleado: empleados[0].Codigo,
+        Nombre: empleados[0].Nombre,
+        Talla: Number(p.Talla),
+        Kilos: Number(p.Kilos),
+      })),
+      puesto: indice >= 0 ? { Puesto: indice + 1, DeCuantos: ranking.length } : null,
+      ayer: { Kilos: Number(ayer[0].Kilos) },
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // POST /api/pesaje  { TransaccionId, NumeroTermo, Codigo, Peso }
 // El termo no se elige de una lista generada por el sistema: el operador escribe el número de termo
 // que tiene físicamente enfrente. Si ese número no existe aún para esta transacción, se crea solo.
@@ -133,7 +247,7 @@ router.post("/", requireAuth, requirePerm("destajo", "crear"), async (req: Reque
       WHERE t.Codigo = ${Codigo} AND t.FechaSalida IS NULL
       ORDER BY t.FechaHora DESC LIMIT 1
     `;
-    if (!areaActual.length || !["DS", "DU"].includes(areaActual[0].CodigoArea)) {
+    if (!areaActual.length || !AREAS_DESTAJO.includes(areaActual[0].CodigoArea)) {
       res.status(400).json({
         error: "Debe darse transferencia en el área DS o DU",
         areaActual: areaActual.length ? { Codigo: areaActual[0].CodigoArea, Nombre: areaActual[0].NombreArea } : null,

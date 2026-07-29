@@ -15,3 +15,6 @@ backend/backup_*.json
 
 # Logs de sesiones de prueba con el navegador (webapp-testing / Playwright MCP)
 .playwright-mcp/
+
+# Índice local de CodeGraph — cache regenerable, no se comparte
+.codegraph/

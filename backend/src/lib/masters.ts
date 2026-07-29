@@ -70,7 +70,12 @@ export async function buscarMastersEnRango(client: any, desde: number, hasta: nu
 }
 
 export interface TechoLinea {
-  Objetivo: number;
+  // null = el pedido es general/de almacenaje (Pedidos.EsGeneral): no hay cantidad planificada, así
+  // que no hay techo contra el cual comparar. TODO consumidor debe tratar null como "sin límite" —
+  // ver project_pedido_general_design. Ojo: para esas líneas CantidadCajas vale 1 de centinela, y
+  // CEILING(1 / CajasXMaster) da 1 siempre, así que interpretarlo como techo topa la línea en un
+  // solo master y bloquea hasta el escaneo del segundo.
+  Objetivo: number | null;
   Escaneado: number;
 }
 
@@ -82,12 +87,16 @@ export interface TechoLinea {
 // candado de concurrencia lo pone el caller con FOR UPDATE antes de invocar esta función.
 export async function calcularTechoLinea(client: any, detalleId: number): Promise<TechoLinea | null> {
   const detalle: any[] = await client.$queryRaw`
-    SELECT dp.CantidadCajas, pr.CajasXMaster
-    FROM DetallePedido dp JOIN Presentacion pr ON dp.Presentacion = pr.Codigo
+    SELECT dp.CantidadCajas, pr.CajasXMaster, ped.EsGeneral
+    FROM DetallePedido dp
+    JOIN Presentacion pr ON dp.Presentacion = pr.Codigo
+    JOIN Pedidos ped ON dp.CodigoPedido = ped.CodigoPedido
     WHERE dp.DetalleId = ${detalleId} LIMIT 1
   `;
   if (!detalle.length) return null;
-  const objetivo = Math.ceil(Number(detalle[0].CantidadCajas) / Number(detalle[0].CajasXMaster));
+  const objetivo = Number(detalle[0].EsGeneral) === 1
+    ? null
+    : Math.ceil(Number(detalle[0].CantidadCajas) / Number(detalle[0].CajasXMaster));
   const escaneadoRows: any[] = await client.$queryRaw`
     SELECT COUNT(*) AS n FROM Masters m
     JOIN EtiquetaImpresa ei ON m.EtiquetaId = ei.EtiquetaId
@@ -107,8 +116,10 @@ export async function calcularTechoLineaBatch(client: any, detalleIds: number[])
   const placeholders = ids.map(() => "?").join(",");
 
   const detalles: any[] = await client.$queryRawUnsafe(`
-    SELECT dp.DetalleId, dp.CantidadCajas, pr.CajasXMaster
-    FROM DetallePedido dp JOIN Presentacion pr ON dp.Presentacion = pr.Codigo
+    SELECT dp.DetalleId, dp.CantidadCajas, pr.CajasXMaster, ped.EsGeneral
+    FROM DetallePedido dp
+    JOIN Presentacion pr ON dp.Presentacion = pr.Codigo
+    JOIN Pedidos ped ON dp.CodigoPedido = ped.CodigoPedido
     WHERE dp.DetalleId IN (${placeholders})
   `, ...ids);
 
@@ -124,7 +135,9 @@ export async function calcularTechoLineaBatch(client: any, detalleIds: number[])
 
   for (const d of detalles) {
     const detalleId = Number(d.DetalleId);
-    const objetivo = Math.ceil(Number(d.CantidadCajas) / Number(d.CajasXMaster));
+    const objetivo = Number(d.EsGeneral) === 1
+      ? null
+      : Math.ceil(Number(d.CantidadCajas) / Number(d.CajasXMaster));
     mapa.set(detalleId, { Objetivo: objetivo, Escaneado: escaneadoPorDetalle.get(detalleId) ?? 0 });
   }
   return mapa;

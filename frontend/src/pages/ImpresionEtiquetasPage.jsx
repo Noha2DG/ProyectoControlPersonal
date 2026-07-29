@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef, Fragment } from "react";
+import { QRCodeSVG } from "qrcode.react";
 import { authHeader, usePuede } from "../context/AuthContext.jsx";
 import { useColWidths, Th, Colgroup } from "../components/ResizableTh.jsx";
 import ConsultarEtiquetaModal from "../components/ConsultarEtiquetaModal.jsx";
@@ -10,6 +11,19 @@ const COL_DEFAULTS = {
   anuladas: 100, escaneadas: 100, linea: 140, acciones: 220,
 };
 const COLS = Object.keys(COL_DEFAULTS);
+
+// Único tamaño verificado contra impresión física real (ver TAMANOS_ETIQUETA en backend/src/lib/zpl.ts)
+// — sin selector en pantalla porque no hay otro rollo entre el cual elegir todavía.
+const TAMANO = "3x1";
+
+// Debe coincidir con el QR real de la etiqueta (^BQN,2,4 en backend/src/lib/zpl.ts) para que el
+// tamaño del QR en la vista previa sea el tamaño físico real, no un cuadro genérico — si se cambia
+// la magnificación allá, hay que cambiar QR_MAGNIFICACION acá. QR_MODULOS asume Versión 1 (21x21),
+// válido para cualquier correlativo real ("E" + unos pocos dígitos, siempre corto); QR_MARGEN_MODULOS
+// es la zona de silencio mínima del estándar QR (4 módulos), que Zebra agrega alrededor del símbolo.
+const QR_MAGNIFICACION = 4;
+const QR_MODULOS = 21;
+const QR_MARGEN_MODULOS = 4;
 
 const LINEA_BADGE = {
   Completo:   "bg-green-100 text-green-700",
@@ -31,6 +45,18 @@ const HIST_COLS = Object.keys(HIST_COL_DEFAULTS);
 // siga físicamente bien — hay que redetectarla en cada intento, no cachearla para toda la sesión.
 // getDefaultDevice a veces devuelve un dispositivo sin "name" ("No value for name") — se prefiere
 // getLocalDevices, que sí trae el nombre real.
+// Sin service = sin nada que leer: el SDK habla contra un servicio local de Windows en
+// http://127.0.0.1:9100 (no contra el driver directamente — ver BrowserPrint-3.1.250.min.js). Si
+// ese servicio no está corriendo, el XHR falla a nivel de red y el callback de error del SDK llega
+// con la respuesta vacía ("") — de ahí que antes el mensaje se cortara en "No se pudo listar
+// impresoras Zebra: " sin nada después. Un err vacío/ausente SIEMPRE es el servicio caído, no la
+// impresora ni el USB — se detecta ese caso puntual para decirlo explícito en vez de dejarlo en blanco.
+function mensajeErrorServicio(err, contexto) {
+  const texto = err == null ? "" : String(err).trim();
+  if (texto) return `${contexto}: ${texto}`;
+  return `${contexto}: el servicio "Zebra Browser Print" no responde en esta computadora. Ábrelo desde la bandeja del sistema (o Inicio → Zebra Browser Print) y volvé a intentar.`;
+}
+
 function detectarDispositivo() {
   return new Promise((resolve, reject) => {
     if (!window.BrowserPrint) { reject(new Error("El SDK de Browser Print no cargó — revisa que el servicio esté instalado y corriendo.")); return; }
@@ -44,10 +70,10 @@ function detectarDispositivo() {
             if (dev && dev.name) resolve(dev);
             else reject(new Error("Se detectó la impresora pero sin nombre válido — probá reiniciar Browser Print."));
           },
-          (err) => reject(new Error("No se encontró impresora Zebra conectada: " + err))
+          (err) => reject(new Error(mensajeErrorServicio(err, "No se encontró impresora Zebra conectada")))
         );
       },
-      (err) => reject(new Error("No se pudo listar impresoras Zebra: " + err)),
+      (err) => reject(new Error(mensajeErrorServicio(err, "No se pudo listar impresoras Zebra"))),
       "printer"
     );
   });
@@ -68,43 +94,11 @@ function formatearSaltadas(saltadas) {
     (s.PosicionCodigo ? ` · sellado en posición ${s.PosicionCodigo}` : "")).join("\n");
 }
 
-// Consulta el estatus de hardware con ~HQES. Es "best effort": si el canal de lectura no responde
-// en 3s se continúa solo con la detección del dispositivo (no todos los enlaces exponen lectura),
-// pero si SÍ responde y reporta errores (sin rollo, cabezal abierto...), quien llama bloquea la
-// impresión ANTES de registrar nada en la base de datos.
-function leerEstadoImpresora(device) {
-  return new Promise((resolve) => {
-    let terminado = false;
-    const listo = (r) => { if (!terminado) { terminado = true; resolve(r); } };
-    setTimeout(() => listo(null), 3000);
-    try {
-      device.sendThenRead("~HQES", (texto) => {
-        const m = /ERRORS:\s*(\d)\s+([0-9A-Fa-f]+)\s+([0-9A-Fa-f]+)/.exec(String(texto || ""));
-        if (!m) { listo(null); return; }
-        if (m[1] !== "1") { listo({ error: false }); return; }
-        const flags = parseInt(m[3], 16);
-        const causas = [];
-        if (flags & 0x1) causas.push("sin papel/rollo");
-        if (flags & 0x2) causas.push("sin ribbon");
-        if (flags & 0x4) causas.push("cabezal abierto");
-        if (flags & 0x8) causas.push("falla en el cortador");
-        listo({ error: true, detalle: causas.length ? causas.join(", ") : `código de error ${m[2]} ${m[3]}` });
-      }, () => listo(null));
-    } catch {
-      listo(null);
-    }
-  });
-}
-
-// Detecta la impresora Y verifica su estatus físico. Se llama ANTES de registrar etiquetas en la
-// base de datos — si Browser Print está caído, el USB suelto o la impresora reporta un problema,
-// se aborta sin consumir cupo ni crear correlativos huérfanos.
-async function verificarImpresora() {
-  const device = await detectarDispositivo();
-  const estado = await leerEstadoImpresora(device);
-  if (estado?.error) throw new Error(`la impresora reporta un problema: ${estado.detalle}. Corrígelo y vuelve a intentar.`);
-  return device;
-}
+// Se probó leer el estatus físico de la impresora por USB (~HQES y variables SGD) para adelantar
+// errores de hardware (sin papel, cabezal abierto) antes de imprimir — pero la lectura por este canal
+// resultó no confiable (respuestas vacías o cruzadas entre comandos, según pruebas jul 2026). Se
+// quitó esa verificación: los llamados que antes usaban verificarImpresora() ahora detectan el
+// dispositivo directo con detectarDispositivo() (arriba), sin intentar leer su estado físico de vuelta.
 
 // Envía los bloques ZPL en tandas (no un solo string gigante): da progreso real en pantalla y,
 // si el envío falla a medias, el error lleva .enviadas/.restantes para que quien llama ofrezca
@@ -147,7 +141,12 @@ const ETIQUETA_CAMPOS = [
   { key: "congelacion", label: "Congelación", render: d => <span className="text-sm whitespace-nowrap">{d.congelacion || "-"}</span> },
   { key: "area", label: "Área", render: d => <span className="text-sm whitespace-nowrap">{d.area || "-"}</span> },
   { key: "fechaProduccion", label: "Fecha Producción", render: d => <span className="text-sm whitespace-nowrap">{d.fechaProduccion || "-"}</span> },
-  { key: "qr", label: "Código QR", render: () => <div className="w-14 h-14 border-2 border-gray-700 flex items-center justify-center text-[9px] text-gray-500 text-center">QR</div> },
+  // Tamaño real (no un cuadro genérico): mismo cálculo en dots que la etiqueta física, escalado al
+  // lienzo de la vista previa — ver QR_MAGNIFICACION/QR_MODULOS/QR_MARGEN_MODULOS arriba.
+  { key: "qr", label: "Código QR", render: (d, escala) => (
+    <QRCodeSVG value={d.correlativo} level="Q" marginSize={QR_MARGEN_MODULOS}
+      size={Math.round((QR_MODULOS + QR_MARGEN_MODULOS * 2) * QR_MAGNIFICACION * escala)} />
+  ) },
   { key: "correlativoTexto", label: "Correlativo (texto)", render: d => <span className="text-xs text-gray-400 italic whitespace-nowrap">{d.correlativo === "(pendiente)" ? "correlativo se asigna al confirmar" : d.correlativo}</span> },
 ];
 
@@ -167,12 +166,13 @@ function CampoArrastrable({ nombre, posiciones, escala, editando, onIniciarArras
 // DATOS (cliente/lote/talla correctos) antes de gastar una etiqueta física, y para reposicionar los
 // campos arrastrándolos cuando el diseño real no coincide (guarda las posiciones en DisenoEtiqueta,
 // que es lo que también usa el backend al armar el ZPL real).
-function VistaPreviaModal({ preview, onConfirmar, onCancelar, confirmando, progreso, onGuardarDiseno, puedeImprimir }) {
+function VistaPreviaModal({ preview, onConfirmar, onCancelar, confirmando, progreso, onGuardarDiseno, onImprimirPrueba, puedeImprimir }) {
   const { AnchoPuntos, AltoPuntos, Datos: d } = preview;
-  const pendientes = preview.orden.CantidadMaster - preview.orden.Impresas;
+  const pendientes = preview.orden ? preview.orden.CantidadMaster - preview.orden.Impresas : 0;
   const [editando, setEditando] = useState(false);
   const [posiciones, setPosiciones] = useState(preview.Posiciones);
   const [guardando, setGuardando] = useState(false);
+  const [imprimiendoPrueba, setImprimiendoPrueba] = useState(false);
   const arrastre = useRef(null);
 
   useEffect(() => { setPosiciones(preview.Posiciones); }, [preview.Posiciones]);
@@ -208,6 +208,11 @@ function VistaPreviaModal({ preview, onConfirmar, onCancelar, confirmando, progr
   const toggleVisible = (campo) => {
     setPosiciones(p => ({ ...p, [campo]: { ...p[campo], Visible: !p[campo].Visible } }));
   };
+  const imprimirPrueba = async () => {
+    setImprimiendoPrueba(true);
+    try { await onImprimirPrueba(posiciones); }
+    finally { setImprimiendoPrueba(false); }
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
@@ -215,8 +220,12 @@ function VistaPreviaModal({ preview, onConfirmar, onCancelar, confirmando, progr
       <div className={`bg-white rounded-2xl shadow-xl w-full flex flex-col max-h-full transition-all ${editando ? "max-w-3xl" : "max-w-lg"}`}>
         <div className="px-6 py-4 border-b flex items-center justify-between shrink-0">
           <div>
-            <h2 className="text-base font-semibold text-gray-800">Vista previa de la etiqueta</h2>
-            <p className="text-xs text-gray-400 mt-0.5">Tamaño: {preview.Tamano} — verifica que coincida con el rollo cargado en la impresora</p>
+            <h2 className="text-base font-semibold text-gray-800">{preview.esPrueba ? "Etiqueta de prueba" : "Vista previa de la etiqueta"}</h2>
+            <p className="text-xs text-gray-400 mt-0.5">
+              {preview.esPrueba
+                ? "Datos de ejemplo — no se registra en el sistema ni consume cupo. Imprime cuantas veces necesites para calibrar."
+                : `Tamaño: ${preview.Tamano} — verifica que coincida con el rollo cargado en la impresora`}
+            </p>
           </div>
           <button onClick={onCancelar} className="text-gray-400 hover:text-gray-600 text-xl leading-none">&times;</button>
         </div>
@@ -227,14 +236,16 @@ function VistaPreviaModal({ preview, onConfirmar, onCancelar, confirmando, progr
               onMouseMove={moverArrastre} onMouseUp={soltarArrastre} onMouseLeave={soltarArrastre}>
               {ETIQUETA_CAMPOS.filter(c => posiciones[c.key].Visible).map(c => (
                 <CampoArrastrable key={c.key} nombre={c.key} posiciones={posiciones} escala={escala} editando={editando} onIniciarArrastre={iniciarArrastre}>
-                  {c.render(d)}
+                  {c.render(d, escala)}
                 </CampoArrastrable>
               ))}
             </div>
             <p className="text-xs text-gray-400 mt-3 text-center" style={{ width: Math.max(anchoVista, 220) }}>
               {editando
                 ? "Arrastra cada campo para reposicionarlo."
-                : `Esto es una maqueta de los datos, no el diseño exacto que imprime la Zebra. Al confirmar se imprimirán las ${pendientes} etiqueta${pendientes !== 1 ? "s" : ""} pendientes de esta captura.`}
+                : preview.esPrueba
+                  ? "Esto es una maqueta de los datos, no el diseño exacto que imprime la Zebra — usa \"Imprimir prueba\" para verlo en físico."
+                  : `Esto es una maqueta de los datos, no el diseño exacto que imprime la Zebra. Al confirmar se imprimirán las ${pendientes} etiqueta${pendientes !== 1 ? "s" : ""} pendientes de esta captura.`}
             </p>
           </div>
           {editando && (
@@ -258,10 +269,18 @@ function VistaPreviaModal({ preview, onConfirmar, onCancelar, confirmando, progr
               <button onClick={cancelarEdicion} className="px-4 py-2 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 transition">
                 Cancelar edición
               </button>
-              <button onClick={guardarDiseno} disabled={guardando}
-                className="px-5 py-2 text-sm bg-gray-800 text-white font-semibold rounded-lg hover:bg-gray-900 transition disabled:opacity-50">
-                {guardando ? "Guardando..." : "Guardar diseño"}
-              </button>
+              <div className="flex gap-3">
+                <button onClick={guardarDiseno} disabled={guardando}
+                  className="px-5 py-2 text-sm bg-gray-800 text-white font-semibold rounded-lg hover:bg-gray-900 transition disabled:opacity-50">
+                  {guardando ? "Guardando..." : "Guardar diseño"}
+                </button>
+                {preview.esPrueba && (
+                  <button onClick={imprimirPrueba} disabled={imprimiendoPrueba}
+                    className="px-5 py-2 text-sm bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 transition disabled:opacity-50">
+                    {imprimiendoPrueba ? "Imprimiendo..." : "Imprimir prueba"}
+                  </button>
+                )}
+              </div>
             </>
           ) : (
             <>
@@ -272,16 +291,21 @@ function VistaPreviaModal({ preview, onConfirmar, onCancelar, confirmando, progr
               ) : <span />}
               <div className="flex gap-3">
                 <button onClick={onCancelar} className="px-4 py-2 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 transition">
-                  Cancelar
+                  {preview.esPrueba ? "Cerrar" : "Cancelar"}
                 </button>
-                {puedeImprimir && (
+                {puedeImprimir && (preview.esPrueba ? (
+                  <button onClick={imprimirPrueba} disabled={imprimiendoPrueba}
+                    className="px-5 py-2 text-sm bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 transition disabled:opacity-50">
+                    {imprimiendoPrueba ? "Imprimiendo..." : "Imprimir prueba"}
+                  </button>
+                ) : (
                   <button onClick={onConfirmar} disabled={confirmando}
                     className="px-5 py-2 text-sm bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 transition disabled:opacity-50">
                     {confirmando
                       ? (progreso ? `Imprimiendo ${progreso.hechas}/${progreso.total}...` : `Imprimiendo ${pendientes}...`)
                       : `Confirmar e imprimir (${pendientes})`}
                   </button>
-                )}
+                ))}
               </div>
             </>
           )}
@@ -426,10 +450,6 @@ export default function ImpresionEtiquetasPage() {
   const [preview, setPreview] = useState(null); // { orden, Tamano, AnchoPuntos, AltoPuntos, Datos }
   const [cargandoPreview, setCargandoPreview] = useState(false);
   const [fecha, setFecha] = useState("");
-  const [tamanos, setTamanos] = useState([]);
-  // "3x1" es el rollo que se usa por defecto hoy en planta (jul 2026, mientras se sigue usando ese
-  // tamaño) — el operador puede cambiarlo si carga otro rollo.
-  const [tamano, setTamano] = useState("3x1");
   const [progreso, setProgreso] = useState(null); // { hechas, total } durante un envío por tandas
   const [falloEnvio, setFalloEnvio] = useState(null); // { bloques, enviadas, total, mensaje, ordenId } si un envío quedó a medias
   const [reintentando, setReintentando] = useState(false);
@@ -459,22 +479,29 @@ export default function ImpresionEtiquetasPage() {
   }, []);
   useEffect(() => { fetchAtascadas(); }, [fetchAtascadas]);
 
-  // Catálogo de tamaños de etiqueta (ver TAMANOS_ETIQUETA en backend/src/lib/zpl.ts — desde jul 2026
-  // solo "3x1", la única medida verificada físicamente; el selector queda listo para cuando planta
-  // incorpore otro rollo). El operador elige a mano cuál está usando según el rollo físico cargado.
-  useEffect(() => {
-    fetch("/api/diseno-etiqueta/tamanos", { headers: authHeader() })
-      .then(res => res.json())
-      .then(data => { if (Array.isArray(data) && data.length) setTamanos(data); });
-  }, []);
-
   // Solo para el indicador de estatus en pantalla — antes de cada impresión se vuelve a detectar
   // (ver detectarDispositivo), esto de aquí no se reusa para imprimir.
-  useEffect(() => {
-    detectarDispositivo()
-      .then(dev => { setDevice(dev); setDeviceError(""); })
-      .catch(err => setDeviceError(err.message));
+  // Antes se detectaba una sola vez al montar: si Browser Print o el USB no estaban listos en ese
+  // instante exacto (servicio Zebra recién arrancando, cable conectado un segundo tarde), el aviso
+  // rojo quedaba pegado para siempre hasta recargar la página entera. Ahora se reintenta solo cada
+  // pocos segundos mientras no haya impresora detectada, y hay un botón para forzarlo al toque.
+  const intentarDetectar = useCallback(async () => {
+    try {
+      const dev = await detectarDispositivo();
+      setDevice(dev);
+      setDeviceError("");
+    } catch (err) {
+      setDevice(null);
+      setDeviceError(err.message);
+    }
   }, []);
+
+  useEffect(() => {
+    if (device) return; // ya detectada — nada que reintentar
+    intentarDetectar();
+    const id = setInterval(intentarDetectar, 4000);
+    return () => clearInterval(id);
+  }, [intentarDetectar, device]);
 
   const cargarEtiquetas = useCallback(async (ordenId) => {
     const res = await fetch(`/api/etiqueta-impresa?orden=${ordenId}`, { headers: authHeader() });
@@ -504,11 +531,44 @@ export default function ImpresionEtiquetasPage() {
     }
     setCargandoPreview(true);
     try {
-      const res = await fetch(`/api/etiqueta-impresa/vista-previa/${orden.OrdenId}?tamano=${tamano}`, { headers: authHeader() });
+      const res = await fetch(`/api/etiqueta-impresa/vista-previa/${orden.OrdenId}?tamano=${TAMANO}`, { headers: authHeader() });
       const data = await res.json();
       if (!res.ok) { await mostrarAlerta("Error: " + data.error); return; }
       setPreview({ orden, ...data });
     } finally { setCargandoPreview(false); }
+  };
+
+  // Abre el mismo editor de diseño pero con datos de ejemplo (sin "orden") — para calibrar el
+  // diseño en cualquier momento, no solo cuando hay una captura con etiquetas pendientes.
+  const abrirPrueba = async () => {
+    setCargandoPreview(true);
+    try {
+      const res = await fetch(`/api/etiqueta-impresa/prueba?tamano=${TAMANO}`, { headers: authHeader() });
+      const data = await res.json();
+      if (!res.ok) { await mostrarAlerta("Error: " + data.error); return; }
+      setPreview({ orden: null, esPrueba: true, ...data });
+    } finally { setCargandoPreview(false); }
+  };
+
+  // Llamado desde dentro del modal con las posiciones QUE ESTÉ VIENDO en ese momento (guardadas o
+  // recién arrastradas sin guardar todavía) — así se puede probar en la impresora física antes de
+  // comprometerse a "Guardar diseño". No pasa por /api/etiqueta-impresa: no crea EtiquetaImpresa, no
+  // consume cupo ni correlativos.
+  const imprimirPrueba = async (posiciones) => {
+    try {
+      const dispositivo = await detectarDispositivo();
+      setDevice(dispositivo); setDeviceError("");
+      const res = await fetch("/api/etiqueta-impresa/prueba-zpl", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeader() },
+        body: JSON.stringify({ Tamano: preview.Tamano, Posiciones: posiciones }),
+      });
+      const data = await res.json();
+      if (!res.ok) { await mostrarAlerta("Error: " + data.error); return; }
+      await enviarZPL(dispositivo, data.Zpl);
+    } catch (err) {
+      await mostrarAlerta("No se pudo imprimir la prueba: " + err.message);
+    }
   };
 
   const confirmarImpresion = async () => {
@@ -521,7 +581,7 @@ export default function ImpresionEtiquetasPage() {
       // consumido cupo ni creado correlativos huérfanos en la base de datos.
       let dispositivo;
       try {
-        dispositivo = await verificarImpresora();
+        dispositivo = await detectarDispositivo();
         setDevice(dispositivo); setDeviceError("");
       } catch (err) {
         await mostrarAlerta("Impresora no lista — no se registró ninguna etiqueta.\n" + err.message);
@@ -575,7 +635,7 @@ export default function ImpresionEtiquetasPage() {
     try {
       let dispositivo;
       try {
-        dispositivo = await verificarImpresora();
+        dispositivo = await detectarDispositivo();
         setDevice(dispositivo); setDeviceError("");
       } catch (err) {
         await mostrarAlerta("Impresora no lista: " + err.message);
@@ -619,7 +679,7 @@ export default function ImpresionEtiquetasPage() {
 
       let dispositivo;
       try {
-        dispositivo = await verificarImpresora();
+        dispositivo = await detectarDispositivo();
         setDevice(dispositivo); setDeviceError("");
       } catch (err) {
         await mostrarAlerta("Impresora no lista: " + err.message);
@@ -678,7 +738,7 @@ export default function ImpresionEtiquetasPage() {
       // Chequeo liviano ANTES de tocar la impresora: si el master ya está escaneado en bodega, no
       // tiene sentido gastar la verificación de Browser Print para algo que de todas formas se va a
       // advertir — y así un problema real de impresora no tapa esta advertencia (lo que pasaba antes,
-      // cuando verificarImpresora() corría primero y cualquier error suyo abortaba todo el flujo).
+      // cuando detectarDispositivo() corría primero y cualquier error suyo abortaba todo el flujo).
       let forzar = false;
       const chk = await fetch(`/api/etiqueta-impresa/${etiqueta.EtiquetaId}/consultar`, { headers: authHeader() });
       const chkData = await chk.json();
@@ -708,7 +768,7 @@ export default function ImpresionEtiquetasPage() {
 
       // Impresora verificada antes de registrar el evento en el log — mismo criterio que la
       // impresión en bloque: no dejar rastro en BD de algo que físicamente no va a salir.
-      const dispositivo = await verificarImpresora();
+      const dispositivo = await detectarDispositivo();
       setDevice(dispositivo); setDeviceError("");
 
       const res = await fetch(`/api/etiqueta-impresa/${etiqueta.EtiquetaId}/reimprimir`, {
@@ -789,26 +849,28 @@ export default function ImpresionEtiquetasPage() {
         {fecha && (
           <button onClick={() => setFecha("")} className="text-xs text-gray-500 hover:text-gray-700 underline">Quitar fecha</button>
         )}
-        <label className="flex items-center gap-2 text-sm text-gray-600">
-          Rollo cargado:
-          <select value={tamano} onChange={e => setTamano(e.target.value)}
-            className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400">
-            {tamanos.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
-          </select>
-        </label>
         <span className="text-sm text-gray-500">{capturas.length} captura{capturas.length !== 1 ? "s" : ""} ({conPendientes} pendiente{conPendientes !== 1 ? "s" : ""} de imprimir)</span>
         <button onClick={() => setMostrarConsulta(true)}
           className="text-sm text-blue-600 border border-blue-200 rounded-lg px-3 py-2 hover:bg-blue-50 transition">
           Consultar etiqueta
         </button>
+        {puedeImprimir && (
+          <button onClick={abrirPrueba} disabled={cargandoPreview}
+            className="text-sm text-gray-600 border border-gray-300 rounded-lg px-3 py-2 hover:bg-gray-50 transition disabled:opacity-50">
+            Editar diseño
+          </button>
+        )}
         {atascadas.length > 0 && (
           <button onClick={() => setMostrarAtascadas(true)}
             className="text-sm text-amber-700 border border-amber-300 bg-amber-50 rounded-lg px-3 py-2 hover:bg-amber-100 transition font-medium">
             ⚠ {atascadas.length} sin escanear +24h
           </button>
         )}
-        <div className={`ml-auto text-xs font-medium px-3 py-1.5 rounded-lg ${device ? "bg-green-100 text-green-700" : "bg-red-100 text-red-600"}`}>
+        <div className={`ml-auto flex items-center gap-2 text-xs font-medium px-3 py-1.5 rounded-lg ${device ? "bg-green-100 text-green-700" : "bg-red-100 text-red-600"}`}>
           {device ? `Impresora: ${device.name}` : deviceError || "Buscando impresora..."}
+          {!device && (
+            <button onClick={intentarDetectar} className="underline hover:no-underline font-semibold">Reintentar</button>
+          )}
         </div>
       </div>
 
@@ -935,10 +997,10 @@ export default function ImpresionEtiquetasPage() {
       )}
 
       {preview && (
-        <VistaPreviaModal preview={preview} confirmando={ordenEnCurso === preview.orden.OrdenId}
-          progreso={ordenEnCurso === preview.orden.OrdenId ? progreso : null}
+        <VistaPreviaModal preview={preview} confirmando={!!preview.orden && ordenEnCurso === preview.orden.OrdenId}
+          progreso={!!preview.orden && ordenEnCurso === preview.orden.OrdenId ? progreso : null}
           onConfirmar={confirmarImpresion} onCancelar={() => setPreview(null)} onGuardarDiseno={guardarDisenoEtiqueta}
-          puedeImprimir={puedeImprimir} />
+          onImprimirPrueba={imprimirPrueba} puedeImprimir={puedeImprimir} />
       )}
 
       {falloEnvio && (

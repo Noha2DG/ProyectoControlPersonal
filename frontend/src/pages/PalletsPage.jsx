@@ -33,6 +33,12 @@ async function leerJSON(res) {
   try { return await res.json(); } catch { return {}; }
 }
 
+function calcularCuadre(cantidadMaster, escaneados) {
+  if (cantidadMaster == null) return null;
+  if (escaneados === cantidadMaster) return "Completo";
+  return escaneados < cantidadMaster ? "Incompleto" : "Sobrante";
+}
+
 // Panel de escaneo de un pallet — un solo pallet a la vez (mismo criterio operativo: la estación
 // llena un pallet, lo cierra, recién ahí abre el siguiente). El input queda enfocado para que el
 // lector 2D USB/Bluetooth (que escribe como si fuera teclado + Enter) alimente el escaneo sin mouse.
@@ -44,10 +50,13 @@ function PanelEscaneo({ palletId, onClose, onCambio }) {
   const [loading, setLoading] = useState(true);
   const [correlativo, setCorrelativo] = useState("");
   const [mensaje, setMensaje] = useState(null); // { ok: bool, texto }
-  const [enviando, setEnviando] = useState(false);
   const [mostrarConsulta, setMostrarConsulta] = useState(false);
   const [mostrarHoja, setMostrarHoja] = useState(false);
   const inputRef = useRef(null);
+  // Candado síncrono contra doble envío — el input NUNCA se deshabilita (deshabilitar un <input>
+  // enfocado le quita el foco en el navegador, y a 50 masters/min el lector no puede darse el lujo
+  // de reenfocar a mano en cada escaneo). Un estado en vez de ref no sirve: llega tarde un render.
+  const enviandoRef = useRef(false);
   const [widths, startResize] = useColWidths("pallet_masters", MASTERS_COL_DEFAULTS);
 
   const fetchDetalle = useCallback(async () => {
@@ -66,8 +75,8 @@ function PanelEscaneo({ palletId, onClose, onCambio }) {
   const handleEscanear = async (e) => {
     e.preventDefault();
     const valor = correlativo.trim();
-    if (!valor || enviando) return;
-    setEnviando(true);
+    if (!valor || enviandoRef.current) return;
+    enviandoRef.current = true;
     setCorrelativo("");
     try {
       const res = await fetch(`${API}/${palletId}/escanear`, {
@@ -79,13 +88,27 @@ function PanelEscaneo({ palletId, onClose, onCambio }) {
       if (res.ok) {
         const m = data.Master;
         setMensaje({ ok: true, texto: `${m.Correlativo} — ${m.CodigoPedido} · ${m.NombreCliente}${m.NombreSubcliente ? "-" + m.NombreSubcliente : ""} · Lote ${m.Lote}` });
-        await fetchDetalle();
-        onCambio?.();
+        // Se agrega el master ya devuelto por /escanear en vez de volver a pedir GET /:id — ese
+        // endpoint reconstruye TODOS los masters del pallet con un join de 8 tablas, y repetirlo en
+        // cada escaneo lo vuelve O(n²) según se llena el pallet (hasta 50 masters). Con esto el
+        // costo por escaneo queda constante.
+        setPallet(prev => {
+          if (!prev) return prev;
+          const masters = [...prev.Masters, m];
+          return { ...prev, Masters: masters, Cuadre: calcularCuadre(prev.CantidadMaster, data.CantidadMasters ?? masters.length) };
+        });
+        // No se llama onCambio() aquí: eso dispara el GET de la lista completa de pallets en el
+        // padre, y a 50 escaneos/minuto sería una consulta extra por cada uno sin necesidad — la
+        // lista ya se refresca al cerrar este panel (onClose) y al cerrar/reabrir el pallet.
       } else {
         setMensaje({ ok: false, texto: `${valor}: ${data.error || "No se pudo escanear"}` });
       }
     } finally {
-      setEnviando(false);
+      enviandoRef.current = false;
+      // Foco explícito en vez de confiar solo en el efecto: el efecto depende de que `mensaje`
+      // cambie de referencia, pero el input nunca se deshabilita ahora así que no hay blur que
+      // revertir — este focus() es el que realmente importa entre escaneo y escaneo.
+      inputRef.current?.focus();
     }
   };
 
@@ -177,7 +200,7 @@ function PanelEscaneo({ palletId, onClose, onCambio }) {
                     </div>
                   </div>
                   <input ref={inputRef} type="text" value={correlativo} onChange={e => setCorrelativo(e.target.value)}
-                    autoFocus disabled={enviando}
+                    autoFocus
                     placeholder="Apunta el lector aquí..."
                     className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-400" />
                 </form>

@@ -136,7 +136,7 @@ export default function ExistenciaBodegaPage() {
                   <Th width={widths.fecha} onResizeStart={startResize("fecha")} className="px-4 py-3 text-left">Fecha</Th>
                   <Th width={widths.master} onResizeStart={startResize("master")} className="px-4 py-3 text-right">Master</Th>
                   <Th width={widths.cajas} onResizeStart={startResize("cajas")} className="px-4 py-3 text-right">Cajas</Th>
-                  <Th width={widths.kilos} onResizeStart={startResize("kilos")} className="px-4 py-3 text-right">Kilos Brutos</Th>
+                  <Th width={widths.kilos} onResizeStart={startResize("kilos")} className="px-4 py-3 text-right">Kilos</Th>
                   <Th width={widths.libras} onResizeStart={startResize("libras")} className="px-4 py-3 text-right">Libras</Th>
                 </tr>
               </thead>

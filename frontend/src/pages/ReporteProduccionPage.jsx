@@ -3,6 +3,9 @@ import { createPortal } from "react-dom";
 import { authHeader } from "../context/AuthContext.jsx";
 import { exportarReporteGeneral, exportarReporteTermos, exportarEficiencias, exportarLbHora, exportarLbHoraPorTalla, exportarLbPorPersona } from "../utils/exportExcel.js";
 import { useColWidths, Th, Colgroup } from "../components/ResizableTh.jsx";
+import {
+  LB_POR_KG, MINIMO_BLOQUE_MINUTOS, calcularLbHora, agruparPorArea, agruparPorProductoTalla, totalLbHora,
+} from "../utils/destajo.js";
 
 const LOTE_DET_COL_DEFAULTS = { talla: 160, producto: 180, estado: 110, procesado: 100, pesajes: 90 };
 const LOTE_DET_COLS = Object.keys(LOTE_DET_COL_DEFAULTS);
@@ -23,7 +26,9 @@ const LBHORA_COL_DEFAULTS = { id: 100, nombre: 150, area: 110, lb: 90, horas: 90
 const LBHORA_COLS = Object.keys(LBHORA_COL_DEFAULTS);
 const PORTALLA_COL_DEFAULTS = { expand: 24, productoTalla: 220, lbTotal: 100, lbHoraProm: 110, numPersonas: 100 };
 const PORTALLA_COLS = Object.keys(PORTALLA_COL_DEFAULTS);
-const LBPERSONA_COL_DEFAULTS = { puesto: 80, id: 100, nombre: 150, descabezado: 130, pelado: 150, total: 100 };
+// Anchos pensados para que quepa el título completo de cada columna sin encimarse ("Pelado y
+// Devenado (Lb)" es el más largo) y para que en Nombre se lea al menos hasta el primer apellido.
+const LBPERSONA_COL_DEFAULTS = { puesto: 80, id: 120, nombre: 240, descabezado: 150, pelado: 190, total: 110 };
 const LBPERSONA_COLS = Object.keys(LBPERSONA_COL_DEFAULTS);
 
 function hoy() { return new Date().toLocaleDateString("sv-SE"); }
@@ -48,92 +53,6 @@ const SUB_TABS_SIN_FINCA = ["lbhora", "portalla", "lbpersona"];
 // Solo Lb/Hora y Por Talla filtran por Área — Lb/Persona siempre muestra Descabezado y
 // Pelado y Devenado lado a lado, así que un filtro de Área no tendría sentido ahí.
 const SUB_TABS_CON_AREA = ["lbhora", "portalla"];
-
-const LB_POR_KG = 2.20462;
-
-const MINIMO_BLOQUE_MINUTOS = 15;
-
-const diaLocal = (fechaHora) => new Date(fechaHora).toLocaleDateString("sv-SE");
-
-// Recorre la secuencia cronológica COMPLETA de cada persona (todas sus tareas, no una tarea aislada)
-// para calcular su tiempo por bloque: el primer bloque de CADA día (no solo el primero del rango
-// completo — un reporte de varios días también debe reiniciar el ancla cada día) se cuenta desde que
-// entra al área (EntradaArea) hasta esa pesada; los siguientes usan la pesada anterior como referencia.
-// EntradaArea solo se usa como ancla si es del MISMO día que la pesada — si la persona no vuelve a
-// marcar entrada al área cada día (Transferencias puede quedar abierta varios días sin un nuevo
-// registro), un EntradaArea de días atrás producía bloques de 60-100+ horas para una jornada normal de
-// 8 horas. Sin ancla confiable ese primer bloque queda inválido, igual que si no hubiera EntradaArea.
-// obtenerGrupo(p) decide en qué se agrupa cada pesada (por Área, por Producto+Talla, etc.) — pero
-// también importa para el cálculo de horas: si esta pesada cae en un grupo distinto al de la pesada
-// inmediatamente anterior de la misma persona, se exige el mismo mínimo de 15 min que al arranque del
-// día antes de contar ese bloque. Sin esto, cuando una persona produce dos o tres Producto+Talla casi
-// al mismo tiempo (común en Pelado y Devenado: el mismo trabajo se clasifica en distintas tallas sobre
-// la marcha), el cambio de grupo puede caer segundos después de la pesada anterior y el bloque le
-// atribuye TODO el peso a un lapso casi instantáneo — de ahí las tasas de 40-60+ lb/hr con una sola
-// pesada. Dentro de un mismo grupo y mismo día no hay mínimo ni tope: ahí sigue aplicando que un hueco
-// largo es el ritmo normal del trabajo (lote grande acumulado), no una pausa. Un bloque inválido no
-// aporta ni peso ni tiempo al total — igual que LIBRA VALIDA/HR VALIDA en la planilla de referencia.
-function calcularLbHora(porPersona, obtenerGrupo) {
-  const porEmpleado = new Map();
-  for (const p of porPersona) {
-    if (!porEmpleado.has(p.IdEmpleado)) porEmpleado.set(p.IdEmpleado, { Nombre: p.Nombre, pesadas: [] });
-    porEmpleado.get(p.IdEmpleado).pesadas.push(p);
-  }
-
-  const buckets = new Map();
-  for (const [idEmpleado, { Nombre, pesadas }] of porEmpleado) {
-    const ordenadas = pesadas.slice().sort((a, b) => new Date(a.FechaHora) - new Date(b.FechaHora));
-
-    let horaAnterior = null;
-    let grupoAnterior = null;
-    let diaAnterior = null;
-    ordenadas.forEach((p, i) => {
-      const horaActual = new Date(p.FechaHora).getTime();
-      const diaActual = diaLocal(p.FechaHora);
-      const { key, campos } = obtenerGrupo(p);
-      const esGrupoNuevo = i === 0 || key !== grupoAnterior;
-      const esDiaNuevo = i === 0 || diaActual !== diaAnterior;
-
-      let minutosBloque = 0;
-      let valido = false;
-      if (esDiaNuevo) {
-        if (p.EntradaArea && diaLocal(p.EntradaArea) === diaActual) {
-          minutosBloque = (horaActual - new Date(p.EntradaArea).getTime()) / 60000;
-          valido = minutosBloque >= MINIMO_BLOQUE_MINUTOS;
-        }
-      } else {
-        minutosBloque = (horaActual - horaAnterior) / 60000;
-        valido = esGrupoNuevo ? minutosBloque >= MINIMO_BLOQUE_MINUTOS : minutosBloque > 0;
-      }
-
-      horaAnterior = horaActual;
-      grupoAnterior = key;
-      diaAnterior = diaActual;
-
-      const bucketKey = `${idEmpleado}|${key}`;
-      if (!buckets.has(bucketKey)) {
-        buckets.set(bucketKey, { IdEmpleado: idEmpleado, Nombre, ...campos, Kilos: 0, Horas: 0, NumPesadas: 0 });
-      }
-      const b = buckets.get(bucketKey);
-      b.NumPesadas += 1;
-      if (valido) {
-        b.Kilos += p.Kilos;
-        b.Horas += minutosBloque / 60;
-      }
-    });
-  }
-
-  return [...buckets.values()].map(({ Kilos, ...b }) => {
-    const lb = Kilos * LB_POR_KG;
-    return { ...b, Lb: lb, LbPorHora: b.Horas > 0 ? lb / b.Horas : null };
-  });
-}
-
-const agruparPorArea = p => ({ key: p.Area ?? "", campos: { Area: p.Area ?? null } });
-const agruparPorProductoTalla = p => ({
-  key: `${p.Producto}|${p.Talla}`,
-  campos: { Producto: p.Producto, Talla: p.Talla, DescripcionTalla: p.DescripcionTalla },
-});
 
 // Una tasa calculada con pocas pesadas o poco tiempo válido puede ser real pero es más fácil que sea
 // producto de un dato aislado (ver project_destajo_lbhora_referencia_excel) — se marca en vez de
@@ -194,16 +113,6 @@ function calcularLbPorPersona(porPersona) {
 // Colores suaves (tono "-50", el más pálido de la escala) para no competir con el texto ni con el
 // resto de la tabla — es un fondo de fila, no una alerta que deba saltar a la vista.
 const FILA_SEMAFORO = { verde: "bg-green-50", amarillo: "bg-amber-50", rojo: "bg-red-50" };
-
-// Promedio de Lb/Hora ponderado por horas (no un promedio simple de las tasas individuales), y solo
-// entre quienes tienen tasa definida — así una persona con una sola pesada no distorsiona el total.
-function totalLbHora(filas) {
-  const totalLb = filas.reduce((s, f) => s + f.Lb, 0);
-  const conTasa = filas.filter(f => f.LbPorHora != null);
-  const sumLb = conTasa.reduce((s, f) => s + f.Lb, 0);
-  const sumHoras = conTasa.reduce((s, f) => s + f.Horas, 0);
-  return { TotalLb: totalLb, PromedioLbHora: sumHoras > 0 ? sumLb / sumHoras : null };
-}
 
 // Una talla que representa menos de esto del total de SU MISMO Producto (todas las tallas que salieron
 // de esa clasificación, no de todo lo procesado) es producción incidental — el tamaño chico o grande
@@ -429,7 +338,14 @@ export default function ReporteProduccionPage() {
   const [widthsEficiencias, startResizeEficiencias] = useColWidths("reporte_eficiencias", EFICIENCIAS_COL_DEFAULTS);
   const [widthsLbHora, startResizeLbHora] = useColWidths("reporte_lbhora", LBHORA_COL_DEFAULTS);
   const [widthsPortalla, startResizePortalla] = useColWidths("reporte_portalla", PORTALLA_COL_DEFAULTS);
-  const [widthsLbPersona, startResizeLbPersona] = useColWidths("reporte_lbpersona", LBPERSONA_COL_DEFAULTS);
+  // _v2 en la llave: los anchos guardados en localStorage se mezclan sobre los defaults, así que
+  // sin cambiar la llave quien ya tenía la tabla abierta seguiría con los anchos viejos (angostos).
+  const [widthsLbPersona, startResizeLbPersona] = useColWidths("reporte_lbpersona_v2", LBPERSONA_COL_DEFAULTS);
+  // Lb/Persona tiene pocas columnas y angostas: a pantalla completa la tabla quedaba estirada de
+  // borde a borde con huecos enormes. Se limita el bloque a la suma real de los anchos (que el
+  // usuario puede cambiar arrastrando) y se centra; si la pantalla es más angosta, encoge sola.
+  // +16 px por la barra de scroll vertical de la lista, para que no le robe ancho a las columnas.
+  const anchoLbPersona = 16 + LBPERSONA_COLS.reduce((s, k) => s + (widthsLbPersona[k] ?? LBPERSONA_COL_DEFAULTS[k] ?? 0), 0);
 
   useEffect(() => {
     fetch("/api/finca", { headers: authHeader() }).then(r => r.json())
@@ -925,7 +841,7 @@ export default function ReporteProduccionPage() {
 
           {/* ── Lb/Persona ── */}
           {subTab === "lbpersona" && (
-            <div>
+            <div className="mx-auto w-full" style={{ maxWidth: anchoLbPersona }}>
               <h3 className="text-xs font-semibold text-gray-700 mb-1">Libras por Persona — Descabezado y Pelado y Devenado</h3>
               <p className="text-xs text-gray-400 mb-2">
                 Libras acumuladas por persona en cada área (sin tasa ni horas), ordenado de mayor a menor por el total de ambas.
@@ -951,7 +867,8 @@ export default function ReporteProduccionPage() {
                       <tr key={f.IdEmpleado} className={`${FILA_SEMAFORO[f.Semaforo]} hover:brightness-95 transition`}>
                         <td className="px-2 py-1.5 text-center text-gray-500 whitespace-nowrap">{f.Puesto}</td>
                         <td className="px-2 py-1.5 font-mono text-gray-700 whitespace-nowrap">{f.IdEmpleado}</td>
-                        <td className="px-2 py-1.5 text-gray-700"><div className="max-w-[9rem] truncate" title={f.Nombre}>{f.Nombre}</div></td>
+                        {/* sin max-w fijo: que el corte lo mande el ancho de la columna (ajustable) */}
+                        <td className="px-2 py-1.5 text-gray-700"><div className="truncate" title={f.Nombre}>{f.Nombre}</div></td>
                         <td className="px-2 py-1.5 text-right text-gray-700 whitespace-nowrap">{f.LbDescabezado > 0 ? f.LbDescabezado.toFixed(2) : <span className="text-gray-300">—</span>}</td>
                         <td className="px-2 py-1.5 text-right text-gray-700 whitespace-nowrap">{f.LbPelado > 0 ? f.LbPelado.toFixed(2) : <span className="text-gray-300">—</span>}</td>
                         <td className="px-2 py-1.5 text-right font-semibold text-blue-700 whitespace-nowrap">{f.LbTotal.toFixed(2)}</td>
