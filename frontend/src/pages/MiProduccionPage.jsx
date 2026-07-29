@@ -16,7 +16,7 @@ const SEGUNDOS = { ok: 20, vacio: 12, error: 5 };
 
 // Tope de filas del detalle. Cuántas se muestran de verdad lo decide la altura disponible (ver
 // useFilasQueCaben): nadie lee treinta filas parado, pero tampoco sirve dejar la tabla vacía.
-const MAX_FILAS = 8;
+const MAX_FILAS = 14;
 
 // Tamaños atados a la altura de la ventana (vh) en vez de fijos: en el monitor de 11" de planta la
 // pantalla queda justa y en un monitor grande el mismo layout crece en vez de dejar hueco. Los
@@ -53,7 +53,7 @@ const lb = (kilos) => kilos * LB_POR_KG;
 // se está calculando. La medición se difiere a un requestAnimationFrame porque el ResizeObserver
 // puede dispararse antes de que el layout se asiente y devolver un alto que todavía no es el final.
 const INTERLINEADO = 1.5;              // line-height base de Tailwind
-const PADDING_FILA = 13;               // py-1.5 arriba y abajo + el borde superior
+const PADDING_FILA = 5;                // py-0.5 arriba y abajo + el borde superior
 
 function useFilasQueCaben(ref) {
   const [caben, setCaben] = useState(3);
@@ -184,26 +184,27 @@ function Resultado({ datos }) {
 
       <div className="min-h-0 bg-slate-900 border border-slate-800 rounded-xl overflow-hidden flex flex-col">
         <div ref={cuerpoRef} className="flex-1 min-h-0">
-        {/* h-full: las filas que sí caben reparten el alto y llenan la tarjeta en vez de amontonarse
-            arriba. No afecta el conteo, que se calcula del tamaño de letra y no de la fila pintada. */}
-        <table className="w-full table-fixed h-full">
+        {/* Sin h-full: cada fila mide lo que mide su texto más su padding. Con h-full las filas se
+            estiraban para rellenar la tarjeta, y con dos o tres pesadas quedaban altísimas. Si
+            sobra alto, sobra y ya — mejor eso que renglones separados por media pantalla. */}
+        <table className="w-full table-fixed">
           <thead>
             <tr className={`${T.medio} bg-slate-800 text-slate-200 uppercase tracking-widest`}>
-              <th className="px-5 py-2 text-left font-bold w-[14%]">Hora</th>
-              <th className="px-5 py-2 text-left font-bold w-[16%]">Talla</th>
-              <th className="px-5 py-2 text-left font-bold">Producto</th>
-              <th className="px-5 py-2 text-right font-bold w-[16%]">Kg</th>
-              <th className="px-5 py-2 text-right font-bold w-[16%]">Lb</th>
+              <th className="px-5 py-1.5 text-left font-bold w-[14%]">Hora</th>
+              <th className="px-5 py-1.5 text-left font-bold w-[16%]">Talla</th>
+              <th className="px-5 py-1.5 text-left font-bold">Producto</th>
+              <th className="px-5 py-1.5 text-right font-bold w-[16%]">Kg</th>
+              <th className="px-5 py-1.5 text-right font-bold w-[16%]">Lb</th>
             </tr>
           </thead>
           <tbody className={`${T.tabla} font-mono tabular-nums`}>
             {ultimas.map((p, i) => (
               <tr key={i} className="border-t border-slate-800">
-                <td className="px-5 py-1.5 text-slate-300">{p.Hora}</td>
-                <td className="px-5 py-1.5 text-white">{p.DescripcionTalla}</td>
-                <td className="px-5 py-1.5 text-slate-200 font-sans truncate">{p.Producto}</td>
-                <td className="px-5 py-1.5 text-right text-white">{p.Kilos.toFixed(2)}</td>
-                <td className="px-5 py-1.5 text-right font-bold text-emerald-400">{lb(p.Kilos).toFixed(1)}</td>
+                <td className="px-5 py-0.5 text-slate-300">{p.Hora}</td>
+                <td className="px-5 py-0.5 text-white">{p.DescripcionTalla}</td>
+                <td className="px-5 py-0.5 text-slate-200 font-sans truncate">{p.Producto}</td>
+                <td className="px-5 py-0.5 text-right text-white">{p.Kilos.toFixed(2)}</td>
+                <td className="px-5 py-0.5 text-right font-bold text-emerald-400">{lb(p.Kilos).toFixed(1)}</td>
               </tr>
             ))}
           </tbody>
