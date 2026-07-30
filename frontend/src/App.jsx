@@ -20,6 +20,7 @@ import PalletsPage from "./pages/PalletsPage.jsx";
 import BodegaFisicaPage from "./pages/BodegaFisicaPage.jsx";
 import ExistenciaBodegaPage from "./pages/ExistenciaBodegaPage.jsx";
 import EmpleadosTable from "./components/EmpleadosTable.jsx";
+import { exportarEmpleados } from "./utils/exportExcel.js";
 import EmpleadoModal from "./components/EmpleadoModal.jsx";
 import BajaModal from "./components/BajaModal.jsx";
 import ConfirmModal from "./components/ConfirmModal.jsx";
@@ -143,6 +144,17 @@ function EmpleadosSection({ canCrear, canEditar, canBaja }) {
           ))}
         </div>
         <span className="text-sm text-gray-500 ml-auto">{filtrados.length} empleado{filtrados.length !== 1 ? "s" : ""}</span>
+        {/* Exporta lo filtrado, no la tabla completa: el botón sale de la misma lista que se está
+            viendo, así que el filtro de estado y la búsqueda ya vienen aplicados en el archivo. */}
+        {filtrados.length > 0 && (
+          <button onClick={() => exportarEmpleados(filtrados, filtroEstado)}
+            className="flex items-center gap-1.5 bg-green-600 hover:bg-green-700 text-white text-sm font-semibold px-3 py-2 rounded-lg transition">
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+            </svg>
+            Exportar Excel
+          </button>
+        )}
         {canCrear && (
           <button onClick={() => setModal({ open: true, empleado: null })}
             className="bg-blue-600 text-white font-semibold px-4 py-2 rounded-lg hover:bg-blue-700 transition text-sm">

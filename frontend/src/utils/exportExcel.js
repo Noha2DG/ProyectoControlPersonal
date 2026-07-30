@@ -226,6 +226,65 @@ export function exportarLbPorPersona(filas, desde, hasta) {
   XLSX.writeFile(wb, `LbPorPersona_${desde}_a_${hasta}.xlsx`);
 }
 
+// El Excel lleva la ficha COMPLETA, no las ocho columnas que se ven en pantalla: la tabla está
+// recortada para que quepa, pero /api/empleados ya devuelve todos los campos y es justo lo que
+// hace falta cuando alguien se baja el listado (planilla, IGSS, expedientes). Se exporta lo que
+// quedó filtrado en pantalla, así el filtro Activo/Baja/Todos y la búsqueda mandan sobre el archivo.
+export function exportarEmpleados(empleados, filtroEstado) {
+  const filas = empleados.map(e => ({
+    "Código":                 e.Codigo,
+    "Nombre Completo":        e.NombreCompleto,
+    "Estado":                 e.Estado,
+    "F. Ingreso":             e.FechaIngreso ?? "",
+    // Solo para quien está de baja. 82 de los 183 activos arrastran FechaBaja = 1970-01-01 (el
+    // centinela de época que deja una fecha vacía al convertirse), y algunos reactivados conservan
+    // la fecha de su baja anterior: en ambos casos es una fecha que no significa nada para alguien
+    // que sigue trabajando. No se filtra el 1970 en general porque hay fechas de NACIMIENTO reales
+    // de ese año, y el historial de bajas verdadero vive en la tabla Bajas.
+    "F. Baja":                e.Estado === "Activo" ? "" : (e.FechaBaja ?? ""),
+    "Primer Nombre":          e.PrimerNombre ?? "",
+    "Segundo Nombre":         e.SegundoNombre ?? "",
+    "Tercer Nombre":          e.TercerNombre ?? "",
+    "Primer Apellido":        e.PrimerApellido ?? "",
+    "Segundo Apellido":       e.SegundoApellido ?? "",
+    "Apellido de Casada":     e.ApellidoCasada ?? "",
+    "Sexo":                   e.Sexo ?? "",
+    "Estado Civil":           e.EstadoCivil ?? "",
+    // DPI y Etalent van como texto: son identificadores, no cantidades. Como número, Excel le come
+    // los ceros a la izquierda y a los DPI de 13 dígitos les mete notación científica.
+    "DPI":                    e.DPI > 0 ? String(e.DPI) : "",
+    "Etalent":                e.CodigoEtalent ? String(e.CodigoEtalent) : "",
+    "NIT":                    e.NIT ?? "",
+    "Seguro Social":          e.SeguroSocial ?? "",
+    "F. Nacimiento":          e.FechaNacimiento ?? "",
+    "País Nacimiento":        e.PaisNacimiento ?? "",
+    "Depto. Nacimiento":      e.DepartamentoNacimiento ?? "",
+    "Municipio Nacimiento":   e.MunicipioNacimiento ?? "",
+    "Etnia":                  e.Etnia ?? "",
+    "Nacionalidad":           e.Nacionalidad ?? "",
+    "País DPI":               e.PaisDPI ?? "",
+    "Depto. DPI":             e.DepartamentoDPI ?? "",
+    "Municipio DPI":          e.MunicipioDPI ?? "",
+    "Vencimiento DPI":        e.VencimientoDPI ?? "",
+    "Celular":                e.Celular ?? "",
+    "Teléfono":               e.Telefono ?? "",
+    "Permiso de Trabajo":     e.PermisoTrabajo ?? "",
+    "Título Personal":        e.TituloPersonal ?? "",
+    "No. de Hijos":           e.NumeroHijos ?? 0,
+    "Nivel Académico":        e.NivelAcademico ?? "",
+    "Tipo de Sangre":         e.TipoSangre ?? "",
+    "Beneficiario":           e.Beneficiario ?? "",
+    "Profesión":              e.Profesion ?? "",
+  }));
+
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.json_to_sheet(filas);
+  autoWidth(ws, filas);
+  XLSX.utils.book_append_sheet(wb, ws, "Empleados");
+  const hoy = new Date().toLocaleDateString("sv-SE", { timeZone: "America/Guatemala" });
+  XLSX.writeFile(wb, `Empleados_${filtroEstado}_${hoy}.xlsx`);
+}
+
 export function exportarPermisos(registros, fecha, hasta) {
   const filas = registros.map(r => ({
     "Desde":            r.Fecha,
