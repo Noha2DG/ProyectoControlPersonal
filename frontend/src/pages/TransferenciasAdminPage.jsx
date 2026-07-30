@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { authHeader, usePuede } from "../context/AuthContext.jsx";
 import { exportarTransferencias } from "../utils/exportExcel.js";
+import { fmtRango } from "../utils/permisos.js";
 import EmpleadoAutocomplete from "../components/EmpleadoAutocomplete.jsx";
 import { useColWidths, Th, Colgroup } from "../components/ResizableTh.jsx";
 
@@ -298,7 +299,7 @@ export default function TransferenciasAdminPage() {
           {permisosEmpleado.map((p, i) => (
             <span key={p.id}>
               {i > 0 && ", "}
-              <span className="font-medium">{p.descripcion}</span> ({p.Fecha.split("-").reverse().join("/")})
+              <span className="font-medium">{p.descripcion}</span> ({fmtRango(p.Fecha, p.FechaFin)})
             </span>
           ))}
         </div>

@@ -1,4 +1,5 @@
 import * as XLSX from "xlsx";
+import { diasPermiso } from "./permisos.js";
 
 export function exportarTransferencias(registros, fecha, permisos = []) {
   const detalle = registros.map(r => ({
@@ -58,7 +59,9 @@ export function exportarTransferencias(registros, fecha, permisos = []) {
   XLSX.utils.book_append_sheet(wb, wsResumen, "Resumen por Empleado");
 
   const filasPermisos = permisos.map(p => ({
-    "Fecha":            p.Fecha,
+    "Desde":            p.Fecha,
+    "Hasta":            p.FechaFin ?? p.Fecha,
+    "Días":             diasPermiso(p.Fecha, p.FechaFin ?? p.Fecha),
     "Código":           p.CodigoEmpleado,
     "Nombre":           p.NombreCompleto,
     "Tipo de Permiso":  p.descripcion,
@@ -225,7 +228,9 @@ export function exportarLbPorPersona(filas, desde, hasta) {
 
 export function exportarPermisos(registros, fecha, hasta) {
   const filas = registros.map(r => ({
-    "Fecha":            r.Fecha,
+    "Desde":            r.Fecha,
+    "Hasta":            r.FechaFin ?? r.Fecha,
+    "Días":             diasPermiso(r.Fecha, r.FechaFin ?? r.Fecha),
     "Código":           r.CodigoEmpleado,
     "Nombre":           r.NombreCompleto,
     "Etalent":          r.CodigoEtalent ?? "",

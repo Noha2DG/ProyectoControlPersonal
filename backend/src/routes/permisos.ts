@@ -16,9 +16,27 @@ function getOperador(req: Request): string {
   }
 }
 
-// GET /api/permisos?fecha=YYYY-MM-DD[&hasta=YYYY-MM-DD] → por defecto desde esa fecha en adelante;
-//   con "hasta" queda acotado al rango [fecha, hasta]
-// GET /api/permisos?codigo=CODIGO&desde=YYYY-MM-DD → permisos de un empleado desde esa fecha en adelante
+// Cada permiso es un rango [Fecha, FechaFin] (ver alterPermisoRango.ts), así que los filtros por
+// fecha preguntan por TRASLAPE y no por igualdad: unas vacaciones del 20 al 30 tienen que salir al
+// consultar el 25, aunque no empiecen ni terminen ese día. Con el filtro anterior (Fecha >= X) un
+// permiso en curso desaparecía justo los días que estaba vigente, que es cuando hace falta verlo.
+const SELECT_PERMISO = `
+  SELECT p.id, p.CodigoEmpleado,
+         CONCAT_WS(' ', e.PrimerNombre, e.SegundoNombre, e.PrimerApellido, e.SegundoApellido) AS NombreCompleto,
+         e.CodigoEtalent, p.codigoPermiso, tp.descripcion,
+         DATE_FORMAT(p.Fecha, '%Y-%m-%d') AS Fecha,
+         DATE_FORMAT(p.FechaFin, '%Y-%m-%d') AS FechaFin,
+         p.Observacion, p.RegistradoPor
+  FROM Permisos p
+  JOIN Empleados e ON p.CodigoEmpleado = e.Codigo
+  JOIN TipoPermiso tp ON p.codigoPermiso = tp.codigoPermiso
+`;
+
+const ORDEN_NOMBRE = `ORDER BY CONCAT_WS(' ', e.PrimerNombre, e.SegundoNombre, e.PrimerApellido, e.SegundoApellido) ASC`;
+
+// GET /api/permisos?fecha=YYYY-MM-DD[&hasta=YYYY-MM-DD] → vigentes en esa fecha o después;
+//   con "hasta" quedan acotados a los que se traslapan con el rango [fecha, hasta]
+// GET /api/permisos?codigo=CODIGO&desde=YYYY-MM-DD → permisos de un empleado vigentes desde esa fecha
 router.get("/", requireAuth, requirePerm("permisos", "ver"), async (req: Request, res: Response) => {
   try {
     const fecha  = req.query.fecha  as string | undefined;
@@ -28,45 +46,19 @@ router.get("/", requireAuth, requirePerm("permisos", "ver"), async (req: Request
 
     let rows: any[];
     if (codigo && desde) {
-      rows = await prisma.$queryRaw`
-        SELECT p.id, p.CodigoEmpleado, CONCAT_WS(' ', e.PrimerNombre, e.SegundoNombre, e.PrimerApellido, e.SegundoApellido) AS NombreCompleto, e.CodigoEtalent, p.codigoPermiso, tp.descripcion,
-               DATE_FORMAT(p.Fecha, '%Y-%m-%d') AS Fecha, p.Observacion, p.RegistradoPor
-        FROM Permisos p
-        JOIN Empleados e ON p.CodigoEmpleado = e.Codigo
-        JOIN TipoPermiso tp ON p.codigoPermiso = tp.codigoPermiso
-        WHERE p.CodigoEmpleado = ${codigo} AND p.Fecha >= ${desde}
-        ORDER BY p.Fecha ASC
-      `;
+      rows = await prisma.$queryRawUnsafe(
+        `${SELECT_PERMISO} WHERE p.CodigoEmpleado = ? AND p.FechaFin >= ? ORDER BY p.Fecha ASC`,
+        codigo, desde
+      );
     } else if (fecha && hasta) {
-      rows = await prisma.$queryRaw`
-        SELECT p.id, p.CodigoEmpleado, CONCAT_WS(' ', e.PrimerNombre, e.SegundoNombre, e.PrimerApellido, e.SegundoApellido) AS NombreCompleto, e.CodigoEtalent, p.codigoPermiso, tp.descripcion,
-               DATE_FORMAT(p.Fecha, '%Y-%m-%d') AS Fecha, p.Observacion, p.RegistradoPor
-        FROM Permisos p
-        JOIN Empleados e ON p.CodigoEmpleado = e.Codigo
-        JOIN TipoPermiso tp ON p.codigoPermiso = tp.codigoPermiso
-        WHERE p.Fecha BETWEEN ${fecha} AND ${hasta}
-        ORDER BY CONCAT_WS(' ', e.PrimerNombre, e.SegundoNombre, e.PrimerApellido, e.SegundoApellido) ASC
-      `;
+      rows = await prisma.$queryRawUnsafe(
+        `${SELECT_PERMISO} WHERE p.Fecha <= ? AND p.FechaFin >= ? ${ORDEN_NOMBRE}`,
+        hasta, fecha
+      );
     } else if (fecha) {
-      rows = await prisma.$queryRaw`
-        SELECT p.id, p.CodigoEmpleado, CONCAT_WS(' ', e.PrimerNombre, e.SegundoNombre, e.PrimerApellido, e.SegundoApellido) AS NombreCompleto, e.CodigoEtalent, p.codigoPermiso, tp.descripcion,
-               DATE_FORMAT(p.Fecha, '%Y-%m-%d') AS Fecha, p.Observacion, p.RegistradoPor
-        FROM Permisos p
-        JOIN Empleados e ON p.CodigoEmpleado = e.Codigo
-        JOIN TipoPermiso tp ON p.codigoPermiso = tp.codigoPermiso
-        WHERE p.Fecha >= ${fecha}
-        ORDER BY CONCAT_WS(' ', e.PrimerNombre, e.SegundoNombre, e.PrimerApellido, e.SegundoApellido) ASC
-      `;
+      rows = await prisma.$queryRawUnsafe(`${SELECT_PERMISO} WHERE p.FechaFin >= ? ${ORDEN_NOMBRE}`, fecha);
     } else {
-      rows = await prisma.$queryRaw`
-        SELECT p.id, p.CodigoEmpleado, CONCAT_WS(' ', e.PrimerNombre, e.SegundoNombre, e.PrimerApellido, e.SegundoApellido) AS NombreCompleto, e.CodigoEtalent, p.codigoPermiso, tp.descripcion,
-               DATE_FORMAT(p.Fecha, '%Y-%m-%d') AS Fecha, p.Observacion, p.RegistradoPor
-        FROM Permisos p
-        JOIN Empleados e ON p.CodigoEmpleado = e.Codigo
-        JOIN TipoPermiso tp ON p.codigoPermiso = tp.codigoPermiso
-        ORDER BY CONCAT_WS(' ', e.PrimerNombre, e.SegundoNombre, e.PrimerApellido, e.SegundoApellido) ASC
-        LIMIT 200
-      `;
+      rows = await prisma.$queryRawUnsafe(`${SELECT_PERMISO} ${ORDEN_NOMBRE} LIMIT 200`);
     }
     res.json(rows);
   } catch (err: any) {
@@ -74,13 +66,25 @@ router.get("/", requireAuth, requirePerm("permisos", "ver"), async (req: Request
   }
 });
 
-// POST /api/permisos  { CodigoEmpleado, codigoPermiso, Fecha, Observacion }
+// FechaFin es opcional en el cuerpo: un permiso de un día se sigue creando mandando solo Fecha, y el
+// rango queda [Fecha, Fecha]. Se valida aquí además del CHECK de la base para poder devolver un 400
+// con un mensaje que explique qué pasó, en vez del error crudo de la restricción.
+function resolverRango(Fecha: any, FechaFin: any): { fin: string } | { error: string } {
+  const fin = FechaFin || Fecha;
+  if (fin < Fecha) return { error: "La fecha de fin no puede ser anterior a la de inicio" };
+  return { fin };
+}
+
+// POST /api/permisos  { CodigoEmpleado, codigoPermiso, Fecha, FechaFin?, Observacion }
 router.post("/", requireAuth, requirePerm("permisos", "crear"), async (req: Request, res: Response) => {
   try {
-    const { CodigoEmpleado, codigoPermiso, Fecha, Observacion } = req.body;
+    const { CodigoEmpleado, codigoPermiso, Fecha, FechaFin, Observacion } = req.body;
     if (!CodigoEmpleado || !codigoPermiso || !Fecha) {
       res.status(400).json({ error: "Empleado, tipo de permiso y fecha son requeridos" }); return;
     }
+
+    const rango = resolverRango(Fecha, FechaFin);
+    if ("error" in rango) { res.status(400).json({ error: rango.error }); return; }
 
     const empleados: any[] = await prisma.$queryRaw`
       SELECT Codigo FROM Empleados WHERE Codigo = ${CodigoEmpleado} LIMIT 1
@@ -94,8 +98,8 @@ router.post("/", requireAuth, requirePerm("permisos", "crear"), async (req: Requ
 
     const operador = getOperador(req);
     await prisma.$executeRaw`
-      INSERT INTO Permisos (CodigoEmpleado, codigoPermiso, Fecha, Observacion, RegistradoPor)
-      VALUES (${CodigoEmpleado}, ${codigoPermiso}, ${Fecha}, ${Observacion || null}, ${operador})
+      INSERT INTO Permisos (CodigoEmpleado, codigoPermiso, Fecha, FechaFin, Observacion, RegistradoPor)
+      VALUES (${CodigoEmpleado}, ${codigoPermiso}, ${Fecha}, ${rango.fin}, ${Observacion || null}, ${operador})
     `;
     res.status(201).json({ ok: true });
   } catch (err: any) {
@@ -103,13 +107,22 @@ router.post("/", requireAuth, requirePerm("permisos", "crear"), async (req: Requ
   }
 });
 
-// PUT /api/permisos/:id  { codigoPermiso, Fecha, Observacion }
+// PUT /api/permisos/:id  { codigoPermiso, Fecha, FechaFin?, Observacion }
 router.put("/:id", requireAuth, requirePerm("permisos", "editar"), async (req: Request, res: Response) => {
   try {
     const id = parseInt(req.params.id);
-    const { codigoPermiso, Fecha, Observacion } = req.body;
+    const { codigoPermiso, Fecha, FechaFin, Observacion } = req.body;
+    if (!codigoPermiso || !Fecha) {
+      res.status(400).json({ error: "Tipo de permiso y fecha son requeridos" }); return;
+    }
+
+    const rango = resolverRango(Fecha, FechaFin);
+    if ("error" in rango) { res.status(400).json({ error: rango.error }); return; }
+
     await prisma.$executeRaw`
-      UPDATE Permisos SET codigoPermiso = ${codigoPermiso}, Fecha = ${Fecha}, Observacion = ${Observacion || null}
+      UPDATE Permisos
+      SET codigoPermiso = ${codigoPermiso}, Fecha = ${Fecha}, FechaFin = ${rango.fin},
+          Observacion = ${Observacion || null}
       WHERE id = ${id}
     `;
     res.json({ ok: true });

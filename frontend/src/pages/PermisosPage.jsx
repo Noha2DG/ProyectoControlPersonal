@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback } from "react";
 import { authHeader, usePuede } from "../context/AuthContext.jsx";
 import { exportarPermisos } from "../utils/exportExcel.js";
+import { fmtRango, diasPermiso, esRango } from "../utils/permisos.js";
 import { useColWidths, Th, Colgroup } from "../components/ResizableTh.jsx";
 
-const COL_DEFAULTS = { fecha: 110, codigo: 100, nombre: 200, etalent: 110, tipo: 170, obs: 260, registrado: 140, acciones: 110 };
+const COL_DEFAULTS = { fecha: 190, codigo: 100, nombre: 200, etalent: 110, tipo: 170, obs: 260, registrado: 140, acciones: 110 };
 const COLS = Object.keys(COL_DEFAULTS);
 
 const API = "/api/permisos";
@@ -69,10 +70,20 @@ function EmpleadoAutocomplete({ empleados, value, onSelect }) {
 function PermisoModal({ permiso, empleados, tipos, onSave, onClose }) {
   const isEdit = !!permiso;
   const [form, setForm] = useState(isEdit
-    ? { CodigoEmpleado: permiso.CodigoEmpleado, codigoPermiso: permiso.codigoPermiso, Fecha: permiso.Fecha, Observacion: permiso.Observacion || "" }
-    : { CodigoEmpleado: "", codigoPermiso: "", Fecha: hoyGT(), Observacion: "" }
+    ? { CodigoEmpleado: permiso.CodigoEmpleado, codigoPermiso: permiso.codigoPermiso, Fecha: permiso.Fecha, FechaFin: permiso.FechaFin || permiso.Fecha, Observacion: permiso.Observacion || "" }
+    : { CodigoEmpleado: "", codigoPermiso: "", Fecha: hoyGT(), FechaFin: hoyGT(), Observacion: "" }
   );
   const set = f => e => setForm(p => ({ ...p, [f]: e.target.value }));
+
+  // Mover el inicio arrastra el fin cuando quedaría antes que el inicio. La alternativa —dejarlo
+  // inválido y avisar al guardar— obliga a corregir dos campos para capturar un permiso de un día,
+  // que es el caso común: se escribe la fecha y ya está.
+  const setInicio = e => {
+    const Fecha = e.target.value;
+    setForm(p => ({ ...p, Fecha, FechaFin: !p.FechaFin || p.FechaFin < Fecha ? Fecha : p.FechaFin }));
+  };
+
+  const dias = diasPermiso(form.Fecha, form.FechaFin);
 
   const handleSubmit = e => {
     e.preventDefault();
@@ -82,7 +93,9 @@ function PermisoModal({ permiso, empleados, tipos, onSave, onClose }) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-      <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm mx-4">
+      {/* max-w-md y no max-w-sm: con "Desde" y "Hasta" lado a lado, en sm cada campo de fecha queda
+          por debajo del ancho que necesita el control nativo y el navegador recorta el calendario. */}
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-md mx-4">
         <div className="px-6 py-4 border-b flex items-center justify-between">
           <h2 className="text-base font-semibold text-gray-800">{isEdit ? "Editar Permiso" : "Nuevo Permiso"}</h2>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl leading-none">&times;</button>
@@ -115,11 +128,24 @@ function PermisoModal({ permiso, empleados, tipos, onSave, onClose }) {
               ))}
             </select>
           </div>
-          <div>
-            <label className="block text-xs font-medium text-gray-500 mb-1">Fecha *</label>
-            <input type="date" required value={form.Fecha} onChange={set("Fecha")}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
+          {/* Rango, no una sola fecha: vacaciones, descanso por horas extras y permiso con goce de
+              sueldo casi nunca son de un día. Para un permiso de un día se llena solo "Desde" y
+              "Hasta" se acomoda solo, así que capturarlo cuesta lo mismo que antes. */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">Desde *</label>
+              <input type="date" required value={form.Fecha} onChange={setInicio}
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">Hasta *</label>
+              <input type="date" required value={form.FechaFin} min={form.Fecha} onChange={set("FechaFin")}
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
+            </div>
           </div>
+          <p className="text-xs text-gray-500 -mt-2">
+            {dias === 1 ? "Un solo día" : <>Cubre <span className="font-semibold text-gray-700">{dias} días</span> (ambos incluidos)</>}
+          </p>
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1">Observación</label>
             <input value={form.Observacion} onChange={set("Observacion")}
@@ -244,7 +270,7 @@ export default function PermisosPage() {
             <Colgroup columns={COLS} widths={widths} />
             <thead>
               <tr className="bg-gray-100 text-gray-600 uppercase text-xs tracking-wider">
-                <Th width={widths.fecha} onResizeStart={startResize("fecha")} className="px-4 py-3 text-left">Fecha</Th>
+                <Th width={widths.fecha} onResizeStart={startResize("fecha")} className="px-4 py-3 text-left">Fechas</Th>
                 <Th width={widths.codigo} onResizeStart={startResize("codigo")} className="px-4 py-3 text-left">Código</Th>
                 <Th width={widths.nombre} onResizeStart={startResize("nombre")} className="px-4 py-3 text-left">Nombre</Th>
                 <Th width={widths.etalent} onResizeStart={startResize("etalent")} className="px-4 py-3 text-left">Etalent</Th>
@@ -259,7 +285,14 @@ export default function PermisosPage() {
                 <tr><td colSpan={8} className="px-4 py-10 text-center text-gray-400">{hasta ? "Sin permisos en este rango de fechas" : "Sin permisos desde esta fecha"}</td></tr>
               ) : filtrados.map(p => (
                 <tr key={p.id} className="hover:bg-gray-50 transition">
-                  <td className="px-4 py-2.5 text-gray-700 text-xs">{p.Fecha}</td>
+                  <td className="px-4 py-2.5 text-gray-700 text-xs whitespace-nowrap">
+                    {fmtRango(p.Fecha, p.FechaFin)}
+                    {esRango(p.Fecha, p.FechaFin) && (
+                      <span className="ml-2 px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 font-semibold">
+                        {diasPermiso(p.Fecha, p.FechaFin)} días
+                      </span>
+                    )}
+                  </td>
                   <td className="px-4 py-2.5 font-mono font-bold text-gray-700">{p.CodigoEmpleado}</td>
                   <td className="px-4 py-2.5 text-gray-900 text-xs">{p.NombreCompleto}</td>
                   <td className="px-4 py-2.5 font-mono text-gray-500 text-xs">{p.CodigoEtalent || "—"}</td>
