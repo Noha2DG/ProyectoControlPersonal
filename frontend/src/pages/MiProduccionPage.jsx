@@ -88,7 +88,7 @@ function useFilasQueCaben(ref) {
     const cont = ref.current;
     if (!cont) return;
     let pendiente = null;
-    let tardio = null;
+    let tardio = [];
     const medir = () => {
       const cuerpo = cont.querySelector("tbody");
       const cabecera = cont.querySelector("thead");
@@ -103,15 +103,16 @@ function useFilasQueCaben(ref) {
     };
     const observador = new ResizeObserver(programar);
     observador.observe(cont);
-    // Red de seguridad: el observador dispara una sola vez si el alto ya no cambia, y esa primera
-    // medición puede caer antes de que las tipografías terminen de cargar (con métricas distintas
-    // el resultado se iba de 7 filas a 3 entre una carga y otra). Se vuelve a medir cuando las
-    // fuentes están listas y una vez más pasado el arranque.
+    // Red de seguridad: el observador dispara una sola vez si el alto ya no vuelve a cambiar, y esa
+    // primera medición puede caer antes de que el layout se asiente — las filas de arriba se
+    // dimensionan por contenido y las tipografías todavía se están cargando, así que la tabla mide
+    // menos de lo que va a medir. El cálculo es idempotente y no cambia el alto del contenedor, así
+    // que repetirlo no puede realimentarse.
     document.fonts?.ready.then(programar).catch(() => {});
-    tardio = setTimeout(programar, 400);
+    tardio = [200, 800].map(ms => setTimeout(programar, ms));
     return () => {
       cancelAnimationFrame(pendiente);
-      clearTimeout(tardio);
+      tardio.forEach(clearTimeout);
       observador.disconnect();
     };
   }, [ref]);
@@ -179,17 +180,20 @@ function Resultado({ datos }) {
   const ultimas = pesadas.slice(-Math.min(caben, MAX_FILAS));
   const anteriores = pesadas.length - ultimas.length;
 
-  // Proporciones fijas en vez de "identidad y totales toman lo que necesiten y el detalle se queda
-  // con las sobras": con ese reparto, en una ventana baja al detalle no le quedaba ni una fila.
+  // Identidad y totales se ajustan a su contenido (auto) y el detalle se queda con todo lo que
+  // sobre. Con proporciones fijas esas dos franjas se estiraban más allá de lo que necesitaban y
+  // dejaban aire muerto adentro de las tarjetas, que en un panel de 7" es espacio que no sobra.
+  // El minmax(0,…) les permite encogerse por debajo de su contenido en una ventana muy baja, para
+  // que cedan ellas en vez de empujar el detalle fuera de la pantalla.
   return (
-    <div className="flex-1 min-h-0 grid grid-rows-[minmax(0,1fr)_minmax(0,2fr)_minmax(0,2.1fr)] gap-3">
+    <div className="flex-1 min-h-0 grid grid-rows-[minmax(0,auto)_minmax(0,auto)_minmax(0,1fr)] gap-3">
       <Identidad empleado={empleado} puesto={puesto} />
 
       {/* El total ocupa el ancho grande y las dos áreas se apilan a su derecha: en horizontal
           cabe todo en una sola franja, sin robarle altura al detalle. min-h-0 para que en una
           ventana baja esta franja ceda alto en vez de empujar el detalle fuera de la pantalla. */}
       <div className="grid grid-cols-[3fr_2fr] gap-3 min-h-0 overflow-hidden">
-        <div className={`${TARJETA} flex flex-col items-center justify-center py-1 min-h-0 overflow-hidden`}>
+        <div className={`${TARJETA} flex flex-col items-center justify-center py-2 min-h-0 overflow-hidden`}>
           <p className={`${T.medio} text-slate-700 font-semibold uppercase tracking-[0.2em]`}>Total procesado hoy</p>
           <p className={`${T.hero} font-mono font-extrabold text-slate-900 tabular-nums leading-none mt-1`}>
             {lb(totalKg).toFixed(1)}
