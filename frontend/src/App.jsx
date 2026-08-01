@@ -197,7 +197,7 @@ function Dashboard() {
   if (perm("transferencias", "ver")) nav.push({ key: "transf",    label: "Transferencias",      icon: "transf"   });
   if (perm("planificacion",   "ver")) nav.push({ key: "planif",    label: "Planificación",       icon: "planif"   });
   if (perm("destajo",        "ver")) nav.push({ key: "destajo",   label: "Destajo",             icon: "destajo"  });
-  if (perm("etiquetado",     "ver")) nav.push({ key: "etiquetado", label: "Etiquetado",          icon: "etiquetado" });
+  if (perm("etiquetado",     "ver")) nav.push({ key: "etiquetado", label: "Agrupación",          icon: "etiquetado" });
   if (perm("etiquetado",     "imprimir")) nav.push({ key: "imprimirEtiquetas", label: "Impresión de Etiquetas", icon: "imprimir" });
   if (perm("bodega",        "ver")) nav.push({ key: "bodega",     label: "Bodega — Pallets",     icon: "bodega"   });
   if (perm("bodega",        "ver")) nav.push({ key: "bodegaFisica", label: "Bodega — Ubicaciones", icon: "ubicaciones" });
@@ -224,7 +224,7 @@ function Dashboard() {
     transf:    "Transferencias — Corrección",
     planif:    "Planificación por Área",
     destajo:   "Destajo — Materia Prima y Pesaje",
-    etiquetado: "Etiquetado — Orden de Trabajo",
+    etiquetado: "Agrupación — Orden de Trabajo",
     imprimirEtiquetas: "Impresión de Etiquetas",
     bodega:    "Bodega — Pallets y Escaneo",
     bodegaFisica: "Bodega — Recepción y Ubicaciones",

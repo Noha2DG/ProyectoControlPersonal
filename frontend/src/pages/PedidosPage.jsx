@@ -411,6 +411,9 @@ export default function PedidosPage() {
   const empaquesMaster = empaques.filter(e => e.TipoEmpaque === "Master");
   const empaquesIndividual = empaques.filter(e => e.TipoEmpaque === "Individual");
 
+  const tallaDesc = codigo => tallas.find(t => String(t.Codigo) === String(codigo))?.Descripcion || codigo;
+  const presentacionDesc = codigo => presentaciones.find(p => p.Codigo === codigo)?.Descripcion || codigo;
+
   const q = busqueda.toLowerCase();
   const pedidosFiltrados = pedidos.filter(p =>
     !q || p.CodigoPedido.toLowerCase().includes(q) || p.Descripcion.toLowerCase().includes(q)
@@ -513,8 +516,8 @@ export default function PedidosPage() {
                 {detalles.map(d => (
                   <tr key={d.DetalleId} className="hover:bg-gray-50 transition">
                     <td className="px-4 py-3 font-mono text-gray-700 whitespace-nowrap">{d.Clase}</td>
-                    <td className="px-4 py-3 font-mono text-gray-700 whitespace-nowrap">{d.Talla}</td>
-                    <td className="px-4 py-3 font-mono text-gray-700 whitespace-nowrap">{d.Presentacion}</td>
+                    <td className="px-4 py-3 text-gray-700 whitespace-nowrap">{tallaDesc(d.Talla)}</td>
+                    <td className="px-4 py-3 text-gray-700 whitespace-nowrap">{presentacionDesc(d.Presentacion)}</td>
                     {/* El 1 de un pedido general es centinela, no un dato: mostrarlo invitaría a leerlo
                         como cantidad planificada. */}
                     <td className="px-4 py-3 text-right whitespace-nowrap">
@@ -539,6 +542,15 @@ export default function PedidosPage() {
                 ))}
                 {detalles.length === 0 && (
                   <tr><td colSpan={6} className="px-4 py-8 text-center text-gray-400">Sin líneas en este pedido</td></tr>
+                )}
+                {detalles.length > 0 && !pedidoSel.EsGeneral && (
+                  <tr className="bg-gray-50 font-semibold">
+                    <td colSpan={4} className="px-4 py-3 text-right text-gray-600 whitespace-nowrap">Total</td>
+                    <td className="px-4 py-3 text-right text-gray-800 whitespace-nowrap">
+                      {Number(detalles.reduce((sum, d) => sum + (Number(d.KgPedido) || 0), 0).toFixed(3))}
+                    </td>
+                    <td></td>
+                  </tr>
                 )}
               </tbody>
             </table>

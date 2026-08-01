@@ -51,6 +51,23 @@ export function AuthProvider({ children }) {
     setUser(data.user);
   };
 
+  // Renovación silenciosa para las terminales de kiosco (Entrada/Salida, Transferencias, Uniformes
+  // y Mi Producción). Son dispositivos que quedan encendidos sin nadie que los atienda: cuando el
+  // token de 30 días vence, la pantalla cae al login y en planta nadie sabe la contraseña, así que
+  // la terminal queda muerta hasta que alguien de sistemas vaya a desbloquearla.
+  //
+  // Al renovar cada 12 h el token nunca se acerca a su vencimiento mientras el equipo siga
+  // encendido. No sirve renovar solo al vencer: /api/auth/refresh exige un token todavía válido.
+  // Se renueva a los 60 s de arrancar (no de inmediato: si la pantalla se abrió justo al reiniciar
+  // el equipo, la red puede no estar lista) y de ahí en adelante cada 12 h.
+  useEffect(() => {
+    if (user?.rol !== "kiosco") return;
+    const renovar = () => { refreshUser(); };
+    const inicial = setTimeout(renovar, 60_000);
+    const periodico = setInterval(renovar, 12 * 60 * 60 * 1000);
+    return () => { clearTimeout(inicial); clearInterval(periodico); };
+  }, [user?.rol]);
+
   return (
     <AuthContext.Provider value={{ user, loading, login, logout, refreshUser }}>
       {children}
