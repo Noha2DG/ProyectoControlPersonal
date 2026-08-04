@@ -92,6 +92,44 @@ export const agruparPorProductoTalla = p => ({
   campos: { Producto: p.Producto, Talla: p.Talla, DescripcionTalla: p.DescripcionTalla },
 });
 
+// Reparte Puesto (1, 2, 3...) y Semaforo (tercios de POSICIÓN, no de valor) sobre una lista ya
+// ordenada de mayor a menor — lo comparten el ranking general y el ranking por área, cada uno
+// ordenando por un campo distinto antes de llamar esto.
+function asignarPuestoYSemaforo(ordenadas) {
+  const n = ordenadas.length;
+  const corte1 = Math.ceil(n / 3);
+  const corte2 = Math.ceil((n * 2) / 3);
+  return ordenadas.map((f, i) => {
+    const puesto = i + 1;
+    const semaforo = puesto <= corte1 ? "verde" : puesto <= corte2 ? "amarillo" : "rojo";
+    return { ...f, Puesto: puesto, Semaforo: semaforo };
+  });
+}
+
+// Convierte los tres Kilos agregados por el backend (GET /api/reportes/ranking-produccion) a libras.
+// LbTotal NO es la suma de LbDescabezado + LbPelado — es KilosTotal tal cual lo agregó el backend
+// (todas las áreas), para que alguien que produce en una tercera área no quede en 0 solo porque esta
+// pantalla no le dedicó columna propia. No asigna Puesto/Semaforo: la pantalla de pared rankea cada
+// área por separado (ver calcularRankingPorArea), no este total combinado.
+export function calcularLbsPorPersona(filas) {
+  return filas.map(f => ({
+    ...f,
+    LbDescabezado: f.KilosDescabezado * LB_POR_KG,
+    LbPelado: f.KilosPelado * LB_POR_KG,
+    LbTotal: f.KilosTotal * LB_POR_KG,
+  }));
+}
+
+// Ranking de una sola área para la pantalla de pared (project_ranking_produccion_pantalla_design):
+// se muestra Pelado y Devenado primero y luego Descabezado, cada una como su propia diapositiva —
+// así que cada una rankea solo a quien produjo ALGO en esa área hoy (filtro > 0), no a todo el
+// personal con un cero incómodo, y el semáforo por tercios se calcula sobre ese subconjunto, no
+// sobre la planta completa.
+export function calcularRankingPorArea(filas, campoLb) {
+  const activos = filas.filter(f => f[campoLb] > 0);
+  return asignarPuestoYSemaforo(activos.slice().sort((a, b) => b[campoLb] - a[campoLb]));
+}
+
 // Promedio de Lb/Hora ponderado por horas (no un promedio simple de las tasas individuales), y solo
 // entre quienes tienen tasa definida — así una persona con una sola pesada no distorsiona el total.
 export function totalLbHora(filas) {

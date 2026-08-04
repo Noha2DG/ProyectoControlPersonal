@@ -16,6 +16,7 @@ const MODULOS = [
   { key: "kiosco",         label: "Kiosco · Entrada / Salida",      acciones: ["ver"],                             grupo: "Kioscos"  },
   { key: "kiosco_areas",   label: "Kiosco · Transferencia de Áreas", acciones: ["ver"],                            grupo: "Kioscos"  },
   { key: "kiosco_destajo", label: "Kiosco · Mi Producción (Destajo)", acciones: ["ver"],                           grupo: "Kioscos"  },
+  { key: "kiosco_ranking", label: "Kiosco · Ranking de Producción",  acciones: ["ver"],                            grupo: "Kioscos"  },
   { key: "equipo",         label: "Kiosco · Entrega de Uniformes",  acciones: ["ver"],                             grupo: "Kioscos"  },
   // ── Módulo de Entradas/Salidas (corrección admin)
   { key: "movimientos",    label: "Entradas / Salidas — Corrección", acciones: ["ver","editar","eliminar"],         grupo: "Admin"    },
@@ -58,7 +59,7 @@ function permisosPara(valor) {
 
 const EMPTY_PERMISOS = permisosPara(false);
 
-const KIOSCO_KEYS = ["kiosco", "kiosco_areas", "kiosco_destajo", "equipo"];
+const KIOSCO_KEYS = ["kiosco", "kiosco_areas", "kiosco_destajo", "kiosco_ranking", "equipo"];
 
 const PRESETS = {
   admin:        permisosPara(true),
@@ -66,6 +67,7 @@ const PRESETS = {
   kiosco:       { ...EMPTY_PERMISOS, kiosco: { ver: true } },
   kiosco_areas: { ...EMPTY_PERMISOS, kiosco_areas: { ver: true } },
   kiosco_destajo: { ...EMPTY_PERMISOS, kiosco_destajo: { ver: true } },
+  kiosco_ranking: { ...EMPTY_PERMISOS, kiosco_ranking: { ver: true } },
   equipo:       { ...EMPTY_PERMISOS, equipo: { ver: true } },
 };
 
@@ -185,6 +187,7 @@ function UsuarioModal({ usuario, onSave, onClose }) {
                 { key: "kiosco",      label: "Kiosco E/S"      },
                 { key: "kiosco_areas",label: "Kiosco Áreas"    },
                 { key: "kiosco_destajo", label: "Kiosco Mi Producción" },
+                { key: "kiosco_ranking", label: "Kiosco Ranking" },
                 { key: "equipo",      label: "Kiosco Uniformes"},
               ].map(p => (
                 <button key={p.key} type="button" onClick={() => applyPreset(p.key)}

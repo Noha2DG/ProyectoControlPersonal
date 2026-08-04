@@ -146,4 +146,45 @@ router.get("/produccion", requireAuth, requirePerm("destajo", "ver"), async (req
   }
 });
 
+// GET /api/reportes/ranking-produccion?fecha=YYYY-MM-DD
+// Endpoint chico y aparte del reporte completo (/produccion) para la pantalla de pared de ranking:
+// esa pantalla hace polling cada 30-60s con una cuenta kiosco que solo tiene este permiso, no
+// "destajo:ver" completo, y no necesita porLote/porTermo/porTalla — solo el desglose del día por
+// persona, ya agregado en SQL. El Área de cada pesada se resuelve igual que en porPersona (la
+// Transferencia vigente al momento de esa pesada), pero acá se calcula una sola vez por fila en la
+// subconsulta derivada y se agrega afuera con SUM(CASE...) — así no se repite el correlacionado dos
+// veces por fila como pasaría metiéndolo directo en cada CASE.
+router.get("/ranking-produccion", requireAuth, requirePerm("kiosco_ranking", "ver"), async (req: Request, res: Response) => {
+  try {
+    const fecha = (req.query.fecha as string) || hoyGT();
+
+    const ranking: any[] = await prisma.$queryRawUnsafe(`
+      SELECT IdEmpleado, Nombre,
+             SUM(CASE WHEN Area = 'DESCABEZADO' THEN Kilos ELSE 0 END) AS KilosDescabezado,
+             SUM(CASE WHEN Area = 'PELADO Y DEVENADO' THEN Kilos ELSE 0 END) AS KilosPelado,
+             SUM(Kilos) AS KilosTotal
+      FROM (
+        SELECT e.Codigo AS IdEmpleado,
+               CONCAT_WS(' ', e.PrimerNombre, e.SegundoNombre, e.PrimerApellido, e.SegundoApellido) AS Nombre,
+               pd.Peso AS Kilos,
+               (SELECT a.Nombre FROM Transferencias tr
+                JOIN Areas a ON tr.CodigoArea = a.Codigo
+                WHERE tr.Codigo = pd.Codigo
+                  AND tr.FechaHora <= pd.FechaHora
+                  AND (tr.FechaSalida IS NULL OR tr.FechaSalida >= pd.FechaHora)
+                ORDER BY tr.FechaHora DESC LIMIT 1) AS Area
+        FROM PesajeDetalle pd
+        JOIN Empleados e ON pd.Codigo = e.Codigo
+        WHERE DATE(pd.FechaHora) = ?
+      ) t
+      GROUP BY IdEmpleado
+      ORDER BY KilosTotal DESC
+    `, fecha);
+
+    res.json({ fecha, ranking: numerizar(ranking, ["KilosDescabezado", "KilosPelado", "KilosTotal"]) });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 export default router;

@@ -3,6 +3,7 @@ import { useAuth, authHeader } from "./context/AuthContext.jsx";
 import LoginPage from "./pages/LoginPage.jsx";
 import KioscoPage from "./pages/KioscoPage.jsx";
 import MiProduccionPage from "./pages/MiProduccionPage.jsx";
+import RankingProduccionPage from "./pages/RankingProduccionPage.jsx";
 import TransferenciasPage from "./pages/TransferenciasPage.jsx";
 import UsuariosPage from "./pages/UsuariosPage.jsx";
 import AreasPage from "./pages/AreasPage.jsx";
@@ -38,7 +39,7 @@ function hasPerm(user, mod, accion) {
     return mod === "empleados" && accion === "ver";
   }
   if (user?.rol === "kiosco") {
-    return (mod === "kiosco" || mod === "kiosco_areas" || mod === "kiosco_destajo" || mod === "equipo") && accion === "ver";
+    return (mod === "kiosco" || mod === "kiosco_areas" || mod === "kiosco_destajo" || mod === "kiosco_ranking" || mod === "equipo") && accion === "ver";
   }
   return false;
 }
@@ -300,6 +301,15 @@ function Dashboard() {
                 Mi Producción
               </a>
             )}
+            {perm("kiosco_ranking", "ver") && (
+              <a href="#/ranking-produccion" onClick={() => { window.location.hash = "#/ranking-produccion"; }}
+                className="hidden sm:flex items-center gap-1.5 text-blue-200 hover:text-white text-xs border border-blue-200 px-2.5 py-1.5 rounded-lg transition">
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                </svg>
+                Ranking Producción
+              </a>
+            )}
 
             <div className="hidden sm:block text-right">
               <p className="text-sm font-medium leading-none">{user?.nombre}</p>
@@ -405,6 +415,7 @@ export default function App() {
     "#/transferencias": { mod: "kiosco_areas", Page: TransferenciasPage },
     "#/equipo":        { mod: "equipo",        Page: EquipoUniformesPage },
     "#/mi-produccion": { mod: "kiosco_destajo", Page: MiProduccionPage },
+    "#/ranking-produccion": { mod: "kiosco_ranking", Page: RankingProduccionPage },
   };
   const kioscoRoute = KIOSCO_ROUTES[hash];
   if (kioscoRoute) {

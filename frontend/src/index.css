@@ -1,5 +1,38 @@
 @import "tailwindcss";
 
+/* Fundido de diapositiva del ranking de producción (RankingProduccionPage.jsx) — remontado por
+   "key" al cambiar de página, así que el fundido se dispara solo con CSS, sin useEffect. */
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* Fondo degradado con olas en la diapositiva de transición del ranking de producción
+   (RankingProduccionPage.jsx, "Cambiando a…") — un degradado por área (ver .fondo-olas-* abajo) más
+   3 capas de olas en SVG (una por sección de FilaOlas en RankingProduccionPage.jsx) que se deslizan
+   a distinta velocidad para dar sensación de profundidad. Cada SVG dibuja el mismo patrón de onda
+   dos veces seguidas (2 periodos, 2400 de ancho) y la animación solo mueve un transform: translateX
+   del 0% al -50% — como el segundo periodo es idéntico al primero, al llegar a -50% el dibujo queda
+   pixel a pixel donde empezó y el bucle no se nota. Anima transform, no el "d" del path, así el
+   navegador la mueve por composición en vez de recalcular la curva en cada frame.
+*/
+@keyframes deslizarOlas {
+  from { transform: translateX(0); }
+  to   { transform: translateX(-50%); }
+}
+.fondo-olas-emerald { background: linear-gradient(135deg, #065f46, #10b981); }
+.fondo-olas-blue    { background: linear-gradient(135deg, #1e3a8a, #3b82f6); }
+
+/* Ráfaga de confeti del puesto 1 (RankingProduccionPage.jsx, componente Confeti) — cada pieza trae
+   su propio --tx/--ty/--rot por variable CSS (calculados en JS, uno por pieza) y esta única
+   animación los aplica a todas. Se usa con iteración "infinite" (no "forwards"): al llegar a 100%
+   vuelve de golpe a 0% y vuelve a explotar, así que se repite en ráfagas mientras la fila del
+   puesto 1 siga montada. */
+@keyframes confetiExplota {
+  0%   { transform: translate(0, 0) rotate(0deg) scale(1); opacity: 1; }
+  100% { transform: translate(var(--tx), var(--ty)) rotate(var(--rot)) scale(0.5); opacity: 0; }
+}
+
 /* Tablas con columnas redimensionables (ver ResizableTh.jsx): evita que texto largo
    sin espacios (códigos, etc.) se desborde de una columna angosta. */
 table.table-fixed td,
