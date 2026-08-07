@@ -4,7 +4,7 @@ import { authHeader } from "../context/AuthContext.jsx";
 import { exportarReporteGeneral, exportarReporteTermos, exportarEficiencias, exportarLbHora, exportarLbHoraPorTalla, exportarLbPorPersona } from "../utils/exportExcel.js";
 import { useColWidths, Th, Colgroup } from "../components/ResizableTh.jsx";
 import {
-  LB_POR_KG, MINIMO_BLOQUE_MINUTOS, calcularLbHora, agruparPorArea, agruparPorProductoTalla, totalLbHora,
+  LB_POR_KG, MINIMO_BLOQUE_MINUTOS, AREAS_DESTAJO, calcularLbHora, agruparPorArea, agruparPorProductoTalla, totalLbHora,
 } from "../utils/destajo.js";
 
 const LOTE_DET_COL_DEFAULTS = { talla: 160, producto: 180, estado: 110, procesado: 100, pesajes: 90 };
@@ -28,8 +28,11 @@ const PORTALLA_COL_DEFAULTS = { expand: 24, productoTalla: 220, lbTotal: 100, lb
 const PORTALLA_COLS = Object.keys(PORTALLA_COL_DEFAULTS);
 // Anchos pensados para que quepa el título completo de cada columna sin encimarse ("Pelado y
 // Devenado (Lb)" es el más largo) y para que en Nombre se lea al menos hasta el primer apellido.
-const LBPERSONA_COL_DEFAULTS = { puesto: 80, id: 120, nombre: 240, descabezado: 150, pelado: 190, total: 110 };
+const LBPERSONA_COL_DEFAULTS = { puesto: 80, id: 120, nombre: 240, descabezado: 150, pelado: 190, pinchado: 190, total: 110 };
 const LBPERSONA_COLS = Object.keys(LBPERSONA_COL_DEFAULTS);
+// Llave de columna (ancho ajustable) que le toca a cada área de destajo, en el mismo orden en que
+// AREAS_DESTAJO las lista — la tabla se arma recorriendo AREAS_DESTAJO, no columna por columna.
+const LBPERSONA_AREA_COL = { DU: "descabezado", DS: "pelado", DT: "pinchado" };
 
 function hoy() { return new Date().toLocaleDateString("sv-SE"); }
 const fechaCorta = (f) => f ? f.split("-").reverse().join("/") : "";
@@ -76,24 +79,26 @@ function CeldaLbHora({ f }) {
   return <>{f.LbPorHora.toFixed(1)}</>;
 }
 
-// Solo libras acumuladas por persona en las dos áreas de destajo, sin hora ni tasa — no usa
-// calcularLbHora porque no necesita el cálculo de bloques/tiempo, solo sumar Kilos por Área. Un
-// pesaje con Área distinta a estas dos (o sin Área resuelta, ver project_destajo_area_familia_validacion
+// Solo libras acumuladas por persona en las áreas de destajo (ver AREAS_DESTAJO), sin hora ni tasa —
+// no usa calcularLbHora porque no necesita el cálculo de bloques/tiempo, solo sumar Kilos por Área.
+// Un pesaje con Área fuera de esa lista (o sin Área resuelta, ver project_destajo_area_familia_validacion
 // y el caso Susan Valeska/TUNEL) no entra en ninguna columna ni en el Total — es un caso raro y esta
-// vista solo pidió estas dos columnas.
+// vista solo tiene columna para las áreas de destajo.
 function calcularLbPorPersona(porPersona) {
   const porEmpleado = new Map();
   for (const p of porPersona) {
     if (!porEmpleado.has(p.IdEmpleado)) {
-      porEmpleado.set(p.IdEmpleado, { IdEmpleado: p.IdEmpleado, Nombre: p.Nombre, LbDescabezado: 0, LbPelado: 0 });
+      porEmpleado.set(p.IdEmpleado, {
+        IdEmpleado: p.IdEmpleado, Nombre: p.Nombre,
+        ...Object.fromEntries(AREAS_DESTAJO.map(a => [a.lb, 0])),
+      });
     }
     const acc = porEmpleado.get(p.IdEmpleado);
-    const lb = p.Kilos * LB_POR_KG;
-    if (p.Area === "DESCABEZADO") acc.LbDescabezado += lb;
-    else if (p.Area === "PELADO Y DEVENADO") acc.LbPelado += lb;
+    const area = AREAS_DESTAJO.find(a => a.nombre === p.Area);
+    if (area) acc[area.lb] += p.Kilos * LB_POR_KG;
   }
   const filas = [...porEmpleado.values()]
-    .map(f => ({ ...f, LbTotal: f.LbDescabezado + f.LbPelado }))
+    .map(f => ({ ...f, LbTotal: AREAS_DESTAJO.reduce((s, a) => s + f[a.lb], 0) }))
     .sort((a, b) => b.LbTotal - a.LbTotal);
 
   // Semáforo por tercios de POSICIÓN (no de valor): siempre reparte verde/amarillo/rojo en
@@ -842,9 +847,11 @@ export default function ReporteProduccionPage() {
           {/* ── Lb/Persona ── */}
           {subTab === "lbpersona" && (
             <div className="mx-auto w-full" style={{ maxWidth: anchoLbPersona }}>
-              <h3 className="text-xs font-semibold text-gray-700 mb-1">Libras por Persona — Descabezado y Pelado y Devenado</h3>
+              <h3 className="text-xs font-semibold text-gray-700 mb-1">
+                Libras por Persona — {AREAS_DESTAJO.map(a => a.etiqueta).join(", ")}
+              </h3>
               <p className="text-xs text-gray-400 mb-2">
-                Libras acumuladas por persona en cada área (sin tasa ni horas), ordenado de mayor a menor por el total de ambas.
+                Libras acumuladas por persona en cada área (sin tasa ni horas), ordenado de mayor a menor por el total de todas.
                 {" "}Semáforo por tercios de posición en el ranking: <span className="px-1.5 py-0.5 rounded bg-green-50 border border-green-200">verde</span> = tercio superior,
                 {" "}<span className="px-1.5 py-0.5 rounded bg-amber-50 border border-amber-200">amarillo</span> = tercio medio,
                 {" "}<span className="px-1.5 py-0.5 rounded bg-red-50 border border-red-200">rojo</span> = tercio inferior — no un monto fijo de libras, para no tener que ajustarlo cada día según el volumen.
@@ -857,8 +864,11 @@ export default function ReporteProduccionPage() {
                       <Th width={widthsLbPersona.puesto} onResizeStart={startResizeLbPersona("puesto")} className="px-2 py-1.5 text-center whitespace-nowrap">Puesto</Th>
                       <Th width={widthsLbPersona.id} onResizeStart={startResizeLbPersona("id")} className="px-2 py-1.5 text-left whitespace-nowrap">Id Empleado</Th>
                       <Th width={widthsLbPersona.nombre} onResizeStart={startResizeLbPersona("nombre")} className="px-2 py-1.5 text-left">Nombre</Th>
-                      <Th width={widthsLbPersona.descabezado} onResizeStart={startResizeLbPersona("descabezado")} className="px-2 py-1.5 text-right whitespace-nowrap">Descabezado (Lb)</Th>
-                      <Th width={widthsLbPersona.pelado} onResizeStart={startResizeLbPersona("pelado")} className="px-2 py-1.5 text-right whitespace-nowrap">Pelado y Devenado (Lb)</Th>
+                      {AREAS_DESTAJO.map(a => (
+                        <Th key={a.codigo} width={widthsLbPersona[LBPERSONA_AREA_COL[a.codigo]]}
+                          onResizeStart={startResizeLbPersona(LBPERSONA_AREA_COL[a.codigo])}
+                          className="px-2 py-1.5 text-right whitespace-nowrap">{a.etiqueta} (Lb)</Th>
+                      ))}
                       <Th width={widthsLbPersona.total} onResizeStart={startResizeLbPersona("total")} className="px-2 py-1.5 text-right whitespace-nowrap">Total (Lb)</Th>
                     </tr>
                   </thead>
@@ -869,13 +879,16 @@ export default function ReporteProduccionPage() {
                         <td className="px-2 py-1.5 font-mono text-gray-700 whitespace-nowrap">{f.IdEmpleado}</td>
                         {/* sin max-w fijo: que el corte lo mande el ancho de la columna (ajustable) */}
                         <td className="px-2 py-1.5 text-gray-700"><div className="truncate" title={f.Nombre}>{f.Nombre}</div></td>
-                        <td className="px-2 py-1.5 text-right text-gray-700 whitespace-nowrap">{f.LbDescabezado > 0 ? f.LbDescabezado.toFixed(2) : <span className="text-gray-300">—</span>}</td>
-                        <td className="px-2 py-1.5 text-right text-gray-700 whitespace-nowrap">{f.LbPelado > 0 ? f.LbPelado.toFixed(2) : <span className="text-gray-300">—</span>}</td>
+                        {AREAS_DESTAJO.map(a => (
+                          <td key={a.codigo} className="px-2 py-1.5 text-right text-gray-700 whitespace-nowrap">
+                            {f[a.lb] > 0 ? f[a.lb].toFixed(2) : <span className="text-gray-300">—</span>}
+                          </td>
+                        ))}
                         <td className="px-2 py-1.5 text-right font-semibold text-blue-700 whitespace-nowrap">{f.LbTotal.toFixed(2)}</td>
                       </tr>
                     ))}
                     {filasLbPersona.length === 0 && (
-                      <tr><td colSpan={6} className="px-3 py-6 text-center text-gray-400">Sin datos en este rango de fechas</td></tr>
+                      <tr><td colSpan={LBPERSONA_COLS.length} className="px-3 py-6 text-center text-gray-400">Sin datos en este rango de fechas</td></tr>
                     )}
                   </tbody>
                 </table>
@@ -1103,8 +1116,9 @@ export default function ReporteProduccionPage() {
                 <th className="text-center font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Puesto</th>
                 <th className="text-left font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Id</th>
                 <th className="text-left font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Nombre</th>
-                <th className="text-right font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Descabezado (Lb)</th>
-                <th className="text-right font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Pelado y Devenado (Lb)</th>
+                {AREAS_DESTAJO.map(a => (
+                  <th key={a.codigo} className="text-right font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">{a.etiqueta} (Lb)</th>
+                ))}
                 <th className="text-right font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Total (Lb)</th>
               </tr>
             </thead>
@@ -1115,8 +1129,9 @@ export default function ReporteProduccionPage() {
                   <td className="py-0.5 px-1 text-center tabular-nums">{f.Puesto}</td>
                   <td className="py-0.5 px-1 font-mono">{f.IdEmpleado}</td>
                   <td className="py-0.5 px-1">{f.Nombre}</td>
-                  <td className="py-0.5 px-1 text-right tabular-nums">{f.LbDescabezado > 0 ? f.LbDescabezado.toFixed(2) : "—"}</td>
-                  <td className="py-0.5 px-1 text-right tabular-nums">{f.LbPelado > 0 ? f.LbPelado.toFixed(2) : "—"}</td>
+                  {AREAS_DESTAJO.map(a => (
+                    <td key={a.codigo} className="py-0.5 px-1 text-right tabular-nums">{f[a.lb] > 0 ? f[a.lb].toFixed(2) : "—"}</td>
+                  ))}
                   <td className="py-0.5 px-1 text-right font-semibold tabular-nums">{f.LbTotal.toFixed(2)}</td>
                 </tr>
               ))}

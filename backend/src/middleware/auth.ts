@@ -19,6 +19,7 @@ export interface Permisos {
   destajo?:        { ver?: boolean; crear?: boolean; editar?: boolean; eliminar?: boolean };
   etiquetado?:     { ver?: boolean; crear?: boolean; editar?: boolean; eliminar?: boolean; imprimir?: boolean };
   bodega?:         { ver?: boolean; escanear?: boolean; editar?: boolean; eliminar?: boolean };
+  remisiones?:     { ver?: boolean; crear?: boolean; editar?: boolean; eliminar?: boolean; imprimir?: boolean };
 }
 
 export interface AuthPayload {

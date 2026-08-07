@@ -16,14 +16,16 @@ const MS_TRANSICION = 4_000;
 // de diapositivas (esto no reinicia el ciclo de paginación, solo actualiza los números y posiciones).
 const MS_REFRESCO = 45_000;
 
-// Mismos nombres de área que usan MiProduccionPage.jsx y ReporteProduccionPage.jsx, con el mismo
-// color por área (azul Descabezado, esmeralda Pelado) para que la pantalla de pared se lea igual
-// que el resto del sistema.
+// Mismas áreas y nombres que AREAS_DESTAJO (destajo.js), con un color propio cada una (esmeralda
+// Pelado, azul Descabezado, violeta Pinchado) para que la pantalla de pared se lea igual que el
+// resto del sistema. El orden de acá es el orden de las diapositivas, no el de AREAS_DESTAJO.
 const SECCIONES_CONFIG = [
   { key: "pelado", campo: "LbPelado", nombre: "PELADO Y DEVENADO", texto: "text-emerald-700",
     fondo: "fondo-olas-emerald", olas: ["rgba(255,255,255,0.14)", "rgba(255,255,255,0.24)", "#d1fae5"] },
   { key: "descabezado", campo: "LbDescabezado", nombre: "DESCABEZADO", texto: "text-blue-700",
     fondo: "fondo-olas-blue", olas: ["rgba(255,255,255,0.14)", "rgba(255,255,255,0.24)", "#dbeafe"] },
+  { key: "pinchado", campo: "LbPinchado", nombre: "PELADO Y PINCHADO", texto: "text-violet-700",
+    fondo: "fondo-olas-violet", olas: ["rgba(255,255,255,0.14)", "rgba(255,255,255,0.24)", "#ede9fe"] },
 ];
 
 // Un solo período (1200 de 2400 de ancho del viewBox) para que el bucle de translateX(-50%) en

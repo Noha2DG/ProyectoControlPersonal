@@ -33,6 +33,7 @@ import disenoEtiquetaRouter from "./routes/disenoEtiqueta.ts";
 import palletsRouter from "./routes/pallets.ts";
 import bodegaVirtualRouter from "./routes/bodegaVirtual.ts";
 import bodegaFisicaRouter from "./routes/bodegaFisica.ts";
+import remisionesRouter from "./routes/remisiones.ts";
 import reportesRouter from "./routes/reportes.ts";
 import { requireAuth } from "./middleware/auth.ts";
 import { barridoCorteMedianoche } from "./lib/corteMedianoche.ts";
@@ -83,6 +84,7 @@ app.use("/api/diseno-etiqueta", disenoEtiquetaRouter);
 app.use("/api/pallets", palletsRouter);
 app.use("/api/bodega-virtual", bodegaVirtualRouter);
 app.use("/api/bodega-fisica", bodegaFisicaRouter);
+app.use("/api/remisiones", remisionesRouter);
 app.use("/api/reportes", reportesRouter);
 
 // Sirve el frontend ya compilado (frontend/dist) para no necesitar un segundo servicio en Railway.

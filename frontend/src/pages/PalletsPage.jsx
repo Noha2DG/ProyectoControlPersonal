@@ -3,6 +3,7 @@ import { authHeader, usePuede } from "../context/AuthContext.jsx";
 import { useColWidths, Th, Colgroup } from "../components/ResizableTh.jsx";
 import ConsultarEtiquetaModal from "../components/ConsultarEtiquetaModal.jsx";
 import AvisoModal from "../components/AvisoModal.jsx";
+import ModalMotivo from "../components/ModalMotivo.jsx";
 import HojaPalletModal from "../components/HojaPalletModal.jsx";
 import { useAviso } from "../hooks/useAviso.js";
 
@@ -14,9 +15,13 @@ const PALLETS_COL_DEFAULTS = { pallet: 110, estatus: 100, area: 130, origen: 130
 const PALLETS_COLS = Object.keys(PALLETS_COL_DEFAULTS);
 
 const ESTATUS_BADGE = {
-  Abierto:   "bg-blue-100 text-blue-700",
-  Cerrado:   "bg-green-100 text-green-700",
-  Cancelado: "bg-gray-100 text-gray-500",
+  Abierto:    "bg-blue-100 text-blue-700",
+  Cerrado:    "bg-green-100 text-green-700",
+  // Estados de SALIDA (ver remisiones.ts): Desarmado = se abrió para despachar parte de su contenido
+  // y sus masters quedaron sueltos; Despachado = salió completo en una remisión confirmada.
+  Desarmado:  "bg-amber-100 text-amber-700",
+  Despachado: "bg-slate-200 text-slate-600",
+  Cancelado:  "bg-gray-100 text-gray-500",
 };
 
 const CUADRE_BADGE = {
@@ -52,6 +57,7 @@ function PanelEscaneo({ palletId, onClose, onCambio }) {
   const [mensaje, setMensaje] = useState(null); // { ok: bool, texto }
   const [mostrarConsulta, setMostrarConsulta] = useState(false);
   const [mostrarHoja, setMostrarHoja] = useState(false);
+  const [modalDesarmar, setModalDesarmar] = useState(false);
   const inputRef = useRef(null);
   // Candado síncrono contra doble envío — el input NUNCA se deshabilita (deshabilitar un <input>
   // enfocado le quita el foco en el navegador, y a 50 masters/min el lector no puede darse el lujo
@@ -135,6 +141,19 @@ function PanelEscaneo({ palletId, onClose, onCambio }) {
     const data = await leerJSON(res);
     if (res.ok) { await fetchDetalle(); onCambio?.(); }
     else await mostrarAlerta("Error: " + (data.error || "No se pudo reabrir el pallet"));
+  };
+
+  const handleDesarmar = async (motivo) => {
+    const res = await fetch(`${API}/${palletId}/desarmar`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeader() },
+      body: JSON.stringify({ Motivo: motivo }),
+    });
+    const data = await leerJSON(res);
+    if (!res.ok) throw new Error(data.error || "No se pudo desarmar el polín");
+    setModalDesarmar(false);
+    await fetchDetalle();
+    onCambio?.();
   };
 
   return (
@@ -268,13 +287,23 @@ function PanelEscaneo({ palletId, onClose, onCambio }) {
             <button onClick={handleCerrar} className="px-4 py-2 rounded-lg text-sm font-semibold bg-blue-600 text-white hover:bg-blue-700 transition">Cerrar pallet</button>
           )}
           {pallet?.Estatus === "Cerrado" && puedeEditar && (
-            <button onClick={handleReabrir} className="px-4 py-2 rounded-lg text-sm font-semibold bg-orange-500 text-white hover:bg-orange-600 transition">Reabrir pallet</button>
+            <>
+              {/* Desarmar = primer paso de la SALIDA (libera los masters para remisionarlos por
+                  separado). No confundir con Reabrir, que devuelve el polín a la fila de ENTRADA. */}
+              <button onClick={() => setModalDesarmar(true)} className="px-4 py-2 rounded-lg text-sm font-semibold bg-amber-500 text-white hover:bg-amber-600 transition">Desarmar polín</button>
+              <button onClick={handleReabrir} className="px-4 py-2 rounded-lg text-sm font-semibold bg-orange-500 text-white hover:bg-orange-600 transition">Reabrir pallet</button>
+            </>
           )}
         </div>
       </div>
     </div>
     {mostrarConsulta && <ConsultarEtiquetaModal onCerrar={() => setMostrarConsulta(false)} />}
     {mostrarHoja && <HojaPalletModal palletId={palletId} onCerrar={() => setMostrarHoja(false)} />}
+    {modalDesarmar && (
+      <ModalMotivo titulo={`Desarmar polín ${pallet?.Codigo ?? ""}`}
+        descripcion="Solo si el polín se rompe de verdad: suelta su posición en bodega y no se puede volver a armar. NO hace falta para remisionar — una remisión puede tomar cajas sueltas dejando el polín en su lugar."
+        textoConfirmar="Desarmar polín" onConfirmar={handleDesarmar} onCerrar={() => setModalDesarmar(false)} />
+    )}
     {aviso && <AvisoModal {...aviso} onCerrar={() => cerrar(true)} onCancelar={() => cerrar(false)} />}
     </>
   );

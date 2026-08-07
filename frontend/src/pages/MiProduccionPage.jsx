@@ -1,14 +1,19 @@
 import { useState, useEffect, useRef } from "react";
 import { useAuth, authHeader } from "../context/AuthContext.jsx";
-import { LB_POR_KG } from "../utils/destajo.js";
+import { LB_POR_KG, AREAS_DESTAJO } from "../utils/destajo.js";
 
 const DIAS = ["Domingo","Lunes","Martes","Miércoles","Jueves","Viernes","Sábado"];
 const MESES = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
 
-// Nombres de área tal como los devuelve la BD (Areas.Nombre) — mismos literales que usa el Reporte
-// de Producción para partir las libras en sus dos columnas.
-const AREA_DESCABEZADO = "DESCABEZADO";
-const AREA_PELADO = "PELADO Y DEVENADO";
+// Color de la tarjeta de cada área de destajo (AREAS_DESTAJO trae el nombre y el orden; acá solo se
+// le pone color, el mismo que usa la pantalla de pared). Solo se dibuja la tarjeta de las áreas donde
+// la persona produjo algo hoy: en un panel de 7" tres tarjetas fijas dejan cada una demasiado
+// aplastada, y en la práctica cada quien trabaja en una sola área al día.
+const COLOR_AREA = {
+  DU: { borde: "border-l-blue-700", titulo: "text-blue-800", cifra: "text-blue-700" },
+  DS: { borde: "border-l-emerald-700", titulo: "text-emerald-800", cifra: "text-emerald-700" },
+  DT: { borde: "border-l-violet-700", titulo: "text-violet-800", cifra: "text-violet-700" },
+};
 
 // La pantalla se limpia sola. El resultado dura bastante más que en el kiosco de Entrada/Salida
 // (2 s) porque ahí la persona solo confirma que marcó, y aquí tiene que leer un detalle parada.
@@ -174,6 +179,7 @@ function Resultado({ datos }) {
 
   const totalKg = pesadas.reduce((s, p) => s + p.Kilos, 0);
   const kgDe = (area) => pesadas.filter(p => p.Area === area).reduce((s, p) => s + p.Kilos, 0);
+  const areasHoy = AREAS_DESTAJO.map(a => ({ ...a, kg: kgDe(a.nombre) })).filter(a => a.kg > 0);
 
   const cuerpoRef = useRef(null);
   const caben = useFilasQueCaben(cuerpoRef);
@@ -189,10 +195,12 @@ function Resultado({ datos }) {
     <div className="flex-1 min-h-0 grid grid-rows-[minmax(0,auto)_minmax(0,auto)_minmax(0,1fr)] gap-3">
       <Identidad empleado={empleado} puesto={puesto} />
 
-      {/* El total ocupa el ancho grande y las dos áreas se apilan a su derecha: en horizontal
-          cabe todo en una sola franja, sin robarle altura al detalle. min-h-0 para que en una
-          ventana baja esta franja ceda alto en vez de empujar el detalle fuera de la pantalla. */}
-      <div className="grid grid-cols-[3fr_2fr] gap-3 min-h-0 overflow-hidden">
+      {/* El total ocupa el ancho grande y las áreas donde produjo hoy se apilan a su derecha: en
+          horizontal cabe todo en una sola franja, sin robarle altura al detalle. min-h-0 para que en
+          una ventana baja esta franja ceda alto en vez de empujar el detalle fuera de la pantalla.
+          Si no hubo pesaje en ninguna área de destajo (área sin resolver), el total se queda con
+          toda la franja en vez de dejar una columna vacía a la par. */}
+      <div className={`grid ${areasHoy.length ? "grid-cols-[3fr_2fr]" : "grid-cols-1"} gap-3 min-h-0 overflow-hidden`}>
         <div className={`${TARJETA} flex flex-col items-center justify-center py-2 min-h-0 overflow-hidden`}>
           <p className={`${T.medio} text-slate-700 font-semibold uppercase tracking-[0.2em]`}>Total procesado hoy</p>
           <p className={`${T.hero} font-mono font-extrabold text-slate-900 tabular-nums leading-none mt-1`}>
@@ -202,20 +210,18 @@ function Resultado({ datos }) {
           <p className={`${T.medio} text-slate-600 font-mono tabular-nums mt-1`}>{totalKg.toFixed(2)} kg</p>
         </div>
 
-        <div className="grid grid-rows-2 gap-3">
-          <div className={`${TARJETA} border-l-8 border-l-blue-700 px-5 flex items-center justify-between gap-3`}>
-            <p className={`${T.medio} text-blue-800 font-semibold uppercase tracking-widest`}>Descabezado</p>
-            <p className={`${T.tarjeta} font-mono font-bold tabular-nums text-blue-700 leading-none`}>
-              {lb(kgDe(AREA_DESCABEZADO)).toFixed(1)}<span className="text-[0.4em] text-slate-600 ml-2">lb</span>
-            </p>
+        {areasHoy.length > 0 && (
+          <div className="grid gap-3" style={{ gridTemplateRows: `repeat(${areasHoy.length}, minmax(0, 1fr))` }}>
+            {areasHoy.map(a => (
+              <div key={a.codigo} className={`${TARJETA} border-l-8 ${COLOR_AREA[a.codigo].borde} px-5 flex items-center justify-between gap-3`}>
+                <p className={`${T.medio} ${COLOR_AREA[a.codigo].titulo} font-semibold uppercase tracking-widest`}>{a.etiqueta}</p>
+                <p className={`${T.tarjeta} font-mono font-bold tabular-nums ${COLOR_AREA[a.codigo].cifra} leading-none`}>
+                  {lb(a.kg).toFixed(1)}<span className="text-[0.4em] text-slate-600 ml-2">lb</span>
+                </p>
+              </div>
+            ))}
           </div>
-          <div className={`${TARJETA} border-l-8 border-l-emerald-700 px-5 flex items-center justify-between gap-3`}>
-            <p className={`${T.medio} text-emerald-800 font-semibold uppercase tracking-widest`}>Pelado y Devenado</p>
-            <p className={`${T.tarjeta} font-mono font-bold tabular-nums text-emerald-700 leading-none`}>
-              {lb(kgDe(AREA_PELADO)).toFixed(1)}<span className="text-[0.4em] text-slate-600 ml-2">lb</span>
-            </p>
-          </div>
-        </div>
+        )}
       </div>
 
       <div className={`${TARJETA} min-h-0 overflow-hidden flex flex-col`}>

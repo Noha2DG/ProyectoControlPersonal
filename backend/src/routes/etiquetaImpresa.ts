@@ -468,6 +468,16 @@ router.put("/:id/anular", requireAuth, requirePerm("etiquetado", "editar"), asyn
     // lo reabre.
     const master = await buscarMasterPorEtiqueta(prisma, etiquetaId);
     if (master) {
+      // Despachado = fuera de la planta. Va ANTES del chequeo de posición a propósito: la remisión
+      // libera la posición al confirmarse, así que un master embarcado llega aquí con PosicionCodigo
+      // en null y, sin esta rama, caería en el mensaje genérico "quítalo del pallet primero" — una
+      // corrección imposible sobre producto que ya se entregó al cliente.
+      if (master.Estatus === "Salido") {
+        res.status(400).json({
+          error: `Este master ya salió de bodega${master.RemisionFolio ? ` en la remisión ${master.RemisionFolio}` : ""} — no se puede anular su etiqueta.`,
+        });
+        return;
+      }
       if (master.PosicionCodigo) {
         res.status(400).json({
           error: `Este master está en el pallet ${master.PalletCodigo}, ya posicionado en bodega física (${master.PosicionCodigo}) — su contenido está sellado y no se puede anular.`,
@@ -581,6 +591,15 @@ router.post("/:id/reimprimir", requireAuth, requirePerm("etiquetado", "imprimir"
     if (etiquetaRows[0].Estatus !== "Activa") { res.status(400).json({ error: "Esta etiqueta está anulada, no se puede reimprimir" }); return; }
 
     const masterExistente = await buscarMasterPorEtiqueta(prisma, etiquetaId);
+    // Mismo candado que en anular, y por la misma razón: al despacharse se liberó la posición, así
+    // que sin esto un master ya embarcado volvería a ser reimprimible (con Forzar) — reimprimir la
+    // etiqueta de un master que ya está con el cliente es exactamente lo que el sellado evita.
+    if (masterExistente?.Estatus === "Salido") {
+      res.status(400).json({
+        error: `Este master ya salió de bodega${masterExistente.RemisionFolio ? ` en la remisión ${masterExistente.RemisionFolio}` : ""} — no se puede reimprimir su etiqueta.`,
+      });
+      return;
+    }
     // Candado de posicionamiento: si el pallet del master ya tiene posición física, la reimpresión
     // se bloquea en seco — sin opción de Forzar (a diferencia del caso "escaneado pero aún en
     // bodega virtual", donde forzar con permiso de edición sigue permitido).

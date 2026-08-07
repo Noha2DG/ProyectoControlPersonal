@@ -1,5 +1,6 @@
 import * as XLSX from "xlsx";
 import { diasPermiso } from "./permisos.js";
+import { AREAS_DESTAJO } from "./destajo.js";
 
 export function exportarTransferencias(registros, fecha, permisos = []) {
   const detalle = registros.map(r => ({
@@ -213,8 +214,8 @@ export function exportarLbPorPersona(filas, desde, hasta) {
     "Puesto":                     f.Puesto,
     "Id Empleado":                f.IdEmpleado,
     "Nombre":                     f.Nombre,
-    "Descabezado (Lb)":           +f.LbDescabezado.toFixed(2),
-    "Pelado y Devenado (Lb)":     +f.LbPelado.toFixed(2),
+    // Una columna por área de destajo, en el mismo orden que la tabla de la pantalla.
+    ...Object.fromEntries(AREAS_DESTAJO.map(a => [`${a.etiqueta} (Lb)`, +f[a.lb].toFixed(2)])),
     "Total (Lb)":                 +f.LbTotal.toFixed(2),
   }));
 

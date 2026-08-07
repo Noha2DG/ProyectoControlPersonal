@@ -28,6 +28,7 @@ const MODULOS = [
   { key: "destajo",        label: "Destajo — Materia Prima y Pesaje", acciones: ["ver","crear","editar","eliminar"], grupo: "Operación" },
   { key: "etiquetado",     label: "Etiquetado — Orden de Trabajo",   acciones: ["ver","crear","editar","eliminar","imprimir"], grupo: "Operación" },
   { key: "bodega",         label: "Bodega — Pallets y Escaneo",      acciones: ["ver","escanear","editar","eliminar"], grupo: "Operación" },
+  { key: "remisiones",     label: "Bodega — Remisiones y Despacho",  acciones: ["ver","crear","editar","eliminar","imprimir"], grupo: "Operación" },
   // ── Configuración
   { key: "areas",          label: "Áreas",                          acciones: ["ver","crear","editar","eliminar"], grupo: "Config"   },
   { key: "permisos",       label: "Permisos",                       acciones: ["ver","crear","editar","eliminar"], grupo: "Config"   },

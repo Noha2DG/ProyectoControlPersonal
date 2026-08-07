@@ -4,14 +4,29 @@ import { useColWidths, Th, Colgroup } from "../components/ResizableTh.jsx";
 
 const PAISES = ["GT", "US", "MX", "TW"];
 
-const CLIENTES_COL_DEFAULTS = { codigo: 100, razonSocial: 220, pais: 90, estado: 100, acciones: 150 };
+// Separa la cartera para las remisiones: una "Venta local" solo ofrece clientes Local y una
+// "Exportación" solo los de Exportación. NO se deriva del País — INDUPECASA está registrada como GT
+// pero vende marcas de EE.UU., así que el país es una pista, no la regla.
+const TIPOS_CLIENTE = [
+  { valor: "Local", label: "Local" },
+  { valor: "Exportacion", label: "Exportación" },
+];
+const TIPO_BADGE = {
+  Local:       "bg-emerald-100 text-emerald-700",
+  Exportacion: "bg-indigo-100 text-indigo-700",
+};
+
+const CLIENTES_COL_DEFAULTS = { codigo: 100, razonSocial: 220, pais: 80, tipo: 110, estado: 100, acciones: 150 };
 const CLIENTES_COLS = Object.keys(CLIENTES_COL_DEFAULTS);
 const SUB_COL_DEFAULTS = { codigo: 120, razonSocial: 220, estado: 100, acciones: 150 };
 const SUB_COLS = Object.keys(SUB_COL_DEFAULTS);
 
 function ClienteModal({ item, onSave, onClose }) {
   const isEdit = !!item;
-  const [form, setForm] = useState({ Codigo: item?.Codigo || "", RazonSocial: item?.RazonSocial || "", Pais: item?.Pais || "GT" });
+  const [form, setForm] = useState({
+    Codigo: item?.Codigo || "", RazonSocial: item?.RazonSocial || "",
+    Pais: item?.Pais || "GT", Tipo: item?.Tipo || "Local",
+  });
   const set = f => e => setForm(p => ({ ...p, [f]: e.target.value }));
   const handleSubmit = e => { e.preventDefault(); onSave(form); };
 
@@ -33,13 +48,25 @@ function ClienteModal({ item, onSave, onClose }) {
             <input required value={form.RazonSocial} onChange={set("RazonSocial")}
               className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
           </div>
-          <div>
-            <label className="block text-xs font-medium text-gray-500 mb-1">País *</label>
-            <select required value={form.Pais} onChange={set("Pais")}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400">
-              {PAISES.map(p => <option key={p} value={p}>{p}</option>)}
-            </select>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">País *</label>
+              <select required value={form.Pais} onChange={set("Pais")}
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400">
+                {PAISES.map(p => <option key={p} value={p}>{p}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">Tipo *</label>
+              <select required value={form.Tipo} onChange={set("Tipo")}
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400">
+                {TIPOS_CLIENTE.map(t => <option key={t.valor} value={t.valor}>{t.label}</option>)}
+              </select>
+            </div>
           </div>
+          <p className="text-xs text-gray-400 -mt-1">
+            El tipo decide en qué remisiones aparece este cliente: los Local en ventas locales, los de Exportación en exportaciones.
+          </p>
           <div className="flex justify-end gap-3 pt-1">
             <button type="button" onClick={onClose} className="px-4 py-2 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 transition">Cancelar</button>
             <button type="submit" className="px-5 py-2 text-sm bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 transition">{isEdit ? "Guardar" : "Crear"}</button>
@@ -202,6 +229,7 @@ export default function ClientesPage() {
                   <Th width={widthsClientes.codigo} onResizeStart={startResizeClientes("codigo")} className="px-4 py-3 text-left whitespace-nowrap">Código</Th>
                   <Th width={widthsClientes.razonSocial} onResizeStart={startResizeClientes("razonSocial")} className="px-4 py-3 text-left whitespace-nowrap">Razón Social</Th>
                   <Th width={widthsClientes.pais} onResizeStart={startResizeClientes("pais")} className="px-4 py-3 text-left whitespace-nowrap">País</Th>
+                  <Th width={widthsClientes.tipo} onResizeStart={startResizeClientes("tipo")} className="px-4 py-3 text-center whitespace-nowrap">Tipo</Th>
                   <Th width={widthsClientes.estado} onResizeStart={startResizeClientes("estado")} className="px-4 py-3 text-center whitespace-nowrap">Estado</Th>
                   <Th width={widthsClientes.acciones} onResizeStart={startResizeClientes("acciones")} className="px-4 py-3 text-center whitespace-nowrap">Acciones</Th>
                 </tr>
@@ -213,6 +241,11 @@ export default function ClientesPage() {
                     <td className="px-4 py-3 font-mono font-bold text-gray-700 whitespace-nowrap">{c.Codigo}</td>
                     <td className="px-4 py-3 text-gray-900 whitespace-nowrap">{c.RazonSocial}</td>
                     <td className="px-4 py-3 text-gray-700 whitespace-nowrap">{c.Pais}</td>
+                    <td className="px-4 py-3 text-center whitespace-nowrap">
+                      <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-semibold ${TIPO_BADGE[c.Tipo] || "bg-gray-100 text-gray-600"}`}>
+                        {c.Tipo === "Exportacion" ? "Exportación" : "Local"}
+                      </span>
+                    </td>
                     <td className="px-4 py-3 text-center whitespace-nowrap">
                       <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-semibold ${c.Activo ? "bg-green-100 text-green-700" : "bg-red-100 text-red-600"}`}>
                         {c.Activo ? "Activo" : "Inactivo"}

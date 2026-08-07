@@ -22,6 +22,9 @@
 }
 .fondo-olas-emerald { background: linear-gradient(135deg, #065f46, #10b981); }
 .fondo-olas-blue    { background: linear-gradient(135deg, #1e3a8a, #3b82f6); }
+/* Pelado y Pinchado (DT). Violeta y no ámbar: el ámbar ya es el color del puesto 1 (medalla, halo y
+   confeti) y un fondo ámbar haría que toda la diapositiva compitiera con el primer lugar. */
+.fondo-olas-violet  { background: linear-gradient(135deg, #4c1d95, #8b5cf6); }
 
 /* Ráfaga de confeti del puesto 1 (RankingProduccionPage.jsx, componente Confeti) — cada pieza trae
    su propio --tx/--ty/--rot por variable CSS (calculados en JS, uno por pieza) y esta única

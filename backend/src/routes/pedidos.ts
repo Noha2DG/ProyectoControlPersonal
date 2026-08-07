@@ -4,19 +4,28 @@ import { requireAuth, requirePerm, requireAnyPerm } from "../middleware/auth.ts"
 
 const router = Router();
 
-// GET /api/pedidos?cliente=10
-router.get("/", requireAuth, requireAnyPerm([["catalogos", "ver"], ["etiquetado", "ver"]]), async (req: Request, res: Response) => {
+// GET /api/pedidos?cliente=10&tipoCliente=Exportacion
+// `remisiones.ver` se agregó a la lista porque el formulario de remisión de exportación se arma A
+// PARTIR de un pedido: sin esto, un usuario que solo despacha no podría ni ver la lista para elegir.
+router.get("/", requireAuth, requireAnyPerm([["catalogos", "ver"], ["etiquetado", "ver"], ["remisiones", "ver"]]), async (req: Request, res: Response) => {
   try {
-    const cliente = req.query.cliente ? Number(req.query.cliente) : undefined;
-    const rows: any[] = cliente
-      ? await prisma.$queryRaw`
-          SELECT CodigoPedido, CodigoCliente, CodigoSubcliente, Descripcion, FechaInicio, Estatus, EsGeneral
-          FROM Pedidos WHERE CodigoCliente = ${cliente} ORDER BY CodigoPedido DESC
-        `
-      : await prisma.$queryRaw`
-          SELECT CodigoPedido, CodigoCliente, CodigoSubcliente, Descripcion, FechaInicio, Estatus, EsGeneral
-          FROM Pedidos ORDER BY CodigoPedido DESC LIMIT 500
-        `;
+    const condiciones: string[] = [];
+    const params: any[] = [];
+    if (req.query.cliente) { condiciones.push("p.CodigoCliente = ?"); params.push(Number(req.query.cliente)); }
+    // Filtra por el tipo del CLIENTE del pedido (Local/Exportacion) — así el selector de una
+    // remisión de exportación no ofrece pedidos de clientes locales, que el backend rechazaría igual.
+    if (req.query.tipoCliente === "Local" || req.query.tipoCliente === "Exportacion") {
+      condiciones.push("c.Tipo = ?"); params.push(req.query.tipoCliente);
+    }
+    const where = condiciones.length ? `WHERE ${condiciones.join(" AND ")}` : "";
+    const rows: any[] = await prisma.$queryRawUnsafe(`
+      SELECT p.CodigoPedido, p.CodigoCliente, p.CodigoSubcliente, p.Descripcion, p.FechaInicio, p.Estatus, p.EsGeneral,
+             c.RazonSocial AS NombreCliente, s.RazonSocial AS NombreSubcliente
+      FROM Pedidos p
+      JOIN Clientes c ON p.CodigoCliente = c.Codigo
+      LEFT JOIN Subcliente s ON p.CodigoCliente = s.CodigoCliente AND p.CodigoSubcliente = s.CodigoSubcliente
+      ${where} ORDER BY p.CodigoPedido DESC LIMIT 500
+    `, ...params);
     res.json(rows.map(r => ({ ...r, CodigoCliente: Number(r.CodigoCliente), EsGeneral: Number(r.EsGeneral) === 1 })));
   } catch (err: any) {
     res.status(500).json({ error: err.message });

@@ -8,11 +8,16 @@ import { hoyGT } from "../lib/dateGT.ts";
 const router = Router();
 
 // Familia (Clase.Familia, FK real a la tabla Familia — no una convención de texto) que le corresponde
-// a cada área de destajo: D = CULTIVO COLA (Descabezado), E = CULTIVO PELADO (Pelado y Devenado).
-// Confirmado contra datos reales: sin este chequeo, ~9.6% de los pesajes en Descabezado y ~1.1% en
-// Pelado y Devenado quedaban contra la transacción de la otra área (Producto distinto al que
-// físicamente se estaba trabajando).
-const FAMILIA_ESPERADA_POR_AREA: Record<string, string> = { DS: "E", DU: "D" };
+// a cada área de destajo: D = CULTIVO COLA (Descabezado), E = CULTIVO PELADO (Pelado y Devenado y
+// Pelado y Pinchado). Confirmado contra datos reales: sin este chequeo, ~9.6% de los pesajes en
+// Descabezado y ~1.1% en Pelado y Devenado quedaban contra la transacción de la otra área (Producto
+// distinto al que físicamente se estaba trabajando).
+//
+// DT (PELADO Y PINCHADO) se agregó en ago 2026: los pinchos (E63/E64/E65) se empezaron a trabajar sin
+// estar en ningún plan y la gente que los pesa se transfiere a DT, no a DS. Comparte Familia E con DS
+// porque es el mismo Producto pelado; lo que cambia es el área física, y por eso lleva su propia
+// columna en el reporte y su propio ranking (ver AREAS_DESTAJO en frontend/src/utils/destajo.js).
+const FAMILIA_ESPERADA_POR_AREA: Record<string, string> = { DS: "E", DU: "D", DT: "E" };
 
 // Las únicas áreas donde se pesa a destajo — se derivan del mapa de arriba para no tener dos listas
 // que se puedan desincronizar.
@@ -240,7 +245,7 @@ router.post("/", requireAuth, requirePerm("destajo", "crear"), async (req: Reque
     if (!empleados.length) { res.status(404).json({ error: "Empleado no encontrado" }); return; }
     if (empleados[0].Estado !== "Activo") { res.status(400).json({ error: "Empleado no está activo" }); return; }
 
-    // Solo puede pesar si su transferencia abierta más reciente lo ubica en Pelado y Devenado (DS) o Descabezado (DU)
+    // Solo puede pesar si su transferencia abierta más reciente lo ubica en un área de destajo
     const areaActual: any[] = await prisma.$queryRaw`
       SELECT t.CodigoArea, a.Nombre AS NombreArea FROM Transferencias t
       JOIN Areas a ON t.CodigoArea = a.Codigo
@@ -249,7 +254,7 @@ router.post("/", requireAuth, requirePerm("destajo", "crear"), async (req: Reque
     `;
     if (!areaActual.length || !AREAS_DESTAJO.includes(areaActual[0].CodigoArea)) {
       res.status(400).json({
-        error: "Debe darse transferencia en el área DS o DU",
+        error: `Debe darse transferencia en un área de destajo (${AREAS_DESTAJO.join(", ")})`,
         areaActual: areaActual.length ? { Codigo: areaActual[0].CodigoArea, Nombre: areaActual[0].NombreArea } : null,
       });
       return;

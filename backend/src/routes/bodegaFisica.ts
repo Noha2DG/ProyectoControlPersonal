@@ -148,7 +148,7 @@ router.get("/existencias", requireAuth, requirePerm("bodega", "ver"), async (_re
              SUM(pr.PesoKG * pr.CajasXMaster) AS KilosBrutos,
              SUM(pr.PesoLb * pr.CajasXMaster) AS Libras
       FROM Pallets p
-      JOIN Masters m ON m.PalletId = p.PalletId
+      JOIN Masters m ON m.PalletId = p.PalletId AND m.Estatus <> 'Salido'
       JOIN EtiquetaImpresa ei ON m.EtiquetaId = ei.EtiquetaId
       JOIN OrdenEtiquetado oe ON ei.OrdenId = oe.OrdenId
       JOIN DetallePedido dp ON oe.DetalleId = dp.DetalleId
@@ -289,9 +289,12 @@ router.get("/movimientos", requireAuth, requirePerm("bodega", "ver"), async (req
     const rows: any[] = await prisma.$queryRawUnsafe(`
       SELECT mb.MovimientoId, mb.Tipo, mb.Fecha, mb.Usuario, mb.Motivo,
              p.Codigo AS PalletCodigo, bv.Nombre AS NombreBodegaVirtual,
-             poO.Codigo AS PosicionOrigen, poD.Codigo AS PosicionDestino
+             poO.Codigo AS PosicionOrigen, poD.Codigo AS PosicionDestino,
+             CONCAT('E', m.EtiquetaId) AS Correlativo, r.Folio AS RemisionFolio
       FROM MovimientosBodega mb
       JOIN Pallets p ON mb.PalletId = p.PalletId
+      LEFT JOIN Masters m ON mb.MasterId = m.MasterId
+      LEFT JOIN Remisiones r ON mb.RemisionId = r.RemisionId
       LEFT JOIN BodegaVirtual bv ON p.BodegaVirtualCodigo = bv.Codigo
       LEFT JOIN Posiciones poO ON mb.PosicionOrigenId = poO.PosicionId
       LEFT JOIN Posiciones poD ON mb.PosicionDestinoId = poD.PosicionId

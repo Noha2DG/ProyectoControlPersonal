@@ -2,7 +2,7 @@ import { Router, Request, Response } from "express";
 import jwt from "jsonwebtoken";
 import prisma from "../lib/prisma.ts";
 import { requireAuth, requirePerm } from "../middleware/auth.ts";
-import { buscarMasterPorEtiqueta, calcularTechoLinea } from "../lib/masters.ts";
+import { buscarMasterPorEtiqueta, calcularTechoLinea, MASTER_SELECT, formatearMaster } from "../lib/masters.ts";
 
 const router = Router();
 
@@ -33,35 +33,6 @@ function getOperador(req: Request): string {
   }
 }
 
-// Un master trae toda su descripción (Pedido/Cliente/Lote/Proceso+Talla+Presentación/Área) resuelta
-// al vuelo desde EtiquetaImpresa→OrdenEtiquetado→DetallePedido — el Pallet no guarda nada de esto
-// (ver project_ordenetiquetado_design: "no está ligado a pedido o cliente, se le cargan los datos
-// de cada master").
-// PesoKG/PesoLb en Presentacion son POR CAJA, no por master (confirmado contra la Descripcion real,
-// ej. "AS" = 2 cajas de 10kg = "20 kg" total, PesoKG=10 → 10*2=20 coincide) — el peso del master
-// completo es PesoKG/PesoLb * CajasXMaster, no el campo solo.
-const MASTER_SELECT = `
-  SELECT m.MasterId, m.PalletId, m.EtiquetaId, m.IngresadoPor, m.FechaIngreso,
-         oe.OrdenId, oe.Lote, oe.FechaProduccion, oe.AreaCodigo, ar.Nombre AS NombreArea,
-         dp.DetalleId, dp.CodigoPedido, dp.Clase, pc.Descripcion AS DescripcionProceso,
-         dp.Talla, ta.Descripcion AS DescripcionTalla,
-         dp.Presentacion, pr.Descripcion AS DescripcionPresentacion,
-         pr.PesoKG * pr.CajasXMaster AS PesoMasterKG, pr.PesoLb * pr.CajasXMaster AS PesoMasterLb,
-         cli.RazonSocial AS NombreCliente, sub.RazonSocial AS NombreSubcliente
-  FROM Masters m
-  JOIN EtiquetaImpresa ei ON m.EtiquetaId = ei.EtiquetaId
-  JOIN OrdenEtiquetado oe ON ei.OrdenId = oe.OrdenId
-  JOIN DetallePedido dp ON oe.DetalleId = dp.DetalleId
-  JOIN Clase cl ON dp.Clase = cl.Clase
-  JOIN Procesos pc ON cl.Proceso = pc.Proceso
-  JOIN Tallas ta ON dp.Talla = ta.Codigo
-  JOIN Presentacion pr ON dp.Presentacion = pr.Codigo
-  JOIN Pedidos ped ON dp.CodigoPedido = ped.CodigoPedido
-  JOIN Clientes cli ON ped.CodigoCliente = cli.Codigo
-  LEFT JOIN Subcliente sub ON ped.CodigoCliente = sub.CodigoCliente AND ped.CodigoSubcliente = sub.CodigoSubcliente
-  LEFT JOIN Areas ar ON oe.AreaCodigo = ar.Codigo
-`;
-
 // Cuadre = meta de referencia, no bloquea el escaneo (decisión jul 2026): compara lo realmente
 // escaneado contra CantidadMaster (la cantidad que se planeó que llevaría el polín al crearlo).
 // Mismo patrón que el cierre de captura de Etiquetado. Si el pallet no tiene CantidadMaster (los
@@ -70,17 +41,6 @@ function calcularCuadre(cantidadMaster: number | null, escaneados: number): stri
   if (cantidadMaster == null) return null;
   if (escaneados === cantidadMaster) return "Completo";
   return escaneados < cantidadMaster ? "Incompleto" : "Sobrante";
-}
-
-function formatearMaster(r: any) {
-  return {
-    ...r,
-    MasterId: Number(r.MasterId), PalletId: Number(r.PalletId), EtiquetaId: Number(r.EtiquetaId),
-    OrdenId: Number(r.OrdenId), DetalleId: Number(r.DetalleId), Talla: Number(r.Talla),
-    PesoMasterKG: Number(r.PesoMasterKG), PesoMasterLb: Number(r.PesoMasterLb),
-    Correlativo: "E" + Number(r.EtiquetaId),
-    FechaProduccion: r.FechaProduccion ? new Date(r.FechaProduccion).toISOString().slice(0, 10) : null,
-  };
 }
 
 async function obtenerMastersDePallet(palletId: number) {
@@ -298,6 +258,61 @@ router.put("/:id/reabrir", requireAuth, requirePerm("bodega", "editar"), async (
     `;
     res.json({ ok: true });
   } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/pallets/:id/desarmar  { Motivo } — el polín se rompe DE VERDAD.
+// Ya NO es un requisito para remisionar (revisado 6 ago 2026): una remisión puede tomar cajas de un
+// polín armado y posicionado, dejándolo en su lugar con el resto — sacar 10 de 50 no destruye nada.
+// Esto queda solo para cuando el polín efectivamente deja de existir como unidad: suelta su posición,
+// sus masters quedan sueltos y no se puede volver a armar; el sobrante se consolida escaneándolo en
+// un polín nuevo, que sí se reubica.
+// No confundir con "reabrir": reabrir devuelve el polín a la fila de escaneo de ENTRADA (y por eso
+// está prohibido si ya se posicionó). Desarmar deja el polín cerrado para siempre.
+router.post("/:id/desarmar", requireAuth, requirePerm("bodega", "editar"), async (req: Request, res: Response) => {
+  try {
+    const palletId = Number(req.params.id);
+    const motivo = String(req.body.Motivo ?? "").trim();
+    if (!motivo) { res.status(400).json({ error: "El motivo del desarme es requerido" }); return; }
+
+    const operador = getOperador(req);
+    let respuesta: any = null;
+    await prisma.$transaction(async (tx) => {
+      const rows: any[] = await tx.$queryRaw`
+        SELECT PalletId, Codigo, Estatus, PosicionId FROM Pallets WHERE PalletId = ${palletId} LIMIT 1 FOR UPDATE
+      `;
+      if (!rows.length) throw new ErrorNegocio(404, "Pallet no encontrado");
+      const pallet = rows[0];
+      if (pallet.Estatus === "Abierto") throw new ErrorNegocio(400, `El polín ${pallet.Codigo} sigue abierto — si quieres sacarle un master, quítalo desde el panel de escaneo`);
+      if (pallet.Estatus === "Desarmado") throw new ErrorNegocio(400, `El polín ${pallet.Codigo} ya está desarmado`);
+      if (pallet.Estatus !== "Cerrado") throw new ErrorNegocio(400, `El polín ${pallet.Codigo} está ${String(pallet.Estatus).toLowerCase()} — no se puede desarmar`);
+
+      const masters: any[] = await tx.$queryRaw`SELECT MasterId FROM Masters WHERE PalletId = ${palletId} AND Estatus = 'EnBodega' FOR UPDATE`;
+      if (!masters.length) throw new ErrorNegocio(400, `El polín ${pallet.Codigo} no tiene masters en bodega que desarmar`);
+
+      // Un polín ya comprometido en una remisión en borrador se agregó ENTERO; desarmarlo a media
+      // captura dejaría ese documento con líneas que ya no corresponden a un polín existente.
+      const enRemision: any[] = await tx.$queryRaw`
+        SELECT r.Folio FROM RemisionDetalle rd
+        JOIN Remisiones r ON rd.RemisionId = r.RemisionId
+        JOIN Masters m ON rd.MasterId = m.MasterId
+        WHERE m.PalletId = ${palletId} AND rd.Vigente = 1 LIMIT 1
+      `;
+      if (enRemision.length) throw new ErrorNegocio(400, `El polín ${pallet.Codigo} ya está en la remisión ${enRemision[0].Folio} — quítalo de ahí antes de desarmarlo`);
+
+      await tx.$executeRaw`UPDATE Masters SET Estatus = 'Suelto' WHERE PalletId = ${palletId} AND Estatus = 'EnBodega'`;
+      await tx.$executeRaw`UPDATE Pallets SET Estatus = 'Desarmado', PosicionId = NULL WHERE PalletId = ${palletId}`;
+      await tx.$executeRaw`
+        INSERT INTO MovimientosBodega (PalletId, Tipo, PosicionOrigenId, PosicionDestinoId, Usuario, Motivo)
+        VALUES (${palletId}, 'DESARME', ${pallet.PosicionId == null ? null : Number(pallet.PosicionId)}, NULL, ${operador}, ${motivo})
+      `;
+      respuesta = { ok: true, PalletCodigo: pallet.Codigo, MastersLiberados: masters.length };
+    }, { timeout: 30_000 });
+
+    res.json(respuesta);
+  } catch (err: any) {
+    if (err instanceof ErrorNegocio) { res.status(err.status).json({ error: err.message }); return; }
     res.status(500).json({ error: err.message });
   }
 });

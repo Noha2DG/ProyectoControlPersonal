@@ -8,6 +8,21 @@
 
 export const LB_POR_KG = 2.20462;
 
+// Las áreas donde se pesa a destajo, en el orden en que se presentan en pantalla. `nombre` es
+// Areas.Nombre tal cual está en la BD: los pesajes llegan con el nombre del área ya resuelto (la
+// Transferencia vigente al momento de la pesada), no con el código. `kilos`/`lb` son los campos que
+// le corresponden en la respuesta del backend y en las filas ya convertidas a libras.
+//
+// DT (PELADO Y PINCHADO) entró en producción en ago 2026 sin estar planificada: los pinchos
+// (E63/E64/E65) son Familia E igual que Pelado y Devenado, pero se trabajan en otra área con otra
+// gente, así que llevan columna y ranking propios en vez de sumarse a Pelado. El equivalente en el
+// backend es FAMILIA_ESPERADA_POR_AREA (routes/pesajeDetalle.ts), que es lo que habilita el pesaje.
+export const AREAS_DESTAJO = [
+  { codigo: "DU", nombre: "DESCABEZADO", etiqueta: "Descabezado", kilos: "KilosDescabezado", lb: "LbDescabezado" },
+  { codigo: "DS", nombre: "PELADO Y DEVENADO", etiqueta: "Pelado y Devenado", kilos: "KilosPelado", lb: "LbPelado" },
+  { codigo: "DT", nombre: "PELADO Y PINCHADO", etiqueta: "Pelado y Pinchado", kilos: "KilosPinchado", lb: "LbPinchado" },
+];
+
 export const MINIMO_BLOQUE_MINUTOS = 15;
 
 export const diaLocal = (fechaHora) => new Date(fechaHora).toLocaleDateString("sv-SE");
@@ -106,18 +121,16 @@ function asignarPuestoYSemaforo(ordenadas) {
   });
 }
 
-// Convierte los tres Kilos agregados por el backend (GET /api/reportes/ranking-produccion) a libras.
-// LbTotal NO es la suma de LbDescabezado + LbPelado — es KilosTotal tal cual lo agregó el backend
-// (todas las áreas), para que alguien que produce en una tercera área no quede en 0 solo porque esta
-// pantalla no le dedicó columna propia. No asigna Puesto/Semaforo: la pantalla de pared rankea cada
-// área por separado (ver calcularRankingPorArea), no este total combinado.
+// Convierte los Kilos agregados por el backend (GET /api/reportes/ranking-produccion) a libras, uno
+// por área de destajo. LbTotal NO es la suma de esas áreas — es KilosTotal tal cual lo agregó el
+// backend (todas las áreas), para que alguien que produce en un área sin columna propia no quede en
+// 0. No asigna Puesto/Semaforo: la pantalla de pared rankea cada área por separado (ver
+// calcularRankingPorArea), no este total combinado.
 export function calcularLbsPorPersona(filas) {
-  return filas.map(f => ({
-    ...f,
-    LbDescabezado: f.KilosDescabezado * LB_POR_KG,
-    LbPelado: f.KilosPelado * LB_POR_KG,
-    LbTotal: f.KilosTotal * LB_POR_KG,
-  }));
+  return filas.map(f => {
+    const porArea = Object.fromEntries(AREAS_DESTAJO.map(a => [a.lb, (f[a.kilos] ?? 0) * LB_POR_KG]));
+    return { ...f, ...porArea, LbTotal: f.KilosTotal * LB_POR_KG };
+  });
 }
 
 // Ranking de una sola área para la pantalla de pared (project_ranking_produccion_pantalla_design):

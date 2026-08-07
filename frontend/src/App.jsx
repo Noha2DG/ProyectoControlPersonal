@@ -20,6 +20,7 @@ import ImpresionEtiquetasPage from "./pages/ImpresionEtiquetasPage.jsx";
 import PalletsPage from "./pages/PalletsPage.jsx";
 import BodegaFisicaPage from "./pages/BodegaFisicaPage.jsx";
 import ExistenciaBodegaPage from "./pages/ExistenciaBodegaPage.jsx";
+import RemisionesPage from "./pages/RemisionesPage.jsx";
 import EmpleadosTable from "./components/EmpleadosTable.jsx";
 import { exportarEmpleados } from "./utils/exportExcel.js";
 import EmpleadoModal from "./components/EmpleadoModal.jsx";
@@ -61,6 +62,7 @@ const Icon = {
   bodega: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M20.25 7.5l-8.25-4.5-8.25 4.5m16.5 0l-8.25 4.5m8.25-4.5v9l-8.25 4.5m0-9L3.75 7.5m8.25 4.5v9M3.75 7.5v9l8.25 4.5M12 12.75l4.5-2.475M12 12.75l-4.5-2.475" />,
   ubicaciones: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M15 10.5a3 3 0 11-6 0 3 3 0 016 0zM19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1115 0z" />,
   existencias: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M3.75 3.75v16.5h16.5M7.5 15.75l3-3 3 3 4.5-4.5" />,
+  remisiones: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M8.25 18.75a1.5 1.5 0 01-3 0m3 0a1.5 1.5 0 00-3 0m3 0h6m-9 0H3.375a1.125 1.125 0 01-1.125-1.125V14.25m17.25 4.5a1.5 1.5 0 01-3 0m3 0a1.5 1.5 0 00-3 0m3 0h1.125c.621 0 1.129-.504 1.09-1.124a17.902 17.902 0 00-3.213-9.193 2.056 2.056 0 00-1.58-.86H14.25M16.5 18.75h-2.25m0-11.177v-.958c0-.568-.422-1.048-.987-1.106a48.554 48.554 0 00-10.026 0 1.106 1.106 0 00-.987 1.106v7.635m12-6.677v6.677m0 4.5v-4.5m0 0h-12" />,
 };
 
 // ── Sección Empleados ──────────────────────────────────────────────
@@ -203,6 +205,7 @@ function Dashboard() {
   if (perm("bodega",        "ver")) nav.push({ key: "bodega",     label: "Bodega — Pallets",     icon: "bodega"   });
   if (perm("bodega",        "ver")) nav.push({ key: "bodegaFisica", label: "Bodega — Ubicaciones", icon: "ubicaciones" });
   if (perm("bodega",        "ver")) nav.push({ key: "bodegaExistencias", label: "Bodega — Existencias", icon: "existencias" });
+  if (perm("remisiones",    "ver")) nav.push({ key: "remisiones", label: "Bodega — Remisiones",   icon: "remisiones" });
   if (perm("areas",          "ver")) nav.push({ key: "areas",     label: "Áreas",               icon: "areas"    });
   if (perm("permisos",       "ver")) nav.push({ key: "permisos",  label: "Permisos",            icon: "permisos" });
   if (perm("tipos_permiso",  "ver")) nav.push({ key: "tiposPermiso", label: "Tipos de Permiso", icon: "tiposPermiso" });
@@ -230,6 +233,7 @@ function Dashboard() {
     bodega:    "Bodega — Pallets y Escaneo",
     bodegaFisica: "Bodega — Recepción y Ubicaciones",
     bodegaExistencias: "Bodega — Existencias",
+    remisiones: "Bodega — Remisiones y Despacho",
     areas:     "Áreas",
     permisos:  "Permisos",
     tiposPermiso: "Tipos de Permiso",
@@ -379,6 +383,7 @@ function Dashboard() {
             {seccion === "bodega"   && perm("bodega",          "ver") && <PalletsPage />}
             {seccion === "bodegaFisica" && perm("bodega",      "ver") && <BodegaFisicaPage />}
             {seccion === "bodegaExistencias" && perm("bodega", "ver") && <ExistenciaBodegaPage />}
+            {seccion === "remisiones" && perm("remisiones", "ver") && <RemisionesPage />}
             {seccion === "areas"    && perm("areas",          "ver") && <AreasPage />}
             {seccion === "permisos" && perm("permisos",       "ver") && <PermisosPage />}
             {seccion === "tiposPermiso" && perm("tipos_permiso", "ver") && <TiposPermisoPage />}

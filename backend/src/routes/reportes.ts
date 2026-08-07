@@ -162,6 +162,7 @@ router.get("/ranking-produccion", requireAuth, requirePerm("kiosco_ranking", "ve
       SELECT IdEmpleado, Nombre,
              SUM(CASE WHEN Area = 'DESCABEZADO' THEN Kilos ELSE 0 END) AS KilosDescabezado,
              SUM(CASE WHEN Area = 'PELADO Y DEVENADO' THEN Kilos ELSE 0 END) AS KilosPelado,
+             SUM(CASE WHEN Area = 'PELADO Y PINCHADO' THEN Kilos ELSE 0 END) AS KilosPinchado,
              SUM(Kilos) AS KilosTotal
       FROM (
         SELECT e.Codigo AS IdEmpleado,
@@ -181,7 +182,7 @@ router.get("/ranking-produccion", requireAuth, requirePerm("kiosco_ranking", "ve
       ORDER BY KilosTotal DESC
     `, fecha);
 
-    res.json({ fecha, ranking: numerizar(ranking, ["KilosDescabezado", "KilosPelado", "KilosTotal"]) });
+    res.json({ fecha, ranking: numerizar(ranking, ["KilosDescabezado", "KilosPelado", "KilosPinchado", "KilosTotal"]) });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
