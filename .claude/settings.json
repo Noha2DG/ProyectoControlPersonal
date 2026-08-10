@@ -1,7 +1,13 @@
 {
   "permissions": {
     "allow": [
-      "mcp__codegraph__*"
+      "mcp__codegraph__*",
+      "Bash(curl -s -o /dev/null -w \"health %{http_code}\\\\n\" http://localhost:3973/api/areas)",
+      "Bash(python verif_panel.py)",
+      "Bash(sed -i 's/page.click\\(\"text=Ubicaciones\"\\)/page.locator\\(\"button[title*=\\\\x27Ubicaciones\\\\x27]\"\\).click\\(\\)/' verif_panel.py)",
+      "PowerShell($p = \\(netstat -ano | Select-String \"LISTENING\" | Select-String \":3973\"\\); if \\($p\\) { $id = \\($p[0] -split '\\\\s+'\\)[-1]; Stop-Process -Id $id -Force -Confirm:$false; Start-Sleep -Seconds 2 }; $c = netstat -ano | Select-String \"LISTENING\" | Select-String \":39\"; if \\($c\\) { \"SIGUE: $c\" } else { \"puertos liberados\" })",
+      "PowerShell($p = \\(netstat -ano | Select-String \"LISTENING\" | Select-String \":3972\"\\); if \\($p\\) { $id = \\($p[0] -split '\\\\s+'\\)[-1]; Stop-Process -Id $id -Force -Confirm:$false; Start-Sleep -Seconds 2 }; $c = netstat -ano | Select-String \"LISTENING\" | Select-String \":39\"; if \\($c\\) { \"SIGUE: $c\" } else { \"puertos liberados\" })",
+      "PowerShell($p = \\(netstat -ano | Select-String \"LISTENING\" | Select-String \":3971\"\\); if \\($p\\) { $id = \\($p[0] -split '\\\\s+'\\)[-1]; Stop-Process -Id $id -Force -Confirm:$false; Start-Sleep -Seconds 2 }; $c = netstat -ano | Select-String \"LISTENING\" | Select-String \":39\"; if \\($c\\) { \"SIGUE: $c\" } else { \"puertos liberados\" })"
     ]
   },
   "hooks": {
