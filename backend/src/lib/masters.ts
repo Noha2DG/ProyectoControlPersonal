@@ -71,7 +71,7 @@ export async function buscarMasterPorEtiqueta(client: any, etiquetaId: number) {
     PalletId: Number(r.PalletId),
     PalletCodigo: r.PalletCodigo as string,
     PalletEstatus: r.PalletEstatus as string,
-    // EnBodega | Suelto | Salido. "Salido" es el candado que sustituye a PosicionCodigo una vez que
+    // EnBodega | Salido. "Salido" es el candado que sustituye a PosicionCodigo una vez que
     // el producto se despachó: la remisión LIBERA la posición física, así que sin este dato un
     // master ya embarcado volvería a verse como "sin posición" y quedaría reimprimible/anulable.
     Estatus: r.Estatus as string,
@@ -90,7 +90,7 @@ export async function buscarMasterPorEtiqueta(client: any, etiquetaId: number) {
 export interface MasterEscaneadoInfo {
   PalletCodigo: string;
   PalletEstatus: string;
-  // EnBodega | Suelto | Salido — ver la nota en buscarMasterPorEtiqueta: una vez despachado, la
+  // EnBodega | Salido — ver la nota en buscarMasterPorEtiqueta: una vez despachado, la
   // posición ya se liberó, así que este es el único dato que distingue "salió de la planta".
   Estatus: string;
   // Igual que en buscarMasterPorEtiqueta: null mientras el pallet siga en bodega virtual. Con esto

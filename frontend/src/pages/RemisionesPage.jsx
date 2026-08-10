@@ -411,6 +411,7 @@ function ModalEscaneo({ titulo, descripcion, placeholder, Icono, pideLinea, onEs
 function PanelRemision({ remisionId, onClose, onCambio }) {
   const puedeEditar = usePuede("remisiones", "editar");
   const puedeImprimir = usePuede("remisiones", "imprimir");
+  const puedeAnular = usePuede("remisiones", "anular");
   const { aviso, mostrarAlerta, pedirConfirmacion, cerrar } = useAviso();
   const [remision, setRemision] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -632,9 +633,11 @@ function PanelRemision({ remisionId, onClose, onCambio }) {
                                 </td>
                               )}
                               <td className="px-3 py-2 font-mono">{l.Correlativo}</td>
-                              <td className="px-3 py-2 font-mono text-gray-500">{l.PalletCodigo}</td>
-                              <td className="px-3 py-2 font-mono">{l.CodigoPedido}</td>
-                              <td className="px-3 py-2">
+                              {/* Mismo motivo que en la tabla de masters del polín: con ancho fijo,
+                                  un texto largo sin `truncate` se pinta encima de la celda vecina. */}
+                              <td className="px-3 py-2 font-mono text-gray-500 truncate">{l.PalletCodigo}</td>
+                              <td className="px-3 py-2 font-mono truncate" title={l.CodigoPedido}>{l.CodigoPedido}</td>
+                              <td className="px-3 py-2 truncate" title={`${l.NombreCliente}${l.NombreSubcliente ? "-" + l.NombreSubcliente : ""}`}>
                                 <span className={l.CalzaConDestino === false ? "text-amber-700 font-medium" : ""}>
                                   {l.NombreCliente}{l.NombreSubcliente ? `-${l.NombreSubcliente}` : ""}
                                 </span>
@@ -644,8 +647,10 @@ function PanelRemision({ remisionId, onClose, onCambio }) {
                                   </span>
                                 )}
                               </td>
-                              <td className="px-3 py-2 font-mono whitespace-nowrap">{l.Lote}</td>
-                              <td className="px-3 py-2 whitespace-nowrap">{l.DescripcionProceso} {l.DescripcionTalla} {l.DescripcionPresentacion}</td>
+                              <td className="px-3 py-2 font-mono truncate" title={l.Lote}>{l.Lote}</td>
+                              <td className="px-3 py-2 truncate" title={`${l.DescripcionProceso} ${l.DescripcionTalla} ${l.DescripcionPresentacion}`}>
+                                {l.DescripcionProceso} {l.DescripcionTalla} {l.DescripcionPresentacion}
+                              </td>
                               <td className="px-3 py-2 text-right">{l.PesoMasterKG.toFixed(2)}</td>
                               <td className="px-3 py-2 text-right">{l.PesoMasterLb.toFixed(2)}</td>
                               {editable && (
@@ -676,7 +681,7 @@ function PanelRemision({ remisionId, onClose, onCambio }) {
                 Imprimir
               </button>
             )}
-            {remision?.Estatus === "Confirmada" && puedeEditar && (
+            {remision?.Estatus === "Confirmada" && puedeAnular && (
               <button onClick={() => setModalAnular(true)}
                 className="px-4 py-2 rounded-lg text-sm font-semibold bg-red-600 text-white hover:bg-red-700 transition">
                 Anular

@@ -213,7 +213,7 @@ router.get("/", requireAuth, requirePerm("remisiones", "ver"), async (req: Reque
 });
 
 // GET /api/remisiones/disponibles/pallets — polines completos que se pueden despachar tal cual.
-// Solo Cerrados: un pallet Abierto sigue armándose en su área, y uno Desarmado/Despachado ya no
+// Solo Cerrados: un pallet Abierto sigue armándose en su área, y uno Despachado ya no
 // existe como unidad. Se excluyen los que tengan CUALQUIER master ya tomado por otra remisión
 // vigente — un polín se agrega entero o no se agrega.
 router.get("/disponibles/pallets", requireAuth, requirePerm("remisiones", "ver"), async (_req: Request, res: Response) => {
@@ -394,7 +394,7 @@ router.post("/", requireAuth, requirePerm("remisiones", "crear"), async (req: Re
       `;
       const fila: any[] = await tx.$queryRaw`SELECT LAST_INSERT_ID() AS id`;
       respuesta = { ok: true, RemisionId: Number(fila[0].id), Folio: folio };
-    });
+    }, { timeout: 30_000 });
 
     res.status(201).json(respuesta);
   } catch (err: any) {
@@ -486,7 +486,7 @@ router.delete("/:id", requireAuth, requirePerm("remisiones", "eliminar"), async 
     await prisma.$transaction(async (tx) => {
       await tx.$executeRaw`DELETE FROM RemisionDetalle WHERE RemisionId = ${remisionId}`;
       await tx.$executeRaw`DELETE FROM Remisiones WHERE RemisionId = ${remisionId}`;
-    });
+    }, { timeout: 30_000 });
     res.json({ ok: true });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -567,7 +567,6 @@ router.post("/:id/agregar-pallet", requireAuth, requirePerm("remisiones", "edita
       const pallet = palletRows[0];
       const palletId = Number(pallet.PalletId);
       if (pallet.Estatus === "Abierto") throw new ErrorNegocio(400, `El polín ${pallet.Codigo} sigue abierto — ciérralo antes de despacharlo`);
-      if (pallet.Estatus === "Desarmado") throw new ErrorNegocio(400, `El polín ${pallet.Codigo} está desarmado — escanea sus masters uno por uno`);
       if (pallet.Estatus !== "Cerrado") throw new ErrorNegocio(400, `El polín ${pallet.Codigo} está ${String(pallet.Estatus).toLowerCase()} — no se puede despachar`);
 
       // Se toman los masters DISPONIBLES, no "todos o ninguno": desde que se permite el picking caja
@@ -666,7 +665,7 @@ router.post("/:id/agregar-master", requireAuth, requirePerm("remisiones", "edita
         INSERT INTO RemisionDetalle (RemisionId, MasterId, LineaContenedor, AgregadoPor)
         VALUES (${remisionId}, ${masterId}, ${linea}, ${operador})
       `;
-    });
+    }, { timeout: 30_000 });
 
     const filas: any[] = await prisma.$queryRawUnsafe(`${MASTER_SELECT} WHERE m.MasterId = ? LIMIT 1`, masterId);
     res.status(201).json({ ok: true, Master: formatearMaster(filas[0]), Linea: lineaAsignada });
@@ -688,7 +687,7 @@ router.delete("/:id/detalle/:detalleId", requireAuth, requirePerm("remisiones", 
       quitadas = Number(await tx.$executeRaw`
         DELETE FROM RemisionDetalle WHERE DetalleId = ${detalleId} AND RemisionId = ${remisionId}
       `);
-    });
+    }, { timeout: 30_000 });
     if (!quitadas) { res.status(404).json({ error: "Línea no encontrada en esta remisión" }); return; }
     res.json({ ok: true });
   } catch (err: any) {
@@ -729,7 +728,7 @@ router.post("/:id/quitar-pallet", requireAuth, requirePerm("remisiones", "editar
 // POST /api/remisiones/:id/confirmar
 // Todo en una transacción: baja los masters, libera la posición de los polines que quedan vacíos y
 // escribe el kardex. Un polín queda "Despachado" solo si TODOS sus masters se van en esta remisión;
-// si salió parcial (sobras sueltas), el polín ya estaba Desarmado desde antes y no se toca.
+// si salió parcial, el polín conserva su posición y las cajas que no se llevaron.
 router.post("/:id/confirmar", requireAuth, requirePerm("remisiones", "editar"), async (req: Request, res: Response) => {
   try {
     const remisionId = Number(req.params.id);
@@ -823,7 +822,7 @@ router.post("/:id/confirmar", requireAuth, requirePerm("remisiones", "editar"), 
 // La posición física NO se restaura aunque el polín se despachara entero: otro polín pudo haberla
 // ocupado mientras tanto. El polín reaparece como "Cerrado sin posición", listo para reubicarse —
 // mismo criterio que ya usa la des-ubicación administrativa de bodega física.
-router.post("/:id/anular", requireAuth, requirePerm("remisiones", "editar"), async (req: Request, res: Response) => {
+router.post("/:id/anular", requireAuth, requirePerm("remisiones", "anular"), async (req: Request, res: Response) => {
   try {
     const remisionId = Number(req.params.id);
     const motivo = String(req.body.Motivo ?? "").trim();
@@ -846,23 +845,22 @@ router.post("/:id/anular", requireAuth, requirePerm("remisiones", "editar"), asy
         FOR UPDATE
       `;
 
-      // El polín vuelve primero: de ese estado depende a dónde regresa cada master. Si se había
-      // despachado entero, el producto vuelve armado (EnBodega); si el polín ya estaba desarmado,
-      // vuelve suelto — no hay a qué polín reintegrarlo.
+      // El polín vuelve primero a 'Cerrado' si se había despachado entero; recién ahí sus masters
+      // vuelven a ser carga normal suya.
       const palletIds = [...new Set(lineas.map(l => Number(l.PalletId)))];
       for (const palletId of palletIds) {
         await tx.$executeRaw`UPDATE Pallets SET Estatus = 'Cerrado' WHERE PalletId = ${palletId} AND Estatus = 'Despachado'`;
       }
 
-      // Agrupado igual que confirmar. Los masters se separan en dos grupos por el destino que les
-      // toca, así son dos UPDATE en vez de uno por master.
-      const aSuelto = lineas.filter(l => l.PalletEstatus === "Desarmado").map(l => Number(l.MasterId));
-      const aEnBodega = lineas.filter(l => l.PalletEstatus !== "Desarmado").map(l => Number(l.MasterId));
-      for (const [estatus, ids] of [["Suelto", aSuelto], ["EnBodega", aEnBodega]] as [string, number[]][]) {
-        if (!ids.length) continue;
+      // Agrupado igual que confirmar. Todos vuelven a 'EnBodega': el master siempre pertenece a un
+      // polín (el suyo de origen), y ese polín está Cerrado o Abierto — en ambos casos la caja es
+      // carga normal de ese polín. (Antes había un caso 'Suelto' para polines desarmados; esa
+      // operación se eliminó el 8 ago 2026.)
+      const masterIdsAnular = lineas.map(l => Number(l.MasterId));
+      if (masterIdsAnular.length) {
         await tx.$executeRawUnsafe(
-          `UPDATE Masters SET Estatus = ? WHERE MasterId IN (${ids.map(() => "?").join(",")})`,
-          estatus, ...ids
+          `UPDATE Masters SET Estatus = 'EnBodega' WHERE MasterId IN (${masterIdsAnular.map(() => "?").join(",")})`,
+          ...masterIdsAnular
         );
       }
       if (lineas.length) {

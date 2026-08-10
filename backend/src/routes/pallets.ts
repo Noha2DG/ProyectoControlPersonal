@@ -63,7 +63,11 @@ router.get("/", requireAuth, requirePerm("bodega", "ver"), async (req: Request, 
              p.BodegaVirtualCodigo, bv.Nombre AS NombreBodegaVirtual,
              p.PosicionId, po.Codigo AS PosicionCodigo,
              p.CreadoPor, p.CreadoEn, p.CerradoPor, p.CerradoEn,
-             (SELECT COUNT(*) FROM Masters m WHERE m.PalletId = p.PalletId) AS CantidadMasters
+             -- Lo que SIGUE en el polín vs. lo que ya se despachó. Antes se contaba todo junto, así
+             -- que un polín al que una remisión le sacó la mitad seguía mostrándose lleno y no había
+             -- cómo detectar los que quedaron a medias ocupando una posición entera.
+             (SELECT COUNT(*) FROM Masters m WHERE m.PalletId = p.PalletId AND m.Estatus <> 'Salido') AS CantidadMasters,
+             (SELECT COUNT(*) FROM Masters m WHERE m.PalletId = p.PalletId AND m.Estatus = 'Salido') AS CantidadSalidos
       FROM Pallets p
       LEFT JOIN Origen org ON p.Origen = org.Codigo
       LEFT JOIN BodegaVirtual bv ON p.BodegaVirtualCodigo = bv.Codigo
@@ -73,7 +77,15 @@ router.get("/", requireAuth, requirePerm("bodega", "ver"), async (req: Request, 
     res.json(rows.map(r => {
       const cantidadMaster = r.CantidadMaster == null ? null : Number(r.CantidadMaster);
       const cantidadMasters = Number(r.CantidadMasters);
-      return { ...r, PalletId: Number(r.PalletId), CantidadMaster: cantidadMaster, CantidadMasters: cantidadMasters, Cuadre: calcularCuadre(cantidadMaster, cantidadMasters) };
+      const cantidadSalidos = Number(r.CantidadSalidos);
+      return {
+        ...r, PalletId: Number(r.PalletId), CantidadMaster: cantidadMaster,
+        CantidadMasters: cantidadMasters, CantidadSalidos: cantidadSalidos,
+        // El Cuadre sigue midiendo lo que se ARMÓ (meta vs. total escaneado alguna vez), no lo que
+        // queda: un polín que se armó completo y después despachó la mitad no fue "incompleto" al
+        // armarlo. Lo que quedó a medias se ve en CantidadMasters/CantidadSalidos.
+        Cuadre: calcularCuadre(cantidadMaster, cantidadMasters + cantidadSalidos),
+      };
     }));
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -94,11 +106,16 @@ router.get("/:id", requireAuth, requirePerm("bodega", "ver"), async (req: Reques
       WHERE p.PalletId = ${palletId} LIMIT 1
     `;
     if (!rows.length) { res.status(404).json({ error: "Pallet no encontrado" }); return; }
+    // Se devuelven TODOS los masters, incluidos los ya despachados: el polín es también un registro
+    // histórico. Los conteos sí separan, para que la pantalla pueda mostrar qué queda de verdad.
     const masters = await obtenerMastersDePallet(palletId);
     const cantidadMaster = rows[0].CantidadMaster == null ? null : Number(rows[0].CantidadMaster);
+    const salidos = masters.filter((m: any) => m.Estatus === "Salido").length;
     res.json({
       ...rows[0], PalletId: Number(rows[0].PalletId), CantidadMaster: cantidadMaster,
-      Masters: masters, Cuadre: calcularCuadre(cantidadMaster, masters.length),
+      Masters: masters,
+      CantidadMasters: masters.length - salidos, CantidadSalidos: salidos,
+      Cuadre: calcularCuadre(cantidadMaster, masters.length),
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -146,7 +163,7 @@ router.post("/", requireAuth, requirePerm("bodega", "escanear"), async (req: Req
       `;
       const fila: any[] = await tx.$queryRaw`SELECT LAST_INSERT_ID() AS id`;
       nuevoPalletId = Number(fila[0].id);
-    });
+    }, { timeout: 30_000 });
 
     res.status(201).json({ ok: true, PalletId: nuevoPalletId, Codigo: codigo });
   } catch (err: any) {
@@ -166,11 +183,31 @@ router.post("/:id/escanear", requireAuth, requirePerm("bodega", "escanear"), asy
     const etiquetaId = parseCorrelativo(req.body.Correlativo);
     if (!etiquetaId) { res.status(400).json({ error: "Correlativo inválido" }); return; }
     const operador = getOperador(req);
+    let traslado: { PalletOrigen: string } | null = null;
 
     await prisma.$transaction(async (tx) => {
-      const palletRows: any[] = await tx.$queryRaw`SELECT Estatus FROM Pallets WHERE PalletId = ${palletId} FOR UPDATE`;
+      const palletRows: any[] = await tx.$queryRaw`
+        SELECT Codigo, Estatus, CantidadMaster FROM Pallets WHERE PalletId = ${palletId} FOR UPDATE
+      `;
       if (!palletRows.length) throw new ErrorNegocio(404, "Pallet no encontrado");
       if (palletRows[0].Estatus !== "Abierto") throw new ErrorNegocio(400, "Este pallet no está abierto");
+
+      // CantidadMaster es la CAPACIDAD del polín y sí frena el escaneo (decisión del usuario, 8 ago
+      // 2026 — antes era solo una meta de referencia que se informaba como "Sobrante"): si se pide
+      // el número al crearlo, es porque define cuánto cabe.
+      // Se cuenta lo que está FÍSICAMENTE encima (Estatus <> 'Salido'): si a un polín le despacharon
+      // 2 cajas, vuelve a haber lugar para 2. Los polines viejos sin cantidad declarada no tienen tope.
+      // El FOR UPDATE de arriba serializa este chequeo contra dos escaneos simultáneos al mismo polín.
+      const capacidad = palletRows[0].CantidadMaster == null ? null : Number(palletRows[0].CantidadMaster);
+      if (capacidad != null) {
+        const carga: any[] = await tx.$queryRaw`
+          SELECT COUNT(*) AS n FROM Masters WHERE PalletId = ${palletId} AND Estatus <> 'Salido'
+        `;
+        if (Number(carga[0].n) >= capacidad) {
+          throw new ErrorNegocio(400,
+            `El polín ${palletRows[0].Codigo} ya llegó a su capacidad de ${capacidad} master(s). Ciérralo y abre otro, o ajusta su capacidad si se declaró mal.`);
+        }
+      }
 
       const etiquetaRows: any[] = await tx.$queryRaw`
         SELECT EtiquetaId, OrdenId, Estatus FROM EtiquetaImpresa WHERE EtiquetaId = ${etiquetaId} LIMIT 1
@@ -178,10 +215,42 @@ router.post("/:id/escanear", requireAuth, requirePerm("bodega", "escanear"), asy
       if (!etiquetaRows.length) throw new ErrorNegocio(404, "QR no reconocido");
       if (etiquetaRows[0].Estatus !== "Activa") throw new ErrorNegocio(400, "Esta etiqueta está anulada, no se puede ingresar a bodega");
 
+      // Un master ya escaneado puede ser un doble-escaneo (error) o una CONSOLIDACIÓN de sobrantes
+      // (legítima): quedaron 5 cajas de un polín y se pasan a otro para no dejar media posición de
+      // rack ocupada. Lo que distingue un caso del otro es que el polín de ORIGEN esté Abierto: un
+      // polín abierto se está trabajando, sus cajas están accesibles; uno Cerrado está sellado.
+      // (Antes esto exigía "desarmar" el polín origen; esa operación se eliminó el 8 ago 2026 por
+      // redundante — reabrir ya deja el polín en condiciones de dar y recibir cajas.)
       const yaEscaneado = await buscarMasterPorEtiqueta(tx, etiquetaId);
       if (yaEscaneado) {
-        const fecha = new Date(yaEscaneado.FechaIngreso).toLocaleString("es-GT");
-        throw new ErrorNegocio(400, `Este master ya fue escaneado (pallet ${yaEscaneado.PalletCodigo}, ${fecha})`);
+        if (yaEscaneado.Estatus === "Salido") {
+          throw new ErrorNegocio(400,
+            `Este master ya salió de bodega${yaEscaneado.RemisionFolio ? ` en la remisión ${yaEscaneado.RemisionFolio}` : ""} — no puede volver a escanearse.`);
+        }
+        if (yaEscaneado.RemisionFolio) {
+          throw new ErrorNegocio(400, `Este master está comprometido en la remisión ${yaEscaneado.RemisionFolio} — quítalo de ahí antes de moverlo.`);
+        }
+        if (yaEscaneado.PalletId === palletId) {
+          throw new ErrorNegocio(400, "Este master ya está en este mismo pallet");
+        }
+        if (yaEscaneado.PalletEstatus !== "Abierto") {
+          const fecha = new Date(yaEscaneado.FechaIngreso).toLocaleString("es-GT");
+          throw new ErrorNegocio(400,
+            `Este master está en el polín ${yaEscaneado.PalletCodigo} (${fecha}), que está ${String(yaEscaneado.PalletEstatus).toLowerCase()}. Para moverlo aquí, reabre primero ese polín.`);
+        }
+
+        // Traslado: se MUEVE la fila, no se inserta una nueva. El master ya está contado en el techo
+        // de su línea de pedido — un INSERT inflaría ese conteo y terminaría bloqueando producción
+        // legítima de la línea. Por lo mismo, aquí NO se revalida el techo: el total no cambia.
+        // FechaIngreso/IngresadoPor se conservan: son su entrada original a bodega, y el traslado
+        // queda registrado aparte en el kardex.
+        await tx.$executeRaw`UPDATE Masters SET PalletId = ${palletId}, Estatus = 'EnBodega' WHERE MasterId = ${yaEscaneado.MasterId}`;
+        await tx.$executeRaw`
+          INSERT INTO MovimientosBodega (PalletId, PalletOrigenId, MasterId, Tipo, PosicionOrigenId, PosicionDestinoId, Usuario, Motivo)
+          VALUES (${palletId}, ${yaEscaneado.PalletId}, ${yaEscaneado.MasterId}, 'TRASLADO', NULL, NULL, ${operador}, ${`Consolidado desde el polín ${yaEscaneado.PalletCodigo}`})
+        `;
+        traslado = { PalletOrigen: yaEscaneado.PalletCodigo };
+        return;
       }
 
       const ordenRows: any[] = await tx.$queryRaw`SELECT DetalleId FROM OrdenEtiquetado WHERE OrdenId = ${Number(etiquetaRows[0].OrdenId)} LIMIT 1`;
@@ -206,7 +275,11 @@ router.post("/:id/escanear", requireAuth, requirePerm("bodega", "escanear"), asy
 
     const masterRows: any[] = await prisma.$queryRawUnsafe(`${MASTER_SELECT} WHERE m.PalletId = ? AND m.EtiquetaId = ? LIMIT 1`, palletId, etiquetaId);
     const cantidadRows: any[] = await prisma.$queryRaw`SELECT COUNT(*) AS n FROM Masters WHERE PalletId = ${palletId}`;
-    res.status(201).json({ ok: true, Master: formatearMaster(masterRows[0]), CantidadMasters: Number(cantidadRows[0].n) });
+    res.status(201).json({
+      ok: true, Master: formatearMaster(masterRows[0]), CantidadMasters: Number(cantidadRows[0].n),
+      // El frontend lo usa para avisar que la caja vino de otro polín y no es un ingreso nuevo.
+      Traslado: traslado != null, PalletOrigen: traslado?.PalletOrigen ?? null,
+    });
   } catch (err: any) {
     if (err instanceof ErrorNegocio) { res.status(err.status).json({ error: err.message }); return; }
     if (err.message?.includes("Duplicate")) { res.status(400).json({ error: "Este master ya fue escaneado" }); return; }
@@ -262,52 +335,95 @@ router.put("/:id/reabrir", requireAuth, requirePerm("bodega", "editar"), async (
   }
 });
 
-// POST /api/pallets/:id/desarmar  { Motivo } — el polín se rompe DE VERDAD.
-// Ya NO es un requisito para remisionar (revisado 6 ago 2026): una remisión puede tomar cajas de un
-// polín armado y posicionado, dejándolo en su lugar con el resto — sacar 10 de 50 no destruye nada.
-// Esto queda solo para cuando el polín efectivamente deja de existir como unidad: suelta su posición,
-// sus masters quedan sueltos y no se puede volver a armar; el sobrante se consolida escaneándolo en
-// un polín nuevo, que sí se reubica.
-// No confundir con "reabrir": reabrir devuelve el polín a la fila de escaneo de ENTRADA (y por eso
-// está prohibido si ya se posicionó). Desarmar deja el polín cerrado para siempre.
-router.post("/:id/desarmar", requireAuth, requirePerm("bodega", "editar"), async (req: Request, res: Response) => {
+// PUT /api/pallets/:id/capacidad  { CantidadMaster } — corrige la capacidad declarada.
+// Existe porque desde que la capacidad FRENA el escaneo, un número mal tecleado al crear el polín
+// dejaría al operador trabado sin salida: no podría meter la caja 51 en un polín donde sí cabe.
+// Solo con el polín Abierto, y nunca por debajo de lo que ya tiene encima (eso lo dejaría en un
+// estado imposible: más carga que capacidad).
+router.put("/:id/capacidad", requireAuth, requirePerm("bodega", "escanear"), async (req: Request, res: Response) => {
   try {
     const palletId = Number(req.params.id);
-    const motivo = String(req.body.Motivo ?? "").trim();
-    if (!motivo) { res.status(400).json({ error: "El motivo del desarme es requerido" }); return; }
+    const nueva = Number(req.body.CantidadMaster);
+    if (!Number.isInteger(nueva) || nueva <= 0) {
+      res.status(400).json({ error: "La capacidad debe ser un entero positivo" });
+      return;
+    }
 
-    const operador = getOperador(req);
-    let respuesta: any = null;
     await prisma.$transaction(async (tx) => {
       const rows: any[] = await tx.$queryRaw`
-        SELECT PalletId, Codigo, Estatus, PosicionId FROM Pallets WHERE PalletId = ${palletId} LIMIT 1 FOR UPDATE
+        SELECT Codigo, Estatus FROM Pallets WHERE PalletId = ${palletId} LIMIT 1 FOR UPDATE
       `;
       if (!rows.length) throw new ErrorNegocio(404, "Pallet no encontrado");
-      const pallet = rows[0];
-      if (pallet.Estatus === "Abierto") throw new ErrorNegocio(400, `El polín ${pallet.Codigo} sigue abierto — si quieres sacarle un master, quítalo desde el panel de escaneo`);
-      if (pallet.Estatus === "Desarmado") throw new ErrorNegocio(400, `El polín ${pallet.Codigo} ya está desarmado`);
-      if (pallet.Estatus !== "Cerrado") throw new ErrorNegocio(400, `El polín ${pallet.Codigo} está ${String(pallet.Estatus).toLowerCase()} — no se puede desarmar`);
+      if (rows[0].Estatus !== "Abierto") throw new ErrorNegocio(400, "Solo se puede ajustar la capacidad de un polín Abierto");
 
-      const masters: any[] = await tx.$queryRaw`SELECT MasterId FROM Masters WHERE PalletId = ${palletId} AND Estatus = 'EnBodega' FOR UPDATE`;
-      if (!masters.length) throw new ErrorNegocio(400, `El polín ${pallet.Codigo} no tiene masters en bodega que desarmar`);
-
-      // Un polín ya comprometido en una remisión en borrador se agregó ENTERO; desarmarlo a media
-      // captura dejaría ese documento con líneas que ya no corresponden a un polín existente.
-      const enRemision: any[] = await tx.$queryRaw`
-        SELECT r.Folio FROM RemisionDetalle rd
-        JOIN Remisiones r ON rd.RemisionId = r.RemisionId
-        JOIN Masters m ON rd.MasterId = m.MasterId
-        WHERE m.PalletId = ${palletId} AND rd.Vigente = 1 LIMIT 1
+      const carga: any[] = await tx.$queryRaw`
+        SELECT COUNT(*) AS n FROM Masters WHERE PalletId = ${palletId} AND Estatus <> 'Salido'
       `;
-      if (enRemision.length) throw new ErrorNegocio(400, `El polín ${pallet.Codigo} ya está en la remisión ${enRemision[0].Folio} — quítalo de ahí antes de desarmarlo`);
+      if (nueva < Number(carga[0].n)) {
+        throw new ErrorNegocio(400, `El polín ${rows[0].Codigo} ya tiene ${Number(carga[0].n)} master(s) encima — la capacidad no puede quedar por debajo de eso.`);
+      }
+      await tx.$executeRaw`UPDATE Pallets SET CantidadMaster = ${nueva} WHERE PalletId = ${palletId}`;
+    }, { timeout: 30_000 });
 
-      await tx.$executeRaw`UPDATE Masters SET Estatus = 'Suelto' WHERE PalletId = ${palletId} AND Estatus = 'EnBodega'`;
-      await tx.$executeRaw`UPDATE Pallets SET Estatus = 'Desarmado', PosicionId = NULL WHERE PalletId = ${palletId}`;
+    res.json({ ok: true, CantidadMaster: nueva });
+  } catch (err: any) {
+    if (err instanceof ErrorNegocio) { res.status(err.status).json({ error: err.message }); return; }
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE /api/pallets/:id/masters/:masterId — saca un master del pallet. Solo con el pallet Abierto.
+// Hay DOS casos distintos según cómo llegó el master aquí:
+//   - Escaneado directo (ingreso normal): se BORRA la fila de Masters. "Nunca entró a bodega", y el
+//     correlativo queda libre para re-escanearse.
+//   - Llegado por TRASLADO (consolidación de sobrantes): NO se puede borrar — ese master sí existe
+//     en bodega desde antes, borrarlo lo haría desaparecer del inventario. Se DESHACE el traslado:
+//     vuelve a su polín de origen, que es de donde salió.
+//     Además la fila de Masters está referenciada por el kardex (fk_movbodega_master), así que un
+//     DELETE reventaba con error de llave foránea — que es como se detectó este caso.
+router.delete("/:id/masters/:masterId", requireAuth, requirePerm("bodega", "editar"), async (req: Request, res: Response) => {
+  try {
+    const palletId = Number(req.params.id);
+    const masterId = Number(req.params.masterId);
+    const operador = getOperador(req);
+    let respuesta: any = { ok: true };
+
+    await prisma.$transaction(async (tx) => {
+      const palletRows: any[] = await tx.$queryRaw`SELECT Estatus FROM Pallets WHERE PalletId = ${palletId} LIMIT 1 FOR UPDATE`;
+      if (!palletRows.length) throw new ErrorNegocio(404, "Pallet no encontrado");
+      if (palletRows[0].Estatus !== "Abierto") throw new ErrorNegocio(400, "Este pallet no está abierto, no se pueden quitar masters");
+
+      const masterRows: any[] = await tx.$queryRaw`
+        SELECT MasterId, Estatus FROM Masters WHERE MasterId = ${masterId} AND PalletId = ${palletId} LIMIT 1 FOR UPDATE
+      `;
+      if (!masterRows.length) throw new ErrorNegocio(404, "Master no encontrado en este pallet");
+
+      // El último traslado hacia ESTE pallet dice de dónde vino. Si no hay ninguno, el master
+      // entró por escaneo normal y se puede borrar.
+      const trasladoRows: any[] = await tx.$queryRaw`
+        SELECT mb.PalletOrigenId, po.Codigo AS PalletOrigenCodigo, po.Estatus AS PalletOrigenEstatus
+        FROM MovimientosBodega mb
+        LEFT JOIN Pallets po ON mb.PalletOrigenId = po.PalletId
+        WHERE mb.MasterId = ${masterId} AND mb.Tipo = 'TRASLADO' AND mb.PalletId = ${palletId}
+        ORDER BY mb.MovimientoId DESC LIMIT 1
+      `;
+
+      if (!trasladoRows.length || trasladoRows[0].PalletOrigenId == null) {
+        await tx.$executeRaw`DELETE FROM Masters WHERE MasterId = ${masterId} AND PalletId = ${palletId}`;
+        respuesta = { ok: true, Accion: "Eliminado" };
+        return;
+      }
+
+      // Vuelve como EnBodega: su polín de origen está Abierto (es el único desde el que se pudo
+      // haber movido), así que ahí las cajas son carga normal del polín.
+      const origenId = Number(trasladoRows[0].PalletOrigenId);
+      await tx.$executeRaw`UPDATE Masters SET PalletId = ${origenId}, Estatus = 'EnBodega' WHERE MasterId = ${masterId}`;
       await tx.$executeRaw`
-        INSERT INTO MovimientosBodega (PalletId, Tipo, PosicionOrigenId, PosicionDestinoId, Usuario, Motivo)
-        VALUES (${palletId}, 'DESARME', ${pallet.PosicionId == null ? null : Number(pallet.PosicionId)}, NULL, ${operador}, ${motivo})
+        INSERT INTO MovimientosBodega (PalletId, PalletOrigenId, MasterId, Tipo, PosicionOrigenId, PosicionDestinoId, Usuario, Motivo)
+        VALUES (${origenId}, ${palletId}, ${masterId}, 'TRASLADO', NULL, NULL, ${operador},
+                ${`Traslado deshecho: vuelve al polín ${trasladoRows[0].PalletOrigenCodigo}`})
       `;
-      respuesta = { ok: true, PalletCodigo: pallet.Codigo, MastersLiberados: masters.length };
+      respuesta = { ok: true, Accion: "TrasladoDeshecho", PalletOrigen: trasladoRows[0].PalletOrigenCodigo };
     }, { timeout: 30_000 });
 
     res.json(respuesta);
@@ -317,38 +433,54 @@ router.post("/:id/desarmar", requireAuth, requirePerm("bodega", "editar"), async
   }
 });
 
-// DELETE /api/pallets/:id/masters/:masterId — quita un master mal escaneado del pallet (libera el
-// correlativo para poder re-escanearse). Solo mientras el pallet siga Abierto.
-router.delete("/:id/masters/:masterId", requireAuth, requirePerm("bodega", "editar"), async (req: Request, res: Response) => {
+// DELETE /api/pallets/:id — solo si está Abierto, sin masters y SIN historia en el kardex.
+// Lo del kardex es nuevo (8 ago 2026): desde que existen los traslados, un polín puede quedar vacío
+// pero haber participado en movimientos (recibió cajas y se las quitaron). Borrarlo destruiría ese
+// registro — y el kardex es inmutable por diseño, de ahí el error de llave foránea que aparecía.
+// La salida para ese caso es cancelarlo, no borrarlo: conserva la historia y lo saca de la operación.
+router.delete("/:id", requireAuth, requirePerm("bodega", "eliminar"), async (req: Request, res: Response) => {
   try {
     const palletId = Number(req.params.id);
-    const masterId = Number(req.params.masterId);
-    const palletRows: any[] = await prisma.$queryRaw`SELECT Estatus FROM Pallets WHERE PalletId = ${palletId} LIMIT 1`;
-    if (!palletRows.length) { res.status(404).json({ error: "Pallet no encontrado" }); return; }
-    if (palletRows[0].Estatus !== "Abierto") { res.status(400).json({ error: "Este pallet no está abierto, no se pueden quitar masters" }); return; }
+    const rows: any[] = await prisma.$queryRaw`
+      SELECT p.Codigo, p.Estatus, (SELECT COUNT(*) FROM Masters m WHERE m.PalletId = p.PalletId) AS n,
+             (SELECT COUNT(*) FROM MovimientosBodega mb
+              WHERE mb.PalletId = p.PalletId OR mb.PalletOrigenId = p.PalletId) AS movimientos
+      FROM Pallets p WHERE p.PalletId = ${palletId} LIMIT 1
+    `;
+    if (!rows.length) { res.status(404).json({ error: "Pallet no encontrado" }); return; }
+    if (rows[0].Estatus !== "Abierto") { res.status(400).json({ error: "Solo se puede eliminar un pallet Abierto" }); return; }
+    if (Number(rows[0].n) > 0) { res.status(400).json({ error: "Este pallet ya tiene masters escaneados, no se puede eliminar" }); return; }
+    if (Number(rows[0].movimientos) > 0) {
+      res.status(400).json({
+        error: `El polín ${rows[0].Codigo} ya tiene movimientos registrados en el kardex (recibió o soltó cajas), así que no se puede borrar sin perder esa historia. Cancélalo en su lugar.`,
+      });
+      return;
+    }
 
-    const result = await prisma.$executeRaw`DELETE FROM Masters WHERE MasterId = ${masterId} AND PalletId = ${palletId}`;
-    if (!result) { res.status(404).json({ error: "Master no encontrado en este pallet" }); return; }
+    await prisma.$executeRaw`DELETE FROM Pallets WHERE PalletId = ${palletId}`;
     res.json({ ok: true });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// DELETE /api/pallets/:id — solo si está Abierto y sin masters.
-router.delete("/:id", requireAuth, requirePerm("bodega", "eliminar"), async (req: Request, res: Response) => {
+// POST /api/pallets/:id/cancelar — da de baja un polín Abierto y vacío conservando su historia.
+// Es la alternativa a eliminar cuando el polín ya tocó el kardex. 'Cancelado' queda fuera de todas
+// las colas operativas: /pendientes y /ubicar filtran por 'Cerrado', y no puede recibir escaneos.
+router.post("/:id/cancelar", requireAuth, requirePerm("bodega", "eliminar"), async (req: Request, res: Response) => {
   try {
     const palletId = Number(req.params.id);
     const rows: any[] = await prisma.$queryRaw`
-      SELECT p.Estatus, (SELECT COUNT(*) FROM Masters m WHERE m.PalletId = p.PalletId) AS n
+      SELECT p.Codigo, p.Estatus, (SELECT COUNT(*) FROM Masters m WHERE m.PalletId = p.PalletId) AS n
       FROM Pallets p WHERE p.PalletId = ${palletId} LIMIT 1
     `;
     if (!rows.length) { res.status(404).json({ error: "Pallet no encontrado" }); return; }
-    if (rows[0].Estatus !== "Abierto") { res.status(400).json({ error: "Solo se puede eliminar un pallet Abierto" }); return; }
-    if (Number(rows[0].n) > 0) { res.status(400).json({ error: "Este pallet ya tiene masters escaneados, no se puede eliminar" }); return; }
+    if (rows[0].Estatus === "Cancelado") { res.status(400).json({ error: `El polín ${rows[0].Codigo} ya está cancelado` }); return; }
+    if (rows[0].Estatus !== "Abierto") { res.status(400).json({ error: "Solo se puede cancelar un polín Abierto" }); return; }
+    if (Number(rows[0].n) > 0) { res.status(400).json({ error: "Este polín tiene masters escaneados — quítalos antes de cancelarlo" }); return; }
 
-    await prisma.$executeRaw`DELETE FROM Pallets WHERE PalletId = ${palletId}`;
-    res.json({ ok: true });
+    await prisma.$executeRaw`UPDATE Pallets SET Estatus = 'Cancelado' WHERE PalletId = ${palletId}`;
+    res.json({ ok: true, Codigo: rows[0].Codigo });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

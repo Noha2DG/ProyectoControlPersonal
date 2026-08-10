@@ -3,7 +3,6 @@ import { authHeader, usePuede } from "../context/AuthContext.jsx";
 import { useColWidths, Th, Colgroup } from "../components/ResizableTh.jsx";
 import ConsultarEtiquetaModal from "../components/ConsultarEtiquetaModal.jsx";
 import AvisoModal from "../components/AvisoModal.jsx";
-import ModalMotivo from "../components/ModalMotivo.jsx";
 import HojaPalletModal from "../components/HojaPalletModal.jsx";
 import { useAviso } from "../hooks/useAviso.js";
 
@@ -17,9 +16,7 @@ const PALLETS_COLS = Object.keys(PALLETS_COL_DEFAULTS);
 const ESTATUS_BADGE = {
   Abierto:    "bg-blue-100 text-blue-700",
   Cerrado:    "bg-green-100 text-green-700",
-  // Estados de SALIDA (ver remisiones.ts): Desarmado = se abrió para despachar parte de su contenido
-  // y sus masters quedaron sueltos; Despachado = salió completo en una remisión confirmada.
-  Desarmado:  "bg-amber-100 text-amber-700",
+  // Despachado = salió completo en una remisión confirmada (ver remisiones.ts).
   Despachado: "bg-slate-200 text-slate-600",
   Cancelado:  "bg-gray-100 text-gray-500",
 };
@@ -57,7 +54,6 @@ function PanelEscaneo({ palletId, onClose, onCambio }) {
   const [mensaje, setMensaje] = useState(null); // { ok: bool, texto }
   const [mostrarConsulta, setMostrarConsulta] = useState(false);
   const [mostrarHoja, setMostrarHoja] = useState(false);
-  const [modalDesarmar, setModalDesarmar] = useState(false);
   const inputRef = useRef(null);
   // Candado síncrono contra doble envío — el input NUNCA se deshabilita (deshabilitar un <input>
   // enfocado le quita el foco en el navegador, y a 50 masters/min el lector no puede darse el lujo
@@ -76,6 +72,10 @@ function PanelEscaneo({ palletId, onClose, onCambio }) {
 
   const abierto = pallet?.Estatus === "Abierto";
   const puedeQuitar = abierto && puedeEditar;
+  // "Encima del polín" = lo que no salió. Es la base tanto del contador como del cupo, porque una
+  // caja despachada libera lugar físico real.
+  const enPolin = pallet?.Masters.filter(m => m.Estatus !== "Salido").length ?? 0;
+  const cupoLibre = pallet?.CantidadMaster != null ? Math.max(0, pallet.CantidadMaster - enPolin) : null;
   const MASTERS_COLS = puedeQuitar ? [...MASTERS_COLS_BASE, "acciones"] : MASTERS_COLS_BASE;
 
   const handleEscanear = async (e) => {
@@ -93,7 +93,10 @@ function PanelEscaneo({ palletId, onClose, onCambio }) {
       const data = await leerJSON(res);
       if (res.ok) {
         const m = data.Master;
-        setMensaje({ ok: true, texto: `${m.Correlativo} — ${m.CodigoPedido} · ${m.NombreCliente}${m.NombreSubcliente ? "-" + m.NombreSubcliente : ""} · Lote ${m.Lote}` });
+        // Un traslado se ve distinto de un ingreso nuevo: si la caja vino de otro polín, el operador
+        // tiene que notarlo (no es producción recién escaneada, es sobrante consolidado).
+        const origen = data.Traslado ? ` · trasladado desde ${data.PalletOrigen}` : "";
+        setMensaje({ ok: true, texto: `${m.Correlativo} — ${m.CodigoPedido} · ${m.NombreCliente}${m.NombreSubcliente ? "-" + m.NombreSubcliente : ""} · Lote ${m.Lote}${origen}` });
         // Se agrega el master ya devuelto por /escanear en vez de volver a pedir GET /:id — ese
         // endpoint reconstruye TODOS los masters del pallet con un join de 8 tablas, y repetirlo en
         // cada escaneo lo vuelve O(n²) según se llena el pallet (hasta 50 masters). Con esto el
@@ -101,7 +104,13 @@ function PanelEscaneo({ palletId, onClose, onCambio }) {
         setPallet(prev => {
           if (!prev) return prev;
           const masters = [...prev.Masters, m];
-          return { ...prev, Masters: masters, Cuadre: calcularCuadre(prev.CantidadMaster, data.CantidadMasters ?? masters.length) };
+          return {
+            ...prev, Masters: masters,
+            // El master recién escaneado siempre entra EnBodega, así que el contador de "en el polín"
+            // sube de a uno; los despachados no se tocan.
+            CantidadMasters: (prev.CantidadMasters ?? 0) + 1,
+            Cuadre: calcularCuadre(prev.CantidadMaster, masters.length),
+          };
         });
         // No se llama onCambio() aquí: eso dispara el GET de la lista completa de pallets en el
         // padre, y a 50 escaneos/minuto sería una consulta extra por cada uno sin necesidad — la
@@ -123,7 +132,14 @@ function PanelEscaneo({ palletId, onClose, onCambio }) {
     if (!confirmado) return;
     const res = await fetch(`${API}/${palletId}/masters/${masterId}`, { method: "DELETE", headers: authHeader() });
     const data = await leerJSON(res);
-    if (res.ok) { await fetchDetalle(); onCambio?.(); }
+    if (res.ok) {
+      // Si el master había llegado por traslado no se borra: vuelve a su polín de origen. Decirlo,
+      // porque el operador espera "desapareció" y en realidad quedó en otro lado.
+      if (data.Accion === "TrasladoDeshecho") {
+        await mostrarAlerta(`${correlativoTexto} volvió al polín ${data.PalletOrigen} (había llegado aquí por traslado).`, "exito");
+      }
+      await fetchDetalle(); onCambio?.();
+    }
     else await mostrarAlerta("Error: " + (data.error || "No se pudo quitar el master"));
   };
 
@@ -136,24 +152,28 @@ function PanelEscaneo({ palletId, onClose, onCambio }) {
     else await mostrarAlerta("Error: " + (data.error || "No se pudo cerrar el pallet"));
   };
 
+  // La capacidad frena el escaneo, así que tiene que ser corregible: un número mal tecleado al crear
+  // el polín dejaría al operador trabado sin poder meter una caja que sí cabe.
+  const handleAjustarCapacidad = async () => {
+    const actual = pallet?.CantidadMaster ?? "";
+    const valor = window.prompt(`Capacidad del polín ${pallet?.Codigo ?? ""} (cuántos masters caben):`, String(actual));
+    if (valor == null) return;
+    const res = await fetch(`${API}/${palletId}/capacidad`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", ...authHeader() },
+      body: JSON.stringify({ CantidadMaster: Number(valor) }),
+    });
+    const data = await leerJSON(res);
+    if (res.ok) { await fetchDetalle(); onCambio?.(); }
+    else await mostrarAlerta("Error: " + (data.error || "No se pudo ajustar la capacidad"));
+  };
+
+  // La capacidad frena el escaneo, así que tiene que ser corregible: un número mal tecleado al crear
   const handleReabrir = async () => {
     const res = await fetch(`${API}/${palletId}/reabrir`, { method: "PUT", headers: authHeader() });
     const data = await leerJSON(res);
     if (res.ok) { await fetchDetalle(); onCambio?.(); }
     else await mostrarAlerta("Error: " + (data.error || "No se pudo reabrir el pallet"));
-  };
-
-  const handleDesarmar = async (motivo) => {
-    const res = await fetch(`${API}/${palletId}/desarmar`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...authHeader() },
-      body: JSON.stringify({ Motivo: motivo }),
-    });
-    const data = await leerJSON(res);
-    if (!res.ok) throw new Error(data.error || "No se pudo desarmar el polín");
-    setModalDesarmar(false);
-    await fetchDetalle();
-    onCambio?.();
   };
 
   return (
@@ -208,13 +228,29 @@ function PanelEscaneo({ palletId, onClose, onCambio }) {
               {abierto && puedeEscanear && (
                 <form onSubmit={handleEscanear} className="mb-3">
                   <div className="flex items-end justify-between gap-3 mb-1">
-                    <label className="block text-xs font-medium text-gray-500">Escanear QR del master</label>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500">Escanear QR del master</label>
+                      {/* El cupo restante se muestra ANTES de escanear: la capacidad ahora frena, y
+                          enterarse al toparse con el error es tarde cuando ya tenés la caja en la mano. */}
+                      {pallet?.CantidadMaster != null && (
+                        <p className="text-[11px] text-gray-400 mt-0.5">
+                          {cupoLibre > 0
+                            ? <>Caben <span className="font-semibold text-gray-600">{cupoLibre}</span> más (capacidad {pallet.CantidadMaster})</>
+                            : <span className="text-amber-700 font-semibold">Capacidad llena ({pallet.CantidadMaster})</span>}
+                          {puedeEscanear && (
+                            <button type="button" onClick={handleAjustarCapacidad} className="ml-2 text-blue-600 hover:text-blue-800 underline">ajustar</button>
+                          )}
+                        </p>
+                      )}
+                    </div>
                     <div className="text-center px-3 py-1 rounded-lg bg-blue-50 border border-blue-100">
                       <div className="text-sm font-bold text-blue-700">
-                        {pallet?.Masters.length ?? 0} master{pallet?.Masters.length === 1 ? "" : "s"}
+                        {enPolin} master{enPolin === 1 ? "" : "s"}
                       </div>
                       <div className="text-[10px] text-blue-500 whitespace-nowrap">
-                        {(pallet?.Masters.reduce((acc, m) => acc + m.PesoMasterKG, 0) ?? 0).toFixed(2)} kg acumulados
+                        {/* Solo el peso de lo que sigue arriba: sumar los despachados daría un peso
+                            que el polín ya no tiene. */}
+                        {(pallet?.Masters.filter(m => m.Estatus !== "Salido").reduce((acc, m) => acc + m.PesoMasterKG, 0) ?? 0).toFixed(2)} kg acumulados
                       </div>
                     </div>
                   </div>
@@ -233,7 +269,12 @@ function PanelEscaneo({ palletId, onClose, onCambio }) {
 
               <div className="flex items-center justify-between mb-2">
                 <span className="text-sm font-medium text-gray-600">
-                  {pallet?.Masters.length ?? 0}{pallet?.CantidadMaster != null ? ` / ${pallet.CantidadMaster}` : ""} master{pallet?.Masters.length === 1 ? "" : "s"} escaneado{pallet?.Masters.length === 1 ? "" : "s"}
+                  {/* "En el polín" ≠ "escaneados alguna vez": lo despachado sigue listado abajo como
+                      historia, pero no cuenta como carga presente. */}
+                  {pallet?.CantidadMasters ?? 0}{pallet?.CantidadMaster != null ? ` / ${pallet.CantidadMaster}` : ""} master{pallet?.CantidadMasters === 1 ? "" : "s"} en el polín
+                  {pallet?.CantidadSalidos > 0 && (
+                    <span className="ml-2 text-xs font-normal text-slate-500">· {pallet.CantidadSalidos} ya despachado{pallet.CantidadSalidos === 1 ? "" : "s"}</span>
+                  )}
                 </span>
               </div>
 
@@ -255,15 +296,27 @@ function PanelEscaneo({ palletId, onClose, onCambio }) {
                   </thead>
                   <tbody>
                     {pallet?.Masters.map(m => (
-                      <tr key={m.MasterId} className="border-t border-gray-100">
-                        <td className="px-3 py-2 font-mono">{m.Correlativo}</td>
-                        <td className="px-3 py-2 whitespace-nowrap">{m.CodigoPedido}</td>
-                        <td className="px-3 py-2 whitespace-nowrap">{m.NombreCliente}{m.NombreSubcliente ? `-${m.NombreSubcliente}` : ""}</td>
-                        <td className="px-3 py-2 font-mono whitespace-nowrap">{m.Lote}</td>
-                        <td className="px-3 py-2 whitespace-nowrap">{m.DescripcionProceso} {m.DescripcionTalla} {m.DescripcionPresentacion}</td>
+                      // Los despachados se listan pero atenuados: son historia del polín, no carga.
+                      <tr key={m.MasterId} className={`border-t border-gray-100 ${m.Estatus === "Salido" ? "bg-slate-50 text-slate-400" : ""}`}>
+                        <td className="px-3 py-2 font-mono truncate">
+                          {m.Correlativo}
+                          {m.Estatus === "Salido" && <span className="ml-1 text-[9px] font-sans font-semibold px-1 py-0.5 rounded bg-slate-200 text-slate-600">salió</span>}
+                        </td>
+                        {/* `truncate` y no `whitespace-nowrap` a secas: la tabla es de ancho fijo, y
+                            sin recorte un nombre largo (ej. "RED CHAMBER COMPANY-RED CHAMBER") se
+                            desborda de su columna y se pinta ENCIMA de la vecina. El title deja ver
+                            el valor completo al pasar el mouse. */}
+                        <td className="px-3 py-2 truncate" title={m.CodigoPedido}>{m.CodigoPedido}</td>
+                        <td className="px-3 py-2 truncate" title={`${m.NombreCliente}${m.NombreSubcliente ? "-" + m.NombreSubcliente : ""}`}>
+                          {m.NombreCliente}{m.NombreSubcliente ? `-${m.NombreSubcliente}` : ""}
+                        </td>
+                        <td className="px-3 py-2 font-mono truncate" title={m.Lote}>{m.Lote}</td>
+                        <td className="px-3 py-2 truncate" title={`${m.DescripcionProceso} ${m.DescripcionTalla} ${m.DescripcionPresentacion}`}>
+                          {m.DescripcionProceso} {m.DescripcionTalla} {m.DescripcionPresentacion}
+                        </td>
                         <td className="px-3 py-2 text-right whitespace-nowrap">{m.PesoMasterKG.toFixed(2)}</td>
                         <td className="px-3 py-2 text-right whitespace-nowrap">{m.PesoMasterLb.toFixed(2)}</td>
-                        <td className="px-3 py-2 whitespace-nowrap">{fmtFecha(m.FechaIngreso)}</td>
+                        <td className="px-3 py-2 truncate" title={fmtFecha(m.FechaIngreso)}>{fmtFecha(m.FechaIngreso)}</td>
                         {puedeQuitar && (
                           <td className="px-3 py-2 text-center">
                             <button onClick={() => handleQuitar(m.MasterId, m.Correlativo)} className="text-red-600 hover:text-red-800 font-medium">Quitar</button>
@@ -281,16 +334,24 @@ function PanelEscaneo({ palletId, onClose, onCambio }) {
           )}
         </div>
 
-        <div className="px-5 py-3 border-t border-gray-200 flex justify-end gap-2 shrink-0">
+        <div className="px-5 py-3 border-t border-gray-200 flex items-center justify-end gap-2 shrink-0 flex-wrap">
+          {/* Un polín ubicado tiene AMBAS acciones bloqueadas por la misma regla de sellado, así que
+              mostrarlas como botones hacía que las dos devolvieran el mismo error y parecieran hacer
+              lo mismo. En ese estado se explica la única salida real en vez de invitar a clickear. */}
+          {pallet?.Estatus === "Cerrado" && puedeEditar && pallet?.PosicionId != null && (
+            <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mr-auto">
+              Ubicado en <span className="font-mono font-semibold">{pallet.PosicionCodigo}</span> — su contenido está sellado.
+              Para reabrirlo, des-ubícalo primero desde <span className="font-semibold">Bodega — Ubicaciones</span>.
+            </p>
+          )}
           <button onClick={onClose} className="px-4 py-2 rounded-lg text-sm font-medium text-gray-600 hover:bg-gray-100 transition">Volver a la lista</button>
           {abierto && puedeEscanear && (
             <button onClick={handleCerrar} className="px-4 py-2 rounded-lg text-sm font-semibold bg-blue-600 text-white hover:bg-blue-700 transition">Cerrar pallet</button>
           )}
-          {pallet?.Estatus === "Cerrado" && puedeEditar && (
+          {pallet?.Estatus === "Cerrado" && puedeEditar && pallet?.PosicionId == null && (
             <>
-              {/* Desarmar = primer paso de la SALIDA (libera los masters para remisionarlos por
-                  separado). No confundir con Reabrir, que devuelve el polín a la fila de ENTRADA. */}
-              <button onClick={() => setModalDesarmar(true)} className="px-4 py-2 rounded-lg text-sm font-semibold bg-amber-500 text-white hover:bg-amber-600 transition">Desarmar polín</button>
+              {/* Reabrir es la ÚNICA forma de volver a tocar un polín cerrado: lo devuelve a la fila
+                  de escaneo, donde puede recibir cajas nuevas y también ceder las suyas a otro polín. */}
               <button onClick={handleReabrir} className="px-4 py-2 rounded-lg text-sm font-semibold bg-orange-500 text-white hover:bg-orange-600 transition">Reabrir pallet</button>
             </>
           )}
@@ -299,11 +360,6 @@ function PanelEscaneo({ palletId, onClose, onCambio }) {
     </div>
     {mostrarConsulta && <ConsultarEtiquetaModal onCerrar={() => setMostrarConsulta(false)} />}
     {mostrarHoja && <HojaPalletModal palletId={palletId} onCerrar={() => setMostrarHoja(false)} />}
-    {modalDesarmar && (
-      <ModalMotivo titulo={`Desarmar polín ${pallet?.Codigo ?? ""}`}
-        descripcion="Solo si el polín se rompe de verdad: suelta su posición en bodega y no se puede volver a armar. NO hace falta para remisionar — una remisión puede tomar cajas sueltas dejando el polín en su lugar."
-        textoConfirmar="Desarmar polín" onConfirmar={handleDesarmar} onCerrar={() => setModalDesarmar(false)} />
-    )}
     {aviso && <AvisoModal {...aviso} onCerrar={() => cerrar(true)} onCancelar={() => cerrar(false)} />}
     </>
   );
@@ -422,13 +478,25 @@ export default function PalletsPage() {
     fetchPallets();
   };
 
-  const handleEliminar = async (id) => {
-    const confirmado = await pedirConfirmacion(`¿Eliminar el pallet #${id}? Solo es posible si está vacío.`, { textoConfirmar: "Eliminar" });
+  const handleEliminar = async (p) => {
+    const confirmado = await pedirConfirmacion(`¿Eliminar el pallet ${p.Codigo || `#${p.PalletId}`}? Solo es posible si está vacío.`, { textoConfirmar: "Eliminar" });
     if (!confirmado) return;
-    const res = await fetch(`${API}/${id}`, { method: "DELETE", headers: authHeader() });
+    const res = await fetch(`${API}/${p.PalletId}`, { method: "DELETE", headers: authHeader() });
     const data = await leerJSON(res);
-    if (res.ok) fetchPallets();
-    else await mostrarAlerta("Error: " + (data.error || "No se pudo eliminar el pallet"));
+    if (res.ok) { fetchPallets(); return; }
+
+    // Un polín que ya tocó el kardex no se puede borrar sin perder esa historia — se cancela.
+    // Se ofrece aquí mismo en vez de dejar al operador con un error y sin salida.
+    if (/kard[eé]x/i.test(data.error || "")) {
+      const cancelar = await pedirConfirmacion(`${data.error}\n\n¿Cancelarlo ahora?`, { textoConfirmar: "Cancelar polín", textoCancelar: "Dejarlo así" });
+      if (!cancelar) return;
+      const res2 = await fetch(`${API}/${p.PalletId}/cancelar`, { method: "POST", headers: authHeader() });
+      const data2 = await leerJSON(res2);
+      if (res2.ok) fetchPallets();
+      else await mostrarAlerta("Error: " + (data2.error || "No se pudo cancelar el polín"));
+      return;
+    }
+    await mostrarAlerta("Error: " + (data.error || "No se pudo eliminar el pallet"));
   };
 
   return (
@@ -482,7 +550,16 @@ export default function PalletsPage() {
                   </td>
                   <td className="px-4 py-3 whitespace-nowrap">{p.NombreBodegaVirtual || "-"}</td>
                   <td className="px-4 py-3 whitespace-nowrap">{p.DescripcionOrigen || "-"}</td>
-                  <td className="px-4 py-3 text-right font-mono">{p.CantidadMasters}{p.CantidadMaster != null ? ` / ${p.CantidadMaster}` : ""}</td>
+                  <td className="px-4 py-3 text-right font-mono">
+                    {p.CantidadMasters}{p.CantidadMaster != null ? ` / ${p.CantidadMaster}` : ""}
+                    {/* Un polín que despachó parte se ve "a medias" aquí: es la señal para ir a
+                        completarlo y no dejarlo ocupando una posición entera con media carga. */}
+                    {p.CantidadSalidos > 0 && (
+                      <span className="block text-[10px] font-sans text-slate-500" title={`${p.CantidadSalidos} master(s) ya despachados en una remisión`}>
+                        {p.CantidadSalidos} despachado{p.CantidadSalidos === 1 ? "" : "s"}
+                      </span>
+                    )}
+                  </td>
                   <td className="px-4 py-3 text-center">
                     {p.Cuadre && (
                       <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${CUADRE_BADGE[p.Cuadre] || "bg-gray-100 text-gray-600"}`}>
@@ -498,7 +575,7 @@ export default function PalletsPage() {
                         {p.Estatus === "Abierto" ? "Escanear" : "Ver"}
                       </button>
                       {p.Estatus === "Abierto" && p.CantidadMasters === 0 && puedeEliminar && (
-                        <button onClick={() => handleEliminar(p.PalletId)} className="text-red-600 hover:text-red-800 text-xs font-medium px-2 py-1 rounded hover:bg-red-50 transition">Eliminar</button>
+                        <button onClick={() => handleEliminar(p)} className="text-red-600 hover:text-red-800 text-xs font-medium px-2 py-1 rounded hover:bg-red-50 transition">Eliminar</button>
                       )}
                     </div>
                   </td>

@@ -19,7 +19,12 @@ export interface Permisos {
   destajo?:        { ver?: boolean; crear?: boolean; editar?: boolean; eliminar?: boolean };
   etiquetado?:     { ver?: boolean; crear?: boolean; editar?: boolean; eliminar?: boolean; imprimir?: boolean };
   bodega?:         { ver?: boolean; escanear?: boolean; editar?: boolean; eliminar?: boolean };
-  remisiones?:     { ver?: boolean; crear?: boolean; editar?: boolean; eliminar?: boolean; imprimir?: boolean };
+  // `anular` va aparte de `editar` y de `eliminar` a propósito: anular una remisión confirmada
+  // devuelve al inventario producto que YA SALIÓ físicamente de la planta. Es la válvula de escape
+  // del módulo (mismo criterio con que `bodega.editar` gobierna desubicar/desarmar, y no `escanear`).
+  // `eliminar` solo borra borradores, que nunca tocaron inventario — compartirlos daría el poder de
+  // revertir embarques a quien solo necesita limpiar sus propios borradores.
+  remisiones?:     { ver?: boolean; crear?: boolean; editar?: boolean; eliminar?: boolean; imprimir?: boolean; anular?: boolean };
 }
 
 export interface AuthPayload {

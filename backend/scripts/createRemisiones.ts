@@ -244,6 +244,29 @@ async function main() {
     console.log("5/6 Columnas MovimientosBodega.MasterId y .RemisionId agregadas (con FK).");
   }
 
+  // PalletOrigenId — de dónde vino la caja en un TRASLADO (consolidación de sobrantes). `PalletId`
+  // guarda el DESTINO, así que sin esta columna el origen solo vivía como texto dentro del Motivo:
+  // imposible de consultar y, sobre todo, imposible de usar para deshacer el traslado.
+  if (!(await existeColumna("MovimientosBodega", "PalletOrigenId"))) {
+    await p.$executeRawUnsafe(`ALTER TABLE MovimientosBodega ADD COLUMN PalletOrigenId INT NULL AFTER PalletId`);
+    await p.$executeRawUnsafe(`
+      ALTER TABLE MovimientosBodega
+        ADD CONSTRAINT fk_movbodega_palletorigen FOREIGN KEY (PalletOrigenId) REFERENCES Pallets(PalletId)
+    `);
+    console.log("    Columna MovimientosBodega.PalletOrigenId agregada (origen de los traslados).");
+  }
+
+  // Los traslados hechos ANTES de que existiera la columna solo guardaron el origen dentro del texto
+  // del Motivo ("Consolidado desde el polín T0012"). Se rellenan desde ahí: sin esto, deshacer uno de
+  // esos traslados no sabría a dónde devolver la caja e intentaría borrarla, reventando contra la FK.
+  const huerfanos = await p.$executeRawUnsafe(`
+    UPDATE MovimientosBodega mb
+    JOIN Pallets pal ON mb.Motivo LIKE CONCAT('%polín ', pal.Codigo)
+    SET mb.PalletOrigenId = pal.PalletId
+    WHERE mb.Tipo = 'TRASLADO' AND mb.PalletOrigenId IS NULL
+  `);
+  if (huerfanos) console.log(`    ${huerfanos} traslado(s) previo(s) con su origen recuperado del Motivo.`);
+
   // ---- 6. Verificación --------------------------------------------------------------------------
   const series: any[] = await p.$queryRawUnsafe(`SELECT Tipo, Prefijo, Destino, UltimoSecuencial FROM SerieRemision ORDER BY Orden`);
   console.log("6/6 Series activas:", JSON.stringify(series, (_k, v) => (typeof v === "bigint" ? Number(v) : v)));

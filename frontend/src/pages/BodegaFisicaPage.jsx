@@ -24,6 +24,20 @@ const TIPO_MOV_BADGE = {
   SALIDA:       "bg-blue-100 text-blue-700",
 };
 
+// Tailwind purga las clases que no aparezcan literales en el código, así que los tonos van como
+// strings completos y no armados con plantillas (`border-${x}-200` se perdería en el build).
+// El color sube con la antigüedad del polín abierto más viejo: cuanto más lleva sin cerrarse ni
+// ubicarse, más grita.
+// Cuántos polines sin ubicar se listan antes de plegar el resto. Vienen ordenados por antigüedad,
+// así que estos son siempre los que más urgen.
+const TOPE_SUELTOS = 4;
+
+const TONO_SUELTOS = {
+  ambar:   { borde: "border-amber-200",   cabecera: "border-amber-100 bg-amber-50",   texto: "text-amber-800" },
+  naranja: { borde: "border-orange-200",  cabecera: "border-orange-100 bg-orange-50", texto: "text-orange-800" },
+  rojo:    { borde: "border-red-200",     cabecera: "border-red-100 bg-red-50",       texto: "text-red-800" },
+};
+
 function fmtFecha(iso) {
   return iso ? new Date(iso).toLocaleString("es-GT", { dateStyle: "short", timeStyle: "short" }) : "-";
 }
@@ -85,6 +99,8 @@ export default function BodegaFisicaPage() {
 
   const [mapa, setMapa] = useState({ Racks: [], Posiciones: [] });
   const [pendientes, setPendientes] = useState([]);
+  const [sueltos, setSueltos] = useState([]);
+  const [verTodosSueltos, setVerTodosSueltos] = useState(false);
   const [movimientos, setMovimientos] = useState([]);
   const [loading, setLoading] = useState(true);
 
@@ -105,14 +121,16 @@ export default function BodegaFisicaPage() {
   const cachePallets = useRef(new Map());
 
   const fetchTodo = useCallback(async () => {
-    const [resMapa, resPend, resMov] = await Promise.all([
+    const [resMapa, resPend, resMov, resSueltos] = await Promise.all([
       fetch(`${API}/mapa`, { headers: authHeader() }),
       fetch(`${API}/pendientes`, { headers: authHeader() }),
       fetch(`${API}/movimientos?limit=12`, { headers: authHeader() }),
+      fetch(`${API}/sueltos`, { headers: authHeader() }),
     ]);
     if (resMapa.ok) { const d = await resMapa.json(); if (d.Posiciones) setMapa(d); }
     if (resPend.ok) { const d = await resPend.json(); if (Array.isArray(d)) setPendientes(d); }
     if (resMov.ok) { const d = await resMov.json(); if (Array.isArray(d)) setMovimientos(d); }
+    if (resSueltos.ok) { const d = await resSueltos.json(); if (Array.isArray(d)) setSueltos(d); }
     setLoading(false);
   }, []);
 
@@ -381,6 +399,69 @@ export default function BodegaFisicaPage() {
                 </div>
               </div>
             )}
+
+            {/* Producto que existe pero NO ocupa posición, así que no aparece en el mapa de al lado.
+                Sin este panel el estado es invisible y nada empuja a resolverlo.
+                Acotado a propósito: en plena producción puede haber decenas de polines abiertos y la
+                lista completa taparía el riel. Lo que importa no es "cuántos hay abiertos" (eso es
+                operación normal) sino "cuáles llevan días sin cerrarse" — por eso se muestran solo
+                los más viejos, con el resto detrás de un "ver todos" y scroll propio. */}
+            {sueltos.length > 0 && (() => {
+              const totalMasters = sueltos.reduce((a, s) => a + s.Masters, 0);
+              const masViejo = Math.max(...sueltos.map(s => s.Dias ?? 0));
+              const t = TONO_SUELTOS[masViejo >= 7 ? "rojo" : masViejo >= 3 ? "naranja" : "ambar"];
+              // Vienen ordenados por antigüedad (SueltoDesde ASC), así que los primeros son los que urgen.
+              const rezagados = sueltos.filter(s => (s.Dias ?? 0) >= 1).length;
+              const visibles = verTodosSueltos ? sueltos : sueltos.slice(0, TOPE_SUELTOS);
+              const ocultos = sueltos.length - visibles.length;
+              return (
+                <div className={`bg-white rounded-xl shadow-sm border ${t.borde}`}>
+                  <div className={`px-4 py-2.5 border-b rounded-t-xl flex items-center gap-2 ${t.cabecera}`}>
+                    <h3 className={`text-[11px] font-bold uppercase tracking-wide ${t.texto}`}>Sin ubicar</h3>
+                    <span className={`ml-auto text-[11px] font-bold tabular-nums ${t.texto}`}
+                      title={`${sueltos.length} polín(es) abiertos · ${totalMasters} masters`}>
+                      {sueltos.length} · {totalMasters}
+                    </span>
+                  </div>
+                  <div className="px-4 py-3">
+                    <p className="text-[11px] text-gray-500 leading-snug mb-2">
+                      {rezagados > 0
+                        ? <><span className="font-semibold text-gray-700">{rezagados}</span> lleva{rezagados === 1 ? "" : "n"} más de un día sin cerrarse.</>
+                        : "Todos abiertos hoy."} Ciérralos y ubícalos, o consolídalos en otro polín.
+                    </p>
+                    {/* Altura tope + scroll: aunque se expanda, el riel no crece sin control. */}
+                    <div className={`space-y-2 ${verTodosSueltos ? "max-h-56 overflow-y-auto pr-1" : ""}`}>
+                      {visibles.map(s => (
+                        <div key={s.PalletId} className="text-xs border-t border-gray-100 pt-2">
+                          <div className="flex items-center gap-2">
+                            <span className="font-mono font-semibold text-gray-700">{s.PalletCodigo}</span>
+                            <span className="text-gray-500">{s.Masters} master{s.Masters === 1 ? "" : "s"}</span>
+                            <span className={`ml-auto text-[10px] font-semibold px-1.5 py-0.5 rounded-full shrink-0 ${
+                              s.Dias == null ? "bg-gray-100 text-gray-500"
+                                : s.Dias >= 7 ? "bg-red-100 text-red-700"
+                                : s.Dias >= 3 ? "bg-orange-100 text-orange-700"
+                                : s.Dias >= 1 ? "bg-amber-100 text-amber-700"
+                                : "bg-gray-100 text-gray-500"
+                            }`}>
+                              {s.Dias == null ? "sin fecha" : s.Dias === 0 ? "hoy" : `${s.Dias} día${s.Dias === 1 ? "" : "s"}`}
+                            </span>
+                          </div>
+                          <div className="text-[11px] text-gray-400 truncate" title={`${s.Clientes} · ${s.Productos}`}>
+                            {s.Clientes} · {s.PesoKg.toFixed(0)} kg
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    {(ocultos > 0 || verTodosSueltos) && (
+                      <button onClick={() => setVerTodosSueltos(v => !v)}
+                        className="mt-2 w-full text-[11px] font-semibold text-gray-500 hover:text-gray-800 hover:bg-gray-50 rounded py-1 transition">
+                        {verTodosSueltos ? "Ver menos" : `Ver los ${sueltos.length} polines`}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })()}
 
             <div className="bg-white rounded-xl shadow-sm border border-gray-200">
               <div className="px-4 py-2.5 border-b border-gray-100 flex items-center justify-between">

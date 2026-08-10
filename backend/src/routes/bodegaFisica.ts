@@ -181,6 +181,60 @@ router.get("/existencias", requireAuth, requirePerm("bodega", "ver"), async (_re
   }
 });
 
+// GET /api/bodega-fisica/sueltos — producto en polines ABIERTOS, que por definición no tienen
+// posición: existe y se puede despachar, pero el sistema no sabe dónde está y no sale en el mapa.
+// Es legítimo mientras se arma el polín, pero NADIE está obligado a cerrarlo — de ahí este listado,
+// para que un polín a medias no se quede meses ocupando espacio sin registrar.
+//
+// "Sin ubicar desde" = cuándo se creó el polín, o el último traslado que recibió si es posterior:
+// un polín que sigue recibiendo cajas está vivo, no olvidado.
+router.get("/sueltos", requireAuth, requirePerm("bodega", "ver"), async (_req: Request, res: Response) => {
+  try {
+    const rows: any[] = await prisma.$queryRaw`
+      SELECT p.PalletId, p.Codigo AS PalletCodigo, p.Estatus AS PalletEstatus,
+             bv.Nombre AS NombreBodegaVirtual,
+             COUNT(m.MasterId) AS Masters,
+             COALESCE(SUM(pr.PesoKG * pr.CajasXMaster), 0) AS PesoKg,
+             GREATEST(p.CreadoEn, COALESCE(
+               (SELECT MAX(mb.Fecha) FROM MovimientosBodega mb
+                WHERE mb.Tipo = 'TRASLADO' AND mb.PalletId = p.PalletId), p.CreadoEn)) AS SueltoDesde,
+             GROUP_CONCAT(DISTINCT cli.RazonSocial ORDER BY cli.RazonSocial SEPARATOR ', ') AS Clientes,
+             GROUP_CONCAT(DISTINCT ped.CodigoPedido ORDER BY ped.CodigoPedido SEPARATOR ', ') AS Pedidos,
+             GROUP_CONCAT(DISTINCT CONCAT(pc.Descripcion, ' ', ta.Descripcion) SEPARATOR ' · ') AS Productos
+      FROM Masters m
+      JOIN Pallets p ON m.PalletId = p.PalletId AND p.Estatus = 'Abierto'
+      JOIN EtiquetaImpresa ei ON m.EtiquetaId = ei.EtiquetaId
+      JOIN OrdenEtiquetado oe ON ei.OrdenId = oe.OrdenId
+      JOIN DetallePedido dp ON oe.DetalleId = dp.DetalleId
+      JOIN Clase cl ON dp.Clase = cl.Clase
+      JOIN Procesos pc ON cl.Proceso = pc.Proceso
+      JOIN Tallas ta ON dp.Talla = ta.Codigo
+      JOIN Presentacion pr ON dp.Presentacion = pr.Codigo
+      JOIN Pedidos ped ON dp.CodigoPedido = ped.CodigoPedido
+      JOIN Clientes cli ON ped.CodigoCliente = cli.Codigo
+      LEFT JOIN BodegaVirtual bv ON p.BodegaVirtualCodigo = bv.Codigo
+      WHERE m.Estatus <> 'Salido'
+      GROUP BY p.PalletId, p.Codigo, p.Estatus, bv.Nombre, p.CreadoEn
+      ORDER BY SueltoDesde ASC
+    `;
+    // Los días se calculan aquí y no en SQL para usar la misma zona horaria que ve el operador.
+    const hoy = Date.now();
+    res.json(rows.map(r => {
+      const desde = r.SueltoDesde ? new Date(r.SueltoDesde) : null;
+      return {
+        PalletId: Number(r.PalletId), PalletCodigo: r.PalletCodigo, PalletEstatus: r.PalletEstatus,
+        NombreBodegaVirtual: r.NombreBodegaVirtual,
+        Masters: Number(r.Masters), PesoKg: Number(r.PesoKg),
+        SueltoDesde: desde ? desde.toISOString() : null,
+        Dias: desde ? Math.floor((hoy - desde.getTime()) / 86_400_000) : null,
+        Clientes: r.Clientes, Pedidos: r.Pedidos, Productos: r.Productos,
+      };
+    }));
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // POST /api/bodega-fisica/ubicar  { Codigo | PalletId, PosicionId }
 // El paso 7 del flujo: asigna la posición y registra el INGRESO en el kardex, todo en una
 // transacción. Acepta el Codigo tal como sale del QR de la hoja del pallet (o el PalletId si la
@@ -329,7 +383,7 @@ router.post("/posiciones/:id/bloquear", requireAuth, requirePerm("bodega", "edit
         UPDATE Posiciones SET Bloqueada = 1, MotivoBloqueo = ${motivo}, BloqueadaPor = ${operador}, BloqueadaEn = NOW()
         WHERE PosicionId = ${posicionId}
       `;
-    });
+    }, { timeout: 30_000 });
     res.json({ ok: true });
   } catch (err: any) {
     if (err instanceof ErrorNegocio) { res.status(err.status).json({ error: err.message }); return; }

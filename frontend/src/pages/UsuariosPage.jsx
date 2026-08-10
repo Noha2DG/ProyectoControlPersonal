@@ -28,7 +28,9 @@ const MODULOS = [
   { key: "destajo",        label: "Destajo — Materia Prima y Pesaje", acciones: ["ver","crear","editar","eliminar"], grupo: "Operación" },
   { key: "etiquetado",     label: "Etiquetado — Orden de Trabajo",   acciones: ["ver","crear","editar","eliminar","imprimir"], grupo: "Operación" },
   { key: "bodega",         label: "Bodega — Pallets y Escaneo",      acciones: ["ver","escanear","editar","eliminar"], grupo: "Operación" },
-  { key: "remisiones",     label: "Bodega — Remisiones y Despacho",  acciones: ["ver","crear","editar","eliminar","imprimir"], grupo: "Operación" },
+  // "anular" es la acción fuerte: devuelve al inventario producto ya despachado. Se separa de
+  // "editar" (armar y confirmar, la operación diaria) y de "eliminar" (borrar borradores).
+  { key: "remisiones",     label: "Bodega — Remisiones y Despacho",  acciones: ["ver","crear","editar","eliminar","imprimir","anular"], grupo: "Operación" },
   // ── Configuración
   { key: "areas",          label: "Áreas",                          acciones: ["ver","crear","editar","eliminar"], grupo: "Config"   },
   { key: "permisos",       label: "Permisos",                       acciones: ["ver","crear","editar","eliminar"], grupo: "Config"   },
@@ -44,7 +46,7 @@ const MODULOS = [
 // aquí — solo el botón de preset completo la activaba.)
 const ACCION_LABELS = {
   ver: "Ver", crear: "Crear", editar: "Editar", eliminar: "Eliminar",
-  baja: "Dar de baja", escanear: "Escanear", imprimir: "Imprimir",
+  baja: "Dar de baja", escanear: "Escanear", imprimir: "Imprimir", anular: "Anular salida",
 };
 
 // Deriva la matriz de permisos de MODULOS en vez de enumerarla a mano por rol:
