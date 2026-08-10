@@ -87,7 +87,8 @@ app.use("/api/bodega-fisica", bodegaFisicaRouter);
 app.use("/api/remisiones", remisionesRouter);
 app.use("/api/reportes", reportesRouter);
 
-// Sirve el frontend ya compilado (frontend/dist) para no necesitar un segundo servicio en Railway.
+// Sirve el frontend ya compilado (frontend/dist) desde este mismo proceso: así el despliegue es un
+// solo servicio, sin un servidor web aparte para los archivos estáticos.
 // Si esa carpeta no existe (ej. en desarrollo local con `vite`), simplemente no hace nada.
 const frontendDist = path.join(process.cwd(), "..", "frontend", "dist");
 app.use(express.static(frontendDist));
