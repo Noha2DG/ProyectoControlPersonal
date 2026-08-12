@@ -25,6 +25,12 @@ export interface Permisos {
   // `eliminar` solo borra borradores, que nunca tocaron inventario — compartirlos daría el poder de
   // revertir embarques a quien solo necesita limpiar sus propios borradores.
   remisiones?:     { ver?: boolean; crear?: boolean; editar?: boolean; eliminar?: boolean; imprimir?: boolean; anular?: boolean };
+  // Pedidos, Clientes y Subcliente salieron de `catalogos` para vivir acá. El motivo no es de menú:
+  // quien captura proformas necesita corregirlas a diario, y con `catalogos` eso le entregaba además
+  // Presentaciones — donde vive CajasXMaster, el número que convierte cajas a master y define el
+  // objetivo de TODOS los pedidos. Editarlo movía la meta de pedidos pasados y futuros sin que nadie
+  // se enterara. `catalogos` queda para lo que casi nadie toca.
+  pedidos?:        { ver?: boolean; crear?: boolean; editar?: boolean; eliminar?: boolean };
 }
 
 export interface AuthPayload {

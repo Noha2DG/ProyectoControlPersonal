@@ -176,7 +176,8 @@ router.get("/mi-dia/:codigo", requireAuth, requirePerm("kiosco_destajo", "ver"),
       JOIN TransaccionesProduccion tp ON pd.TransaccionId = tp.TransaccionId
       JOIN Clase cl ON tp.ClasePT = cl.Clase
       JOIN Tallas ta ON tp.Talla = ta.Codigo
-      WHERE pd.Codigo = ${codigo} AND DATE(pd.FechaHora) = ${hoy}
+      WHERE pd.Codigo = ${codigo}
+        AND pd.FechaHora >= ${hoy} AND pd.FechaHora < DATE_ADD(${hoy}, INTERVAL 1 DAY)
       ORDER BY pd.FechaHora ASC
     `;
 
@@ -185,14 +186,15 @@ router.get("/mi-dia/:codigo", requireAuth, requirePerm("kiosco_destajo", "ver"),
     // Basta con sumar Peso sin filtrar por área — solo se puede pesar estando en DS o DU (ver el POST).
     const ranking: any[] = await prisma.$queryRaw`
       SELECT Codigo, SUM(Peso) AS Kilos FROM PesajeDetalle
-      WHERE DATE(FechaHora) = ${hoy}
+      WHERE FechaHora >= ${hoy} AND FechaHora < DATE_ADD(${hoy}, INTERVAL 1 DAY)
       GROUP BY Codigo ORDER BY Kilos DESC
     `;
     const indice = ranking.findIndex(r => r.Codigo === codigo);
 
     const ayer: any[] = await prisma.$queryRaw`
       SELECT COALESCE(SUM(Peso), 0) AS Kilos FROM PesajeDetalle
-      WHERE Codigo = ${codigo} AND DATE(FechaHora) = DATE_SUB(${hoy}, INTERVAL 1 DAY)
+      WHERE Codigo = ${codigo}
+        AND FechaHora >= DATE_SUB(${hoy}, INTERVAL 1 DAY) AND FechaHora < ${hoy}
     `;
 
     const area = areaActual[0];

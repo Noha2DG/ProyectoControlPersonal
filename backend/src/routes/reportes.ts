@@ -31,7 +31,11 @@ router.get("/produccion", requireAuth, requirePerm("destajo", "ver"), async (req
     const filtroFinca = finca ? "AND f.Codigo = ?" : "";
     const argsFinca = finca ? [finca] : [];
 
-    const porLote: any[] = await prisma.$queryRawUnsafe(`
+    // Las cinco consultas son independientes entre sí (ninguna usa el resultado de otra), así que
+    // se lanzan juntas con Promise.all y el endpoint tarda lo que la más lenta, no la suma de las
+    // cinco. Van como promesas sin await individual justamente para eso: poner un await acá
+    // volvería a serializarlas sin que se note en el código.
+    const pLote = prisma.$queryRawUnsafe(`
       SELECT l.Lote, f.Codigo AS CodigoFinca, f.Descripcion AS NombreFinca, l.Clase, c.Descripcion AS DescripcionClase,
              l.Fecha, l.PesoIngreso, l.UM,
              COALESCE((SELECT SUM(pd.Peso) FROM PesajeDetalle pd
@@ -46,7 +50,7 @@ router.get("/produccion", requireAuth, requirePerm("destajo", "ver"), async (req
       ORDER BY l.Fecha DESC, l.Lote DESC, l.Clase ASC
     `, desde, hasta, ...argsFinca);
 
-    const porTermo: any[] = await prisma.$queryRawUnsafe(`
+    const pTermo = prisma.$queryRawUnsafe(`
       SELECT t.TermoId, t.NumeroTermo, tp.Lote, tp.Talla, ta.Descripcion AS DescripcionTalla,
              tp.Proceso, pr.Descripcion AS DescripcionProceso, tp.FechaProduccion,
              COALESCE(SUM(pd.Peso), 0) AS Procesado
@@ -63,7 +67,7 @@ router.get("/produccion", requireAuth, requirePerm("destajo", "ver"), async (req
       ORDER BY tp.FechaProduccion DESC, tp.Lote DESC, t.NumeroTermo ASC
     `, desde, hasta, ...argsFinca);
 
-    const porLoteTalla: any[] = await prisma.$queryRawUnsafe(`
+    const pLoteTalla = prisma.$queryRawUnsafe(`
       SELECT tp.Lote, tp.ClaseOrigen, tp.Talla, ta.Descripcion AS DescripcionTalla, tp.ClasePT, cl.Descripcion AS DescripcionClasePT,
              tp.Estado, COALESCE(SUM(pd.Peso), 0) AS Procesado, COUNT(pd.PesajeId) AS NumPesajes
       FROM TransaccionesProduccion tp
@@ -78,7 +82,7 @@ router.get("/produccion", requireAuth, requirePerm("destajo", "ver"), async (req
       ORDER BY tp.Lote DESC
     `, desde, hasta, ...argsFinca);
 
-    const porTalla: any[] = await prisma.$queryRawUnsafe(`
+    const pTalla = prisma.$queryRawUnsafe(`
       SELECT tp.Talla, ta.Descripcion AS DescripcionTalla,
              COALESCE(SUM(pd.Peso), 0) AS Procesado, COUNT(pd.PesajeId) AS NumPesajes
       FROM TransaccionesProduccion tp
@@ -92,7 +96,12 @@ router.get("/produccion", requireAuth, requirePerm("destajo", "ver"), async (req
       ORDER BY Procesado DESC
     `, desde, hasta, ...argsFinca);
 
-    const porPersona: any[] = await prisma.$queryRawUnsafe(`
+    // El rango de fechas va como `FechaHora >= desde AND < hasta+1día` y NO como
+    // `DATE(FechaHora) BETWEEN desde AND hasta`: envolver la columna en DATE() obliga a evaluarla fila
+    // por fila y deja inservible el índice idx_pesaje_fecha. Escrito así es un rango de índice.
+    // Mismo criterio en /ranking-produccion y en el kiosco (pesajeDetalle.ts) — si se vuelve a meter
+    // DATE() alrededor de la columna, se pierde el índice otra vez.
+    const pPersona = prisma.$queryRawUnsafe(`
       SELECT e.Codigo AS IdEmpleado,
              CONCAT_WS(' ', e.PrimerNombre, e.SegundoNombre, e.PrimerApellido, e.SegundoApellido) AS Nombre,
              (SELECT a.Nombre FROM Transferencias tr
@@ -116,9 +125,12 @@ router.get("/produccion", requireAuth, requirePerm("destajo", "ver"), async (req
       JOIN Lotes l ON tp.Lote = l.Lote AND tp.ClaseOrigen = l.Clase
       JOIN Piscina p ON l.PiscinaId = p.PiscinaId
       JOIN Finca f ON p.CodigoFinca = f.Codigo
-      WHERE DATE(pd.FechaHora) BETWEEN ? AND ? ${filtroFinca}
+      WHERE pd.FechaHora >= ? AND pd.FechaHora < DATE_ADD(?, INTERVAL 1 DAY) ${filtroFinca}
       ORDER BY pd.FechaHora DESC
     `, desde, hasta, ...argsFinca);
+
+    const [porLote, porTermo, porLoteTalla, porTalla, porPersona] =
+      await Promise.all([pLote, pTermo, pLoteTalla, pTalla, pPersona]) as any[][];
 
     const lotesFmt = numerizar(porLote, ["PesoIngreso", "Procesado", "NumTransacciones"])
       .map(l => ({ ...l, Pendiente: l.PesoIngreso - l.Procesado, Rendimiento: l.PesoIngreso > 0 ? (l.Procesado / l.PesoIngreso * 100) : 0 }));
@@ -176,11 +188,11 @@ router.get("/ranking-produccion", requireAuth, requirePerm("kiosco_ranking", "ve
                 ORDER BY tr.FechaHora DESC LIMIT 1) AS Area
         FROM PesajeDetalle pd
         JOIN Empleados e ON pd.Codigo = e.Codigo
-        WHERE DATE(pd.FechaHora) = ?
+        WHERE pd.FechaHora >= ? AND pd.FechaHora < DATE_ADD(?, INTERVAL 1 DAY)
       ) t
       GROUP BY IdEmpleado
       ORDER BY KilosTotal DESC
-    `, fecha);
+    `, fecha, fecha);
 
     res.json({ fecha, ranking: numerizar(ranking, ["KilosDescabezado", "KilosPelado", "KilosPinchado", "KilosTotal"]) });
   } catch (err: any) {

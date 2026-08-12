@@ -48,6 +48,100 @@ async function obtenerMastersDePallet(palletId: number) {
   return rows.map(formatearMaster);
 }
 
+// Quitar masters solo tiene sentido con el polín Abierto: uno Cerrado está sellado (y si además está
+// posicionado, ni siquiera se puede reabrir). Bloquea la fila para serializar contra otro escaneo
+// simultáneo al mismo polín, igual que /escanear.
+export async function bloquearPalletAbierto(tx: any, palletId: number) {
+  const rows: any[] = await tx.$queryRaw`SELECT Codigo, Estatus FROM Pallets WHERE PalletId = ${palletId} LIMIT 1 FOR UPDATE`;
+  if (!rows.length) throw new ErrorNegocio(404, "Pallet no encontrado");
+  if (rows[0].Estatus !== "Abierto") throw new ErrorNegocio(400, "Este pallet no está abierto, no se pueden quitar masters");
+  return rows[0] as { Codigo: string; Estatus: string };
+}
+
+// Saca un master del pallet. Hay DOS casos distintos según cómo llegó aquí:
+//   - Escaneado directo (ingreso normal): se BORRA la fila de Masters. "Nunca entró a bodega", y el
+//     correlativo queda libre para re-escanearse.
+//   - Llegado por TRASLADO (consolidación de sobrantes): NO se puede borrar — ese master sí existe
+//     en bodega desde antes, borrarlo lo haría desaparecer del inventario. Se DESHACE el traslado:
+//     vuelve a su polín de origen, que es de donde salió.
+//     Además la fila de Masters está referenciada por el kardex (fk_movbodega_master), así que un
+//     DELETE reventaba con error de llave foránea — que es como se detectó este caso.
+// Compartida por las dos formas de quitar (el botón de cada fila y el escaneo en tanda): son la
+// misma operación, lo único que cambia es cómo se identificó el master.
+export async function quitarMasterDePallet(tx: any, palletId: number, masterId: number, operador: string) {
+  const masterRows: any[] = await tx.$queryRaw`
+    SELECT MasterId, Estatus FROM Masters WHERE MasterId = ${masterId} AND PalletId = ${palletId} LIMIT 1 FOR UPDATE
+  `;
+  if (!masterRows.length) throw new ErrorNegocio(404, "Master no encontrado en este pallet");
+
+  // Un master tomado por una remisión no se puede quitar por aquí: su fila está referenciada desde
+  // RemisionDetalle, así que el DELETE reventaría con llave foránea y el traslado deshecho lo sacaría
+  // de debajo de una salida ya registrada. Se saca primero de la remisión (mismo criterio que usa
+  // /escanear para no dejar mover una caja comprometida).
+  const remisionRows: any[] = await tx.$queryRaw`
+    SELECT r.Folio FROM RemisionDetalle rd
+    JOIN Remisiones r ON rd.RemisionId = r.RemisionId
+    WHERE rd.MasterId = ${masterId} AND rd.Vigente = 1 LIMIT 1
+  `;
+  if (remisionRows.length) {
+    throw new ErrorNegocio(400, masterRows[0].Estatus === "Salido"
+      ? `Este master ya salió de bodega en la remisión ${remisionRows[0].Folio} — no se puede quitar del polín.`
+      : `Este master está comprometido en la remisión ${remisionRows[0].Folio} — quítalo de ahí antes de sacarlo del polín.`);
+  }
+  if (masterRows[0].Estatus === "Salido") {
+    throw new ErrorNegocio(400, "Este master ya salió de bodega — no se puede quitar del polín.");
+  }
+
+  // El último traslado hacia ESTE pallet dice de dónde vino. Si no hay ninguno, el master
+  // entró por escaneo normal y se puede borrar.
+  const trasladoRows: any[] = await tx.$queryRaw`
+    SELECT mb.PalletOrigenId, po.Codigo AS PalletOrigenCodigo, po.Estatus AS PalletOrigenEstatus
+    FROM MovimientosBodega mb
+    LEFT JOIN Pallets po ON mb.PalletOrigenId = po.PalletId
+    WHERE mb.MasterId = ${masterId} AND mb.Tipo = 'TRASLADO' AND mb.PalletId = ${palletId}
+    ORDER BY mb.MovimientoId DESC LIMIT 1
+  `;
+
+  if (!trasladoRows.length || trasladoRows[0].PalletOrigenId == null) {
+    await tx.$executeRaw`DELETE FROM Masters WHERE MasterId = ${masterId} AND PalletId = ${palletId}`;
+    return { ok: true, Accion: "Eliminado", MasterId: masterId, PalletOrigen: null as string | null };
+  }
+
+  // Vuelve como EnBodega: su polín de origen está Abierto (es el único desde el que se pudo
+  // haber movido), así que ahí las cajas son carga normal del polín.
+  const origenId = Number(trasladoRows[0].PalletOrigenId);
+  await tx.$executeRaw`UPDATE Masters SET PalletId = ${origenId}, Estatus = 'EnBodega' WHERE MasterId = ${masterId}`;
+  await tx.$executeRaw`
+    INSERT INTO MovimientosBodega (PalletId, PalletOrigenId, MasterId, Tipo, PosicionOrigenId, PosicionDestinoId, Usuario, Motivo)
+    VALUES (${origenId}, ${palletId}, ${masterId}, 'TRASLADO', NULL, NULL, ${operador},
+            ${`Traslado deshecho: vuelve al polín ${trasladoRows[0].PalletOrigenCodigo}`})
+  `;
+  return { ok: true, Accion: "TrasladoDeshecho", MasterId: masterId, PalletOrigen: trasladoRows[0].PalletOrigenCodigo as string };
+}
+
+// Quitar un master identificándolo por el QR que se acaba de leer, en vez de por su fila en la
+// tabla. Todo el criterio vive aquí (y no en el handler) para que la ruta quede de una línea y esta
+// operación se pueda ejercitar contra la base real sin levantar el servidor.
+export async function quitarMasterEscaneado(tx: any, palletId: number, correlativo: any, operador: string) {
+  const etiquetaId = parseCorrelativo(correlativo);
+  if (!etiquetaId) throw new ErrorNegocio(400, "Correlativo inválido");
+
+  await bloquearPalletAbierto(tx, palletId);
+
+  const master = await buscarMasterPorEtiqueta(tx, etiquetaId);
+  if (!master) throw new ErrorNegocio(404, "Este master no está escaneado en ningún polín");
+  // Escanear la caja equivocada es el error que este flujo tiene que atajar: si el QR es de otro
+  // polín no se toca nada, se dice dónde está y el operador la devuelve a su lugar.
+  if (master.PalletId !== palletId) {
+    throw new ErrorNegocio(400, `Este master no está en este polín, está en el ${master.PalletCodigo}`);
+  }
+
+  const resultado = await quitarMasterDePallet(tx, palletId, master.MasterId, operador);
+  // Correlativo de vuelta para que la pantalla arme el renglón del historial de la tanda con lo que
+  // ya tiene cargado del master — sin repetir aquí el join de 10 tablas por cada escaneo.
+  return { ...resultado, Correlativo: "E" + etiquetaId };
+}
+
 // GET /api/pallets?estatus=Abierto&fecha=2026-07-14
 router.get("/", requireAuth, requirePerm("bodega", "ver"), async (req: Request, res: Response) => {
   try {
@@ -372,15 +466,8 @@ router.put("/:id/capacidad", requireAuth, requirePerm("bodega", "escanear"), asy
   }
 });
 
-// DELETE /api/pallets/:id/masters/:masterId — saca un master del pallet. Solo con el pallet Abierto.
-// Hay DOS casos distintos según cómo llegó el master aquí:
-//   - Escaneado directo (ingreso normal): se BORRA la fila de Masters. "Nunca entró a bodega", y el
-//     correlativo queda libre para re-escanearse.
-//   - Llegado por TRASLADO (consolidación de sobrantes): NO se puede borrar — ese master sí existe
-//     en bodega desde antes, borrarlo lo haría desaparecer del inventario. Se DESHACE el traslado:
-//     vuelve a su polín de origen, que es de donde salió.
-//     Además la fila de Masters está referenciada por el kardex (fk_movbodega_master), así que un
-//     DELETE reventaba con error de llave foránea — que es como se detectó este caso.
+// DELETE /api/pallets/:id/masters/:masterId — saca un master del pallet, identificado desde su fila
+// en la tabla. Solo con el pallet Abierto. La lógica real está en quitarMasterDePallet.
 router.delete("/:id/masters/:masterId", requireAuth, requirePerm("bodega", "editar"), async (req: Request, res: Response) => {
   try {
     const palletId = Number(req.params.id);
@@ -389,43 +476,30 @@ router.delete("/:id/masters/:masterId", requireAuth, requirePerm("bodega", "edit
     let respuesta: any = { ok: true };
 
     await prisma.$transaction(async (tx) => {
-      const palletRows: any[] = await tx.$queryRaw`SELECT Estatus FROM Pallets WHERE PalletId = ${palletId} LIMIT 1 FOR UPDATE`;
-      if (!palletRows.length) throw new ErrorNegocio(404, "Pallet no encontrado");
-      if (palletRows[0].Estatus !== "Abierto") throw new ErrorNegocio(400, "Este pallet no está abierto, no se pueden quitar masters");
-
-      const masterRows: any[] = await tx.$queryRaw`
-        SELECT MasterId, Estatus FROM Masters WHERE MasterId = ${masterId} AND PalletId = ${palletId} LIMIT 1 FOR UPDATE
-      `;
-      if (!masterRows.length) throw new ErrorNegocio(404, "Master no encontrado en este pallet");
-
-      // El último traslado hacia ESTE pallet dice de dónde vino. Si no hay ninguno, el master
-      // entró por escaneo normal y se puede borrar.
-      const trasladoRows: any[] = await tx.$queryRaw`
-        SELECT mb.PalletOrigenId, po.Codigo AS PalletOrigenCodigo, po.Estatus AS PalletOrigenEstatus
-        FROM MovimientosBodega mb
-        LEFT JOIN Pallets po ON mb.PalletOrigenId = po.PalletId
-        WHERE mb.MasterId = ${masterId} AND mb.Tipo = 'TRASLADO' AND mb.PalletId = ${palletId}
-        ORDER BY mb.MovimientoId DESC LIMIT 1
-      `;
-
-      if (!trasladoRows.length || trasladoRows[0].PalletOrigenId == null) {
-        await tx.$executeRaw`DELETE FROM Masters WHERE MasterId = ${masterId} AND PalletId = ${palletId}`;
-        respuesta = { ok: true, Accion: "Eliminado" };
-        return;
-      }
-
-      // Vuelve como EnBodega: su polín de origen está Abierto (es el único desde el que se pudo
-      // haber movido), así que ahí las cajas son carga normal del polín.
-      const origenId = Number(trasladoRows[0].PalletOrigenId);
-      await tx.$executeRaw`UPDATE Masters SET PalletId = ${origenId}, Estatus = 'EnBodega' WHERE MasterId = ${masterId}`;
-      await tx.$executeRaw`
-        INSERT INTO MovimientosBodega (PalletId, PalletOrigenId, MasterId, Tipo, PosicionOrigenId, PosicionDestinoId, Usuario, Motivo)
-        VALUES (${origenId}, ${palletId}, ${masterId}, 'TRASLADO', NULL, NULL, ${operador},
-                ${`Traslado deshecho: vuelve al polín ${trasladoRows[0].PalletOrigenCodigo}`})
-      `;
-      respuesta = { ok: true, Accion: "TrasladoDeshecho", PalletOrigen: trasladoRows[0].PalletOrigenCodigo };
+      await bloquearPalletAbierto(tx, palletId);
+      respuesta = await quitarMasterDePallet(tx, palletId, masterId, operador);
     }, { timeout: 30_000 });
 
+    res.json(respuesta);
+  } catch (err: any) {
+    if (err instanceof ErrorNegocio) { res.status(err.status).json({ error: err.message }); return; }
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/pallets/:id/quitar  { Correlativo } — el espejo de /escanear: saca del polín el master
+// del QR que se acaba de leer. Existe porque corregir con el botón de cada fila obliga a BUSCAR la
+// caja en la tabla y confirmar una por una, y cuando hay que bajar 20 cajas de un polín mal armado
+// eso es justamente donde se quita la que no era. Con el lector, la caja que se baja es la que se
+// quita — el mismo criterio de "se escanea, no se elige de una lista" del resto de bodega.
+router.post("/:id/quitar", requireAuth, requirePerm("bodega", "editar"), async (req: Request, res: Response) => {
+  try {
+    const palletId = Number(req.params.id);
+    const operador = getOperador(req);
+    const respuesta = await prisma.$transaction(
+      (tx) => quitarMasterEscaneado(tx, palletId, req.body.Correlativo, operador),
+      { timeout: 30_000 },
+    );
     res.json(respuesta);
   } catch (err: any) {
     if (err instanceof ErrorNegocio) { res.status(err.status).json({ error: err.message }); return; }

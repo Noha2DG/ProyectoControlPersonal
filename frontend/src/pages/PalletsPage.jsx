@@ -4,6 +4,7 @@ import { useColWidths, Th, Colgroup } from "../components/ResizableTh.jsx";
 import ConsultarEtiquetaModal from "../components/ConsultarEtiquetaModal.jsx";
 import AvisoModal from "../components/AvisoModal.jsx";
 import HojaPalletModal from "../components/HojaPalletModal.jsx";
+import ModalEscaneo from "../components/ModalEscaneo.jsx";
 import { useAviso } from "../hooks/useAviso.js";
 
 const API = "/api/pallets";
@@ -41,6 +42,17 @@ function calcularCuadre(cantidadMaster, escaneados) {
   return escaneados < cantidadMaster ? "Incompleto" : "Sobrante";
 }
 
+// La misma caja del master que se usa al cargar, con el signo de menos: es la caja que BAJA del
+// polín. La figura hace de aviso de que este modal es el destructivo, junto con el color rojo.
+const IconoQuitarMaster = (props) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6} {...props}>
+    <path strokeLinecap="round" strokeLinejoin="round"
+      d="M21 7.5l-9-5.25L3 7.5m18 0l-9 5.25m9-5.25v5.25M3 7.5l9 5.25M3 7.5v9l9 5.25m0-9v9" />
+    <circle cx="17.5" cy="16.5" r="4.5" />
+    <path strokeLinecap="round" d="M15.25 16.5h4.5" />
+  </svg>
+);
+
 // Panel de escaneo de un pallet — un solo pallet a la vez (mismo criterio operativo: la estación
 // llena un pallet, lo cierra, recién ahí abre el siguiente). El input queda enfocado para que el
 // lector 2D USB/Bluetooth (que escribe como si fuera teclado + Enter) alimente el escaneo sin mouse.
@@ -54,6 +66,7 @@ function PanelEscaneo({ palletId, onClose, onCambio }) {
   const [mensaje, setMensaje] = useState(null); // { ok: bool, texto }
   const [mostrarConsulta, setMostrarConsulta] = useState(false);
   const [mostrarHoja, setMostrarHoja] = useState(false);
+  const [mostrarQuitar, setMostrarQuitar] = useState(false);
   const inputRef = useRef(null);
   // Candado síncrono contra doble envío — el input NUNCA se deshabilita (deshabilitar un <input>
   // enfocado le quita el foco en el navegador, y a 50 masters/min el lector no puede darse el lujo
@@ -143,6 +156,40 @@ function PanelEscaneo({ palletId, onClose, onCambio }) {
     else await mostrarAlerta("Error: " + (data.error || "No se pudo quitar el master"));
   };
 
+  // Quitar ESCANEANDO: el espejo exacto del escaneo de ingreso. Bajar 20 cajas mal puestas de un
+  // polín buscándolas una por una en la tabla y confirmando cada una es donde se termina quitando la
+  // que no era; con el lector, la caja que se baja es la que se quita. Sin confirmación por caja a
+  // propósito — la confirmación es el acto físico de bajarla y pasarle el lector.
+  const quitarEscaneando = async (valor) => {
+    const res = await fetch(`${API}/${palletId}/quitar`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeader() },
+      body: JSON.stringify({ Correlativo: valor }),
+    });
+    const data = await leerJSON(res);
+    if (!res.ok) throw new Error(data.error || "No se pudo quitar el master");
+
+    // El detalle del master ya está cargado en pantalla, así que el renglón del historial se arma de
+    // ahí en vez de pedirlo de nuevo — mismo criterio que el escaneo de ingreso, que tampoco refresca
+    // el pallet completo en cada lectura.
+    const m = pallet?.Masters.find(x => x.MasterId === data.MasterId);
+    setPallet(prev => {
+      if (!prev) return prev;
+      const masters = prev.Masters.filter(x => x.MasterId !== data.MasterId);
+      return {
+        ...prev, Masters: masters,
+        CantidadMasters: Math.max(0, (prev.CantidadMasters ?? 0) - 1),
+        Cuadre: calcularCuadre(prev.CantidadMaster, masters.length),
+      };
+    });
+
+    const detalle = m ? ` — ${m.CodigoPedido} · ${m.NombreCliente}${m.NombreSubcliente ? "-" + m.NombreSubcliente : ""} · Lote ${m.Lote}` : "";
+    // Un traslado deshecho no desaparece: vuelve a su polín de origen, y el operador tiene que saber
+    // dónde quedó la caja que acaba de bajar.
+    const destino = data.Accion === "TrasladoDeshecho" ? ` · volvió al polín ${data.PalletOrigen}` : "";
+    return `${data.Correlativo} quitado${detalle}${destino}`;
+  };
+
   const handleCerrar = async () => {
     const confirmado = await pedirConfirmacion("¿Cerrar este pallet? No se podrán escanear más masters aquí.", { textoConfirmar: "Cerrar pallet" });
     if (!confirmado) return;
@@ -206,10 +253,19 @@ function PanelEscaneo({ palletId, onClose, onCambio }) {
               className="px-4 py-2.5 text-sm font-semibold text-blue-700 bg-blue-50 border border-blue-200 rounded-lg hover:bg-blue-100 active:bg-blue-200 transition">
               Consultar etiqueta
             </button>
-            {pallet?.Estatus === "Cerrado" && (
+            {/* También con el polín Abierto: la hoja es la forma de REVISAR en papel lo que lleva
+                cargado antes de cerrarlo (se sale a cotejarla contra las cajas físicas), no solo el
+                documento final del polín cerrado. La hoja misma se marca como preliminar. */}
+            {pallet && (
               <button onClick={() => setMostrarHoja(true)}
                 className="px-4 py-2.5 text-sm font-semibold text-purple-700 bg-purple-50 border border-purple-200 rounded-lg hover:bg-purple-100 active:bg-purple-200 transition">
                 Imprimir hoja
+              </button>
+            )}
+            {puedeQuitar && (
+              <button onClick={() => setMostrarQuitar(true)}
+                className="px-4 py-2.5 text-sm font-semibold text-red-700 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100 active:bg-red-200 transition">
+                Quitar masters
               </button>
             )}
           </div>
@@ -360,6 +416,15 @@ function PanelEscaneo({ palletId, onClose, onCambio }) {
     </div>
     {mostrarConsulta && <ConsultarEtiquetaModal onCerrar={() => setMostrarConsulta(false)} />}
     {mostrarHoja && <HojaPalletModal palletId={palletId} onCerrar={() => setMostrarHoja(false)} />}
+    {mostrarQuitar && (
+      <ModalEscaneo titulo="Quitar masters del polín" Icono={IconoQuitarMaster} tono="rojo" verbo="quitado"
+        descripcion={`Apunta el lector al QR de cada caja que bajes del polín ${pallet?.Codigo ?? ""}. Sale del polín apenas se lee.`}
+        placeholder="QR del master (ej. E120)"
+        onEscanear={quitarEscaneando}
+        // Al cerrar sí se recarga: la tanda pudo tocar varios polines (un traslado deshecho devuelve
+        // cajas a su origen) y la lista de atrás tiene que reflejarlo.
+        onCerrar={() => { setMostrarQuitar(false); fetchDetalle(); onCambio?.(); }} />
+    )}
     {aviso && <AvisoModal {...aviso} onCerrar={() => cerrar(true)} onCancelar={() => cerrar(false)} />}
     </>
   );

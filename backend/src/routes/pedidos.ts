@@ -7,7 +7,7 @@ const router = Router();
 // GET /api/pedidos?cliente=10&tipoCliente=Exportacion
 // `remisiones.ver` se agregó a la lista porque el formulario de remisión de exportación se arma A
 // PARTIR de un pedido: sin esto, un usuario que solo despacha no podría ni ver la lista para elegir.
-router.get("/", requireAuth, requireAnyPerm([["catalogos", "ver"], ["etiquetado", "ver"], ["remisiones", "ver"]]), async (req: Request, res: Response) => {
+router.get("/", requireAuth, requireAnyPerm([["pedidos", "ver"], ["etiquetado", "ver"], ["remisiones", "ver"]]), async (req: Request, res: Response) => {
   try {
     const condiciones: string[] = [];
     const params: any[] = [];
@@ -33,7 +33,7 @@ router.get("/", requireAuth, requireAnyPerm([["catalogos", "ver"], ["etiquetado"
 });
 
 // POST /api/pedidos  { CodigoPedido, CodigoCliente, CodigoSubcliente, Descripcion, FechaInicio }
-router.post("/", requireAuth, requirePerm("catalogos", "crear"), async (req: Request, res: Response) => {
+router.post("/", requireAuth, requirePerm("pedidos", "crear"), async (req: Request, res: Response) => {
   try {
     const { CodigoPedido, CodigoCliente, CodigoSubcliente, Descripcion, FechaInicio, EsGeneral } = req.body;
     if (!CodigoPedido || !CodigoCliente || !Descripcion) {
@@ -53,7 +53,7 @@ router.post("/", requireAuth, requirePerm("catalogos", "crear"), async (req: Req
 });
 
 // PUT /api/pedidos/:codigo
-router.put("/:codigo", requireAuth, requirePerm("catalogos", "editar"), async (req: Request, res: Response) => {
+router.put("/:codigo", requireAuth, requirePerm("pedidos", "editar"), async (req: Request, res: Response) => {
   try {
     const { Descripcion, FechaInicio, Estatus, EsGeneral } = req.body;
 

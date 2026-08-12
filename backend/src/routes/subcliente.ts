@@ -22,7 +22,7 @@ router.get("/", async (req: Request, res: Response) => {
 });
 
 // POST /api/subcliente  { CodigoCliente, CodigoSubcliente, RazonSocial }
-router.post("/", requireAuth, requirePerm("catalogos", "crear"), async (req: Request, res: Response) => {
+router.post("/", requireAuth, requirePerm("pedidos", "crear"), async (req: Request, res: Response) => {
   try {
     const { CodigoCliente, CodigoSubcliente, RazonSocial } = req.body;
     if (!CodigoCliente || !CodigoSubcliente || !RazonSocial) {
@@ -41,7 +41,7 @@ router.post("/", requireAuth, requirePerm("catalogos", "crear"), async (req: Req
 });
 
 // PUT /api/subcliente/:cliente/:sub
-router.put("/:cliente/:sub", requireAuth, requirePerm("catalogos", "editar"), async (req: Request, res: Response) => {
+router.put("/:cliente/:sub", requireAuth, requirePerm("pedidos", "editar"), async (req: Request, res: Response) => {
   try {
     const { RazonSocial, Activo } = req.body;
     const estatus = Activo === false || Activo === 0 ? "Inactivo" : "Activo";
@@ -56,7 +56,7 @@ router.put("/:cliente/:sub", requireAuth, requirePerm("catalogos", "editar"), as
 });
 
 // DELETE /api/subcliente/:cliente/:sub → baja lógica
-router.delete("/:cliente/:sub", requireAuth, requirePerm("catalogos", "eliminar"), async (req: Request, res: Response) => {
+router.delete("/:cliente/:sub", requireAuth, requirePerm("pedidos", "eliminar"), async (req: Request, res: Response) => {
   try {
     await prisma.$executeRaw`
       UPDATE Subcliente SET Estatus = 'Inactivo' WHERE CodigoCliente = ${Number(req.params.cliente)} AND CodigoSubcliente = ${req.params.sub}

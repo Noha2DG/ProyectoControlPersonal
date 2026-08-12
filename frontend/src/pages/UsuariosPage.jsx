@@ -31,6 +31,11 @@ const MODULOS = [
   // "anular" es la acción fuerte: devuelve al inventario producto ya despachado. Se separa de
   // "editar" (armar y confirmar, la operación diaria) y de "eliminar" (borrar borradores).
   { key: "remisiones",     label: "Bodega — Remisiones y Despacho",  acciones: ["ver","crear","editar","eliminar","imprimir","anular"], grupo: "Operación" },
+  // ── Pedidos
+  // Separado de `catalogos` porque es trabajo diario: capturar y corregir proformas, y dar de alta
+  // clientes. Con `catalogos` venía de regalo Presentaciones, donde CajasXMaster define el objetivo
+  // de todos los pedidos.
+  { key: "pedidos",       label: "Pedidos y Clientes",               acciones: ["ver","crear","editar","eliminar"], grupo: "Operación" },
   // ── Configuración
   { key: "areas",          label: "Áreas",                          acciones: ["ver","crear","editar","eliminar"], grupo: "Config"   },
   { key: "permisos",       label: "Permisos",                       acciones: ["ver","crear","editar","eliminar"], grupo: "Config"   },

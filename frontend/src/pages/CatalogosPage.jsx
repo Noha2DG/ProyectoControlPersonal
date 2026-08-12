@@ -3,11 +3,12 @@ import CatalogoSimpleTable from "../components/CatalogoSimpleTable.jsx";
 import ClasePage from "./ClasePage.jsx";
 import PresentacionPage from "./PresentacionPage.jsx";
 import PiscinaCicloPage from "./PiscinaCicloPage.jsx";
-import ClientesPage from "./ClientesPage.jsx";
-import PedidosPage from "./PedidosPage.jsx";
 
 // Catálogos de producción agrupados en una sola pantalla con sub-navegación,
 // para no llenar el menú principal de items sueltos a medida que se agreguen más.
+// Pedidos, Clientes y Subclientes se movieron a la sección Pedidos (PedidosClientesPage): los usa
+// a diario quien
+// captura proformas, y no debía costarle acceso de escritura a Presentaciones ni a Clase.
 const TABS = [
   { key: "familia", label: "Familia" },
   { key: "procesos", label: "Procesos" },
@@ -18,8 +19,6 @@ const TABS = [
   { key: "finca", label: "Fincas" },
   { key: "almacenes", label: "Almacenes" },
   { key: "piscina", label: "Piscinas y Ciclos" },
-  { key: "clientes", label: "Clientes" },
-  { key: "pedidos", label: "Pedidos" },
   { key: "origen", label: "Origen" },
   { key: "congelacion", label: "Congelación" },
 ];
@@ -63,8 +62,6 @@ export default function CatalogosPage() {
         <CatalogoSimpleTable api="/api/almacenes" pk="Codigo" pkLabel="Código" nuevoLabel="+ Nuevo Almacén" />
       )}
       {tab === "piscina" && <PiscinaCicloPage />}
-      {tab === "clientes" && <ClientesPage />}
-      {tab === "pedidos" && <PedidosPage />}
       {tab === "origen" && (
         <CatalogoSimpleTable api="/api/origen" pk="Codigo" pkLabel="Código" nuevoLabel="+ Nuevo Origen" />
       )}

@@ -13,6 +13,7 @@ import PlanificacionPage from "./pages/PlanificacionPage.jsx";
 import TiposPermisoPage from "./pages/TiposPermisoPage.jsx";
 import PermisosPage from "./pages/PermisosPage.jsx";
 import EquipoUniformesPage from "./pages/EquipoUniformesPage.jsx";
+import PedidosClientesPage from "./pages/PedidosClientesPage.jsx";
 import CatalogosPage from "./pages/CatalogosPage.jsx";
 import DestajoPage from "./pages/DestajoPage.jsx";
 import EtiquetadoPage from "./pages/EtiquetadoPage.jsx";
@@ -55,6 +56,7 @@ const Icon = {
   planif:    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" />,
   tiposPermiso: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />,
   permisos:  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />,
+  pedidos: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h2a2 2 0 014 0h2a2 2 0 012 2v14a2 2 0 01-2 2z" />,
   catalogos: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />,
   destajo:   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M3 7.5L12 3l9 4.5M3 7.5l9 4.5m0 0l9-4.5M3 7.5v9l9 4.5m0-13.5v13.5m0 0l9-4.5v-9" />,
   etiquetado: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M9.568 3H5.25A2.25 2.25 0 003 5.25v4.318c0 .597.237 1.169.659 1.591l9.581 9.581a2.25 2.25 0 003.182 0l4.318-4.318a2.25 2.25 0 000-3.182L10.16 3.66A2.25 2.25 0 008.568 3zM6 6h.008v.008H6V6z" />,
@@ -200,6 +202,7 @@ function Dashboard() {
   if (perm("transferencias", "ver")) nav.push({ key: "transf",    label: "Transferencias",      icon: "transf"   });
   if (perm("planificacion",   "ver")) nav.push({ key: "planif",    label: "Planificación",       icon: "planif"   });
   if (perm("destajo",        "ver")) nav.push({ key: "destajo",   label: "Destajo",             icon: "destajo"  });
+  if (perm("pedidos",        "ver")) nav.push({ key: "pedidos",   label: "Pedidos",             icon: "pedidos" });
   if (perm("etiquetado",     "ver")) nav.push({ key: "etiquetado", label: "Agrupación",          icon: "etiquetado" });
   if (perm("etiquetado",     "imprimir")) nav.push({ key: "imprimirEtiquetas", label: "Impresión de Etiquetas", icon: "imprimir" });
   if (perm("bodega",        "ver")) nav.push({ key: "bodega",     label: "Bodega — Pallets",     icon: "bodega"   });
@@ -238,6 +241,7 @@ function Dashboard() {
     permisos:  "Permisos",
     tiposPermiso: "Tipos de Permiso",
     usuarios:  "Usuarios",
+    pedidos: "Pedidos y Clientes",
     catalogos: "Catálogos de Producción",
   };
 
@@ -378,6 +382,7 @@ function Dashboard() {
             {seccion === "transf"   && perm("transferencias", "ver") && <TransferenciasAdminPage />}
             {seccion === "planif"   && perm("planificacion",   "ver") && <PlanificacionPage />}
             {seccion === "destajo"  && perm("destajo",         "ver") && <DestajoPage />}
+            {seccion === "pedidos"   && perm("pedidos",       "ver") && <PedidosClientesPage />}
             {seccion === "etiquetado" && perm("etiquetado",    "ver") && <EtiquetadoPage />}
             {seccion === "imprimirEtiquetas" && perm("etiquetado", "imprimir") && <ImpresionEtiquetasPage />}
             {seccion === "bodega"   && perm("bodega",          "ver") && <PalletsPage />}

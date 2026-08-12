@@ -7,7 +7,14 @@
       "Bash(sed -i 's/page.click\\(\"text=Ubicaciones\"\\)/page.locator\\(\"button[title*=\\\\x27Ubicaciones\\\\x27]\"\\).click\\(\\)/' verif_panel.py)",
       "PowerShell($p = \\(netstat -ano | Select-String \"LISTENING\" | Select-String \":3973\"\\); if \\($p\\) { $id = \\($p[0] -split '\\\\s+'\\)[-1]; Stop-Process -Id $id -Force -Confirm:$false; Start-Sleep -Seconds 2 }; $c = netstat -ano | Select-String \"LISTENING\" | Select-String \":39\"; if \\($c\\) { \"SIGUE: $c\" } else { \"puertos liberados\" })",
       "PowerShell($p = \\(netstat -ano | Select-String \"LISTENING\" | Select-String \":3972\"\\); if \\($p\\) { $id = \\($p[0] -split '\\\\s+'\\)[-1]; Stop-Process -Id $id -Force -Confirm:$false; Start-Sleep -Seconds 2 }; $c = netstat -ano | Select-String \"LISTENING\" | Select-String \":39\"; if \\($c\\) { \"SIGUE: $c\" } else { \"puertos liberados\" })",
-      "PowerShell($p = \\(netstat -ano | Select-String \"LISTENING\" | Select-String \":3971\"\\); if \\($p\\) { $id = \\($p[0] -split '\\\\s+'\\)[-1]; Stop-Process -Id $id -Force -Confirm:$false; Start-Sleep -Seconds 2 }; $c = netstat -ano | Select-String \"LISTENING\" | Select-String \":39\"; if \\($c\\) { \"SIGUE: $c\" } else { \"puertos liberados\" })"
+      "PowerShell($p = \\(netstat -ano | Select-String \"LISTENING\" | Select-String \":3971\"\\); if \\($p\\) { $id = \\($p[0] -split '\\\\s+'\\)[-1]; Stop-Process -Id $id -Force -Confirm:$false; Start-Sleep -Seconds 2 }; $c = netstat -ano | Select-String \"LISTENING\" | Select-String \":39\"; if \\($c\\) { \"SIGUE: $c\" } else { \"puertos liberados\" })",
+      "Bash(taskkill //F //IM node.exe)",
+      "Bash(sed -i 's/FROM UnidadCongelacion/FROM UnidadesCongelacion/' \"C:/Users/NEHEMIAS_ALVAREZ/AppData/Local/Temp/claude/c--Users-NEHEMIAS-ALVAREZ-Documents-ProyectoControlPersonal/913b0587-b6de-4869-8f70-d786c1ded729/scratchpad/flujo.ts\")",
+      "Bash(cp \"C:/Users/NEHEMIAS_ALVAREZ/AppData/Local/Temp/claude/c--Users-NEHEMIAS-ALVAREZ-Documents-ProyectoControlPersonal/913b0587-b6de-4869-8f70-d786c1ded729/scratchpad/flujo.ts\" scripts/tmp_flujo.ts)",
+      "Bash(sed -i 's/Tamano: \"4x2\"/Tamano: \"3x1\"/' \"C:/Users/NEHEMIAS_ALVAREZ/AppData/Local/Temp/claude/c--Users-NEHEMIAS-ALVAREZ-Documents-ProyectoControlPersonal/913b0587-b6de-4869-8f70-d786c1ded729/scratchpad/flujo.ts\")",
+      "Bash(taskkill //F //PID 17396)",
+      "Bash(python -c ' *)",
+      "WebSearch"
     ]
   },
   "hooks": {

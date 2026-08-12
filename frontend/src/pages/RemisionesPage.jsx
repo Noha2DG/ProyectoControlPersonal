@@ -1,9 +1,10 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { authHeader, usePuede } from "../context/AuthContext.jsx";
 import { useColWidths, Th, Colgroup } from "../components/ResizableTh.jsx";
 import AvisoModal from "../components/AvisoModal.jsx";
 import ModalMotivo from "../components/ModalMotivo.jsx";
 import HojaRemisionModal from "../components/HojaRemisionModal.jsx";
+import ModalEscaneo from "../components/ModalEscaneo.jsx";
 import { useAviso } from "../hooks/useAviso.js";
 
 const API = "/api/remisiones";
@@ -293,120 +294,6 @@ const IconoMaster = (props) => (
   </svg>
 );
 
-// ── Modal de escaneo ──────────────────────────────────────────────────────────────────────────────
-// Se ESCANEA, no se elige de una lista: el operador tiene el polín o la caja enfrente, y elegir de un
-// listado es donde se cuela el error de agarrar el de al lado. Queda abierto entre escaneo y escaneo
-// para poder cargar varios seguidos, con el historial de lo que fue entrando a la vista.
-function ModalEscaneo({ titulo, descripcion, placeholder, Icono, pideLinea, onEscanear, onCerrar }) {
-  const [valor, setValor] = useState("");
-  const [linea, setLinea] = useState("");
-  const [historial, setHistorial] = useState([]); // [{ ok, texto }]
-  const inputRef = useRef(null);
-  const lineaRef = useRef(null);
-  // Candado síncrono contra doble envío: un estado llegaría un render tarde y el lector es más
-  // rápido que eso. El input NUNCA se deshabilita — deshabilitarlo le quita el foco en el navegador.
-  const enviandoRef = useRef(false);
-
-  // La línea del contenedor se captura ANTES de escanear y se mantiene hasta cambiarla: se estiba
-  // una línea completa y recién ahí se pasa a la siguiente.
-  const lineaNum = Number(linea);
-  const lineaLista = !pideLinea || (Number.isInteger(lineaNum) && lineaNum > 0);
-
-  useEffect(() => {
-    // Mientras falte la línea, el foco va ahí; una vez puesta, al lector.
-    if (lineaLista) inputRef.current?.focus();
-    else lineaRef.current?.focus();
-  }, [historial, lineaLista]);
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    const v = valor.trim();
-    if (!v || enviandoRef.current || !lineaLista) return;
-    enviandoRef.current = true;
-    setValor("");
-    try {
-      const texto = await onEscanear(v, lineaLista && pideLinea ? lineaNum : null);
-      setHistorial(h => [{ ok: true, texto }, ...h]);
-    } catch (err) {
-      setHistorial(h => [{ ok: false, texto: `${v}: ${err.message}` }, ...h]);
-    } finally {
-      enviandoRef.current = false;
-      inputRef.current?.focus();
-    }
-  };
-
-  const aciertos = historial.filter(h => h.ok).length;
-
-  return (
-    <div className="fixed inset-0 bg-black/40 z-[55] flex items-center justify-center p-4" onClick={onCerrar}>
-      <div className="bg-white rounded-xl shadow-xl w-full max-w-lg max-h-full flex flex-col" onClick={e => e.stopPropagation()}>
-        <div className="px-5 py-4 border-b border-gray-200 flex items-start justify-between gap-3 shrink-0">
-          <div className="flex items-center gap-3">
-            <span className="w-11 h-11 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center shrink-0">
-              <Icono className="w-6 h-6" />
-            </span>
-            <div>
-              <h3 className="text-lg font-bold text-gray-800">{titulo}</h3>
-              <p className="text-xs text-gray-500">{descripcion}</p>
-            </div>
-          </div>
-          <button onClick={onCerrar} className="text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-lg p-2 text-xl leading-none transition shrink-0">&times;</button>
-        </div>
-
-        <div className="px-5 py-4 overflow-y-auto flex-1">
-          {pideLinea && (
-            <div className="mb-3">
-              <label className="block text-xs font-medium text-gray-500 mb-1">Línea dentro del contenedor *</label>
-              <input ref={lineaRef} type="number" min="1" step="1" value={linea} onChange={e => setLinea(e.target.value)}
-                placeholder="Ej. 1"
-                className="w-full border-2 border-amber-300 rounded-lg px-3 py-2.5 text-base font-mono focus:outline-none focus:ring-2 focus:ring-amber-400" />
-              <p className="text-xs text-gray-400 mt-1">
-                Todo lo que escanees se registra en esta línea. Cámbiala al pasar a la siguiente.
-              </p>
-            </div>
-          )}
-
-          <form onSubmit={handleSubmit}>
-            {/* El lector solo se habilita con la línea puesta: escanear sin saber dónde se estibó es
-                justamente el dato que después no se puede reconstruir. */}
-            <input ref={inputRef} type="text" value={valor} onChange={e => setValor(e.target.value)} autoFocus
-              placeholder={lineaLista ? placeholder : "Primero indica la línea del contenedor"}
-              readOnly={!lineaLista}
-              className={`w-full border-2 rounded-lg px-3 py-3 text-base font-mono focus:outline-none focus:ring-2 ${
-                lineaLista
-                  ? "border-blue-300 focus:ring-blue-400"
-                  : "border-gray-200 bg-gray-50 text-gray-400 cursor-not-allowed focus:ring-gray-200"
-              }`} />
-          </form>
-          {pideLinea && lineaLista && (
-            <p className="text-xs text-amber-700 mt-1.5 font-medium">Escaneando hacia la línea {lineaNum}</p>
-          )}
-
-          {historial.length > 0 && (
-            <div className="mt-4">
-              <p className="text-xs font-medium text-gray-500 mb-2">
-                {aciertos} agregado{aciertos === 1 ? "" : "s"} en esta tanda
-              </p>
-              <div className="space-y-1.5">
-                {historial.map((h, i) => (
-                  <div key={historial.length - i}
-                    className={`text-sm px-3 py-2 rounded-lg border ${h.ok ? "bg-green-50 text-green-700 border-green-200" : "bg-red-50 text-red-700 border-red-200"}`}>
-                    {h.texto}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-
-        <div className="px-5 py-3 border-t border-gray-200 flex justify-end shrink-0">
-          <button onClick={onCerrar} className="px-4 py-2 rounded-lg text-sm font-semibold bg-blue-600 text-white hover:bg-blue-700 transition">Listo</button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 // ── Panel de armado / consulta de una remisión ────────────────────────────────────────────────────
 function PanelRemision({ remisionId, onClose, onCambio }) {
   const puedeEditar = usePuede("remisiones", "editar");
@@ -420,6 +307,7 @@ function PanelRemision({ remisionId, onClose, onCambio }) {
   const [escaneando, setEscaneando] = useState(null); // "pallet" | "master" | null
   const [modalAnular, setModalAnular] = useState(false);
   const [mostrarHoja, setMostrarHoja] = useState(false);
+  const [avance, setAvance] = useState({}); // DetalleId -> avance de esa línea de la proforma
   const [widths, startResize] = useColWidths("remision_lineas", LINEAS_COL_DEFAULTS);
 
   const fetchDetalle = useCallback(async () => {
@@ -518,6 +406,49 @@ function PanelRemision({ remisionId, onClose, onCambio }) {
     return acc;
   }, {});
   const grupos = Object.values(porPolin);
+
+  // Compara lo que va saliendo contra lo que pide la proforma. Es AVISO, no candado: la proforma se
+  // modifica constantemente y se corrige después de la carga, así que bloquear aquí frenaría
+  // contenedores legítimos con el camión esperando en el andén.
+  const lineasRem = remision?.Lineas ?? [];
+  const pedidosEnRemision = [...new Set(lineasRem.map(l => l.CodigoPedido).filter(Boolean))].sort().join(",");
+
+  useEffect(() => {
+    if (!pedidosEnRemision) { setAvance({}); return; }
+    let vivo = true;
+    // Una remisión mixta junta varias proformas, así que se piden todas y se indexan por línea.
+    Promise.all(pedidosEnRemision.split(",").map(p =>
+      fetch(`/api/detalle-pedido/avance?pedido=${encodeURIComponent(p)}`, { headers: authHeader() })
+        .then(r => (r.ok ? r.json() : [])).catch(() => [])
+    )).then(res => {
+      if (!vivo) return;
+      const mapa = {};
+      for (const fila of res.flat()) mapa[fila.DetalleId] = fila;
+      setAvance(mapa);
+    });
+    return () => { vivo = false; };
+  }, [pedidosEnRemision]);
+
+  const excedidas = (() => {
+    const enRemision = {};
+    for (const l of lineasRem) enRemision[l.DetalleId] = (enRemision[l.DetalleId] ?? 0) + 1;
+    const confirmada = remision?.Estatus === "Confirmada";
+    return Object.entries(enRemision).map(([id, cuantos]) => {
+      const a = avance[id];
+      // Objetivo null = pedido general: perpetuo, sin cantidad planificada contra la cual comparar.
+      if (!a || a.Objetivo === null) return null;
+      // En una confirmada el Despachado del avance YA incluye estas líneas; en un borrador todavía no.
+      const total = confirmada ? a.Despachado : a.Despachado + cuantos;
+      if (total <= a.Objetivo) return null;
+      const l = lineasRem.find(x => String(x.DetalleId) === String(id));
+      return {
+        id,
+        producto: `${l.DescripcionProceso} ${l.DescripcionTalla}`,
+        pedido: l.CodigoPedido,
+        total, objetivo: a.Objetivo, exceso: total - a.Objetivo,
+      };
+    }).filter(Boolean);
+  })();
   // La columna de línea del contenedor solo tiene sentido donde se estiba uno (Exportación).
   const pideLinea = remision?.PideLinea === true;
   const LINEAS_COLS = Object.keys(LINEAS_COL_DEFAULTS)
@@ -586,6 +517,21 @@ function PanelRemision({ remisionId, onClose, onCambio }) {
                     </span>
                   )}
                 </div>
+
+                {excedidas.length > 0 && (
+                  <div className="mb-3 px-3 py-2 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-xs">
+                    <span className="font-semibold">Pasa lo que pide la proforma.</span>{" "}
+                    Se puede despachar igual — es solo un aviso para que la proforma se corrija después.
+                    <ul className="mt-1 space-y-0.5">
+                      {excedidas.map(e => (
+                        <li key={e.id}>
+                          · {e.producto} <span className="font-mono text-amber-700">({e.pedido})</span>:{" "}
+                          {e.total} de {e.objetivo} master — <b>+{e.exceso}</b>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
 
                 {grupos.length === 0 ? (
                   <p className="text-gray-400 text-sm py-8 text-center border border-gray-200 rounded-lg">

@@ -6,8 +6,24 @@ const ESTATUS = ["Proceso", "Terminado"];
 
 const PEDIDOS_COL_DEFAULTS = { pedido: 130, descripcion: 220, estatus: 110, editar: 90 };
 const PEDIDOS_COLS = Object.keys(PEDIDOS_COL_DEFAULTS);
-const DETALLE_COL_DEFAULTS = { clase: 90, talla: 90, presentacion: 130, cajas: 90, kg: 90, acciones: 130 };
+const DETALLE_COL_DEFAULTS = { clase: 90, talla: 90, presentacion: 130, cajas: 90, kg: 90, acciones: 170 };
 const DETALLE_COLS = Object.keys(DETALLE_COL_DEFAULTS);
+// El avance va en su propia pestaña y no como columnas extra del detalle: son 8 columnas y el panel
+// vive a media pantalla, así que metidas junto a la proforma quedarían ilegibles.
+const AVANCE_COL_DEFAULTS = { clase: 70, talla: 80, presentacion: 95, objetivo: 80, agrupado: 85, bodega: 85, despachado: 90, dif: 90 };
+const AVANCE_COLS = Object.keys(AVANCE_COL_DEFAULTS);
+
+const fmtFecha = v => {
+  if (!v) return "";
+  const d = new Date(v);
+  return `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}/${d.getFullYear()} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+};
+
+const ACCION_BADGE = {
+  Alta:   "bg-green-100 text-green-700",
+  Cambio: "bg-blue-100 text-blue-700",
+  Baja:   "bg-red-100 text-red-700",
+};
 
 // Combo de texto con búsqueda — para catálogos largos (Clase, Talla, Presentación, Empaques)
 function ComboBuscable({ options, value, onChange, placeholder, required }) {
@@ -314,10 +330,73 @@ function DetalleModal({ item, codigoPedido, esGeneral, clases, tallas, presentac
 
 const ESTATUS_BADGE = { Proceso: "bg-yellow-100 text-yellow-700", Terminado: "bg-green-100 text-green-700" };
 
+// Cómo se ha movido una línea de la proforma. Cada fila del historial es una foto completa del
+// estado tras el cambio, así que el "de X a Y" se saca comparando con la fila anterior.
+function HistorialModal({ detalleId, tallaDesc, presentacionDesc, onClose }) {
+  const [filas, setFilas] = useState(null);
+
+  useEffect(() => {
+    fetch(`/api/detalle-pedido/${detalleId}/historial`, { headers: authHeader() })
+      .then(r => r.json())
+      .then(d => setFilas(Array.isArray(d) ? d : []))
+      .catch(() => setFilas([]));
+  }, [detalleId]);
+
+  return (
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={onClose}>
+      <div className="bg-white rounded-xl shadow-xl w-full max-w-2xl max-h-[80vh] flex flex-col" onClick={e => e.stopPropagation()}>
+        <div className="px-5 py-4 border-b flex items-center justify-between">
+          <h3 className="font-semibold text-gray-800">Historial de la línea</h3>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-700 text-xl leading-none">&times;</button>
+        </div>
+
+        <div className="overflow-y-auto p-5">
+          {filas === null ? (
+            <div className="flex justify-center py-8"><div className="w-6 h-6 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" /></div>
+          ) : filas.length === 0 ? (
+            <p className="text-sm text-gray-400 text-center py-6">Sin movimientos registrados.</p>
+          ) : (
+            <ol className="space-y-3">
+              {filas.map((f, i) => {
+                const prev = i > 0 ? filas[i - 1] : null;
+                const cambioCajas = prev && prev.CantidadCajas !== f.CantidadCajas;
+                return (
+                  <li key={f.HistorialId} className="border-l-2 border-gray-200 pl-4 relative">
+                    <span className="absolute -left-[5px] top-1.5 w-2 h-2 rounded-full bg-gray-300" />
+                    <div className="flex flex-wrap items-center gap-2 text-xs">
+                      <span className={`px-2 py-0.5 rounded-full font-semibold ${ACCION_BADGE[f.Accion] || "bg-gray-100 text-gray-600"}`}>{f.Accion}</span>
+                      <span className="text-gray-500">{fmtFecha(f.CreadoEn)}</span>
+                      <span className="text-gray-400">·</span>
+                      <span className="text-gray-600">{f.RegistradoPor || "—"}</span>
+                    </div>
+                    <div className="mt-1 text-sm text-gray-700">
+                      {f.Clase} · {tallaDesc(f.Talla)} · {presentacionDesc(f.Presentacion)}
+                    </div>
+                    <div className="text-sm">
+                      {cambioCajas ? (
+                        <span className="font-semibold text-amber-700">
+                          {prev.CantidadCajas} → {f.CantidadCajas} cajas
+                        </span>
+                      ) : (
+                        <span className="text-gray-600">{f.CantidadCajas} cajas</span>
+                      )}
+                      <span className="text-gray-400"> · {f.KgPedido} Kg</span>
+                    </div>
+                  </li>
+                );
+              })}
+            </ol>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function PedidosPage() {
-  const puedeCrear = usePuede("catalogos", "crear");
-  const puedeEditar = usePuede("catalogos", "editar");
-  const puedeEliminar = usePuede("catalogos", "eliminar");
+  const puedeCrear = usePuede("pedidos", "crear");
+  const puedeEditar = usePuede("pedidos", "editar");
+  const puedeEliminar = usePuede("pedidos", "eliminar");
   const [pedidos, setPedidos] = useState([]);
   const [clientes, setClientes] = useState([]);
   const [clases, setClases] = useState([]);
@@ -333,6 +412,11 @@ export default function PedidosPage() {
   const [busqueda, setBusqueda] = useState("");
   const [widthsPedidos, startResizePedidos] = useColWidths("pedidos", PEDIDOS_COL_DEFAULTS);
   const [widthsDetalle, startResizeDetalle] = useColWidths("pedidos_detalle", DETALLE_COL_DEFAULTS);
+  const [widthsAvance, startResizeAvance] = useColWidths("pedidos_avance", AVANCE_COL_DEFAULTS);
+  const [vista, setVista] = useState("proforma");
+  const [avance, setAvance] = useState([]);
+  const [loadingAv, setLoadingAv] = useState(false);
+  const [historialId, setHistorialId] = useState(null);
 
   const fetchPedidos = useCallback(async () => {
     setLoading(true);
@@ -369,7 +453,22 @@ export default function PedidosPage() {
     } finally { setLoadingDet(false); }
   }, []);
 
+  const fetchAvance = useCallback(async (codigo) => {
+    setLoadingAv(true);
+    try {
+      const res = await fetch(`/api/detalle-pedido/avance?pedido=${encodeURIComponent(codigo)}`, { headers: authHeader() });
+      const data = await res.json();
+      setAvance(Array.isArray(data) ? data : []);
+    } finally { setLoadingAv(false); }
+  }, []);
+
   const seleccionarPedido = (p) => { setPedidoSel(p); fetchDetalles(p.CodigoPedido); };
+
+  // El avance se recarga al entrar a la pestaña y al cambiar de pedido. Cuenta producto físico, que
+  // se mueve todo el día por escaneo y despacho, así que se pide fresco en vez de cachearlo.
+  useEffect(() => {
+    if (vista === "avance" && pedidoSel) fetchAvance(pedidoSel.CodigoPedido);
+  }, [vista, pedidoSel, fetchAvance]);
 
   const handleSavePedido = async (form) => {
     const isEdit = pedidos.some(p => p.CodigoPedido === form.CodigoPedido);
@@ -454,7 +553,7 @@ export default function PedidosPage() {
                   <tr key={p.CodigoPedido} onClick={() => seleccionarPedido(p)}
                     className={`cursor-pointer transition ${pedidoSel?.CodigoPedido === p.CodigoPedido ? "bg-blue-50" : "hover:bg-gray-50"}`}>
                     <td className="px-4 py-3 font-mono font-bold text-gray-700 whitespace-nowrap">{p.CodigoPedido}</td>
-                    <td className="px-4 py-3 text-gray-900 whitespace-nowrap">
+                    <td className="px-4 py-3 text-gray-900 truncate" title={p.Descripcion}>
                       {p.Descripcion}
                       {p.EsGeneral && (
                         <span className="ml-2 inline-block px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-700"
@@ -484,18 +583,102 @@ export default function PedidosPage() {
       <div className="flex-1 min-w-0">
         <div className="flex flex-wrap gap-3 items-center mb-4">
           <h3 className="text-sm font-medium text-gray-600">
-            Detalle {pedidoSel ? <span className="font-mono font-bold text-gray-800">— {pedidoSel.CodigoPedido}</span> : ""}
+            {pedidoSel ? <span className="font-mono font-bold text-gray-800">{pedidoSel.CodigoPedido}</span> : "Detalle"}
           </h3>
-          {puedeCrear && (
+
+          <div className="inline-flex rounded-lg border border-gray-300 overflow-hidden text-xs font-semibold">
+            {[["proforma", "Proforma"], ["avance", "Avance"]].map(([key, label]) => (
+              <button key={key} onClick={() => setVista(key)} disabled={!pedidoSel}
+                className={`px-3 py-2 transition disabled:opacity-50 ${vista === key ? "bg-blue-600 text-white" : "bg-white text-gray-600 hover:bg-gray-50"}`}>
+                {label}
+              </button>
+            ))}
+          </div>
+
+          {puedeCrear && vista === "proforma" && (
             <button onClick={() => setModalDetalle({ open: true, item: null })} disabled={!pedidoSel}
               className="ml-auto bg-blue-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-blue-700 transition disabled:opacity-50">
               + Nueva Línea
+            </button>
+          )}
+          {vista === "avance" && pedidoSel && (
+            <button onClick={() => fetchAvance(pedidoSel.CodigoPedido)}
+              className="ml-auto text-xs font-medium text-blue-600 hover:text-blue-800 px-2 py-1 rounded hover:bg-blue-50 transition">
+              Actualizar
             </button>
           )}
         </div>
 
         {!pedidoSel ? (
           <div className="bg-white rounded-xl shadow px-4 py-8 text-center text-gray-400 text-sm">Seleccione un pedido para ver su detalle</div>
+        ) : vista === "avance" ? (
+          loadingAv ? (
+            <div className="flex justify-center py-10"><div className="w-6 h-6 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" /></div>
+          ) : (
+            <>
+              <div className="bg-white rounded-xl shadow overflow-x-auto">
+                <table className="w-full text-sm table-fixed">
+                  <Colgroup columns={AVANCE_COLS} widths={widthsAvance} />
+                  <thead>
+                    <tr className="bg-gray-100 text-gray-600 uppercase text-xs tracking-wider">
+                      <Th width={widthsAvance.clase} onResizeStart={startResizeAvance("clase")} className="px-3 py-3 text-left">Clase</Th>
+                      <Th width={widthsAvance.talla} onResizeStart={startResizeAvance("talla")} className="px-3 py-3 text-left">Talla</Th>
+                      <Th width={widthsAvance.presentacion} onResizeStart={startResizeAvance("presentacion")} className="px-3 py-3 text-left">Present.</Th>
+                      <Th width={widthsAvance.objetivo} onResizeStart={startResizeAvance("objetivo")} className="px-3 py-3 text-right" title="Master que pide la proforma">Pedido</Th>
+                      <Th width={widthsAvance.agrupado} onResizeStart={startResizeAvance("agrupado")} className="px-3 py-3 text-right" title="Master declarados en Agrupación">Agrupado</Th>
+                      <Th width={widthsAvance.bodega} onResizeStart={startResizeAvance("bodega")} className="px-3 py-3 text-right" title="Master escaneados que siguen en bodega">Bodega</Th>
+                      <Th width={widthsAvance.despachado} onResizeStart={startResizeAvance("despachado")} className="px-3 py-3 text-right" title="Master que salieron en una remisión confirmada">Despach.</Th>
+                      <Th width={widthsAvance.dif} onResizeStart={startResizeAvance("dif")} className="px-3 py-3 text-right" title="Despachado menos lo pedido">Dif.</Th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {avance.map(a => (
+                      <tr key={a.DetalleId} className="hover:bg-gray-50 transition">
+                        <td className="px-3 py-3 font-mono text-gray-700 truncate" title={a.Clase}>{a.Clase}</td>
+                        <td className="px-3 py-3 text-gray-700 truncate" title={tallaDesc(a.Talla)}>{tallaDesc(a.Talla)}</td>
+                        <td className="px-3 py-3 text-gray-700 truncate" title={presentacionDesc(a.Presentacion)}>{presentacionDesc(a.Presentacion)}</td>
+                        <td className="px-3 py-3 text-right text-gray-800 font-semibold">
+                          {a.Objetivo === null ? <span className="text-gray-300">—</span> : a.Objetivo}
+                        </td>
+                        <td className="px-3 py-3 text-right text-gray-600">{a.Declarado}</td>
+                        <td className="px-3 py-3 text-right text-gray-600">{a.EnBodega}</td>
+                        <td className="px-3 py-3 text-right text-gray-800 font-semibold">{a.Despachado}</td>
+                        <td className="px-3 py-3 text-right">
+                          {a.Diferencia === null ? (
+                            <span className="text-gray-300">—</span>
+                          ) : a.Diferencia > 0 ? (
+                            <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-700"
+                              title="Salió más de lo que pide la proforma">+{a.Diferencia}</span>
+                          ) : a.Diferencia === 0 ? (
+                            <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-green-100 text-green-700">completo</span>
+                          ) : (
+                            <span className="text-gray-500">{a.Diferencia}</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                    {avance.length === 0 && (
+                      <tr><td colSpan={8} className="px-4 py-8 text-center text-gray-400">Sin líneas en este pedido</td></tr>
+                    )}
+                    {avance.length > 0 && (
+                      <tr className="bg-gray-50 font-semibold">
+                        <td colSpan={3} className="px-3 py-3 text-right text-gray-600">Total</td>
+                        <td className="px-3 py-3 text-right text-gray-800">{avance.reduce((s, a) => s + (a.Objetivo || 0), 0)}</td>
+                        <td className="px-3 py-3 text-right text-gray-600">{avance.reduce((s, a) => s + a.Declarado, 0)}</td>
+                        <td className="px-3 py-3 text-right text-gray-600">{avance.reduce((s, a) => s + a.EnBodega, 0)}</td>
+                        <td className="px-3 py-3 text-right text-gray-800">{avance.reduce((s, a) => s + a.Despachado, 0)}</td>
+                        <td></td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+              <p className="mt-2 text-xs text-gray-500 leading-relaxed">
+                Todo en master. <b>Pedido</b> = cajas de la proforma ÷ cajas por master.
+                {" "}Las diferencias en ámbar avisan, no bloquean: la proforma se corrige después de la carga.
+              </p>
+            </>
+          )
         ) : loadingDet ? (
           <div className="flex justify-center py-10"><div className="w-6 h-6 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" /></div>
         ) : (
@@ -515,9 +698,9 @@ export default function PedidosPage() {
               <tbody className="divide-y divide-gray-100">
                 {detalles.map(d => (
                   <tr key={d.DetalleId} className="hover:bg-gray-50 transition">
-                    <td className="px-4 py-3 font-mono text-gray-700 whitespace-nowrap">{d.Clase}</td>
-                    <td className="px-4 py-3 text-gray-700 whitespace-nowrap">{tallaDesc(d.Talla)}</td>
-                    <td className="px-4 py-3 text-gray-700 whitespace-nowrap">{presentacionDesc(d.Presentacion)}</td>
+                    <td className="px-4 py-3 font-mono text-gray-700 truncate" title={d.Clase}>{d.Clase}</td>
+                    <td className="px-4 py-3 text-gray-700 truncate" title={tallaDesc(d.Talla)}>{tallaDesc(d.Talla)}</td>
+                    <td className="px-4 py-3 text-gray-700 truncate" title={presentacionDesc(d.Presentacion)}>{presentacionDesc(d.Presentacion)}</td>
                     {/* El 1 de un pedido general es centinela, no un dato: mostrarlo invitaría a leerlo
                         como cantidad planificada. */}
                     <td className="px-4 py-3 text-right whitespace-nowrap">
@@ -527,7 +710,9 @@ export default function PedidosPage() {
                       {pedidoSel.EsGeneral ? <span className="text-gray-300">—</span> : d.KgPedido}
                     </td>
                     <td className="px-4 py-3 text-center whitespace-nowrap">
-                      <div className="flex justify-center gap-2">
+                      <div className="flex justify-center gap-1">
+                        <button onClick={() => setHistorialId(d.DetalleId)} title="Cómo ha cambiado esta línea"
+                          className="text-gray-500 hover:text-gray-800 text-xs font-medium px-2 py-1 rounded hover:bg-gray-100 transition">Historial</button>
                         {puedeEditar && (
                           <button onClick={() => setModalDetalle({ open: true, item: d })}
                             className="text-blue-600 hover:text-blue-800 text-xs font-medium px-2 py-1 rounded hover:bg-blue-50 transition">Editar</button>
@@ -560,6 +745,10 @@ export default function PedidosPage() {
 
       {modalPedido.open && (
         <PedidoModal item={modalPedido.item} clientes={clientes} onSave={handleSavePedido} onClose={() => setModalPedido({ open: false, item: null })} />
+      )}
+      {historialId && (
+        <HistorialModal detalleId={historialId} tallaDesc={tallaDesc} presentacionDesc={presentacionDesc}
+          onClose={() => setHistorialId(null)} />
       )}
       {modalDetalle.open && pedidoSel && (
         <DetalleModal item={modalDetalle.item} codigoPedido={pedidoSel.CodigoPedido} esGeneral={pedidoSel.EsGeneral}

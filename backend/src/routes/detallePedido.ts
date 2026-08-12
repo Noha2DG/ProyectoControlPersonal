@@ -1,8 +1,12 @@
 import { Router, Request, Response } from "express";
 import prisma from "../lib/prisma.ts";
-import { requireAuth, requirePerm, requireAnyPerm } from "../middleware/auth.ts";
+import { requireAuth, requirePerm, requireAnyPerm, AuthRequest } from "../middleware/auth.ts";
 
 const router = Router();
+
+// requireAuth ya validó el token y dejó el payload en req.user, así que no hace falta volver a
+// verificarlo. Se prefiere el nombre sobre el usuario porque el historial se lee como bitácora.
+const operadorDe = (req: AuthRequest) => req.user?.nombre ?? req.user?.username ?? "Sistema";
 
 function formatear(rows: any[]) {
   return rows.map(r => ({
@@ -49,6 +53,35 @@ function resolverCantidades(esGeneral: boolean, ctx: { PesoKG: number; PesoLb: n
   return { cajas: Number(body.CantidadCajas), kg: Number(body.KgPedido), lb: Number(body.LibrasPedido) };
 }
 
+// Deja constancia del estado de la línea DESPUÉS del cambio (foto completa, no delta). La proforma
+// se modifica seguido, y sin este rastro no hay forma de saber qué decía el día que se despachó
+// —ver crearHistorialDetallePedido.ts—. Nunca debe tumbar la operación: si el historial falla, el
+// cambio de la línea ya ocurrió y bloquearlo dejaría al usuario sin poder capturar. Se registra el
+// fallo y se sigue.
+async function registrarHistorial(
+  client: any,
+  datos: {
+    DetalleId: number; CodigoPedido: string; Accion: "Alta" | "Cambio" | "Baja";
+    Clase: string; Proceso: number; Talla: number; Presentacion: string;
+    EmpaqueMaster: string; EmpaqueAccesorio: string | null;
+    CantidadCajas: number; KgPedido: number; LibrasPedido: number;
+  },
+  usuario?: string,
+) {
+  try {
+    await client.$executeRaw`
+      INSERT INTO DetallePedidoHistorial
+        (DetalleId, CodigoPedido, Accion, Clase, Proceso, Talla, Presentacion,
+         EmpaqueMaster, EmpaqueAccesorio, CantidadCajas, KgPedido, LibrasPedido, RegistradoPor)
+      VALUES (${datos.DetalleId}, ${datos.CodigoPedido}, ${datos.Accion}, ${datos.Clase}, ${datos.Proceso},
+              ${datos.Talla}, ${datos.Presentacion}, ${datos.EmpaqueMaster}, ${datos.EmpaqueAccesorio},
+              ${datos.CantidadCajas}, ${datos.KgPedido}, ${datos.LibrasPedido}, ${usuario || null})
+    `;
+  } catch (err: any) {
+    console.error("No se pudo registrar el historial de la línea de pedido:", err.message);
+  }
+}
+
 function errorLinea(err: any, res: Response) {
   if (err.message?.includes("uq_detalle_producto")) {
     res.status(400).json({ error: "Ya existe una línea con ese proceso, talla y presentación en este pedido — esa combinación no se puede repetir." });
@@ -60,7 +93,7 @@ function errorLinea(err: any, res: Response) {
 }
 
 // GET /api/detalle-pedido?pedido=2025004
-router.get("/", requireAuth, requireAnyPerm([["catalogos", "ver"], ["etiquetado", "ver"]]), async (req: Request, res: Response) => {
+router.get("/", requireAuth, requireAnyPerm([["pedidos", "ver"], ["etiquetado", "ver"]]), async (req: Request, res: Response) => {
   try {
     const pedido = req.query.pedido as string | undefined;
     // El tope de 2000 en la rama por pedido es una red de seguridad, no paginación: un pedido general
@@ -83,7 +116,7 @@ router.get("/", requireAuth, requireAnyPerm([["catalogos", "ver"], ["etiquetado"
 });
 
 // POST /api/detalle-pedido
-router.post("/", requireAuth, requirePerm("catalogos", "crear"), async (req: Request, res: Response) => {
+router.post("/", requireAuth, requirePerm("pedidos", "crear"), async (req: AuthRequest, res: Response) => {
   try {
     const { CodigoPedido, Clase, Talla, Presentacion, EmpaqueMaster, EmpaqueAccesorio, CantidadCajas, KgPedido, LibrasPedido } = req.body;
     if (!CodigoPedido || !Clase || !Talla || !Presentacion || !EmpaqueMaster) {
@@ -102,18 +135,32 @@ router.post("/", requireAuth, requirePerm("catalogos", "crear"), async (req: Req
     }
     const { cajas, kg, lb } = resolverCantidades(ctx.EsGeneral, ctx, { CantidadCajas, KgPedido, LibrasPedido });
 
-    await prisma.$executeRaw`
-      INSERT INTO DetallePedido (CodigoPedido, Clase, Proceso, Talla, Presentacion, EmpaqueMaster, EmpaqueAccesorio, CantidadCajas, KgPedido, LibrasPedido)
-      VALUES (${CodigoPedido}, ${Clase}, ${ctx.Proceso}, ${Number(Talla)}, ${Presentacion}, ${EmpaqueMaster}, ${EmpaqueAccesorio || null}, ${cajas}, ${kg}, ${lb})
-    `;
-    res.status(201).json({ ok: true });
+    // El INSERT y la lectura del id van en la misma transacción: LAST_INSERT_ID() es por conexión, y
+    // fuera de la transacción el pool podría devolver otra y traer el id de un insert ajeno.
+    const detalleId = await prisma.$transaction(async tx => {
+      await tx.$executeRaw`
+        INSERT INTO DetallePedido (CodigoPedido, Clase, Proceso, Talla, Presentacion, EmpaqueMaster, EmpaqueAccesorio, CantidadCajas, KgPedido, LibrasPedido)
+        VALUES (${CodigoPedido}, ${Clase}, ${ctx.Proceso}, ${Number(Talla)}, ${Presentacion}, ${EmpaqueMaster}, ${EmpaqueAccesorio || null}, ${cajas}, ${kg}, ${lb})
+      `;
+      const filas: any[] = await tx.$queryRaw`SELECT LAST_INSERT_ID() AS id`;
+      return Number(filas[0].id);
+    }, { timeout: 30_000 });
+
+    await registrarHistorial(prisma, {
+      DetalleId: detalleId, CodigoPedido: String(CodigoPedido), Accion: "Alta",
+      Clase, Proceso: ctx.Proceso, Talla: Number(Talla), Presentacion,
+      EmpaqueMaster, EmpaqueAccesorio: EmpaqueAccesorio || null,
+      CantidadCajas: cajas, KgPedido: kg, LibrasPedido: lb,
+    }, operadorDe(req));
+
+    res.status(201).json({ ok: true, DetalleId: detalleId });
   } catch (err: any) {
     errorLinea(err, res);
   }
 });
 
 // PUT /api/detalle-pedido/:id
-router.put("/:id", requireAuth, requirePerm("catalogos", "editar"), async (req: Request, res: Response) => {
+router.put("/:id", requireAuth, requirePerm("pedidos", "editar"), async (req: AuthRequest, res: Response) => {
   try {
     const id = Number(req.params.id);
     const { Clase, Talla, Presentacion, EmpaqueMaster, EmpaqueAccesorio, CantidadCajas, KgPedido, LibrasPedido } = req.body;
@@ -146,6 +193,14 @@ router.put("/:id", requireAuth, requirePerm("catalogos", "editar"), async (req: 
         CantidadCajas = ${cajas}, KgPedido = ${kg}, LibrasPedido = ${lb}
       WHERE DetalleId = ${id}
     `;
+
+    await registrarHistorial(prisma, {
+      DetalleId: id, CodigoPedido: String(actuales[0].CodigoPedido), Accion: "Cambio",
+      Clase, Proceso: ctx.Proceso, Talla: Number(Talla), Presentacion,
+      EmpaqueMaster, EmpaqueAccesorio: EmpaqueAccesorio || null,
+      CantidadCajas: cajas, KgPedido: kg, LibrasPedido: lb,
+    }, operadorDe(req));
+
     res.json({ ok: true });
   } catch (err: any) {
     errorLinea(err, res);
@@ -153,10 +208,128 @@ router.put("/:id", requireAuth, requirePerm("catalogos", "editar"), async (req: 
 });
 
 // DELETE /api/detalle-pedido/:id  (elimina la línea, igual que correcciones de captura)
-router.delete("/:id", requireAuth, requirePerm("catalogos", "eliminar"), async (req: Request, res: Response) => {
+router.delete("/:id", requireAuth, requirePerm("pedidos", "eliminar"), async (req: AuthRequest, res: Response) => {
   try {
-    await prisma.$executeRaw`DELETE FROM DetallePedido WHERE DetalleId = ${Number(req.params.id)}`;
+    const id = Number(req.params.id);
+    // Se lee ANTES de borrar: el historial guarda el último estado conocido, que es justo lo que
+    // hace falta si más adelante aparece producto despachado contra una línea que ya no existe.
+    const previas: any[] = await prisma.$queryRaw`
+      SELECT CodigoPedido, Clase, Proceso, Talla, Presentacion, EmpaqueMaster, EmpaqueAccesorio,
+             CantidadCajas, KgPedido, LibrasPedido
+      FROM DetallePedido WHERE DetalleId = ${id} LIMIT 1
+    `;
+    if (!previas.length) { res.status(404).json({ error: "Línea de pedido no encontrada" }); return; }
+    const p = previas[0];
+
+    await prisma.$executeRaw`DELETE FROM DetallePedido WHERE DetalleId = ${id}`;
+
+    await registrarHistorial(prisma, {
+      DetalleId: id, CodigoPedido: String(p.CodigoPedido), Accion: "Baja",
+      Clase: String(p.Clase), Proceso: Number(p.Proceso), Talla: Number(p.Talla),
+      Presentacion: String(p.Presentacion), EmpaqueMaster: String(p.EmpaqueMaster),
+      EmpaqueAccesorio: p.EmpaqueAccesorio ?? null, CantidadCajas: Number(p.CantidadCajas),
+      KgPedido: Number(p.KgPedido), LibrasPedido: Number(p.LibrasPedido),
+    }, operadorDe(req));
+
     res.json({ ok: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/detalle-pedido/avance?pedido=2026-016
+//
+// Cierra la cadena del pedido, que hasta ahora llegaba solo hasta "agrupado" y ahí se cortaba:
+//   Objetivo → Declarado → EnBodega → Despachado
+//
+// Es MEDICIÓN, no candado. La proforma se mueve (se agregan productos en plena carga), así que topar
+// el despacho contra ella frenaría contenedores legítimos en el andén. Diferencia > 0 se muestra en
+// ámbar y el bodeguero decide — el candado duro sigue siendo el de Agrupación (declarado), que sí
+// tiene sentido porque ahí todavía no hay producto físico comprometido.
+router.get("/avance", requireAuth, requireAnyPerm([["pedidos", "ver"], ["etiquetado", "ver"], ["remisiones", "ver"]]), async (req: Request, res: Response) => {
+  try {
+    const pedido = req.query.pedido as string | undefined;
+    if (!pedido) { res.status(400).json({ error: "Falta el pedido" }); return; }
+
+    const lineas: any[] = await prisma.$queryRaw`
+      SELECT dp.DetalleId, dp.Clase, dp.Proceso, dp.Talla, dp.Presentacion,
+             dp.CantidadCajas, dp.KgPedido, dp.LibrasPedido, pr.CajasXMaster, ped.EsGeneral
+      FROM DetallePedido dp
+      JOIN Presentacion pr ON pr.Codigo = dp.Presentacion
+      JOIN Pedidos ped ON ped.CodigoPedido = dp.CodigoPedido
+      WHERE dp.CodigoPedido = ${pedido}
+      ORDER BY dp.DetalleId ASC LIMIT 2000
+    `;
+    if (!lineas.length) { res.json([]); return; }
+
+    const ids = lineas.map(l => Number(l.DetalleId));
+    const marcas = ids.map(() => "?").join(",");
+
+    // Dos consultas agrupadas en vez de subconsultas por fila: un pedido general acumula cientos de
+    // líneas y ahí las correlacionadas se vuelven lentas (mismo patrón que calcularTechoLineaBatch).
+    const declarados: any[] = await prisma.$queryRawUnsafe(`
+      SELECT DetalleId, COALESCE(SUM(CantidadMaster), 0) AS n
+      FROM OrdenEtiquetado
+      WHERE DetalleId IN (${marcas}) AND Estatus <> 'Cancelada'
+      GROUP BY DetalleId`, ...ids);
+
+    const fisicos: any[] = await prisma.$queryRawUnsafe(`
+      SELECT oe.DetalleId,
+             SUM(CASE WHEN m.Estatus <> 'Salido' THEN 1 ELSE 0 END) AS enBodega,
+             SUM(CASE WHEN m.Estatus =  'Salido' THEN 1 ELSE 0 END) AS despachado
+      FROM Masters m
+      JOIN EtiquetaImpresa ei ON ei.EtiquetaId = m.EtiquetaId
+      JOIN OrdenEtiquetado oe ON oe.OrdenId = ei.OrdenId
+      WHERE oe.DetalleId IN (${marcas})
+      GROUP BY oe.DetalleId`, ...ids);
+
+    const porDeclarado = new Map(declarados.map((r: any) => [Number(r.DetalleId), Number(r.n)]));
+    const porFisico = new Map(fisicos.map((r: any) => [Number(r.DetalleId), r]));
+
+    res.json(lineas.map(l => {
+      const detalleId = Number(l.DetalleId);
+      const f = porFisico.get(detalleId);
+      const despachado = f ? Number(f.despachado) : 0;
+      // Objetivo null en pedidos generales: son perpetuos, no hay cantidad planificada contra la
+      // cual comparar (ver project_pedido_general_design). Sin objetivo tampoco hay diferencia.
+      const objetivo = Number(l.EsGeneral) === 1
+        ? null
+        : Math.ceil(Number(l.CantidadCajas) / Number(l.CajasXMaster));
+      return {
+        DetalleId: detalleId,
+        Clase: l.Clase, Proceso: Number(l.Proceso), Talla: Number(l.Talla), Presentacion: l.Presentacion,
+        CantidadCajas: Number(l.CantidadCajas),
+        CajasXMaster: Number(l.CajasXMaster),
+        Objetivo: objetivo,
+        Declarado: porDeclarado.get(detalleId) ?? 0,
+        EnBodega: f ? Number(f.enBodega) : 0,
+        Despachado: despachado,
+        Diferencia: objetivo === null ? null : despachado - objetivo,
+      };
+    }));
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/detalle-pedido/:id/historial — cómo se ha movido esa línea de la proforma en el tiempo.
+router.get("/:id/historial", requireAuth, requireAnyPerm([["pedidos", "ver"], ["remisiones", "ver"]]), async (req: Request, res: Response) => {
+  try {
+    const rows: any[] = await prisma.$queryRaw`
+      SELECT HistorialId, DetalleId, CodigoPedido, Accion, Clase, Proceso, Talla, Presentacion,
+             EmpaqueMaster, EmpaqueAccesorio, CantidadCajas, KgPedido, LibrasPedido,
+             RegistradoPor, CreadoEn
+      FROM DetallePedidoHistorial
+      WHERE DetalleId = ${Number(req.params.id)}
+      ORDER BY HistorialId ASC
+    `;
+    res.json(rows.map(r => ({
+      ...r,
+      HistorialId: Number(r.HistorialId), DetalleId: Number(r.DetalleId),
+      Proceso: Number(r.Proceso), Talla: Number(r.Talla),
+      CantidadCajas: Number(r.CantidadCajas),
+      KgPedido: Number(r.KgPedido), LibrasPedido: Number(r.LibrasPedido),
+    })));
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

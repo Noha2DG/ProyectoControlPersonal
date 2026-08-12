@@ -11,13 +11,25 @@ function fmtFecha(iso) {
 // dentro del modal, y una copia portada a #print-root solo para imprimir, ver más abajo). Extraído
 // a su propio componente para no repetir el JSX dos veces.
 function ContenidoHoja({ pallet, totalKg, totalLb }) {
+  // Lo que está ENCIMA del polín, que es contra lo que se coteja parado frente a él. Los despachados
+  // siguen listados abajo como historia, pero sumarlos daría un total que el polín ya no tiene.
+  const enPolin = pallet.Masters.filter(m => m.Estatus !== "Salido").length;
   return (
     <>
       <div className="flex items-start justify-between mb-6">
         <div>
           <h1 className="text-4xl font-bold text-gray-900">Pallet {pallet.Codigo}</h1>
           <p className="text-base text-gray-500 mt-2">{pallet.NombreBodegaVirtual}{pallet.DescripcionOrigen ? ` · Origen: ${pallet.DescripcionOrigen}` : ""}</p>
-          <p className="text-base text-gray-500">Cerrado: {fmtFecha(pallet.CerradoEn)}{pallet.CerradoPor ? ` por ${pallet.CerradoPor}` : ""}</p>
+          {/* Un polín abierto se puede imprimir para cotejar en piso lo que lleva cargado, pero esa
+              hoja NO es el documento del polín: mañana puede tener más cajas. Se dice en la hoja
+              misma, que es donde va a estar el que la lea, y no en la pantalla desde donde se mandó. */}
+          {pallet.Estatus === "Cerrado" ? (
+            <p className="text-base text-gray-500">Cerrado: {fmtFecha(pallet.CerradoEn)}{pallet.CerradoPor ? ` por ${pallet.CerradoPor}` : ""}</p>
+          ) : (
+            <p className="text-base font-bold text-gray-900 border-2 border-gray-800 rounded px-2 py-1 mt-1 inline-block">
+              PRELIMINAR — el polín sigue {String(pallet.Estatus).toLowerCase()}, su contenido puede cambiar
+            </p>
+          )}
         </div>
         <div className="flex flex-col items-center shrink-0">
           <QRCodeSVG value={pallet.Codigo} size={140} />
@@ -26,9 +38,12 @@ function ContenidoHoja({ pallet, totalKg, totalLb }) {
       </div>
 
       <div className="flex gap-10 mb-5 text-base border-y-2 border-gray-800 py-4">
-        <span><span className="text-gray-400">Total Masters:</span> <span className="font-bold text-2xl">{pallet.Masters.length}</span></span>
+        <span><span className="text-gray-400">Total Masters:</span> <span className="font-bold text-2xl">{enPolin}</span></span>
         <span><span className="text-gray-400">Total Kg:</span> <span className="font-bold text-2xl">{totalKg.toFixed(2)}</span></span>
         <span><span className="text-gray-400">Total Lb:</span> <span className="font-bold text-2xl">{totalLb.toFixed(2)}</span></span>
+        {pallet.Masters.length > enPolin && (
+          <span><span className="text-gray-400">Ya despachados:</span> <span className="font-bold text-2xl">{pallet.Masters.length - enPolin}</span></span>
+        )}
       </div>
 
       <table className="w-full text-base">
@@ -46,7 +61,7 @@ function ContenidoHoja({ pallet, totalKg, totalLb }) {
         </thead>
         <tbody className="divide-y divide-gray-100">
           {pallet.Masters.map(m => (
-            <tr key={m.MasterId}>
+            <tr key={m.MasterId} className={m.Estatus === "Salido" ? "text-gray-400 line-through" : ""}>
               <td className="py-1.5 pr-3 font-mono">{m.Correlativo}</td>
               <td className="py-1.5 pr-3 font-mono">{m.CodigoPedido}</td>
               <td className="py-1.5 pr-3 whitespace-nowrap">{m.NombreCliente}{m.NombreSubcliente ? `-${m.NombreSubcliente}` : ""}</td>
@@ -94,8 +109,10 @@ export default function HojaPalletModal({ palletId, onCerrar }) {
     }
   }, [loading, pallet]);
 
-  const totalKg = pallet?.Masters.reduce((acc, m) => acc + m.PesoMasterKG, 0) ?? 0;
-  const totalLb = pallet?.Masters.reduce((acc, m) => acc + m.PesoMasterLb, 0) ?? 0;
+  // Solo el peso de lo que sigue arriba del polín — ver la nota en ContenidoHoja.
+  const enPolin = pallet?.Masters.filter(m => m.Estatus !== "Salido") ?? [];
+  const totalKg = enPolin.reduce((acc, m) => acc + m.PesoMasterKG, 0);
+  const totalLb = enPolin.reduce((acc, m) => acc + m.PesoMasterLb, 0);
 
   return (
     <>

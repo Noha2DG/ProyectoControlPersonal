@@ -112,9 +112,9 @@ function SubclienteModal({ item, codigoCliente, onSave, onClose }) {
 }
 
 export default function ClientesPage() {
-  const puedeCrear = usePuede("catalogos", "crear");
-  const puedeEditar = usePuede("catalogos", "editar");
-  const puedeEliminar = usePuede("catalogos", "eliminar");
+  const puedeCrear = usePuede("pedidos", "crear");
+  const puedeEditar = usePuede("pedidos", "editar");
+  const puedeEliminar = usePuede("pedidos", "eliminar");
   const [clientes, setClientes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [clienteSel, setClienteSel] = useState(null);
