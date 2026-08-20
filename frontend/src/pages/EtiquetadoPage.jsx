@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { authHeader, usePuede } from "../context/AuthContext.jsx";
 import { componerCodigoLote, piscinaRequiereCiclo } from "../utils/codigoLote.js";
-import { useColWidths, Th, Colgroup } from "../components/ResizableTh.jsx";
+import { useColWidths, useOrden, ordenarFilas, Th, Colgroup } from "../components/ResizableTh.jsx";
 
 const hoy = () => new Date().toLocaleDateString("sv-SE");
 
@@ -41,6 +41,14 @@ export default function EtiquetadoPage() {
   const [guardando, setGuardando] = useState(false);
   const [loading, setLoading] = useState(true);
   const [widths, startResize] = useColWidths("etiquetado", COL_DEFAULTS);
+  const [orden, alternarOrden] = useOrden();
+  // "Impresión" ordena por cuántas etiquetas llevan impresas, que es lo que separa una captura
+  // pendiente de una lista — no por el texto de la píldora.
+  const capturasOrdenadas = ordenarFilas(capturas, orden, {
+    fecha: c => c.FechaProduccion, lote: c => c.Lote, area: c => c.NombreArea,
+    origen: c => c.DescripcionOrigen, congelacion: c => c.DescripcionCongelacion,
+    masters: c => c.CantidadMaster, estatus: c => c.Estatus, impresion: c => c.Impresas,
+  });
 
   useEffect(() => {
     setLoading(true);
@@ -388,19 +396,19 @@ export default function EtiquetadoPage() {
                 <Colgroup columns={COLS} widths={widths} />
                 <thead>
                   <tr className="bg-gray-100 text-gray-600 uppercase text-xs tracking-wider">
-                    <Th width={widths.fecha} onResizeStart={startResize("fecha")} className="px-4 py-3 text-left whitespace-nowrap">Fecha</Th>
-                    <Th width={widths.lote} onResizeStart={startResize("lote")} className="px-4 py-3 text-left whitespace-nowrap">Lote</Th>
-                    <Th width={widths.area} onResizeStart={startResize("area")} className="px-4 py-3 text-left whitespace-nowrap">Área</Th>
-                    <Th width={widths.origen} onResizeStart={startResize("origen")} className="px-4 py-3 text-left whitespace-nowrap">Origen</Th>
-                    <Th width={widths.congelacion} onResizeStart={startResize("congelacion")} className="px-4 py-3 text-left whitespace-nowrap">Congelación</Th>
-                    <Th width={widths.masters} onResizeStart={startResize("masters")} className="px-4 py-3 text-right whitespace-nowrap">Masters</Th>
-                    <Th width={widths.estatus} onResizeStart={startResize("estatus")} className="px-4 py-3 text-center whitespace-nowrap">Estatus</Th>
-                    <Th width={widths.impresion} onResizeStart={startResize("impresion")} className="px-4 py-3 text-center whitespace-nowrap">Impresión</Th>
+                    <Th width={widths.fecha} onResizeStart={startResize("fecha")} sortKey="fecha" orden={orden} onOrdenar={alternarOrden} className="px-4 py-3 text-left whitespace-nowrap">Fecha</Th>
+                    <Th width={widths.lote} onResizeStart={startResize("lote")} sortKey="lote" orden={orden} onOrdenar={alternarOrden} className="px-4 py-3 text-left whitespace-nowrap">Lote</Th>
+                    <Th width={widths.area} onResizeStart={startResize("area")} sortKey="area" orden={orden} onOrdenar={alternarOrden} className="px-4 py-3 text-left whitespace-nowrap">Área</Th>
+                    <Th width={widths.origen} onResizeStart={startResize("origen")} sortKey="origen" orden={orden} onOrdenar={alternarOrden} className="px-4 py-3 text-left whitespace-nowrap">Origen</Th>
+                    <Th width={widths.congelacion} onResizeStart={startResize("congelacion")} sortKey="congelacion" orden={orden} onOrdenar={alternarOrden} className="px-4 py-3 text-left whitespace-nowrap">Congelación</Th>
+                    <Th width={widths.masters} onResizeStart={startResize("masters")} sortKey="masters" orden={orden} onOrdenar={alternarOrden} className="px-4 py-3 text-right whitespace-nowrap">Masters</Th>
+                    <Th width={widths.estatus} onResizeStart={startResize("estatus")} sortKey="estatus" orden={orden} onOrdenar={alternarOrden} className="px-4 py-3 text-center whitespace-nowrap">Estatus</Th>
+                    <Th width={widths.impresion} onResizeStart={startResize("impresion")} sortKey="impresion" orden={orden} onOrdenar={alternarOrden} className="px-4 py-3 text-center whitespace-nowrap">Impresión</Th>
                     <Th width={widths.acciones} onResizeStart={startResize("acciones")} className="px-4 py-3 text-center whitespace-nowrap">Acciones</Th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
-                  {capturas.map(c => (
+                  {capturasOrdenadas.map(c => (
                     <tr key={c.OrdenId} className={`hover:bg-gray-50 transition ${c.Estatus === "Cancelada" ? "opacity-50" : ""}`}>
                       <td className="px-4 py-3 whitespace-nowrap">{c.FechaProduccion?.slice(0, 10)}</td>
                       <td className="px-4 py-3 font-mono text-gray-700 whitespace-nowrap">{c.Lote}</td>

@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
+import { fmtNum } from "../utils/numero.js";
 import { authHeader, usePuede } from "../context/AuthContext.jsx";
-import { useColWidths, Th, Colgroup } from "../components/ResizableTh.jsx";
+import { useColWidths, useOrden, ordenarFilas, Th, Colgroup } from "../components/ResizableTh.jsx";
 import ConsultarEtiquetaModal from "../components/ConsultarEtiquetaModal.jsx";
 import AvisoModal from "../components/AvisoModal.jsx";
 import HojaPalletModal from "../components/HojaPalletModal.jsx";
@@ -370,8 +371,8 @@ function PanelEscaneo({ palletId, onClose, onCambio }) {
                         <td className="px-3 py-2 truncate" title={`${m.DescripcionProceso} ${m.DescripcionTalla} ${m.DescripcionPresentacion}`}>
                           {m.DescripcionProceso} {m.DescripcionTalla} {m.DescripcionPresentacion}
                         </td>
-                        <td className="px-3 py-2 text-right whitespace-nowrap">{m.PesoMasterKG.toFixed(2)}</td>
-                        <td className="px-3 py-2 text-right whitespace-nowrap">{m.PesoMasterLb.toFixed(2)}</td>
+                        <td className="px-3 py-2 text-right whitespace-nowrap">{fmtNum(m.PesoMasterKG)}</td>
+                        <td className="px-3 py-2 text-right whitespace-nowrap">{fmtNum(m.PesoMasterLb)}</td>
                         <td className="px-3 py-2 truncate" title={fmtFecha(m.FechaIngreso)}>{fmtFecha(m.FechaIngreso)}</td>
                         {puedeQuitar && (
                           <td className="px-3 py-2 text-center">
@@ -507,6 +508,14 @@ export default function PalletsPage() {
   const [bodegasVirtuales, setBodegasVirtuales] = useState([]);
   const [modalNuevo, setModalNuevo] = useState(false);
   const [widthsPallets, startResizePallets] = useColWidths("pallets", PALLETS_COL_DEFAULTS);
+  const [ordenPallets, alternarOrdenPallets] = useOrden();
+  // Masters ordena por lo que hay dentro (número), no por el texto "12 / 20"; Creado y Cerrado
+  // por su fecha real y no por el "usuario · fecha" que se muestra.
+  const palletsOrdenados = ordenarFilas(pallets, ordenPallets, {
+    pallet: p => p.Codigo, estatus: p => p.Estatus, area: p => p.NombreBodegaVirtual,
+    origen: p => p.DescripcionOrigen, masters: p => p.CantidadMasters, cuadre: p => p.Cuadre,
+    creado: p => p.CreadoEn, cerrado: p => p.CerradoEn,
+  });
 
   useEffect(() => {
     fetch("/api/origen", { headers: authHeader() }).then(r => r.json()).then(data => {
@@ -589,14 +598,14 @@ export default function PalletsPage() {
             <Colgroup columns={PALLETS_COLS} widths={widthsPallets} />
             <thead className="bg-gray-50 text-gray-500 border-b border-gray-200">
               <tr>
-                <Th width={widthsPallets.pallet} onResizeStart={startResizePallets("pallet")} className="px-4 py-3 text-left">Pallet</Th>
-                <Th width={widthsPallets.estatus} onResizeStart={startResizePallets("estatus")} className="px-4 py-3 text-center">Estatus</Th>
-                <Th width={widthsPallets.area} onResizeStart={startResizePallets("area")} className="px-4 py-3 text-left">Área</Th>
-                <Th width={widthsPallets.origen} onResizeStart={startResizePallets("origen")} className="px-4 py-3 text-left">Origen</Th>
-                <Th width={widthsPallets.masters} onResizeStart={startResizePallets("masters")} className="px-4 py-3 text-right">Masters</Th>
-                <Th width={widthsPallets.cuadre} onResizeStart={startResizePallets("cuadre")} className="px-4 py-3 text-center">Cuadre</Th>
-                <Th width={widthsPallets.creado} onResizeStart={startResizePallets("creado")} className="px-4 py-3 text-left">Creado</Th>
-                <Th width={widthsPallets.cerrado} onResizeStart={startResizePallets("cerrado")} className="px-4 py-3 text-left">Cerrado</Th>
+                <Th width={widthsPallets.pallet} onResizeStart={startResizePallets("pallet")} sortKey="pallet" orden={ordenPallets} onOrdenar={alternarOrdenPallets} className="px-4 py-3 text-left">Pallet</Th>
+                <Th width={widthsPallets.estatus} onResizeStart={startResizePallets("estatus")} sortKey="estatus" orden={ordenPallets} onOrdenar={alternarOrdenPallets} className="px-4 py-3 text-center">Estatus</Th>
+                <Th width={widthsPallets.area} onResizeStart={startResizePallets("area")} sortKey="area" orden={ordenPallets} onOrdenar={alternarOrdenPallets} className="px-4 py-3 text-left">Área</Th>
+                <Th width={widthsPallets.origen} onResizeStart={startResizePallets("origen")} sortKey="origen" orden={ordenPallets} onOrdenar={alternarOrdenPallets} className="px-4 py-3 text-left">Origen</Th>
+                <Th width={widthsPallets.masters} onResizeStart={startResizePallets("masters")} sortKey="masters" orden={ordenPallets} onOrdenar={alternarOrdenPallets} className="px-4 py-3 text-right">Masters</Th>
+                <Th width={widthsPallets.cuadre} onResizeStart={startResizePallets("cuadre")} sortKey="cuadre" orden={ordenPallets} onOrdenar={alternarOrdenPallets} className="px-4 py-3 text-center">Cuadre</Th>
+                <Th width={widthsPallets.creado} onResizeStart={startResizePallets("creado")} sortKey="creado" orden={ordenPallets} onOrdenar={alternarOrdenPallets} className="px-4 py-3 text-left">Creado</Th>
+                <Th width={widthsPallets.cerrado} onResizeStart={startResizePallets("cerrado")} sortKey="cerrado" orden={ordenPallets} onOrdenar={alternarOrdenPallets} className="px-4 py-3 text-left">Cerrado</Th>
                 <Th width={widthsPallets.acciones} onResizeStart={startResizePallets("acciones")} className="px-4 py-3 text-center">Acciones</Th>
               </tr>
             </thead>
@@ -605,7 +614,7 @@ export default function PalletsPage() {
                 <tr><td colSpan={9} className="px-4 py-8 text-center text-gray-400">Cargando…</td></tr>
               ) : pallets.length === 0 ? (
                 <tr><td colSpan={9} className="px-4 py-8 text-center text-gray-400">Sin pallets para este filtro</td></tr>
-              ) : pallets.map(p => (
+              ) : palletsOrdenados.map(p => (
                 <tr key={p.PalletId} className="border-t border-gray-100 hover:bg-gray-50">
                   <td className="px-4 py-3 font-mono font-semibold">{p.Codigo || `#${p.PalletId}`}</td>
                   <td className="px-4 py-3 text-center">

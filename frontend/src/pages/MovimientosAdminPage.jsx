@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { authHeader, usePuede } from "../context/AuthContext.jsx";
 import { exportarMovimientos } from "../utils/exportExcel.js";
 import EmpleadoAutocomplete from "../components/EmpleadoAutocomplete.jsx";
-import { useColWidths, Th, Colgroup } from "../components/ResizableTh.jsx";
+import { useColWidths, useOrden, ordenarFilas, Th, Colgroup } from "../components/ResizableTh.jsx";
 
 const TIPOS = ["Entrada", "Salida"];
 
@@ -101,6 +101,7 @@ export default function MovimientosAdminPage() {
   const [loading, setLoading]   = useState(false);
   const [modal, setModal] = useState({ open: false, registro: null, cierre: null });
   const [widths, startResize] = useColWidths("movimientos", COL_DEFAULTS);
+  const [orden, alternarOrden] = useOrden();
   const [ciclosAbiertos, setCiclosAbiertos] = useState([]);
 
   const fetchData = useCallback(async () => {
@@ -146,11 +147,17 @@ export default function MovimientosAdminPage() {
     else { const e = await res.json(); alert("Error: " + e.error); }
   };
 
-  const filtrados = registros.filter(r =>
+  const coincidentes = registros.filter(r =>
     !busqueda ||
     r.NombreEmpleado?.toLowerCase().includes(busqueda.toLowerCase()) ||
     r.Codigo?.toLowerCase().includes(busqueda.toLowerCase())
   );
+
+  // La fecha ordena por su ISO (no por el dd/mm/aaaa que se pinta) y la hora por HH:MM:SS.
+  const filtrados = ordenarFilas(coincidentes, orden, {
+    fecha: r => r.Fecha, codigo: r => r.Codigo, nombre: r => r.NombreEmpleado,
+    tipo: r => r.Tipo, hora: r => r.Hora, dia: r => r.DiaSemana, operador: r => r.Operador,
+  });
 
   return (
     <div>
@@ -221,13 +228,13 @@ export default function MovimientosAdminPage() {
             <Colgroup columns={COLS} widths={widths} />
             <thead>
               <tr className="bg-gray-100 text-gray-600 uppercase text-xs tracking-wider">
-                <Th width={widths.fecha} onResizeStart={startResize("fecha")} className="px-4 py-3 text-left">Fecha</Th>
-                <Th width={widths.codigo} onResizeStart={startResize("codigo")} className="px-4 py-3 text-left">Código</Th>
-                <Th width={widths.nombre} onResizeStart={startResize("nombre")} className="px-4 py-3 text-left">Nombre</Th>
-                <Th width={widths.tipo} onResizeStart={startResize("tipo")} className="px-4 py-3 text-center">Tipo</Th>
-                <Th width={widths.hora} onResizeStart={startResize("hora")} className="px-4 py-3 text-center">Hora</Th>
-                <Th width={widths.dia} onResizeStart={startResize("dia")} className="px-4 py-3 text-center">Día</Th>
-                <Th width={widths.operador} onResizeStart={startResize("operador")} className="px-4 py-3 text-center">Operador</Th>
+                <Th width={widths.fecha} onResizeStart={startResize("fecha")} sortKey="fecha" orden={orden} onOrdenar={alternarOrden} className="px-4 py-3 text-left">Fecha</Th>
+                <Th width={widths.codigo} onResizeStart={startResize("codigo")} sortKey="codigo" orden={orden} onOrdenar={alternarOrden} className="px-4 py-3 text-left">Código</Th>
+                <Th width={widths.nombre} onResizeStart={startResize("nombre")} sortKey="nombre" orden={orden} onOrdenar={alternarOrden} className="px-4 py-3 text-left">Nombre</Th>
+                <Th width={widths.tipo} onResizeStart={startResize("tipo")} sortKey="tipo" orden={orden} onOrdenar={alternarOrden} className="px-4 py-3 text-center">Tipo</Th>
+                <Th width={widths.hora} onResizeStart={startResize("hora")} sortKey="hora" orden={orden} onOrdenar={alternarOrden} className="px-4 py-3 text-center">Hora</Th>
+                <Th width={widths.dia} onResizeStart={startResize("dia")} sortKey="dia" orden={orden} onOrdenar={alternarOrden} className="px-4 py-3 text-center">Día</Th>
+                <Th width={widths.operador} onResizeStart={startResize("operador")} sortKey="operador" orden={orden} onOrdenar={alternarOrden} className="px-4 py-3 text-center">Operador</Th>
                 <Th width={widths.acciones} onResizeStart={startResize("acciones")} className="px-4 py-3 text-center">Acciones</Th>
               </tr>
             </thead>

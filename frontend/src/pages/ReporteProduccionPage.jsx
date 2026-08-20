@@ -2,9 +2,11 @@ import { useState, useEffect, useCallback, Fragment } from "react";
 import { createPortal } from "react-dom";
 import { authHeader } from "../context/AuthContext.jsx";
 import { exportarReporteGeneral, exportarReporteTermos, exportarEficiencias, exportarLbHora, exportarLbHoraPorTalla, exportarLbPorPersona } from "../utils/exportExcel.js";
-import { useColWidths, Th, Colgroup } from "../components/ResizableTh.jsx";
+import { useColWidths, useOrden, ordenarFilas, FiltroColumna, Th, Colgroup } from "../components/ResizableTh.jsx";
+import { fmtNum } from "../utils/numero.js";
 import {
-  LB_POR_KG, MINIMO_BLOQUE_MINUTOS, AREAS_DESTAJO, calcularLbHora, agruparPorArea, agruparPorProductoTalla, totalLbHora,
+  LB_POR_KG, MINIMO_BLOQUE_MINUTOS, AREAS_DESTAJO, calcularLbHora, agruparPorArea, agruparPorProductoTalla,
+  totalLbHora, resumenValidez,
 } from "../utils/destajo.js";
 
 const LOTE_DET_COL_DEFAULTS = { talla: 160, producto: 180, estado: 110, procesado: 100, pesajes: 90 };
@@ -51,8 +53,9 @@ const SUB_TABS = [
 // Eficiencias, Lb/Hora, Por Talla y Lb/Persona son vistas por persona, no por lote de Materia Prima —
 // no tiene sentido mostrarles el resumen de Ingreso/Procesado/Pendiente/Rendimiento.
 const SUB_TABS_SIN_TOTALES = ["eficiencias", "lbhora", "portalla", "lbpersona"];
-// Ninguna de estas tres usa Finca (son vistas por persona, no por lote/origen).
-const SUB_TABS_SIN_FINCA = ["lbhora", "portalla", "lbpersona"];
+// Ninguna de estas cuatro usa Finca (son vistas por persona, no por lote/origen). Eficiencias
+// estaba fuera de la lista por descuido: mostraba el selector aunque la vista es por persona.
+const SUB_TABS_SIN_FINCA = ["eficiencias", "lbhora", "portalla", "lbpersona"];
 // Solo Lb/Hora y Por Talla filtran por Área — Lb/Persona siempre muestra Descabezado y
 // Pelado y Devenado lado a lado, así que un filtro de Área no tendría sentido ahí.
 const SUB_TABS_CON_AREA = ["lbhora", "portalla"];
@@ -70,13 +73,59 @@ function CeldaLbHora({ f }) {
   if (f.LbPorHora == null) return <span className="text-gray-300 font-normal">—</span>;
   if (esBajaConfianza(f)) {
     return (
-      <span title={`Dato de baja confianza: ${f.NumPesadas} pesada${f.NumPesadas !== 1 ? "s" : ""}, ${f.Horas.toFixed(2)} h válidas`}
+      <span title={`Dato de baja confianza: ${f.NumPesadas} pesada${f.NumPesadas !== 1 ? "s" : ""}, ${fmtNum(f.Horas)} h válidas`}
         className="text-amber-600">
-        {f.LbPorHora.toFixed(1)} <span className="text-[10px] align-top">●</span>
+        {fmtNum(f.LbPorHora, 1)} <span className="text-[10px] align-top">●</span>
       </span>
     );
   }
-  return <>{f.LbPorHora.toFixed(1)}</>;
+  return <>{fmtNum(f.LbPorHora, 1)}</>;
+}
+
+// Cuadre contra el Procesado del Reporte General. Lb/Hora y Por Talla suman libra VÁLIDA (peso con
+// tiempo medible), así que su Total General siempre queda por debajo del Procesado — sin este aviso
+// la diferencia parecía producción perdida y obligaba a rehacer la resta a mano. Se nombra a la gente
+// afectada porque la causa casi siempre es marcaje: la Transferencia de área quedó abierta de un día
+// anterior, así que su primera pesada del día no tiene ancla y se descarta entera.
+function AvisoLbSinTiempo({ resumen }) {
+  const [abierto, setAbierto] = useState(false);
+  if (resumen.PesadasSinTiempo === 0) return null;
+  const pct = resumen.LbProcesadas > 0 ? (resumen.LbSinTiempo / resumen.LbProcesadas) * 100 : 0;
+  return (
+    <div className="mt-2 text-xs bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+      <div className="flex items-start gap-2">
+        <span className="text-amber-600 mt-px">▲</span>
+        <div className="flex-1 min-w-0">
+          <p className="text-amber-900">
+            El Total General de arriba es <strong>libra válida</strong>: {fmtNum(resumen.LbSinTiempo)} lb
+            {" "}({pct.toFixed(1)}% de las {fmtNum(resumen.LbProcesadas)} lb procesadas) quedaron fuera porque
+            {" "}{resumen.PesadasSinTiempo === 1 ? "una pesada no tiene" : `${resumen.PesadasSinTiempo} pesadas no tienen`} tiempo medible.
+            {" "}Por eso este total no cuadra con el Procesado del Reporte General.
+          </p>
+          <button onClick={() => setAbierto(!abierto)} className="mt-1 text-amber-700 underline hover:text-amber-900">
+            {abierto ? "Ocultar" : `Ver ${resumen.Personas.length} persona${resumen.Personas.length !== 1 ? "s" : ""} a revisar`}
+          </button>
+          {abierto && (
+            <>
+              <p className="mt-1.5 text-amber-800">
+                Casi siempre es marcaje: su entrada al área quedó abierta desde un día anterior (olvidó marcar salida
+                y no volvió a darse transferencia al área), así que su primera pesada del día no tiene desde cuándo
+                contar. El tiempo se cuenta desde que entra a Pelado o Descabezado, no desde su entrada general —
+                esa es solo asistencia. Corrigiendo la transferencia del área, esa producción vuelve a contar.
+              </p>
+              <ul className="mt-1 grid grid-cols-2 md:grid-cols-3 gap-x-4 text-amber-900">
+                {resumen.Personas.map(p => (
+                  <li key={p.IdEmpleado} className="truncate" title={p.Nombre}>
+                    <span className="font-mono">{p.IdEmpleado}</span> {p.Nombre}
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 // Solo libras acumuladas por persona en las áreas de destajo (ver AREAS_DESTAJO), sin hora ni tasa —
@@ -165,12 +214,12 @@ function FilaLote({ l, detalle, abierta, onToggle }) {
         <td className="px-3 py-2.5 text-gray-700">{l.NombreFinca}</td>
         <td className="px-3 py-2.5 font-mono text-gray-600">{l.Clase} — {l.DescripcionClase}</td>
         <td className="px-3 py-2.5 text-center text-gray-600">{l.Fecha?.slice(0, 10)}</td>
-        <td className="px-3 py-2.5 text-right font-semibold text-gray-800">{l.PesoIngreso.toFixed(2)} {l.UM}</td>
-        <td className="px-3 py-2.5 text-right font-semibold text-blue-700">{l.Procesado.toFixed(2)}</td>
-        <td className="px-3 py-2.5 text-right font-semibold text-amber-600">{l.Pendiente.toFixed(2)}</td>
+        <td className="px-3 py-2.5 text-right font-semibold text-gray-800">{fmtNum(l.PesoIngreso)} {l.UM}</td>
+        <td className="px-3 py-2.5 text-right font-semibold text-blue-700">{fmtNum(l.Procesado)}</td>
+        <td className="px-3 py-2.5 text-right font-semibold text-amber-600">{fmtNum(l.Pendiente)}</td>
         <td className="px-3 py-2.5 text-right">
           <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${l.Rendimiento >= 50 ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-600"}`}>
-            {l.Rendimiento.toFixed(1)}%
+            {fmtNum(l.Rendimiento, 1)}%
           </span>
         </td>
         <td className="px-3 py-2.5 text-center text-gray-500">{l.NumTransacciones}</td>
@@ -202,7 +251,7 @@ function FilaLote({ l, detalle, abierta, onToggle }) {
                           {d.Estado}
                         </span>
                       </td>
-                      <td className="px-2 py-1.5 text-right font-semibold">{d.Procesado.toFixed(2)}</td>
+                      <td className="px-2 py-1.5 text-right font-semibold">{fmtNum(d.Procesado)}</td>
                       <td className="px-2 py-1.5 text-right">{d.NumPesajes}</td>
                     </tr>
                   ))}
@@ -229,7 +278,7 @@ function FilaTermo({ numeroTermo, cargas, abierta, onToggle }) {
         <td className="px-2 py-1.5 text-gray-500 whitespace-nowrap">
           {cargas.length} carga{cargas.length !== 1 ? "s" : ""}
         </td>
-        <td className="px-2 py-1.5 text-right font-bold text-blue-700 whitespace-nowrap w-28">{subtotal.toFixed(2)}</td>
+        <td className="px-2 py-1.5 text-right font-bold text-blue-700 whitespace-nowrap w-28">{fmtNum(subtotal)}</td>
       </tr>
       {abierta && (
         <tr>
@@ -252,7 +301,7 @@ function FilaTermo({ numeroTermo, cargas, abierta, onToggle }) {
                     <td className="px-2 py-1">{c.Talla} — {c.DescripcionTalla}</td>
                     <td className="px-2 py-1">{c.DescripcionProceso}</td>
                     <td className="px-2 py-1 text-center">{c.FechaProduccion?.slice(0, 10)}</td>
-                    <td className="px-2 py-1 text-right font-semibold">{c.Procesado.toFixed(2)}</td>
+                    <td className="px-2 py-1 text-right font-semibold">{fmtNum(c.Procesado)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -282,9 +331,9 @@ function FilaProductoTalla({ g, abierta, onToggle }) {
             </span>
           )}
         </td>
-        <td className="px-2 py-1.5 text-right whitespace-nowrap">{g.resumen.TotalLb.toFixed(2)}</td>
+        <td className="px-2 py-1.5 text-right whitespace-nowrap">{fmtNum(g.resumen.TotalLb)}</td>
         <td className={`px-2 py-1.5 text-right whitespace-nowrap ${g.esSecundaria ? "" : "text-blue-700"}`}>
-          {g.resumen.PromedioLbHora != null ? g.resumen.PromedioLbHora.toFixed(1) : "—"}
+          {g.resumen.PromedioLbHora != null ? fmtNum(g.resumen.PromedioLbHora, 1) : "—"}
         </td>
         <td className="px-2 py-1.5 text-center whitespace-nowrap">{g.resumen.NumPersonas}</td>
       </tr>
@@ -308,8 +357,8 @@ function FilaProductoTalla({ g, abierta, onToggle }) {
                   <tr key={f.IdEmpleado}>
                     <td className="px-2 py-1 font-mono">{f.IdEmpleado}</td>
                     <td className="px-2 py-1"><div className="max-w-[9rem] truncate" title={f.Nombre}>{f.Nombre}</div></td>
-                    <td className="px-2 py-1 text-right font-semibold">{f.Lb.toFixed(2)}</td>
-                    <td className="px-2 py-1 text-right text-gray-500">{f.Horas.toFixed(2)}</td>
+                    <td className="px-2 py-1 text-right font-semibold">{fmtNum(f.Lb)}</td>
+                    <td className="px-2 py-1 text-right text-gray-500">{fmtNum(f.Horas)}</td>
                     <td className="px-2 py-1 text-right font-semibold text-blue-700">
                       <CeldaLbHora f={f} />
                     </td>
@@ -341,6 +390,12 @@ export default function ReporteProduccionPage() {
   const [widthsPorTallaGen, startResizePorTallaGen] = useColWidths("reporte_por_talla_general", POR_TALLA_GEN_COL_DEFAULTS);
   const [widthsTermos, startResizeTermos] = useColWidths("reporte_termos", TERMOS_COL_DEFAULTS);
   const [widthsEficiencias, startResizeEficiencias] = useColWidths("reporte_eficiencias", EFICIENCIAS_COL_DEFAULTS);
+  const [ordenEfic, alternarOrdenEfic] = useOrden();
+  const [ordenTallaGen, alternarOrdenTallaGen] = useOrden();
+  const [ordenLbHora, alternarOrdenLbHora] = useOrden();
+  const [ordenPortalla, alternarOrdenPortalla] = useOrden();
+  const [ordenLbPersona, alternarOrdenLbPersona] = useOrden();
+  const [personaEfic, setPersonaEfic] = useState("");
   const [widthsLbHora, startResizeLbHora] = useColWidths("reporte_lbhora", LBHORA_COL_DEFAULTS);
   const [widthsPortalla, startResizePortalla] = useColWidths("reporte_portalla", PORTALLA_COL_DEFAULTS);
   // _v2 en la llave: los anchos guardados en localStorage se mezclan sobre los defaults, así que
@@ -401,13 +456,86 @@ export default function ReporteProduccionPage() {
   // Producto+Talla llegara a venir de dos áreas distintas, quede acotado a una sola al elegirla.
   const porPersonaLbHora = (reporte?.porPersona ?? []).filter(p => !areaLbHora || p.Area === areaLbHora);
 
-  const filasLbHora = calcularLbHora(porPersonaLbHora, agruparPorArea).sort((a, b) => b.Lb - a.Lb);
-  const filasPorTalla = calcularLbHora(porPersonaLbHora, agruparPorProductoTalla);
+  const pausasNoPaga = reporte?.pausasNoPaga ?? [];
+  const filasLbHora = calcularLbHora(porPersonaLbHora, agruparPorArea, pausasNoPaga).sort((a, b) => b.Lb - a.Lb);
+  const filasPorTalla = calcularLbHora(porPersonaLbHora, agruparPorProductoTalla, pausasNoPaga);
+  // Uno por pestaña, no uno compartido: Por Talla descarta además los bloques con cambio de grupo de
+  // menos de 15 min, así que descarta más libras que Lb/Hora. Con un solo resumen la resta del aviso
+  // no cerraba contra el Total General de esa pestaña. resumenValidez deduplica por IdEmpleado, así
+  // que la lista de gente no repite a nadie aunque haya trabajado en varios Producto+Talla.
+  const validezLbHora = resumenValidez(filasLbHora);
+  const validezPorTalla = resumenValidez(filasPorTalla);
   const gruposPorTalla = gruposPorProductoTalla(filasPorTalla);
+  // Lb se suma, pero las otras dos NO:
+  //  · Lb/Hora es el promedio PONDERADO por horas sobre las filas de persona (totalLbHora), no el
+  //    promedio de los promedios de cada fila — una talla con poca gente pesaría igual que una
+  //    con todo el equipo.
+  //  · Personas se cuenta DISTINTO: quien trabajó en dos Producto+Talla aparece en ambas filas, y
+  //    sumar la columna lo contaría dos veces.
+  const totalPorTalla = {
+    ...totalLbHora(filasPorTalla),
+    NumPersonas: new Set(filasPorTalla.map(f => f.IdEmpleado)).size,
+  };
   const filasLbPersona = calcularLbPorPersona(reporte?.porPersona ?? []);
+  // Acá sí cuadra sumar columna por columna: calcularLbPorPersona define LbTotal como la suma de
+  // las áreas de destajo, y cada persona aparece en una sola fila (agrupada por IdEmpleado), así
+  // que el total de la columna Total es también la suma de los tres totales de área.
+  const totalLbPersona = {
+    ...Object.fromEntries(AREAS_DESTAJO.map(a => [a.lb, filasLbPersona.reduce((t, f) => t + f[a.lb], 0)])),
+    LbTotal: filasLbPersona.reduce((t, f) => t + f.LbTotal, 0),
+    Personas: filasLbPersona.length,
+  };
+
+
+  // El % de Talla se ordena por Procesado: es proporcional, y así no depende del redondeo.
+  const tallasOrdenadas = ordenarFilas(tallasMostradas, ordenTallaGen, {
+    talla: t => t.Talla, kg: t => t.Procesado, pct: t => t.Procesado,
+  });
+  const lbHoraOrdenadas = ordenarFilas(filasLbHora, ordenLbHora, {
+    id: f => f.IdEmpleado, nombre: f => f.Nombre, area: f => f.Area,
+    lb: f => f.Lb, horas: f => f.Horas, lbhora: f => f.LbPorHora, pesadas: f => f.NumPesadas,
+  });
+  const portallaOrdenadas = ordenarFilas(gruposPorTalla, ordenPortalla, {
+    productoTalla: g => `${g.Producto} ${g.Talla}`,
+    lbTotal: g => g.resumen.TotalLb,
+    lbHoraProm: g => g.resumen.PromedioLbHora,
+    numPersonas: g => g.resumen.NumPersonas,
+  });
+  // Las columnas por área se arman recorriendo AREAS_DESTAJO, así que su mapa de orden también.
+  const lbPersonaOrdenadas = ordenarFilas(filasLbPersona, ordenLbPersona, {
+    puesto: f => f.Puesto, id: f => f.IdEmpleado, nombre: f => f.Nombre, total: f => f.LbTotal,
+    ...Object.fromEntries(AREAS_DESTAJO.map(a => [LBPERSONA_AREA_COL[a.codigo], f => f[a.lb]])),
+  });
+
+  // Eficiencias: una fila por pesada, así que la misma persona aparece decenas de veces. El filtro
+  // de la columna Nombre es para poder aislar a una sola sin exportar y filtrar en Excel.
+  const pesajes = reporte?.porPersona ?? [];
+  const personasEfic = Object.values(pesajes.reduce((acc, p) => {
+    (acc[p.IdEmpleado] ??= { valor: p.IdEmpleado, etiqueta: `${p.Nombre} (${p.IdEmpleado})`, cuenta: 0 }).cuenta++;
+    return acc;
+  }, {})).sort((a, b) => a.etiqueta.localeCompare(b.etiqueta, "es"));
+  // Talla y Kilos se ordenan por su número, no por el texto que se pinta ("361 — 91/110").
+  const VALORES_EFIC = {
+    id:       p => p.IdEmpleado,
+    nombre:   p => p.Nombre,
+    area:     p => p.Area,
+    fecha:    p => p.FechaHora,                 // completo: a igual día, ordena por hora
+    hora:     p => p.FechaHora?.slice(11, 16),  // solo la hora del día, como se muestra
+    lote:     p => p.Lote,
+    producto: p => p.Producto,
+    talla:    p => p.Talla,
+    kilos:    p => p.Kilos,
+  };
+  const pesajesVisibles = ordenarFilas(
+    personaEfic ? pesajes.filter(p => p.IdEmpleado === personaEfic) : pesajes,
+    ordenEfic, VALORES_EFIC);
 
   // Solo para la hoja imprimible (Descargar PDF) — encabezado con el rango, filtros activos y sello de hora.
   const tituloSubTab = SUB_TABS.find(t => t.key === subTab)?.label ?? "";
+  useEffect(() => {
+    if (SUB_TABS_SIN_FINCA.includes(subTab) && finca) setFinca("");
+  }, [subTab, finca]);
+
   const nombreFincaSeleccionada = fincas.find(f => f.Codigo === finca)?.Descripcion;
   const rangoFechasTexto = desde === hasta ? fechaCorta(desde) : `${fechaCorta(desde)} — ${fechaCorta(hasta)}`;
   const impresoEn = new Date().toLocaleString("sv-SE", { timeZone: "America/Guatemala", hour12: false }).slice(0, 16);
@@ -443,7 +571,9 @@ export default function ReporteProduccionPage() {
     else if (subTab === "lbhora") exportarLbHora(filasLbHora, desde, hasta);
     else if (subTab === "portalla") exportarLbHoraPorTalla(filasPorTalla, desde, hasta);
     else if (subTab === "lbpersona") exportarLbPorPersona(filasLbPersona, desde, hasta);
-    else exportarEficiencias(reporte.porPersona, desde, hasta);
+    // pesajesVisibles y no reporte.porPersona: el Excel debe traer lo que se está viendo, con el
+    // filtro de persona y el orden ya aplicados.
+    else exportarEficiencias(pesajesVisibles, desde, hasta);
   };
 
   return (
@@ -527,19 +657,19 @@ export default function ReporteProduccionPage() {
             <div className="grid grid-cols-4 gap-2 mb-3">
               <div className="bg-white rounded-lg shadow px-3 py-2 text-center">
                 <p className="text-xs text-gray-400">Materia Prima Recibida</p>
-                <p className="text-base font-bold text-gray-800">{reporte.totales.PesoIngreso.toFixed(2)} kg</p>
+                <p className="text-base font-bold text-gray-800">{fmtNum(reporte.totales.PesoIngreso)} kg</p>
               </div>
               <div className="bg-white rounded-lg shadow px-3 py-2 text-center">
                 <p className="text-xs text-gray-400">Procesado</p>
-                <p className="text-base font-bold text-blue-700">{reporte.totales.Procesado.toFixed(2)} kg</p>
+                <p className="text-base font-bold text-blue-700">{fmtNum(reporte.totales.Procesado)} kg</p>
               </div>
               <div className="bg-white rounded-lg shadow px-3 py-2 text-center">
                 <p className="text-xs text-gray-400">Pendiente</p>
-                <p className="text-base font-bold text-amber-600">{reporte.totales.Pendiente.toFixed(2)} kg</p>
+                <p className="text-base font-bold text-amber-600">{fmtNum(reporte.totales.Pendiente)} kg</p>
               </div>
               <div className="bg-white rounded-lg shadow px-3 py-2 text-center">
                 <p className="text-xs text-gray-400">Rendimiento</p>
-                <p className="text-base font-bold text-gray-700">{reporte.totales.Rendimiento.toFixed(1)}%</p>
+                <p className="text-base font-bold text-gray-700">{fmtNum(reporte.totales.Rendimiento, 1)}%</p>
               </div>
             </div>
           )}
@@ -580,10 +710,10 @@ export default function ReporteProduccionPage() {
                             ))}
                             <tr className="bg-gray-50 font-semibold">
                               <td className="px-3 py-2" colSpan={5}>Subtotal — {nombreFinca}</td>
-                              <td className="px-3 py-2 text-right text-gray-800">{sub.PesoIngreso.toFixed(2)}</td>
-                              <td className="px-3 py-2 text-right text-blue-700">{sub.Procesado.toFixed(2)}</td>
-                              <td className="px-3 py-2 text-right text-amber-600">{sub.Pendiente.toFixed(2)}</td>
-                              <td className="px-3 py-2 text-right text-gray-600">{rendSub.toFixed(1)}%</td>
+                              <td className="px-3 py-2 text-right text-gray-800">{fmtNum(sub.PesoIngreso)}</td>
+                              <td className="px-3 py-2 text-right text-blue-700">{fmtNum(sub.Procesado)}</td>
+                              <td className="px-3 py-2 text-right text-amber-600">{fmtNum(sub.Pendiente)}</td>
+                              <td className="px-3 py-2 text-right text-gray-600">{fmtNum(rendSub, 1)}%</td>
                               <td className="px-3 py-2"></td>
                             </tr>
                           </Fragment>
@@ -597,10 +727,10 @@ export default function ReporteProduccionPage() {
                       <tfoot>
                         <tr className="bg-gray-200 font-bold border-t-2 border-gray-300">
                           <td className="px-3 py-2.5" colSpan={5}>Total General</td>
-                          <td className="px-3 py-2.5 text-right text-gray-900">{reporte.totales.PesoIngreso.toFixed(2)}</td>
-                          <td className="px-3 py-2.5 text-right text-blue-800">{reporte.totales.Procesado.toFixed(2)}</td>
-                          <td className="px-3 py-2.5 text-right text-amber-700">{reporte.totales.Pendiente.toFixed(2)}</td>
-                          <td className="px-3 py-2.5 text-right text-gray-800">{reporte.totales.Rendimiento.toFixed(1)}%</td>
+                          <td className="px-3 py-2.5 text-right text-gray-900">{fmtNum(reporte.totales.PesoIngreso)}</td>
+                          <td className="px-3 py-2.5 text-right text-blue-800">{fmtNum(reporte.totales.Procesado)}</td>
+                          <td className="px-3 py-2.5 text-right text-amber-700">{fmtNum(reporte.totales.Pendiente)}</td>
+                          <td className="px-3 py-2.5 text-right text-gray-800">{fmtNum(reporte.totales.Rendimiento, 1)}%</td>
                           <td className="px-3 py-2.5"></td>
                         </tr>
                       </tfoot>
@@ -626,18 +756,18 @@ export default function ReporteProduccionPage() {
                     <Colgroup columns={POR_TALLA_GEN_COLS} widths={widthsPorTallaGen} />
                     <thead>
                       <tr className="bg-gray-100 text-gray-600 uppercase text-xs tracking-wider">
-                        <Th width={widthsPorTallaGen.talla} onResizeStart={startResizePorTallaGen("talla")} className="px-3 py-3 text-left">Talla</Th>
-                        <Th width={widthsPorTallaGen.kg} onResizeStart={startResizePorTallaGen("kg")} className="px-3 py-3 text-right">Kg</Th>
-                        <Th width={widthsPorTallaGen.pct} onResizeStart={startResizePorTallaGen("pct")} className="px-3 py-3 text-right">%</Th>
+                        <Th width={widthsPorTallaGen.talla} onResizeStart={startResizePorTallaGen("talla")} sortKey="talla" orden={ordenTallaGen} onOrdenar={alternarOrdenTallaGen} className="px-3 py-3 text-left">Talla</Th>
+                        <Th width={widthsPorTallaGen.kg} onResizeStart={startResizePorTallaGen("kg")} sortKey="kg" orden={ordenTallaGen} onOrdenar={alternarOrdenTallaGen} className="px-3 py-3 text-right">Kg</Th>
+                        <Th width={widthsPorTallaGen.pct} onResizeStart={startResizePorTallaGen("pct")} sortKey="pct" orden={ordenTallaGen} onOrdenar={alternarOrdenTallaGen} className="px-3 py-3 text-right">%</Th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100">
-                      {tallasMostradas.map(t => (
+                      {tallasOrdenadas.map(t => (
                         <tr key={t.Talla} className="hover:bg-gray-50 transition">
                           <td className="px-3 py-2.5 text-gray-700">
                             <span className="font-mono">{t.Talla}</span> — {t.DescripcionTalla}
                           </td>
-                          <td className="px-3 py-2.5 text-right font-semibold text-blue-700">{t.Procesado.toFixed(2)}</td>
+                          <td className="px-3 py-2.5 text-right font-semibold text-blue-700">{fmtNum(t.Procesado)}</td>
                           <td className="px-3 py-2.5 text-right text-gray-500">
                             {totalProcesadoTalla > 0 ? (t.Procesado / totalProcesadoTalla * 100).toFixed(1) : "0.0"}%
                           </td>
@@ -651,7 +781,7 @@ export default function ReporteProduccionPage() {
                       <tfoot>
                         <tr className="bg-gray-200 font-bold border-t-2 border-gray-300">
                           <td className="px-3 py-2.5">Total General</td>
-                          <td className="px-3 py-2.5 text-right text-blue-800">{totalProcesadoTalla.toFixed(2)}</td>
+                          <td className="px-3 py-2.5 text-right text-blue-800">{fmtNum(totalProcesadoTalla)}</td>
                           <td className="px-3 py-2.5 text-right text-gray-800">100.0%</td>
                         </tr>
                       </tfoot>
@@ -691,7 +821,7 @@ export default function ReporteProduccionPage() {
                     <tfoot>
                       <tr className="bg-gray-200 font-bold border-t-2 border-gray-300">
                         <td className="px-2 py-1.5" colSpan={3}>Total General</td>
-                        <td className="px-2 py-1.5 text-right text-blue-800">{totalProcesadoTermo.toFixed(2)}</td>
+                        <td className="px-2 py-1.5 text-right text-blue-800">{fmtNum(totalProcesadoTermo)}</td>
                       </tr>
                     </tfoot>
                   )}
@@ -703,25 +833,35 @@ export default function ReporteProduccionPage() {
           {/* ── Eficiencias ── */}
           {subTab === "eficiencias" && (
             <div>
-              <h3 className="text-xs font-semibold text-gray-700 mb-1.5">Pesajes por Persona</h3>
+              <div className="flex items-center gap-2 mb-1.5 flex-wrap">
+                <h3 className="text-xs font-semibold text-gray-700">Pesajes por Persona</h3>
+                <span className="text-xs text-gray-500">{pesajesVisibles.length} pesada{pesajesVisibles.length !== 1 ? "s" : ""}</span>
+                {personaEfic && (
+                  <button onClick={() => setPersonaEfic("")}
+                    className="text-xs font-medium px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 hover:bg-blue-200 transition">
+                    {personasEfic.find(o => o.valor === personaEfic)?.etiqueta ?? personaEfic} &times;
+                  </button>
+                )}
+              </div>
               <div className="bg-white rounded-lg shadow overflow-hidden overflow-x-auto max-h-[600px] overflow-y-auto">
                 <table className="w-full text-xs table-fixed">
                   <Colgroup columns={EFICIENCIAS_COLS} widths={widthsEficiencias} />
                   <thead>
                     <tr className="bg-gray-100 text-gray-600 uppercase text-[10px] tracking-wider">
-                      <Th width={widthsEficiencias.id} onResizeStart={startResizeEficiencias("id")} className="px-2 py-1.5 text-left whitespace-nowrap">Id Empleado</Th>
-                      <Th width={widthsEficiencias.nombre} onResizeStart={startResizeEficiencias("nombre")} className="px-2 py-1.5 text-left">Nombre</Th>
-                      <Th width={widthsEficiencias.area} onResizeStart={startResizeEficiencias("area")} className="px-2 py-1.5 text-left whitespace-nowrap">Área</Th>
-                      <Th width={widthsEficiencias.fecha} onResizeStart={startResizeEficiencias("fecha")} className="px-2 py-1.5 text-center whitespace-nowrap">Fecha</Th>
-                      <Th width={widthsEficiencias.hora} onResizeStart={startResizeEficiencias("hora")} className="px-2 py-1.5 text-center whitespace-nowrap">Hora</Th>
-                      <Th width={widthsEficiencias.lote} onResizeStart={startResizeEficiencias("lote")} className="px-2 py-1.5 text-left whitespace-nowrap">Lote</Th>
-                      <Th width={widthsEficiencias.producto} onResizeStart={startResizeEficiencias("producto")} className="px-2 py-1.5 text-left whitespace-nowrap">Producto</Th>
-                      <Th width={widthsEficiencias.talla} onResizeStart={startResizeEficiencias("talla")} className="px-2 py-1.5 text-left whitespace-nowrap">Talla</Th>
-                      <Th width={widthsEficiencias.kilos} onResizeStart={startResizeEficiencias("kilos")} className="px-2 py-1.5 text-right whitespace-nowrap">Kilos</Th>
+                      <Th width={widthsEficiencias.id} onResizeStart={startResizeEficiencias("id")} sortKey="id" orden={ordenEfic} onOrdenar={alternarOrdenEfic} className="px-2 py-1.5 text-left whitespace-nowrap">Id Empleado</Th>
+                      <Th width={widthsEficiencias.nombre} onResizeStart={startResizeEficiencias("nombre")} sortKey="nombre" orden={ordenEfic} onOrdenar={alternarOrdenEfic} className="px-2 py-1.5 text-left"
+                        filtro={<FiltroColumna opciones={personasEfic} valor={personaEfic} onCambio={setPersonaEfic} etiqueta="Ver una sola persona" />}>Nombre</Th>
+                      <Th width={widthsEficiencias.area} onResizeStart={startResizeEficiencias("area")} sortKey="area" orden={ordenEfic} onOrdenar={alternarOrdenEfic} className="px-2 py-1.5 text-left whitespace-nowrap">Área</Th>
+                      <Th width={widthsEficiencias.fecha} onResizeStart={startResizeEficiencias("fecha")} sortKey="fecha" orden={ordenEfic} onOrdenar={alternarOrdenEfic} className="px-2 py-1.5 text-center whitespace-nowrap">Fecha</Th>
+                      <Th width={widthsEficiencias.hora} onResizeStart={startResizeEficiencias("hora")} sortKey="hora" orden={ordenEfic} onOrdenar={alternarOrdenEfic} className="px-2 py-1.5 text-center whitespace-nowrap">Hora</Th>
+                      <Th width={widthsEficiencias.lote} onResizeStart={startResizeEficiencias("lote")} sortKey="lote" orden={ordenEfic} onOrdenar={alternarOrdenEfic} className="px-2 py-1.5 text-left whitespace-nowrap">Lote</Th>
+                      <Th width={widthsEficiencias.producto} onResizeStart={startResizeEficiencias("producto")} sortKey="producto" orden={ordenEfic} onOrdenar={alternarOrdenEfic} className="px-2 py-1.5 text-left whitespace-nowrap">Producto</Th>
+                      <Th width={widthsEficiencias.talla} onResizeStart={startResizeEficiencias("talla")} sortKey="talla" orden={ordenEfic} onOrdenar={alternarOrdenEfic} className="px-2 py-1.5 text-left whitespace-nowrap">Talla</Th>
+                      <Th width={widthsEficiencias.kilos} onResizeStart={startResizeEficiencias("kilos")} sortKey="kilos" orden={ordenEfic} onOrdenar={alternarOrdenEfic} className="px-2 py-1.5 text-right whitespace-nowrap">Kilos</Th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
-                    {(reporte.porPersona ?? []).map((p, i) => (
+                    {pesajesVisibles.map((p, i) => (
                       <tr key={i} className="hover:bg-gray-50 transition">
                         <td className="px-2 py-1.5 font-mono text-gray-700 whitespace-nowrap">{p.IdEmpleado}</td>
                         <td className="px-2 py-1.5 text-gray-700"><div className="max-w-[9rem] truncate" title={p.Nombre}>{p.Nombre}</div></td>
@@ -731,11 +871,11 @@ export default function ReporteProduccionPage() {
                         <td className="px-2 py-1.5 font-mono text-gray-700 whitespace-nowrap">{p.Lote}</td>
                         <td className="px-2 py-1.5 text-gray-700 whitespace-nowrap">{p.Producto}</td>
                         <td className="px-2 py-1.5 text-gray-700 whitespace-nowrap">{p.Talla} — {p.DescripcionTalla}</td>
-                        <td className="px-2 py-1.5 text-right font-semibold text-blue-700 whitespace-nowrap">{p.Kilos.toFixed(2)}</td>
+                        <td className="px-2 py-1.5 text-right font-semibold text-blue-700 whitespace-nowrap">{fmtNum(p.Kilos)}</td>
                       </tr>
                     ))}
-                    {(reporte.porPersona ?? []).length === 0 && (
-                      <tr><td colSpan={9} className="px-3 py-6 text-center text-gray-400">Sin datos en este rango de fechas</td></tr>
+                    {pesajesVisibles.length === 0 && (
+                      <tr><td colSpan={9} className="px-3 py-6 text-center text-gray-400">{personaEfic ? "Esa persona no tiene pesadas en este rango" : "Sin datos en este rango de fechas"}</td></tr>
                     )}
                   </tbody>
                 </table>
@@ -756,23 +896,23 @@ export default function ReporteProduccionPage() {
                   <Colgroup columns={LBHORA_COLS} widths={widthsLbHora} />
                   <thead>
                     <tr className="bg-gray-100 text-gray-600 uppercase text-[10px] tracking-wider">
-                      <Th width={widthsLbHora.id} onResizeStart={startResizeLbHora("id")} className="px-2 py-1.5 text-left whitespace-nowrap">Id Empleado</Th>
-                      <Th width={widthsLbHora.nombre} onResizeStart={startResizeLbHora("nombre")} className="px-2 py-1.5 text-left">Nombre</Th>
-                      <Th width={widthsLbHora.area} onResizeStart={startResizeLbHora("area")} className="px-2 py-1.5 text-left whitespace-nowrap">Área</Th>
-                      <Th width={widthsLbHora.lb} onResizeStart={startResizeLbHora("lb")} className="px-2 py-1.5 text-right whitespace-nowrap">Lb</Th>
-                      <Th width={widthsLbHora.horas} onResizeStart={startResizeLbHora("horas")} className="px-2 py-1.5 text-right whitespace-nowrap">Horas</Th>
-                      <Th width={widthsLbHora.lbhora} onResizeStart={startResizeLbHora("lbhora")} className="px-2 py-1.5 text-right whitespace-nowrap">Lb/Hora</Th>
-                      <Th width={widthsLbHora.pesadas} onResizeStart={startResizeLbHora("pesadas")} className="px-2 py-1.5 text-center whitespace-nowrap"># Pesadas</Th>
+                      <Th width={widthsLbHora.id} onResizeStart={startResizeLbHora("id")} sortKey="id" orden={ordenLbHora} onOrdenar={alternarOrdenLbHora} className="px-2 py-1.5 text-left whitespace-nowrap">Id Empleado</Th>
+                      <Th width={widthsLbHora.nombre} onResizeStart={startResizeLbHora("nombre")} sortKey="nombre" orden={ordenLbHora} onOrdenar={alternarOrdenLbHora} className="px-2 py-1.5 text-left">Nombre</Th>
+                      <Th width={widthsLbHora.area} onResizeStart={startResizeLbHora("area")} sortKey="area" orden={ordenLbHora} onOrdenar={alternarOrdenLbHora} className="px-2 py-1.5 text-left whitespace-nowrap">Área</Th>
+                      <Th width={widthsLbHora.lb} onResizeStart={startResizeLbHora("lb")} sortKey="lb" orden={ordenLbHora} onOrdenar={alternarOrdenLbHora} className="px-2 py-1.5 text-right whitespace-nowrap">Lb</Th>
+                      <Th width={widthsLbHora.horas} onResizeStart={startResizeLbHora("horas")} sortKey="horas" orden={ordenLbHora} onOrdenar={alternarOrdenLbHora} className="px-2 py-1.5 text-right whitespace-nowrap">Horas</Th>
+                      <Th width={widthsLbHora.lbhora} onResizeStart={startResizeLbHora("lbhora")} sortKey="lbhora" orden={ordenLbHora} onOrdenar={alternarOrdenLbHora} className="px-2 py-1.5 text-right whitespace-nowrap">Lb/Hora</Th>
+                      <Th width={widthsLbHora.pesadas} onResizeStart={startResizeLbHora("pesadas")} sortKey="pesadas" orden={ordenLbHora} onOrdenar={alternarOrdenLbHora} className="px-2 py-1.5 text-center whitespace-nowrap"># Pesadas</Th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
-                    {filasLbHora.map(f => (
+                    {lbHoraOrdenadas.map(f => (
                       <tr key={`${f.IdEmpleado}-${f.Area}`} className="hover:bg-gray-50 transition">
                         <td className="px-2 py-1.5 font-mono text-gray-700 whitespace-nowrap">{f.IdEmpleado}</td>
                         <td className="px-2 py-1.5 text-gray-700"><div className="max-w-[9rem] truncate" title={f.Nombre}>{f.Nombre}</div></td>
                         <td className="px-2 py-1.5 text-gray-700 whitespace-nowrap">{f.Area || <span className="text-gray-300">—</span>}</td>
-                        <td className="px-2 py-1.5 text-right text-gray-700 whitespace-nowrap">{f.Lb.toFixed(2)}</td>
-                        <td className="px-2 py-1.5 text-right text-gray-500 whitespace-nowrap">{f.Horas.toFixed(2)}</td>
+                        <td className="px-2 py-1.5 text-right text-gray-700 whitespace-nowrap">{fmtNum(f.Lb)}</td>
+                        <td className="px-2 py-1.5 text-right text-gray-500 whitespace-nowrap">{fmtNum(f.Horas)}</td>
                         <td className="px-2 py-1.5 text-right font-semibold text-blue-700 whitespace-nowrap">
                           <CeldaLbHora f={f} />
                         </td>
@@ -789,10 +929,10 @@ export default function ReporteProduccionPage() {
                       <tfoot>
                         <tr className="bg-gray-200 font-bold border-t-2 border-gray-300">
                           <td className="px-2 py-1.5" colSpan={3}>Total General</td>
-                          <td className="px-2 py-1.5 text-right text-gray-900">{total.TotalLb.toFixed(2)}</td>
+                          <td className="px-2 py-1.5 text-right text-gray-900">{fmtNum(total.TotalLb)}</td>
                           <td className="px-2 py-1.5"></td>
                           <td className="px-2 py-1.5 text-right text-blue-800">
-                            {total.PromedioLbHora != null ? total.PromedioLbHora.toFixed(1) : "—"}
+                            {total.PromedioLbHora != null ? fmtNum(total.PromedioLbHora, 1) : "—"}
                           </td>
                           <td className="px-2 py-1.5"></td>
                         </tr>
@@ -801,6 +941,7 @@ export default function ReporteProduccionPage() {
                   })()}
                 </table>
               </div>
+              <AvisoLbSinTiempo resumen={validezLbHora} />
             </div>
           )}
 
@@ -820,14 +961,14 @@ export default function ReporteProduccionPage() {
                   <thead>
                     <tr className="bg-gray-100 text-gray-600 uppercase text-[10px] tracking-wider">
                       <Th width={widthsPortalla.expand} onResizeStart={startResizePortalla("expand")} className="px-2 py-1.5"></Th>
-                      <Th width={widthsPortalla.productoTalla} onResizeStart={startResizePortalla("productoTalla")} className="px-2 py-1.5 text-left whitespace-nowrap">Producto — Talla</Th>
-                      <Th width={widthsPortalla.lbTotal} onResizeStart={startResizePortalla("lbTotal")} className="px-2 py-1.5 text-right whitespace-nowrap">Lb Total</Th>
-                      <Th width={widthsPortalla.lbHoraProm} onResizeStart={startResizePortalla("lbHoraProm")} className="px-2 py-1.5 text-right whitespace-nowrap">Lb/Hora Prom.</Th>
-                      <Th width={widthsPortalla.numPersonas} onResizeStart={startResizePortalla("numPersonas")} className="px-2 py-1.5 text-center whitespace-nowrap"># Personas</Th>
+                      <Th width={widthsPortalla.productoTalla} onResizeStart={startResizePortalla("productoTalla")} sortKey="productoTalla" orden={ordenPortalla} onOrdenar={alternarOrdenPortalla} className="px-2 py-1.5 text-left whitespace-nowrap">Producto — Talla</Th>
+                      <Th width={widthsPortalla.lbTotal} onResizeStart={startResizePortalla("lbTotal")} sortKey="lbTotal" orden={ordenPortalla} onOrdenar={alternarOrdenPortalla} className="px-2 py-1.5 text-right whitespace-nowrap">Lb Total</Th>
+                      <Th width={widthsPortalla.lbHoraProm} onResizeStart={startResizePortalla("lbHoraProm")} sortKey="lbHoraProm" orden={ordenPortalla} onOrdenar={alternarOrdenPortalla} className="px-2 py-1.5 text-right whitespace-nowrap">Lb/Hora Prom.</Th>
+                      <Th width={widthsPortalla.numPersonas} onResizeStart={startResizePortalla("numPersonas")} sortKey="numPersonas" orden={ordenPortalla} onOrdenar={alternarOrdenPortalla} className="px-2 py-1.5 text-center whitespace-nowrap"># Personas</Th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
-                    {gruposPorTalla.map(g => {
+                    {portallaOrdenadas.map(g => {
                       const key = `${g.Producto}-${g.Talla}`;
                       return (
                         <FilaProductoTalla key={key} g={g}
@@ -839,8 +980,25 @@ export default function ReporteProduccionPage() {
                       <tr><td colSpan={5} className="px-3 py-6 text-center text-gray-400">Sin datos en este rango de fechas</td></tr>
                     )}
                   </tbody>
+                  {gruposPorTalla.length > 0 && (
+                    <tfoot>
+                      <tr className="bg-gray-200 font-bold border-t-2 border-gray-300">
+                        <td className="px-2 py-1.5" colSpan={2}>Total General</td>
+                        <td className="px-2 py-1.5 text-right text-gray-900">{fmtNum(totalPorTalla.TotalLb)}</td>
+                        <td className="px-2 py-1.5 text-right text-blue-800"
+                          title="Promedio ponderado por horas de todo el equipo, no el promedio de las filas">
+                          {totalPorTalla.PromedioLbHora != null ? fmtNum(totalPorTalla.PromedioLbHora, 1) : "—"}
+                        </td>
+                        <td className="px-2 py-1.5 text-center"
+                          title="Personas distintas: quien trabajó en varios Producto+Talla se cuenta una sola vez">
+                          {totalPorTalla.NumPersonas}
+                        </td>
+                      </tr>
+                    </tfoot>
+                  )}
                 </table>
               </div>
+              <AvisoLbSinTiempo resumen={validezPorTalla} />
             </div>
           )}
 
@@ -861,19 +1019,20 @@ export default function ReporteProduccionPage() {
                   <Colgroup columns={LBPERSONA_COLS} widths={widthsLbPersona} />
                   <thead>
                     <tr className="bg-gray-100 text-gray-600 uppercase text-[10px] tracking-wider">
-                      <Th width={widthsLbPersona.puesto} onResizeStart={startResizeLbPersona("puesto")} className="px-2 py-1.5 text-center whitespace-nowrap">Puesto</Th>
-                      <Th width={widthsLbPersona.id} onResizeStart={startResizeLbPersona("id")} className="px-2 py-1.5 text-left whitespace-nowrap">Id Empleado</Th>
-                      <Th width={widthsLbPersona.nombre} onResizeStart={startResizeLbPersona("nombre")} className="px-2 py-1.5 text-left">Nombre</Th>
+                      <Th width={widthsLbPersona.puesto} onResizeStart={startResizeLbPersona("puesto")} sortKey="puesto" orden={ordenLbPersona} onOrdenar={alternarOrdenLbPersona} className="px-2 py-1.5 text-center whitespace-nowrap">Puesto</Th>
+                      <Th width={widthsLbPersona.id} onResizeStart={startResizeLbPersona("id")} sortKey="id" orden={ordenLbPersona} onOrdenar={alternarOrdenLbPersona} className="px-2 py-1.5 text-left whitespace-nowrap">Id Empleado</Th>
+                      <Th width={widthsLbPersona.nombre} onResizeStart={startResizeLbPersona("nombre")} sortKey="nombre" orden={ordenLbPersona} onOrdenar={alternarOrdenLbPersona} className="px-2 py-1.5 text-left">Nombre</Th>
                       {AREAS_DESTAJO.map(a => (
                         <Th key={a.codigo} width={widthsLbPersona[LBPERSONA_AREA_COL[a.codigo]]}
                           onResizeStart={startResizeLbPersona(LBPERSONA_AREA_COL[a.codigo])}
+                          sortKey={LBPERSONA_AREA_COL[a.codigo]} orden={ordenLbPersona} onOrdenar={alternarOrdenLbPersona}
                           className="px-2 py-1.5 text-right whitespace-nowrap">{a.etiqueta} (Lb)</Th>
                       ))}
-                      <Th width={widthsLbPersona.total} onResizeStart={startResizeLbPersona("total")} className="px-2 py-1.5 text-right whitespace-nowrap">Total (Lb)</Th>
+                      <Th width={widthsLbPersona.total} onResizeStart={startResizeLbPersona("total")} sortKey="total" orden={ordenLbPersona} onOrdenar={alternarOrdenLbPersona} className="px-2 py-1.5 text-right whitespace-nowrap">Total (Lb)</Th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
-                    {filasLbPersona.map(f => (
+                    {lbPersonaOrdenadas.map(f => (
                       <tr key={f.IdEmpleado} className={`${FILA_SEMAFORO[f.Semaforo]} hover:brightness-95 transition`}>
                         <td className="px-2 py-1.5 text-center text-gray-500 whitespace-nowrap">{f.Puesto}</td>
                         <td className="px-2 py-1.5 font-mono text-gray-700 whitespace-nowrap">{f.IdEmpleado}</td>
@@ -881,16 +1040,31 @@ export default function ReporteProduccionPage() {
                         <td className="px-2 py-1.5 text-gray-700"><div className="truncate" title={f.Nombre}>{f.Nombre}</div></td>
                         {AREAS_DESTAJO.map(a => (
                           <td key={a.codigo} className="px-2 py-1.5 text-right text-gray-700 whitespace-nowrap">
-                            {f[a.lb] > 0 ? f[a.lb].toFixed(2) : <span className="text-gray-300">—</span>}
+                            {f[a.lb] > 0 ? fmtNum(f[a.lb]) : <span className="text-gray-300">—</span>}
                           </td>
                         ))}
-                        <td className="px-2 py-1.5 text-right font-semibold text-blue-700 whitespace-nowrap">{f.LbTotal.toFixed(2)}</td>
+                        <td className="px-2 py-1.5 text-right font-semibold text-blue-700 whitespace-nowrap">{fmtNum(f.LbTotal)}</td>
                       </tr>
                     ))}
                     {filasLbPersona.length === 0 && (
                       <tr><td colSpan={LBPERSONA_COLS.length} className="px-3 py-6 text-center text-gray-400">Sin datos en este rango de fechas</td></tr>
                     )}
                   </tbody>
+                  {filasLbPersona.length > 0 && (
+                    <tfoot>
+                      <tr className="bg-gray-200 font-bold border-t-2 border-gray-300">
+                        <td className="px-2 py-1.5 whitespace-nowrap" colSpan={3}>
+                          Total General <span className="font-normal text-gray-500">· {totalLbPersona.Personas} persona{totalLbPersona.Personas !== 1 ? "s" : ""}</span>
+                        </td>
+                        {AREAS_DESTAJO.map(a => (
+                          <td key={a.codigo} className="px-2 py-1.5 text-right whitespace-nowrap text-gray-900">
+                            {totalLbPersona[a.lb] > 0 ? fmtNum(totalLbPersona[a.lb]) : <span className="text-gray-400">—</span>}
+                          </td>
+                        ))}
+                        <td className="px-2 py-1.5 text-right whitespace-nowrap text-blue-800">{fmtNum(totalLbPersona.LbTotal)}</td>
+                      </tr>
+                    </tfoot>
+                  )}
                 </table>
               </div>
             </div>
@@ -942,20 +1116,20 @@ export default function ReporteProduccionPage() {
                     <td className="py-0.5 px-1">{l.NombreFinca}</td>
                     <td className="py-0.5 px-1 font-mono">{l.Clase} — {l.DescripcionClase}</td>
                     <td className="py-0.5 px-1 text-center tabular-nums">{l.Fecha?.slice(0, 10)}</td>
-                    <td className="py-0.5 px-1 text-right tabular-nums">{l.PesoIngreso.toFixed(2)}</td>
-                    <td className="py-0.5 px-1 text-right font-semibold tabular-nums">{l.Procesado.toFixed(2)}</td>
-                    <td className="py-0.5 px-1 text-right tabular-nums">{l.Pendiente.toFixed(2)}</td>
-                    <td className="py-0.5 px-1 text-right tabular-nums">{l.Rendimiento.toFixed(1)}%</td>
+                    <td className="py-0.5 px-1 text-right tabular-nums">{fmtNum(l.PesoIngreso)}</td>
+                    <td className="py-0.5 px-1 text-right font-semibold tabular-nums">{fmtNum(l.Procesado)}</td>
+                    <td className="py-0.5 px-1 text-right tabular-nums">{fmtNum(l.Pendiente)}</td>
+                    <td className="py-0.5 px-1 text-right tabular-nums">{fmtNum(l.Rendimiento, 1)}%</td>
                   </tr>
                 ))}
               </tbody>
               <tfoot>
                 <tr className="font-bold border-t-2 border-slate-900">
                   <td className="py-1 px-1" colSpan={4}>Total General</td>
-                  <td className="py-1 px-1 text-right tabular-nums">{reporte.totales.PesoIngreso.toFixed(2)}</td>
-                  <td className="py-1 px-1 text-right tabular-nums">{reporte.totales.Procesado.toFixed(2)}</td>
-                  <td className="py-1 px-1 text-right tabular-nums">{reporte.totales.Pendiente.toFixed(2)}</td>
-                  <td className="py-1 px-1 text-right tabular-nums">{reporte.totales.Rendimiento.toFixed(1)}%</td>
+                  <td className="py-1 px-1 text-right tabular-nums">{fmtNum(reporte.totales.PesoIngreso)}</td>
+                  <td className="py-1 px-1 text-right tabular-nums">{fmtNum(reporte.totales.Procesado)}</td>
+                  <td className="py-1 px-1 text-right tabular-nums">{fmtNum(reporte.totales.Pendiente)}</td>
+                  <td className="py-1 px-1 text-right tabular-nums">{fmtNum(reporte.totales.Rendimiento, 1)}%</td>
                 </tr>
               </tfoot>
             </table>
@@ -973,7 +1147,7 @@ export default function ReporteProduccionPage() {
                 {tallasMostradas.map(t => (
                   <tr key={t.Talla} className="border-b border-gray-100">
                     <td className="py-0.5 px-1"><span className="font-mono">{t.Talla}</span> — {t.DescripcionTalla}</td>
-                    <td className="py-0.5 px-1 text-right font-semibold tabular-nums">{t.Procesado.toFixed(2)}</td>
+                    <td className="py-0.5 px-1 text-right font-semibold tabular-nums">{fmtNum(t.Procesado)}</td>
                     <td className="py-0.5 px-1 text-right tabular-nums">{totalProcesadoTalla > 0 ? (t.Procesado / totalProcesadoTalla * 100).toFixed(1) : "0.0"}%</td>
                   </tr>
                 ))}
@@ -998,7 +1172,7 @@ export default function ReporteProduccionPage() {
                   <tr key={numeroTermo} className="border-b border-gray-100">
                     <td className="py-0.5 px-1 font-mono font-bold">Termo {numeroTermo}</td>
                     <td className="py-0.5 px-1">{cargas.length} carga{cargas.length !== 1 ? "s" : ""}</td>
-                    <td className="py-0.5 px-1 text-right font-semibold tabular-nums">{subtotal.toFixed(2)}</td>
+                    <td className="py-0.5 px-1 text-right font-semibold tabular-nums">{fmtNum(subtotal)}</td>
                   </tr>
                 );
               })}
@@ -1006,7 +1180,7 @@ export default function ReporteProduccionPage() {
             <tfoot>
               <tr className="font-bold border-t-2 border-slate-900">
                 <td className="py-1 px-1" colSpan={2}>Total General</td>
-                <td className="py-1 px-1 text-right tabular-nums">{totalProcesadoTermo.toFixed(2)}</td>
+                <td className="py-1 px-1 text-right tabular-nums">{fmtNum(totalProcesadoTermo)}</td>
               </tr>
             </tfoot>
           </table>
@@ -1038,7 +1212,7 @@ export default function ReporteProduccionPage() {
                   <td className="py-0.5 px-1 font-mono">{p.Lote}</td>
                   <td className="py-0.5 px-1">{p.Producto}</td>
                   <td className="py-0.5 px-1">{p.Talla} — {p.DescripcionTalla}</td>
-                  <td className="py-0.5 px-1 text-right font-semibold tabular-nums">{p.Kilos.toFixed(2)}</td>
+                  <td className="py-0.5 px-1 text-right font-semibold tabular-nums">{fmtNum(p.Kilos)}</td>
                 </tr>
               ))}
             </tbody>
@@ -1066,9 +1240,9 @@ export default function ReporteProduccionPage() {
                     <td className="py-0.5 px-1 font-mono">{f.IdEmpleado}</td>
                     <td className="py-0.5 px-1">{f.Nombre}</td>
                     <td className="py-0.5 px-1">{f.Area || "—"}</td>
-                    <td className="py-0.5 px-1 text-right tabular-nums">{f.Lb.toFixed(2)}</td>
-                    <td className="py-0.5 px-1 text-right tabular-nums">{f.Horas.toFixed(2)}</td>
-                    <td className="py-0.5 px-1 text-right font-semibold tabular-nums">{f.LbPorHora != null ? f.LbPorHora.toFixed(1) : "—"}</td>
+                    <td className="py-0.5 px-1 text-right tabular-nums">{fmtNum(f.Lb)}</td>
+                    <td className="py-0.5 px-1 text-right tabular-nums">{fmtNum(f.Horas)}</td>
+                    <td className="py-0.5 px-1 text-right font-semibold tabular-nums">{f.LbPorHora != null ? fmtNum(f.LbPorHora, 1) : "—"}</td>
                     <td className="py-0.5 px-1 text-center tabular-nums">{f.NumPesadas}</td>
                   </tr>
                 ))}
@@ -1076,9 +1250,9 @@ export default function ReporteProduccionPage() {
               <tfoot>
                 <tr className="font-bold border-t-2 border-slate-900">
                   <td className="py-1 px-1" colSpan={3}>Total General</td>
-                  <td className="py-1 px-1 text-right tabular-nums">{total.TotalLb.toFixed(2)}</td>
+                  <td className="py-1 px-1 text-right tabular-nums">{fmtNum(total.TotalLb)}</td>
                   <td className="py-1 px-1"></td>
-                  <td className="py-1 px-1 text-right tabular-nums">{total.PromedioLbHora != null ? total.PromedioLbHora.toFixed(1) : "—"}</td>
+                  <td className="py-1 px-1 text-right tabular-nums">{total.PromedioLbHora != null ? fmtNum(total.PromedioLbHora, 1) : "—"}</td>
                   <td className="py-1 px-1"></td>
                 </tr>
               </tfoot>
@@ -1100,8 +1274,8 @@ export default function ReporteProduccionPage() {
               {gruposPorTalla.map(g => (
                 <tr key={`${g.Producto}-${g.Talla}`} className="border-b border-gray-100">
                   <td className="py-0.5 px-1">{g.Producto} — {g.Talla} ({g.DescripcionTalla}){g.esSecundaria && " (Bajo Volumen)"}</td>
-                  <td className="py-0.5 px-1 text-right font-semibold tabular-nums">{g.resumen.TotalLb.toFixed(2)}</td>
-                  <td className="py-0.5 px-1 text-right tabular-nums">{g.resumen.PromedioLbHora != null ? g.resumen.PromedioLbHora.toFixed(1) : "—"}</td>
+                  <td className="py-0.5 px-1 text-right font-semibold tabular-nums">{fmtNum(g.resumen.TotalLb)}</td>
+                  <td className="py-0.5 px-1 text-right tabular-nums">{g.resumen.PromedioLbHora != null ? fmtNum(g.resumen.PromedioLbHora, 1) : "—"}</td>
                   <td className="py-0.5 px-1 text-center tabular-nums">{g.resumen.NumPersonas}</td>
                 </tr>
               ))}
@@ -1130,9 +1304,9 @@ export default function ReporteProduccionPage() {
                   <td className="py-0.5 px-1 font-mono">{f.IdEmpleado}</td>
                   <td className="py-0.5 px-1">{f.Nombre}</td>
                   {AREAS_DESTAJO.map(a => (
-                    <td key={a.codigo} className="py-0.5 px-1 text-right tabular-nums">{f[a.lb] > 0 ? f[a.lb].toFixed(2) : "—"}</td>
+                    <td key={a.codigo} className="py-0.5 px-1 text-right tabular-nums">{f[a.lb] > 0 ? fmtNum(f[a.lb]) : "—"}</td>
                   ))}
-                  <td className="py-0.5 px-1 text-right font-semibold tabular-nums">{f.LbTotal.toFixed(2)}</td>
+                  <td className="py-0.5 px-1 text-right font-semibold tabular-nums">{fmtNum(f.LbTotal)}</td>
                 </tr>
               ))}
             </tbody>

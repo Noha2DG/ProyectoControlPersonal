@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
+import { fmtNum } from "../utils/numero.js";
 import { authHeader, usePuede } from "../context/AuthContext.jsx";
 import { useColWidths, Th, Colgroup } from "../components/ResizableTh.jsx";
 
@@ -29,7 +30,7 @@ function SelectorTransacciones({ transacciones, seleccionada, onSelect, onCerrar
               <button onClick={() => onSelect(t)} className="w-full text-left">
                 <p className={`font-mono font-bold ${activa ? "text-white" : "text-gray-800"}`}>{t.Lote}</p>
                 <p className={`text-xs ${activa ? "text-blue-100" : "text-gray-500"}`}>{t.DescripcionProceso} → {t.ClasePT} ({t.DescripcionTalla})</p>
-                <p className={`text-xs font-semibold ${activa ? "text-white" : "text-blue-700"}`}>{t.Procesado.toFixed(1)} kg</p>
+                <p className={`text-xs font-semibold ${activa ? "text-white" : "text-blue-700"}`}>{fmtNum(t.Procesado, 1)} kg</p>
               </button>
               {puedeEditar && (
                 <button onClick={() => onCerrar(t)}
@@ -267,17 +268,17 @@ export default function PesajePage() {
               <div className="text-center">
                 <p className="text-xs text-gray-400">Ingreso MP</p>
                 <p className="text-xs font-mono font-semibold text-blue-600 truncate">{lote.Clase}</p>
-                <p className="text-sm font-bold text-gray-800">{lote.PesoIngreso.toFixed(1)}</p>
+                <p className="text-sm font-bold text-gray-800">{fmtNum(lote.PesoIngreso, 1)}</p>
               </div>
               <div className="text-center">
                 <p className="text-xs text-gray-400">Procesado</p>
                 <p className="text-xs font-mono font-semibold text-blue-600 truncate">&nbsp;</p>
-                <p className="text-sm font-bold text-blue-700">{lote.Procesado.toFixed(1)}</p>
+                <p className="text-sm font-bold text-blue-700">{fmtNum(lote.Procesado, 1)}</p>
               </div>
               <div className="text-center">
                 <p className="text-xs text-gray-400">Pendiente MP</p>
                 <p className="text-xs font-mono font-semibold text-blue-600 truncate">{lote.Clase}</p>
-                <p className={`text-sm font-bold ${lote.Pendiente < 0 ? "text-red-600" : "text-amber-600"}`}>{lote.Pendiente.toFixed(1)}</p>
+                <p className={`text-sm font-bold ${lote.Pendiente < 0 ? "text-red-600" : "text-amber-600"}`}>{fmtNum(lote.Pendiente, 1)}</p>
               </div>
               <div className="text-center">
                 <p className="text-xs text-gray-400">Rendimiento</p>
@@ -311,7 +312,7 @@ export default function PesajePage() {
                 return (
                   <>
                     <p className="text-xs text-gray-500">
-                      Acumulado: <span className="font-semibold text-gray-700">{termoActual.PesoAcumulado.toFixed(2)} kg</span>
+                      Acumulado: <span className="font-semibold text-gray-700">{fmtNum(termoActual.PesoAcumulado)} kg</span>
                       <span className="text-gray-400"> / {cap} kg</span>
                     </p>
                     <div className="w-full bg-gray-200 rounded-full h-4 overflow-hidden mt-1.5">
@@ -319,7 +320,7 @@ export default function PesajePage() {
                         style={{ width: `${Math.min(pct, 100)}%` }} />
                     </div>
                     <p className={`text-xs font-semibold mt-1 ${pct >= 100 ? "text-red-600" : pct >= 80 ? "text-amber-600" : "text-gray-500"}`}>
-                      {falta > 0 ? `Faltan ${falta.toFixed(2)} kg` : `Termo lleno — excedido ${Math.abs(falta).toFixed(2)} kg`}
+                      {falta > 0 ? `Faltan ${fmtNum(falta)} kg` : `Termo lleno — excedido ${Math.abs(falta).toFixed(2)} kg`}
                     </p>
                   </>
                 );
@@ -396,7 +397,7 @@ export default function PesajePage() {
                     <td className="px-3 py-2 font-mono text-gray-700 whitespace-nowrap">{p.Codigo}</td>
                     <td className="px-3 py-2 text-gray-900 whitespace-nowrap">{p.NombreCompleto}</td>
                     <td className="px-3 py-2 text-center whitespace-nowrap">#{p.NumeroTermo}</td>
-                    <td className="px-3 py-2 text-right font-semibold whitespace-nowrap">{p.Peso.toFixed(2)}</td>
+                    <td className="px-3 py-2 text-right font-semibold whitespace-nowrap">{fmtNum(p.Peso)}</td>
                     <td className="px-3 py-2 text-center text-gray-500 whitespace-nowrap">{p.FechaHora?.slice(11, 16)}</td>
                     <td className="px-3 py-2 text-center whitespace-nowrap">
                       <div className="flex justify-center gap-2">

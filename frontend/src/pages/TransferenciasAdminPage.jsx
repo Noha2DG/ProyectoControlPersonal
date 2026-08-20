@@ -4,7 +4,7 @@ import { authHeader, usePuede } from "../context/AuthContext.jsx";
 import { exportarTransferencias } from "../utils/exportExcel.js";
 import { fmtRango } from "../utils/permisos.js";
 import EmpleadoAutocomplete from "../components/EmpleadoAutocomplete.jsx";
-import { useColWidths, Th, Colgroup } from "../components/ResizableTh.jsx";
+import { useColWidths, useOrden, ordenarFilas, Th, Colgroup } from "../components/ResizableTh.jsx";
 
 const COL_DEFAULTS = { fecha: 100, codigo: 100, nombre: 190, area: 90, nombreArea: 180, entrada: 100, salida: 100, duracion: 100, acciones: 110 };
 const COLS = Object.keys(COL_DEFAULTS);
@@ -111,6 +111,7 @@ export default function TransferenciasAdminPage() {
   const [modal, setModal] = useState({ open: false, registro: null });
   const [permisosEmpleado, setPermisosEmpleado] = useState([]);
   const [widths, startResize] = useColWidths("transferencias", COL_DEFAULTS);
+  const [orden, alternarOrden] = useOrden();
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -181,13 +182,32 @@ export default function TransferenciasAdminPage() {
     setAreaTexto("");
   };
 
-  const filtrados = registros.filter(r =>
+  const coincidentes = registros.filter(r =>
     (!busqueda ||
       r.NombreCompleto?.toLowerCase().includes(busqueda.toLowerCase()) ||
       r.Codigo?.toLowerCase().includes(busqueda.toLowerCase())) &&
     (!areaFiltro || r.CodigoArea === areaFiltro)
   );
-  if (areaFiltro) filtrados.sort((a, b) => (b.Minutos ?? 0) - (a.Minutos ?? 0));
+
+  // Duración se ordena por Minutos y no por el "4h 36m" que se ve: como texto, "13m" quedaría
+  // después de "4h". Fecha y horas ya vienen en formato ordenable (YYYY-MM-DD, HH:MM:SS).
+  const VALORES_ORDEN = {
+    fecha:      r => r.Fecha,
+    codigo:     r => r.Codigo,
+    nombre:     r => r.NombreCompleto,
+    area:       r => r.CodigoArea,
+    nombreArea: r => r.NombreArea,
+    entrada:    r => r.HoraEntrada,
+    salida:     r => r.HoraSalida,   // null = En curso → siempre al final
+    duracion:   r => r.Minutos,
+  };
+
+  const filtrados = orden
+    ? ordenarFilas(coincidentes, orden, VALORES_ORDEN)
+    // Sin orden elegido a mano, al acotar por área se mantiene el criterio de siempre: las estadías
+    // más largas arriba, que es lo que se anda buscando al revisar un área.
+    : areaFiltro ? [...coincidentes].sort((a, b) => (b.Minutos ?? 0) - (a.Minutos ?? 0))
+    : coincidentes;
 
   const atascadas = filtrados.filter(r => !r.HoraSalida && r.Minutos >= LIMITE_ALERTA_MIN).length;
 
@@ -313,14 +333,14 @@ export default function TransferenciasAdminPage() {
             <Colgroup columns={COLS} widths={widths} />
             <thead>
               <tr className="bg-gray-100 text-gray-600 uppercase text-xs tracking-wider">
-                <Th width={widths.fecha} onResizeStart={startResize("fecha")} className="px-4 py-3 text-left">Fecha</Th>
-                <Th width={widths.codigo} onResizeStart={startResize("codigo")} className="px-4 py-3 text-left">Código</Th>
-                <Th width={widths.nombre} onResizeStart={startResize("nombre")} className="px-4 py-3 text-left">Nombre</Th>
-                <Th width={widths.area} onResizeStart={startResize("area")} className="px-4 py-3 text-center">Área</Th>
-                <Th width={widths.nombreArea} onResizeStart={startResize("nombreArea")} className="px-4 py-3 text-left">Nombre del Área</Th>
-                <Th width={widths.entrada} onResizeStart={startResize("entrada")} className="px-4 py-3 text-center">H. Entrada</Th>
-                <Th width={widths.salida} onResizeStart={startResize("salida")} className="px-4 py-3 text-center">H. Salida</Th>
-                <Th width={widths.duracion} onResizeStart={startResize("duracion")} className="px-4 py-3 text-center">Duración</Th>
+                <Th width={widths.fecha} onResizeStart={startResize("fecha")} sortKey="fecha" orden={orden} onOrdenar={alternarOrden} className="px-4 py-3 text-left">Fecha</Th>
+                <Th width={widths.codigo} onResizeStart={startResize("codigo")} sortKey="codigo" orden={orden} onOrdenar={alternarOrden} className="px-4 py-3 text-left">Código</Th>
+                <Th width={widths.nombre} onResizeStart={startResize("nombre")} sortKey="nombre" orden={orden} onOrdenar={alternarOrden} className="px-4 py-3 text-left">Nombre</Th>
+                <Th width={widths.area} onResizeStart={startResize("area")} sortKey="area" orden={orden} onOrdenar={alternarOrden} className="px-4 py-3 text-center">Área</Th>
+                <Th width={widths.nombreArea} onResizeStart={startResize("nombreArea")} sortKey="nombreArea" orden={orden} onOrdenar={alternarOrden} className="px-4 py-3 text-left">Nombre del Área</Th>
+                <Th width={widths.entrada} onResizeStart={startResize("entrada")} sortKey="entrada" orden={orden} onOrdenar={alternarOrden} className="px-4 py-3 text-center">H. Entrada</Th>
+                <Th width={widths.salida} onResizeStart={startResize("salida")} sortKey="salida" orden={orden} onOrdenar={alternarOrden} className="px-4 py-3 text-center">H. Salida</Th>
+                <Th width={widths.duracion} onResizeStart={startResize("duracion")} sortKey="duracion" orden={orden} onOrdenar={alternarOrden} className="px-4 py-3 text-center">Duración</Th>
                 <Th width={widths.acciones} onResizeStart={startResize("acciones")} className="px-4 py-3 text-center">Acciones</Th>
               </tr>
             </thead>

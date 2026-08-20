@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
+import { fmtEntero, fmtNum } from "../utils/numero.js";
 import { authHeader } from "../context/AuthContext.jsx";
-import { useColWidths, Th, Colgroup } from "../components/ResizableTh.jsx";
+import { useColWidths, useOrden, ordenarFilas, Th, Colgroup } from "../components/ResizableTh.jsx";
 
 const API = "/api/bodega-fisica/existencias";
 
@@ -42,6 +43,7 @@ export default function ExistenciaBodegaPage() {
   const [loading, setLoading] = useState(true);
   const [filtros, setFiltros] = useState(FILTRO_INICIAL);
   const [widths, startResize] = useColWidths("existenciaBodega", COL_DEFAULTS);
+  const [orden, alternarOrden] = useOrden();
 
   const fetchDatos = useCallback(async () => {
     setLoading(true);
@@ -79,6 +81,15 @@ export default function ExistenciaBodegaPage() {
     Master: acc.Master + f.Master, Cajas: acc.Cajas + f.Cajas,
     KilosBrutos: acc.KilosBrutos + f.KilosBrutos, Libras: acc.Libras + f.Libras,
   }), { Master: 0, Cajas: 0, KilosBrutos: 0, Libras: 0 }), [filtradas]);
+
+  // Master/Cajas/Kilos/Libras se comparan como números, no por el texto con decimales.
+  const ordenadas = ordenarFilas(filtradas, orden, {
+    pedido: f => f.Pedido, cliente: f => f.Cliente, lote: f => f.Lote, polin: f => f.Polin,
+    ubicacion: f => ubicacionDe(f), posicion: f => f.PosicionCodigo, area: f => f.NombreArea,
+    clase: f => f.Clase, talla: f => f.Talla, presentacion: f => f.Presentacion,
+    fecha: f => f.Fecha, master: f => f.Master, cajas: f => f.Cajas,
+    kilos: f => f.KilosBrutos, libras: f => f.Libras,
+  });
 
   const hayFiltros = Object.values(filtros).some(Boolean);
   const limpiarFiltros = () => setFiltros(FILTRO_INICIAL);
@@ -123,21 +134,21 @@ export default function ExistenciaBodegaPage() {
               <Colgroup columns={COLS} widths={widths} />
               <thead>
                 <tr className="bg-gray-100 text-gray-600 uppercase text-xs tracking-wider">
-                  <Th width={widths.pedido} onResizeStart={startResize("pedido")} className="px-4 py-3 text-left">Pedido</Th>
-                  <Th width={widths.cliente} onResizeStart={startResize("cliente")} className="px-4 py-3 text-left">Cliente</Th>
-                  <Th width={widths.lote} onResizeStart={startResize("lote")} className="px-4 py-3 text-left">Lote</Th>
-                  <Th width={widths.polin} onResizeStart={startResize("polin")} className="px-4 py-3 text-left">Polín</Th>
-                  <Th width={widths.ubicacion} onResizeStart={startResize("ubicacion")} className="px-4 py-3 text-left">Ubicación</Th>
-                  <Th width={widths.posicion} onResizeStart={startResize("posicion")} className="px-4 py-3 text-left">Posición</Th>
-                  <Th width={widths.area} onResizeStart={startResize("area")} className="px-4 py-3 text-left">Área (origen)</Th>
-                  <Th width={widths.clase} onResizeStart={startResize("clase")} className="px-4 py-3 text-left">Clase</Th>
-                  <Th width={widths.talla} onResizeStart={startResize("talla")} className="px-4 py-3 text-left">Talla</Th>
-                  <Th width={widths.presentacion} onResizeStart={startResize("presentacion")} className="px-4 py-3 text-left">Presentación</Th>
-                  <Th width={widths.fecha} onResizeStart={startResize("fecha")} className="px-4 py-3 text-left">Fecha</Th>
-                  <Th width={widths.master} onResizeStart={startResize("master")} className="px-4 py-3 text-right">Master</Th>
-                  <Th width={widths.cajas} onResizeStart={startResize("cajas")} className="px-4 py-3 text-right">Cajas</Th>
-                  <Th width={widths.kilos} onResizeStart={startResize("kilos")} className="px-4 py-3 text-right">Kilos</Th>
-                  <Th width={widths.libras} onResizeStart={startResize("libras")} className="px-4 py-3 text-right">Libras</Th>
+                  <Th width={widths.pedido} onResizeStart={startResize("pedido")} sortKey="pedido" orden={orden} onOrdenar={alternarOrden} className="px-4 py-3 text-left">Pedido</Th>
+                  <Th width={widths.cliente} onResizeStart={startResize("cliente")} sortKey="cliente" orden={orden} onOrdenar={alternarOrden} className="px-4 py-3 text-left">Cliente</Th>
+                  <Th width={widths.lote} onResizeStart={startResize("lote")} sortKey="lote" orden={orden} onOrdenar={alternarOrden} className="px-4 py-3 text-left">Lote</Th>
+                  <Th width={widths.polin} onResizeStart={startResize("polin")} sortKey="polin" orden={orden} onOrdenar={alternarOrden} className="px-4 py-3 text-left">Polín</Th>
+                  <Th width={widths.ubicacion} onResizeStart={startResize("ubicacion")} sortKey="ubicacion" orden={orden} onOrdenar={alternarOrden} className="px-4 py-3 text-left">Ubicación</Th>
+                  <Th width={widths.posicion} onResizeStart={startResize("posicion")} sortKey="posicion" orden={orden} onOrdenar={alternarOrden} className="px-4 py-3 text-left">Posición</Th>
+                  <Th width={widths.area} onResizeStart={startResize("area")} sortKey="area" orden={orden} onOrdenar={alternarOrden} className="px-4 py-3 text-left">Área (origen)</Th>
+                  <Th width={widths.clase} onResizeStart={startResize("clase")} sortKey="clase" orden={orden} onOrdenar={alternarOrden} className="px-4 py-3 text-left">Clase</Th>
+                  <Th width={widths.talla} onResizeStart={startResize("talla")} sortKey="talla" orden={orden} onOrdenar={alternarOrden} className="px-4 py-3 text-left">Talla</Th>
+                  <Th width={widths.presentacion} onResizeStart={startResize("presentacion")} sortKey="presentacion" orden={orden} onOrdenar={alternarOrden} className="px-4 py-3 text-left">Presentación</Th>
+                  <Th width={widths.fecha} onResizeStart={startResize("fecha")} sortKey="fecha" orden={orden} onOrdenar={alternarOrden} className="px-4 py-3 text-left">Fecha</Th>
+                  <Th width={widths.master} onResizeStart={startResize("master")} sortKey="master" orden={orden} onOrdenar={alternarOrden} className="px-4 py-3 text-right">Master</Th>
+                  <Th width={widths.cajas} onResizeStart={startResize("cajas")} sortKey="cajas" orden={orden} onOrdenar={alternarOrden} className="px-4 py-3 text-right">Cajas</Th>
+                  <Th width={widths.kilos} onResizeStart={startResize("kilos")} sortKey="kilos" orden={orden} onOrdenar={alternarOrden} className="px-4 py-3 text-right">Kilos</Th>
+                  <Th width={widths.libras} onResizeStart={startResize("libras")} sortKey="libras" orden={orden} onOrdenar={alternarOrden} className="px-4 py-3 text-right">Libras</Th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
@@ -145,7 +156,7 @@ export default function ExistenciaBodegaPage() {
                   <tr><td colSpan={COLS.length} className="px-4 py-10 text-center text-gray-400">
                     {filas.length === 0 ? "No hay pallets escaneados todavía" : "Ningún polín coincide con los filtros"}
                   </td></tr>
-                ) : filtradas.map((f, i) => {
+                ) : ordenadas.map((f, i) => {
                   const ubicacion = ubicacionDe(f);
                   return (
                     <tr key={i} className="hover:bg-gray-50 transition">
@@ -164,10 +175,10 @@ export default function ExistenciaBodegaPage() {
                       <td className="px-4 py-2.5 text-gray-600">{f.Talla}</td>
                       <td className="px-4 py-2.5 text-gray-600 truncate" title={f.Presentacion}>{f.Presentacion}</td>
                       <td className="px-4 py-2.5 text-gray-500 whitespace-nowrap">{fmtFecha(f.Fecha)}</td>
-                      <td className="px-4 py-2.5 text-right font-medium tabular-nums">{f.Master}</td>
-                      <td className="px-4 py-2.5 text-right tabular-nums">{f.Cajas}</td>
-                      <td className="px-4 py-2.5 text-right tabular-nums">{f.KilosBrutos.toFixed(2)}</td>
-                      <td className="px-4 py-2.5 text-right tabular-nums">{f.Libras.toFixed(2)}</td>
+                      <td className="px-4 py-2.5 text-right font-medium tabular-nums">{fmtEntero(f.Master)}</td>
+                      <td className="px-4 py-2.5 text-right tabular-nums">{fmtEntero(f.Cajas)}</td>
+                      <td className="px-4 py-2.5 text-right tabular-nums">{fmtNum(f.KilosBrutos)}</td>
+                      <td className="px-4 py-2.5 text-right tabular-nums">{fmtNum(f.Libras)}</td>
                     </tr>
                   );
                 })}
@@ -176,10 +187,10 @@ export default function ExistenciaBodegaPage() {
                 <tfoot>
                   <tr className="bg-gray-50 border-t-2 border-gray-200 font-bold text-gray-700">
                     <td colSpan={11} className="px-4 py-2.5 text-right text-xs uppercase tracking-wide text-gray-500">Total</td>
-                    <td className="px-4 py-2.5 text-right tabular-nums">{totales.Master}</td>
-                    <td className="px-4 py-2.5 text-right tabular-nums">{totales.Cajas}</td>
-                    <td className="px-4 py-2.5 text-right tabular-nums">{totales.KilosBrutos.toFixed(2)}</td>
-                    <td className="px-4 py-2.5 text-right tabular-nums">{totales.Libras.toFixed(2)}</td>
+                    <td className="px-4 py-2.5 text-right tabular-nums">{fmtEntero(totales.Master)}</td>
+                    <td className="px-4 py-2.5 text-right tabular-nums">{fmtEntero(totales.Cajas)}</td>
+                    <td className="px-4 py-2.5 text-right tabular-nums">{fmtNum(totales.KilosBrutos)}</td>
+                    <td className="px-4 py-2.5 text-right tabular-nums">{fmtNum(totales.Libras)}</td>
                   </tr>
                 </tfoot>
               )}

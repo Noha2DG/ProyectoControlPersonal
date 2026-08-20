@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { authHeader, usePuede } from "../context/AuthContext.jsx";
 import { exportarPermisos } from "../utils/exportExcel.js";
 import { fmtRango, diasPermiso, esRango } from "../utils/permisos.js";
-import { useColWidths, Th, Colgroup } from "../components/ResizableTh.jsx";
+import { useColWidths, useOrden, ordenarFilas, Th, Colgroup } from "../components/ResizableTh.jsx";
 
 const COL_DEFAULTS = { fecha: 190, codigo: 100, nombre: 200, etalent: 110, tipo: 170, obs: 260, registrado: 140, acciones: 110 };
 const COLS = Object.keys(COL_DEFAULTS);
@@ -180,6 +180,7 @@ export default function PermisosPage() {
   const [busqueda, setBusqueda] = useState("");
   const [modal, setModal] = useState({ open: false, permiso: null });
   const [widths, startResize] = useColWidths("permisos", COL_DEFAULTS);
+  const [orden, alternarOrden] = useOrden();
 
   const fetchPermisos = useCallback(async () => {
     setLoading(true);
@@ -221,6 +222,13 @@ export default function PermisosPage() {
     p.NombreCompleto?.toLowerCase().includes(busqueda.toLowerCase()) ||
     p.CodigoEmpleado?.toLowerCase().includes(busqueda.toLowerCase())
   );
+
+  // El permiso es un rango: se ordena por la fecha de inicio, que es como se lee la columna.
+  const ordenados = ordenarFilas(filtrados, orden, {
+    fecha: p => p.Fecha, codigo: p => p.CodigoEmpleado, nombre: p => p.NombreCompleto,
+    etalent: p => p.CodigoEtalent, tipo: p => p.descripcion, obs: p => p.Observacion,
+    registrado: p => p.RegistradoPor,
+  });
 
   return (
     <div>
@@ -270,20 +278,20 @@ export default function PermisosPage() {
             <Colgroup columns={COLS} widths={widths} />
             <thead>
               <tr className="bg-gray-100 text-gray-600 uppercase text-xs tracking-wider">
-                <Th width={widths.fecha} onResizeStart={startResize("fecha")} className="px-4 py-3 text-left">Fechas</Th>
-                <Th width={widths.codigo} onResizeStart={startResize("codigo")} className="px-4 py-3 text-left">Código</Th>
-                <Th width={widths.nombre} onResizeStart={startResize("nombre")} className="px-4 py-3 text-left">Nombre</Th>
-                <Th width={widths.etalent} onResizeStart={startResize("etalent")} className="px-4 py-3 text-left">Etalent</Th>
-                <Th width={widths.tipo} onResizeStart={startResize("tipo")} className="px-4 py-3 text-left">Tipo de Permiso</Th>
-                <Th width={widths.obs} onResizeStart={startResize("obs")} className="px-4 py-3 text-left">Observación</Th>
-                <Th width={widths.registrado} onResizeStart={startResize("registrado")} className="px-4 py-3 text-left">Registrado por</Th>
+                <Th width={widths.fecha} onResizeStart={startResize("fecha")} sortKey="fecha" orden={orden} onOrdenar={alternarOrden} className="px-4 py-3 text-left">Fechas</Th>
+                <Th width={widths.codigo} onResizeStart={startResize("codigo")} sortKey="codigo" orden={orden} onOrdenar={alternarOrden} className="px-4 py-3 text-left">Código</Th>
+                <Th width={widths.nombre} onResizeStart={startResize("nombre")} sortKey="nombre" orden={orden} onOrdenar={alternarOrden} className="px-4 py-3 text-left">Nombre</Th>
+                <Th width={widths.etalent} onResizeStart={startResize("etalent")} sortKey="etalent" orden={orden} onOrdenar={alternarOrden} className="px-4 py-3 text-left">Etalent</Th>
+                <Th width={widths.tipo} onResizeStart={startResize("tipo")} sortKey="tipo" orden={orden} onOrdenar={alternarOrden} className="px-4 py-3 text-left">Tipo de Permiso</Th>
+                <Th width={widths.obs} onResizeStart={startResize("obs")} sortKey="obs" orden={orden} onOrdenar={alternarOrden} className="px-4 py-3 text-left">Observación</Th>
+                <Th width={widths.registrado} onResizeStart={startResize("registrado")} sortKey="registrado" orden={orden} onOrdenar={alternarOrden} className="px-4 py-3 text-left">Registrado por</Th>
                 <Th width={widths.acciones} onResizeStart={startResize("acciones")} className="px-4 py-3 text-center">Acciones</Th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
               {filtrados.length === 0 ? (
                 <tr><td colSpan={8} className="px-4 py-10 text-center text-gray-400">{hasta ? "Sin permisos en este rango de fechas" : "Sin permisos desde esta fecha"}</td></tr>
-              ) : filtrados.map(p => (
+              ) : ordenados.map(p => (
                 <tr key={p.id} className="hover:bg-gray-50 transition">
                   <td className="px-4 py-2.5 text-gray-700 text-xs whitespace-nowrap">
                     {fmtRango(p.Fecha, p.FechaFin)}

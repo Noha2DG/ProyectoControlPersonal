@@ -157,6 +157,19 @@ export default function BodegaFisicaPage() {
   const totalPos = mapa.Posiciones.length;
   const pctOcupacion = totalPos ? Math.round((conteos.ocupada / totalPos) * 100) : 0;
 
+  // 80% es el punto que el usuario definió como "de aquí en adelante va a haber pallets en el
+  // piso". No bloquea nada — a esa altura la decisión de dónde dejar el polín es del bodeguero;
+  // el sistema solo tiene que avisar a tiempo para que no se descubra con el montacargas cargado.
+  const UMBRAL_AVISO = 80, UMBRAL_CRITICO = 95;
+  const nivelOcupacion = pctOcupacion >= UMBRAL_CRITICO ? "critico" : pctOcupacion >= UMBRAL_AVISO ? "aviso" : "normal";
+  // Clases literales: Tailwind purga las que se arman concatenando.
+  const TONO_OCUPACION = {
+    normal:  { texto: "text-gray-800", caja: "bg-white border-gray-200", barra: "bg-green-500" },
+    aviso:   { texto: "text-amber-700", caja: "bg-amber-50 border-amber-300", barra: "bg-amber-500" },
+    critico: { texto: "text-red-700", caja: "bg-red-50 border-red-300", barra: "bg-red-500" },
+  };
+  const tonoOcup = TONO_OCUPACION[nivelOcupacion];
+
   // Si el mapa se refrescó y la posición seleccionada dejó de estar libre (otra estación la ganó),
   // se suelta la selección — el candado real igual está en el servidor, esto solo avisa antes.
   useEffect(() => {
@@ -463,10 +476,22 @@ export default function BodegaFisicaPage() {
               );
             })()}
 
-            <div className="bg-white rounded-xl shadow-sm border border-gray-200">
+            <div className={`rounded-xl shadow-sm border ${tonoOcup.caja}`}>
               <div className="px-4 py-2.5 border-b border-gray-100 flex items-center justify-between">
                 <h3 className="text-[11px] font-bold text-gray-500 uppercase tracking-wide">Leyenda</h3>
-                <span className="text-[11px] text-gray-500">Ocupación <b className="text-gray-800">{pctOcupacion}%</b> · {conteos.ocupada}/{totalPos}</span>
+                <span className="text-[11px] text-gray-500">Ocupación <b className={tonoOcup.texto}>{pctOcupacion}%</b> · {conteos.ocupada}/{totalPos}</span>
+              </div>
+              <div className="px-4 pt-3">
+                <div className="h-1.5 w-full rounded-full bg-gray-200 overflow-hidden">
+                  <div className={`h-full rounded-full transition-all ${tonoOcup.barra}`} style={{ width: `${pctOcupacion}%` }} />
+                </div>
+                {nivelOcupacion !== "normal" && (
+                  <p className={`mt-2 text-[11px] leading-snug ${tonoOcup.texto}`}>
+                    {nivelOcupacion === "critico"
+                      ? <><b>Bodega casi llena.</b> Quedan {conteos.libre} posicion{conteos.libre === 1 ? "" : "es"} libres.</>
+                      : <><b>Bodega al {pctOcupacion}%.</b> Quedan {conteos.libre} posiciones — prevé dónde vas a dejar los polines que ya no entren.</>}
+                  </p>
+                )}
               </div>
               <div className="px-4 py-3 space-y-1.5 text-xs">
                 <div className="flex items-center gap-2"><span className="w-4 h-4 rounded bg-green-100 border border-green-300" /> Disponible <span className="ml-auto text-gray-400 tabular-nums">{conteos.libre}</span></div>

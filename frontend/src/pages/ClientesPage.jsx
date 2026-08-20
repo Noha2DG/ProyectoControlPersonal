@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { authHeader, usePuede } from "../context/AuthContext.jsx";
-import { useColWidths, Th, Colgroup } from "../components/ResizableTh.jsx";
+import { useColWidths, useOrden, ordenarFilas, Th, Colgroup } from "../components/ResizableTh.jsx";
 
 const PAISES = ["GT", "US", "MX", "TW"];
 
@@ -125,6 +125,12 @@ export default function ClientesPage() {
   const [busqueda, setBusqueda] = useState("");
   const [widthsClientes, startResizeClientes] = useColWidths("clientes", CLIENTES_COL_DEFAULTS);
   const [widthsSub, startResizeSub] = useColWidths("subclientes", SUB_COL_DEFAULTS);
+  const [ordenCli, alternarOrdenCli] = useOrden();
+  const [ordenSub, alternarOrdenSub] = useOrden();
+  const VALORES_CLI = { codigo: c => c.Codigo, razonSocial: c => c.RazonSocial, pais: c => c.Pais,
+                        tipo: c => c.Tipo, estado: c => (c.Activo ? "Activo" : "Inactivo") };
+  const VALORES_SUB = { codigo: x => x.CodigoSubcliente, razonSocial: x => x.RazonSocial,
+                        estado: x => (x.Activo ? "Activo" : "Inactivo") };
 
   const fetchClientes = useCallback(async () => {
     setLoading(true);
@@ -226,16 +232,16 @@ export default function ClientesPage() {
               <Colgroup columns={CLIENTES_COLS} widths={widthsClientes} />
               <thead>
                 <tr className="bg-gray-100 text-gray-600 uppercase text-xs tracking-wider">
-                  <Th width={widthsClientes.codigo} onResizeStart={startResizeClientes("codigo")} className="px-4 py-3 text-left whitespace-nowrap">Código</Th>
-                  <Th width={widthsClientes.razonSocial} onResizeStart={startResizeClientes("razonSocial")} className="px-4 py-3 text-left whitespace-nowrap">Razón Social</Th>
-                  <Th width={widthsClientes.pais} onResizeStart={startResizeClientes("pais")} className="px-4 py-3 text-left whitespace-nowrap">País</Th>
-                  <Th width={widthsClientes.tipo} onResizeStart={startResizeClientes("tipo")} className="px-4 py-3 text-center whitespace-nowrap">Tipo</Th>
-                  <Th width={widthsClientes.estado} onResizeStart={startResizeClientes("estado")} className="px-4 py-3 text-center whitespace-nowrap">Estado</Th>
+                  <Th width={widthsClientes.codigo} onResizeStart={startResizeClientes("codigo")} sortKey="codigo" orden={ordenCli} onOrdenar={alternarOrdenCli} className="px-4 py-3 text-left whitespace-nowrap">Código</Th>
+                  <Th width={widthsClientes.razonSocial} onResizeStart={startResizeClientes("razonSocial")} sortKey="razonSocial" orden={ordenCli} onOrdenar={alternarOrdenCli} className="px-4 py-3 text-left whitespace-nowrap">Razón Social</Th>
+                  <Th width={widthsClientes.pais} onResizeStart={startResizeClientes("pais")} sortKey="pais" orden={ordenCli} onOrdenar={alternarOrdenCli} className="px-4 py-3 text-left whitespace-nowrap">País</Th>
+                  <Th width={widthsClientes.tipo} onResizeStart={startResizeClientes("tipo")} sortKey="tipo" orden={ordenCli} onOrdenar={alternarOrdenCli} className="px-4 py-3 text-center whitespace-nowrap">Tipo</Th>
+                  <Th width={widthsClientes.estado} onResizeStart={startResizeClientes("estado")} sortKey="estado" orden={ordenCli} onOrdenar={alternarOrdenCli} className="px-4 py-3 text-center whitespace-nowrap">Estado</Th>
                   <Th width={widthsClientes.acciones} onResizeStart={startResizeClientes("acciones")} className="px-4 py-3 text-center whitespace-nowrap">Acciones</Th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {clientesFiltrados.map(c => (
+                {ordenarFilas(clientesFiltrados, ordenCli, VALORES_CLI).map(c => (
                   <tr key={c.Codigo} onClick={() => seleccionarCliente(c)}
                     className={`cursor-pointer transition ${clienteSel?.Codigo === c.Codigo ? "bg-blue-50" : "hover:bg-gray-50"} ${!c.Activo ? "opacity-50" : ""}`}>
                     <td className="px-4 py-3 font-mono font-bold text-gray-700 whitespace-nowrap">{c.Codigo}</td>
@@ -299,14 +305,14 @@ export default function ClientesPage() {
               <Colgroup columns={SUB_COLS} widths={widthsSub} />
               <thead>
                 <tr className="bg-gray-100 text-gray-600 uppercase text-xs tracking-wider">
-                  <Th width={widthsSub.codigo} onResizeStart={startResizeSub("codigo")} className="px-4 py-3 text-left whitespace-nowrap">Código</Th>
-                  <Th width={widthsSub.razonSocial} onResizeStart={startResizeSub("razonSocial")} className="px-4 py-3 text-left whitespace-nowrap">Razón Social</Th>
-                  <Th width={widthsSub.estado} onResizeStart={startResizeSub("estado")} className="px-4 py-3 text-center whitespace-nowrap">Estado</Th>
+                  <Th width={widthsSub.codigo} onResizeStart={startResizeSub("codigo")} sortKey="codigo" orden={ordenSub} onOrdenar={alternarOrdenSub} className="px-4 py-3 text-left whitespace-nowrap">Código</Th>
+                  <Th width={widthsSub.razonSocial} onResizeStart={startResizeSub("razonSocial")} sortKey="razonSocial" orden={ordenSub} onOrdenar={alternarOrdenSub} className="px-4 py-3 text-left whitespace-nowrap">Razón Social</Th>
+                  <Th width={widthsSub.estado} onResizeStart={startResizeSub("estado")} sortKey="estado" orden={ordenSub} onOrdenar={alternarOrdenSub} className="px-4 py-3 text-center whitespace-nowrap">Estado</Th>
                   <Th width={widthsSub.acciones} onResizeStart={startResizeSub("acciones")} className="px-4 py-3 text-center whitespace-nowrap">Acciones</Th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {subclientes.map(s => (
+                {ordenarFilas(subclientes, ordenSub, VALORES_SUB).map(s => (
                   <tr key={s.CodigoSubcliente} className={`hover:bg-gray-50 transition ${!s.Activo ? "opacity-50" : ""}`}>
                     <td className="px-4 py-3 font-mono font-bold text-gray-700 whitespace-nowrap">{s.CodigoSubcliente}</td>
                     <td className="px-4 py-3 text-gray-900 whitespace-nowrap">{s.RazonSocial}</td>

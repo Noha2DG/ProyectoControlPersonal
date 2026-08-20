@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
+import { fmtEntero, fmtNum } from "../utils/numero.js";
 import { authHeader, usePuede } from "../context/AuthContext.jsx";
-import { useColWidths, Th, Colgroup } from "../components/ResizableTh.jsx";
+import { useColWidths, useOrden, ordenarFilas, Th, Colgroup } from "../components/ResizableTh.jsx";
 
 const ESTATUS = ["Proceso", "Terminado"];
 
@@ -309,7 +310,7 @@ function DetalleModal({ item, codigoPedido, esGeneral, clases, tallas, presentac
                     <span className="text-blue-400">Ingrese las cajas para calcular los masters</span>
                   ) : (
                     <>
-                      <span className="font-semibold">{masters.toFixed(2)} master{masters !== 1 ? "s" : ""}</span>
+                      <span className="font-semibold">{fmtNum(masters)} master{masters !== 1 ? "s" : ""}</span>
                       <span className="text-blue-500"> ({presentacionSel.CajasXMaster} cajas x master)</span>
                     </>
                   )}
@@ -417,6 +418,9 @@ export default function PedidosPage() {
   const [avance, setAvance] = useState([]);
   const [loadingAv, setLoadingAv] = useState(false);
   const [historialId, setHistorialId] = useState(null);
+  const [ordenPed, alternarOrdenPed] = useOrden();
+  const [ordenDet, alternarOrdenDet] = useOrden();
+  const [ordenAv, alternarOrdenAv] = useOrden();
 
   const fetchPedidos = useCallback(async () => {
     setLoading(true);
@@ -513,6 +517,13 @@ export default function PedidosPage() {
   const tallaDesc = codigo => tallas.find(t => String(t.Codigo) === String(codigo))?.Descripcion || codigo;
   const presentacionDesc = codigo => presentaciones.find(p => p.Codigo === codigo)?.Descripcion || codigo;
 
+  const VALORES_PED = { pedido: p => p.CodigoPedido, descripcion: p => p.Descripcion, estatus: p => p.Estatus };
+  const VALORES_DET = { clase: d => d.Clase, talla: d => d.Talla, presentacion: d => d.Presentacion,
+                        cajas: d => d.CantidadCajas, kg: d => d.KgPedido };
+  const VALORES_AV = { clase: a => a.Clase, talla: a => a.Talla, presentacion: a => a.Presentacion,
+                       objetivo: a => a.Objetivo, agrupado: a => a.Declarado, bodega: a => a.EnBodega,
+                       despachado: a => a.Despachado, dif: a => a.Diferencia };
+
   const q = busqueda.toLowerCase();
   const pedidosFiltrados = pedidos.filter(p =>
     !q || p.CodigoPedido.toLowerCase().includes(q) || p.Descripcion.toLowerCase().includes(q)
@@ -542,14 +553,14 @@ export default function PedidosPage() {
               <Colgroup columns={PEDIDOS_COLS} widths={widthsPedidos} />
               <thead>
                 <tr className="bg-gray-100 text-gray-600 uppercase text-xs tracking-wider">
-                  <Th width={widthsPedidos.pedido} onResizeStart={startResizePedidos("pedido")} className="px-4 py-3 text-left whitespace-nowrap">Pedido</Th>
-                  <Th width={widthsPedidos.descripcion} onResizeStart={startResizePedidos("descripcion")} className="px-4 py-3 text-left whitespace-nowrap">Descripción</Th>
-                  <Th width={widthsPedidos.estatus} onResizeStart={startResizePedidos("estatus")} className="px-4 py-3 text-center whitespace-nowrap">Estatus</Th>
+                  <Th width={widthsPedidos.pedido} onResizeStart={startResizePedidos("pedido")} sortKey="pedido" orden={ordenPed} onOrdenar={alternarOrdenPed} className="px-4 py-3 text-left whitespace-nowrap">Pedido</Th>
+                  <Th width={widthsPedidos.descripcion} onResizeStart={startResizePedidos("descripcion")} sortKey="descripcion" orden={ordenPed} onOrdenar={alternarOrdenPed} className="px-4 py-3 text-left whitespace-nowrap">Descripción</Th>
+                  <Th width={widthsPedidos.estatus} onResizeStart={startResizePedidos("estatus")} sortKey="estatus" orden={ordenPed} onOrdenar={alternarOrdenPed} className="px-4 py-3 text-center whitespace-nowrap">Estatus</Th>
                   <Th width={widthsPedidos.editar} onResizeStart={startResizePedidos("editar")} className="px-4 py-3 text-center whitespace-nowrap">Editar</Th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {pedidosFiltrados.map(p => (
+                {ordenarFilas(pedidosFiltrados, ordenPed, VALORES_PED).map(p => (
                   <tr key={p.CodigoPedido} onClick={() => seleccionarPedido(p)}
                     className={`cursor-pointer transition ${pedidoSel?.CodigoPedido === p.CodigoPedido ? "bg-blue-50" : "hover:bg-gray-50"}`}>
                     <td className="px-4 py-3 font-mono font-bold text-gray-700 whitespace-nowrap">{p.CodigoPedido}</td>
@@ -621,38 +632,38 @@ export default function PedidosPage() {
                   <Colgroup columns={AVANCE_COLS} widths={widthsAvance} />
                   <thead>
                     <tr className="bg-gray-100 text-gray-600 uppercase text-xs tracking-wider">
-                      <Th width={widthsAvance.clase} onResizeStart={startResizeAvance("clase")} className="px-3 py-3 text-left">Clase</Th>
-                      <Th width={widthsAvance.talla} onResizeStart={startResizeAvance("talla")} className="px-3 py-3 text-left">Talla</Th>
-                      <Th width={widthsAvance.presentacion} onResizeStart={startResizeAvance("presentacion")} className="px-3 py-3 text-left">Present.</Th>
-                      <Th width={widthsAvance.objetivo} onResizeStart={startResizeAvance("objetivo")} className="px-3 py-3 text-right" title="Master que pide la proforma">Pedido</Th>
-                      <Th width={widthsAvance.agrupado} onResizeStart={startResizeAvance("agrupado")} className="px-3 py-3 text-right" title="Master declarados en Agrupación">Agrupado</Th>
-                      <Th width={widthsAvance.bodega} onResizeStart={startResizeAvance("bodega")} className="px-3 py-3 text-right" title="Master escaneados que siguen en bodega">Bodega</Th>
-                      <Th width={widthsAvance.despachado} onResizeStart={startResizeAvance("despachado")} className="px-3 py-3 text-right" title="Master que salieron en una remisión confirmada">Despach.</Th>
-                      <Th width={widthsAvance.dif} onResizeStart={startResizeAvance("dif")} className="px-3 py-3 text-right" title="Despachado menos lo pedido">Dif.</Th>
+                      <Th width={widthsAvance.clase} onResizeStart={startResizeAvance("clase")} sortKey="clase" orden={ordenAv} onOrdenar={alternarOrdenAv} className="px-3 py-3 text-left">Clase</Th>
+                      <Th width={widthsAvance.talla} onResizeStart={startResizeAvance("talla")} sortKey="talla" orden={ordenAv} onOrdenar={alternarOrdenAv} className="px-3 py-3 text-left">Talla</Th>
+                      <Th width={widthsAvance.presentacion} onResizeStart={startResizeAvance("presentacion")} sortKey="presentacion" orden={ordenAv} onOrdenar={alternarOrdenAv} className="px-3 py-3 text-left">Present.</Th>
+                      <Th width={widthsAvance.objetivo} onResizeStart={startResizeAvance("objetivo")} sortKey="objetivo" orden={ordenAv} onOrdenar={alternarOrdenAv} className="px-3 py-3 text-right" title="Master que pide la proforma">Pedido</Th>
+                      <Th width={widthsAvance.agrupado} onResizeStart={startResizeAvance("agrupado")} sortKey="agrupado" orden={ordenAv} onOrdenar={alternarOrdenAv} className="px-3 py-3 text-right" title="Master declarados en Agrupación">Agrupado</Th>
+                      <Th width={widthsAvance.bodega} onResizeStart={startResizeAvance("bodega")} sortKey="bodega" orden={ordenAv} onOrdenar={alternarOrdenAv} className="px-3 py-3 text-right" title="Master escaneados que siguen en bodega">Bodega</Th>
+                      <Th width={widthsAvance.despachado} onResizeStart={startResizeAvance("despachado")} sortKey="despachado" orden={ordenAv} onOrdenar={alternarOrdenAv} className="px-3 py-3 text-right" title="Master que salieron en una remisión confirmada">Despach.</Th>
+                      <Th width={widthsAvance.dif} onResizeStart={startResizeAvance("dif")} sortKey="dif" orden={ordenAv} onOrdenar={alternarOrdenAv} className="px-3 py-3 text-right" title="Despachado menos lo pedido">Dif.</Th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
-                    {avance.map(a => (
+                    {ordenarFilas(avance, ordenAv, VALORES_AV).map(a => (
                       <tr key={a.DetalleId} className="hover:bg-gray-50 transition">
                         <td className="px-3 py-3 font-mono text-gray-700 truncate" title={a.Clase}>{a.Clase}</td>
                         <td className="px-3 py-3 text-gray-700 truncate" title={tallaDesc(a.Talla)}>{tallaDesc(a.Talla)}</td>
                         <td className="px-3 py-3 text-gray-700 truncate" title={presentacionDesc(a.Presentacion)}>{presentacionDesc(a.Presentacion)}</td>
                         <td className="px-3 py-3 text-right text-gray-800 font-semibold">
-                          {a.Objetivo === null ? <span className="text-gray-300">—</span> : a.Objetivo}
+                          {a.Objetivo === null ? <span className="text-gray-300">—</span> : fmtEntero(a.Objetivo)}
                         </td>
-                        <td className="px-3 py-3 text-right text-gray-600">{a.Declarado}</td>
-                        <td className="px-3 py-3 text-right text-gray-600">{a.EnBodega}</td>
-                        <td className="px-3 py-3 text-right text-gray-800 font-semibold">{a.Despachado}</td>
+                        <td className="px-3 py-3 text-right text-gray-600">{fmtEntero(a.Declarado)}</td>
+                        <td className="px-3 py-3 text-right text-gray-600">{fmtEntero(a.EnBodega)}</td>
+                        <td className="px-3 py-3 text-right text-gray-800 font-semibold">{fmtEntero(a.Despachado)}</td>
                         <td className="px-3 py-3 text-right">
                           {a.Diferencia === null ? (
                             <span className="text-gray-300">—</span>
                           ) : a.Diferencia > 0 ? (
                             <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-700"
-                              title="Salió más de lo que pide la proforma">+{a.Diferencia}</span>
+                              title="Salió más de lo que pide la proforma">+{fmtEntero(a.Diferencia)}</span>
                           ) : a.Diferencia === 0 ? (
                             <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-green-100 text-green-700">completo</span>
                           ) : (
-                            <span className="text-gray-500">{a.Diferencia}</span>
+                            <span className="text-gray-500">{fmtEntero(a.Diferencia)}</span>
                           )}
                         </td>
                       </tr>
@@ -663,10 +674,10 @@ export default function PedidosPage() {
                     {avance.length > 0 && (
                       <tr className="bg-gray-50 font-semibold">
                         <td colSpan={3} className="px-3 py-3 text-right text-gray-600">Total</td>
-                        <td className="px-3 py-3 text-right text-gray-800">{avance.reduce((s, a) => s + (a.Objetivo || 0), 0)}</td>
-                        <td className="px-3 py-3 text-right text-gray-600">{avance.reduce((s, a) => s + a.Declarado, 0)}</td>
-                        <td className="px-3 py-3 text-right text-gray-600">{avance.reduce((s, a) => s + a.EnBodega, 0)}</td>
-                        <td className="px-3 py-3 text-right text-gray-800">{avance.reduce((s, a) => s + a.Despachado, 0)}</td>
+                        <td className="px-3 py-3 text-right text-gray-800">{fmtEntero(avance.reduce((s, a) => s + (a.Objetivo || 0), 0))}</td>
+                        <td className="px-3 py-3 text-right text-gray-600">{fmtEntero(avance.reduce((s, a) => s + a.Declarado, 0))}</td>
+                        <td className="px-3 py-3 text-right text-gray-600">{fmtEntero(avance.reduce((s, a) => s + a.EnBodega, 0))}</td>
+                        <td className="px-3 py-3 text-right text-gray-800">{fmtEntero(avance.reduce((s, a) => s + a.Despachado, 0))}</td>
                         <td></td>
                       </tr>
                     )}
@@ -687,16 +698,16 @@ export default function PedidosPage() {
               <Colgroup columns={DETALLE_COLS} widths={widthsDetalle} />
               <thead>
                 <tr className="bg-gray-100 text-gray-600 uppercase text-xs tracking-wider">
-                  <Th width={widthsDetalle.clase} onResizeStart={startResizeDetalle("clase")} className="px-4 py-3 text-left whitespace-nowrap">Clase</Th>
-                  <Th width={widthsDetalle.talla} onResizeStart={startResizeDetalle("talla")} className="px-4 py-3 text-left whitespace-nowrap">Talla</Th>
-                  <Th width={widthsDetalle.presentacion} onResizeStart={startResizeDetalle("presentacion")} className="px-4 py-3 text-left whitespace-nowrap">Presentación</Th>
-                  <Th width={widthsDetalle.cajas} onResizeStart={startResizeDetalle("cajas")} className="px-4 py-3 text-right whitespace-nowrap">Cajas</Th>
-                  <Th width={widthsDetalle.kg} onResizeStart={startResizeDetalle("kg")} className="px-4 py-3 text-right whitespace-nowrap">Kg</Th>
+                  <Th width={widthsDetalle.clase} onResizeStart={startResizeDetalle("clase")} sortKey="clase" orden={ordenDet} onOrdenar={alternarOrdenDet} className="px-4 py-3 text-left whitespace-nowrap">Clase</Th>
+                  <Th width={widthsDetalle.talla} onResizeStart={startResizeDetalle("talla")} sortKey="talla" orden={ordenDet} onOrdenar={alternarOrdenDet} className="px-4 py-3 text-left whitespace-nowrap">Talla</Th>
+                  <Th width={widthsDetalle.presentacion} onResizeStart={startResizeDetalle("presentacion")} sortKey="presentacion" orden={ordenDet} onOrdenar={alternarOrdenDet} className="px-4 py-3 text-left whitespace-nowrap">Presentación</Th>
+                  <Th width={widthsDetalle.cajas} onResizeStart={startResizeDetalle("cajas")} sortKey="cajas" orden={ordenDet} onOrdenar={alternarOrdenDet} className="px-4 py-3 text-right whitespace-nowrap">Cajas</Th>
+                  <Th width={widthsDetalle.kg} onResizeStart={startResizeDetalle("kg")} sortKey="kg" orden={ordenDet} onOrdenar={alternarOrdenDet} className="px-4 py-3 text-right whitespace-nowrap">Kg</Th>
                   <Th width={widthsDetalle.acciones} onResizeStart={startResizeDetalle("acciones")} className="px-4 py-3 text-center whitespace-nowrap">Acciones</Th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {detalles.map(d => (
+                {ordenarFilas(detalles, ordenDet, VALORES_DET).map(d => (
                   <tr key={d.DetalleId} className="hover:bg-gray-50 transition">
                     <td className="px-4 py-3 font-mono text-gray-700 truncate" title={d.Clase}>{d.Clase}</td>
                     <td className="px-4 py-3 text-gray-700 truncate" title={tallaDesc(d.Talla)}>{tallaDesc(d.Talla)}</td>
@@ -704,10 +715,10 @@ export default function PedidosPage() {
                     {/* El 1 de un pedido general es centinela, no un dato: mostrarlo invitaría a leerlo
                         como cantidad planificada. */}
                     <td className="px-4 py-3 text-right whitespace-nowrap">
-                      {pedidoSel.EsGeneral ? <span className="text-gray-300">—</span> : d.CantidadCajas}
+                      {pedidoSel.EsGeneral ? <span className="text-gray-300">—</span> : fmtEntero(d.CantidadCajas)}
                     </td>
                     <td className="px-4 py-3 text-right whitespace-nowrap">
-                      {pedidoSel.EsGeneral ? <span className="text-gray-300">—</span> : d.KgPedido}
+                      {pedidoSel.EsGeneral ? <span className="text-gray-300">—</span> : fmtNum(d.KgPedido)}
                     </td>
                     <td className="px-4 py-3 text-center whitespace-nowrap">
                       <div className="flex justify-center gap-1">

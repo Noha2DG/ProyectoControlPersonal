@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import { fmtNum } from "../utils/numero.js";
 import { authHeader, usePuede } from "../context/AuthContext.jsx";
 import { piscinaRequiereCiclo } from "../utils/codigoLote.js";
 import { useColWidths, Th, Colgroup } from "../components/ResizableTh.jsx";
@@ -517,15 +518,15 @@ export default function MateriaPrimaPage() {
             <div className="grid grid-cols-3 gap-2 mb-4">
               <div className="bg-white rounded-lg shadow px-3 py-2 text-center">
                 <p className="text-xs text-gray-400">Ingreso</p>
-                <p className="text-sm font-bold text-gray-800">{loteSel.PesoIngreso.toFixed(2)} {loteSel.UM}</p>
+                <p className="text-sm font-bold text-gray-800">{fmtNum(loteSel.PesoIngreso)} {loteSel.UM}</p>
               </div>
               <div className="bg-white rounded-lg shadow px-3 py-2 text-center">
                 <p className="text-xs text-gray-400">Procesado</p>
-                <p className="text-sm font-bold text-blue-700">{loteSel.Procesado.toFixed(2)} {loteSel.UM}</p>
+                <p className="text-sm font-bold text-blue-700">{fmtNum(loteSel.Procesado)} {loteSel.UM}</p>
               </div>
               <div className="bg-white rounded-lg shadow px-3 py-2 text-center">
                 <p className="text-xs text-gray-400">Pendiente</p>
-                <p className="text-sm font-bold text-amber-600">{loteSel.Pendiente.toFixed(2)} {loteSel.UM}</p>
+                <p className="text-sm font-bold text-amber-600">{fmtNum(loteSel.Pendiente)} {loteSel.UM}</p>
               </div>
             </div>
 
@@ -551,7 +552,7 @@ export default function MateriaPrimaPage() {
                         <td className="px-3 py-3 text-gray-700 whitespace-nowrap">{t.DescripcionProceso}</td>
                         <td className="px-3 py-3 text-gray-700 whitespace-nowrap">{t.DescripcionTalla}</td>
                         <td className="px-3 py-3 text-center text-gray-600 whitespace-nowrap">{t.FechaProduccion?.slice(0, 10)}</td>
-                        <td className="px-3 py-3 text-right whitespace-nowrap">{t.Procesado.toFixed(2)}</td>
+                        <td className="px-3 py-3 text-right whitespace-nowrap">{fmtNum(t.Procesado)}</td>
                         <td className="px-3 py-3 text-center whitespace-nowrap">
                           <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-semibold ${t.Estado === "Abierta" ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-600"}`}>
                             {t.Estado}

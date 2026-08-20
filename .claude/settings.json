@@ -14,7 +14,23 @@
       "Bash(sed -i 's/Tamano: \"4x2\"/Tamano: \"3x1\"/' \"C:/Users/NEHEMIAS_ALVAREZ/AppData/Local/Temp/claude/c--Users-NEHEMIAS-ALVAREZ-Documents-ProyectoControlPersonal/913b0587-b6de-4869-8f70-d786c1ded729/scratchpad/flujo.ts\")",
       "Bash(taskkill //F //PID 17396)",
       "Bash(python -c ' *)",
-      "WebSearch"
+      "WebSearch",
+      "Bash(python orden.py)",
+      "Bash(node -e ' *)",
+      "Bash(PORT=3985 npx tsx src/index.ts)",
+      "Bash(awk -F: '{print $1}')",
+      "Bash(PYTHONIOENCODING=utf-8 python total.py)",
+      "Bash(awk '/── Lb\\\\/Persona ──/,/^          \\\\\\)\\\\}/' ReporteProduccionPage.jsx)",
+      "Bash(sed -i 's/localhost:3990/localhost:3991/' names.py)",
+      "Bash(sed -i 's/if any\\(k in n for k in \\(\"Lb\",\"Talla\",\"Reporte\",\"Eficien\"\\)\\): print\\(repr\\(n\\)\\)/print\\(repr\\(n\\)\\)/' names.py)",
+      "Bash(PYTHONIOENCODING=utf-8 python names.py)",
+      "Bash(echo \"EXIT=$?\")",
+      "Bash(PYTHONIOENCODING=utf-8 python lbp.py)",
+      "Bash(grep -v \"toLocaleString\\(\\\\\"sv-SE\\\\\"\\\\|toLocaleString\\(\\\\\"es-GT\\\\\", {\")",
+      "Bash(sort -t: -k2 -rn)",
+      "WebFetch(domain:support.seagullsoftware.com)",
+      "WebFetch(domain:bartender-software.files.svdcdn.com)",
+      "WebFetch(domain:help.seagullscientific.com)"
     ]
   },
   "hooks": {

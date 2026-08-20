@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { authHeader, useAuth, usePuede } from "../context/AuthContext.jsx";
-import { useColWidths, Th, Colgroup } from "../components/ResizableTh.jsx";
+import { useColWidths, useOrden, ordenarFilas, Th, Colgroup } from "../components/ResizableTh.jsx";
 
 const API = "/api/usuarios";
 
@@ -296,6 +296,13 @@ export default function UsuariosPage() {
   const [modal, setModal] = useState({ open: false, usuario: null });
   const [confirmDelete, setConfirmDelete] = useState(null);
   const [widths, startResize] = useColWidths("usuarios", COL_DEFAULTS);
+  const [orden, alternarOrden] = useOrden();
+  // "Módulos" ordena por cuántos tiene concedidos: es lo que hace comparable a dos usuarios.
+  const VALORES_USR = {
+    usuario: u => u.username, nombre: u => u.nombre, rol: u => u.rol,
+    modulos: u => (u.permisos ? Object.keys(u.permisos).length : null),
+    estado: u => (u.activo ? "Activo" : "Inactivo"),
+  };
 
   const fetchUsuarios = async () => {
     setLoading(true);
@@ -368,16 +375,16 @@ export default function UsuariosPage() {
             <Colgroup columns={COLS} widths={widths} />
             <thead>
               <tr className="bg-gray-100 text-gray-600 uppercase text-xs tracking-wider">
-                <Th width={widths.usuario} onResizeStart={startResize("usuario")} className="px-5 py-3 text-left">Usuario</Th>
-                <Th width={widths.nombre} onResizeStart={startResize("nombre")} className="px-5 py-3 text-left">Nombre</Th>
-                <Th width={widths.rol} onResizeStart={startResize("rol")} className="px-5 py-3 text-left">Rol</Th>
-                <Th width={widths.modulos} onResizeStart={startResize("modulos")} className="px-5 py-3 text-left">Acceso a módulos</Th>
-                <Th width={widths.estado} onResizeStart={startResize("estado")} className="px-5 py-3 text-center">Estado</Th>
+                <Th width={widths.usuario} onResizeStart={startResize("usuario")} sortKey="usuario" orden={orden} onOrdenar={alternarOrden} className="px-5 py-3 text-left">Usuario</Th>
+                <Th width={widths.nombre} onResizeStart={startResize("nombre")} sortKey="nombre" orden={orden} onOrdenar={alternarOrden} className="px-5 py-3 text-left">Nombre</Th>
+                <Th width={widths.rol} onResizeStart={startResize("rol")} sortKey="rol" orden={orden} onOrdenar={alternarOrden} className="px-5 py-3 text-left">Rol</Th>
+                <Th width={widths.modulos} onResizeStart={startResize("modulos")} sortKey="modulos" orden={orden} onOrdenar={alternarOrden} className="px-5 py-3 text-left">Acceso a módulos</Th>
+                <Th width={widths.estado} onResizeStart={startResize("estado")} sortKey="estado" orden={orden} onOrdenar={alternarOrden} className="px-5 py-3 text-center">Estado</Th>
                 <Th width={widths.acciones} onResizeStart={startResize("acciones")} className="px-5 py-3 text-center">Acciones</Th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {usuarios.map(u => {
+              {ordenarFilas(usuarios, orden, VALORES_USR).map(u => {
                 // Legacy admin (sin permisos) = acceso total
                 const esLegacyAdmin = u.rol === "admin" && !u.permisos;
                 const rolEfectivo = esLegacyAdmin ? "admin" : derivarRol(u.permisos);

@@ -78,7 +78,11 @@ export function exportarTransferencias(registros, fecha, permisos = []) {
 
 export function exportarMovimientos(registros, fecha) {
   const filas = registros.map(r => ({
-    "Fecha":    fecha,
+    // La fecha de CADA fila, no la del filtro. El filtro es un "desde": trae de esa fecha en
+    // adelante, así que sellar todas las filas con la fecha inicial hacía ver el archivo como si
+    // solo tuviera ese día — los registros de los días siguientes sí estaban, con la fecha mal.
+    // Mismo criterio que exportarTransferencias, y mismo formato dd/mm/aaaa que se ve en pantalla.
+    "Fecha":    r.Fecha ? r.Fecha.split("-").reverse().join("/") : fecha,
     "Código":   r.Codigo,
     "Nombre":   r.NombreEmpleado,
     "Tipo":     r.Tipo,
@@ -91,7 +95,8 @@ export function exportarMovimientos(registros, fecha) {
   const ws = XLSX.utils.json_to_sheet(filas);
   autoWidth(ws, filas);
   XLSX.utils.book_append_sheet(wb, ws, "Entradas-Salidas");
-  XLSX.writeFile(wb, `MovimientosPersonal_${fecha}.xlsx`);
+  // "desde" en el nombre para que el archivo no se lea como si fuera de un solo día.
+  XLSX.writeFile(wb, `MovimientosPersonal_desde_${fecha}.xlsx`);
 }
 
 export function exportarReporteGeneral(porLote, porTalla, desde, hasta) {

@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { authHeader, usePuede } from "../context/AuthContext.jsx";
-import { useColWidths, Th, Colgroup } from "./ResizableTh.jsx";
+import { useColWidths, useOrden, ordenarFilas, Th, Colgroup } from "./ResizableTh.jsx";
 
 function CatalogoModal({ item, pk, pkLabel, pkType, camposExtra, onSave, onClose }) {
   const isEdit = !!item;
@@ -86,6 +86,12 @@ export default function CatalogoSimpleTable({ api, pk, pkLabel = "Código", pkTy
   const COL_DEFAULTS = { [pk]: 110, descripcion: 240, ...Object.fromEntries(camposExtra.map(c => [c.campo, 140])), estado: 100, acciones: 150 };
   const COLS = [pk, "descripcion", ...camposExtra.map(c => c.campo), "estado", "acciones"];
   const [widths, startResize] = useColWidths(`catalogo:${api}`, COL_DEFAULTS);
+  const [orden, alternarOrden] = useOrden();
+  // Las columnas extra son distintas en cada catálogo, así que su mapa de orden se arma solo.
+  const VALORES = {
+    [pk]: i => i[pk], descripcion: i => i.Descripcion, estado: i => (i.Activo ? "Activo" : "Inactivo"),
+    ...Object.fromEntries(camposExtra.map(c => [c.campo, i => i[c.campo]])),
+  };
 
   const fetchItems = async () => {
     setLoading(true);
@@ -160,17 +166,17 @@ export default function CatalogoSimpleTable({ api, pk, pkLabel = "Código", pkTy
             <Colgroup columns={COLS} widths={widths} />
             <thead>
               <tr className="bg-gray-100 text-gray-600 uppercase text-xs tracking-wider">
-                <Th width={widths[pk]} onResizeStart={startResize(pk)} className="px-4 py-3 text-left">{pkLabel}</Th>
-                <Th width={widths.descripcion} onResizeStart={startResize("descripcion")} className="px-4 py-3 text-left">Descripción</Th>
+                <Th width={widths[pk]} onResizeStart={startResize(pk)} sortKey={pk} orden={orden} onOrdenar={alternarOrden} className="px-4 py-3 text-left">{pkLabel}</Th>
+                <Th width={widths.descripcion} onResizeStart={startResize("descripcion")} sortKey="descripcion" orden={orden} onOrdenar={alternarOrden} className="px-4 py-3 text-left">Descripción</Th>
                 {camposExtra.map(c => (
-                  <Th key={c.campo} width={widths[c.campo]} onResizeStart={startResize(c.campo)} className="px-4 py-3 text-left">{c.label}</Th>
+                  <Th key={c.campo} width={widths[c.campo]} onResizeStart={startResize(c.campo)} sortKey={c.campo} orden={orden} onOrdenar={alternarOrden} className="px-4 py-3 text-left">{c.label}</Th>
                 ))}
-                <Th width={widths.estado} onResizeStart={startResize("estado")} className="px-4 py-3 text-center">Estado</Th>
+                <Th width={widths.estado} onResizeStart={startResize("estado")} sortKey="estado" orden={orden} onOrdenar={alternarOrden} className="px-4 py-3 text-center">Estado</Th>
                 <Th width={widths.acciones} onResizeStart={startResize("acciones")} className="px-4 py-3 text-center">Acciones</Th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {filtrados.map(item => (
+              {ordenarFilas(filtrados, orden, VALORES).map(item => (
                 <tr key={item[pk]} className={`hover:bg-gray-50 transition ${!item.Activo ? "opacity-50" : ""}`}>
                   <td className="px-4 py-3 font-mono font-bold text-gray-700">{item[pk]}</td>
                   <td className="px-4 py-3 text-gray-900">{item.Descripcion}</td>

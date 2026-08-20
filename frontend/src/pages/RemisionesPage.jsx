@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
+import { fmtNum } from "../utils/numero.js";
 import { authHeader, usePuede } from "../context/AuthContext.jsx";
-import { useColWidths, Th, Colgroup } from "../components/ResizableTh.jsx";
+import { useColWidths, useOrden, ordenarFilas, Th, Colgroup } from "../components/ResizableTh.jsx";
 import AvisoModal from "../components/AvisoModal.jsx";
 import ModalMotivo from "../components/ModalMotivo.jsx";
 import HojaRemisionModal from "../components/HojaRemisionModal.jsx";
@@ -563,7 +564,7 @@ function PanelRemision({ remisionId, onClose, onCambio }) {
                             <Th width={widths.cliente} onResizeStart={startResize("cliente")} className="px-3 py-2 text-left">Cliente de la etiqueta</Th>
                             <Th width={widths.lote} onResizeStart={startResize("lote")} className="px-3 py-2 text-left">Lote</Th>
                             <Th width={widths.producto} onResizeStart={startResize("producto")} className="px-3 py-2 text-left">Producto</Th>
-                            <Th width={widths.kg} onResizeStart={startResize("kg")} className="px-3 py-2 text-right">Kg</Th>
+                            <Th width={widths.kg} onResizeStart={startResize("kg")} sortKey="kg" orden={ordenLista} onOrdenar={alternarOrdenLista} className="px-3 py-2 text-right">Kg</Th>
                             <Th width={widths.lb} onResizeStart={startResize("lb")} className="px-3 py-2 text-right">Lb</Th>
                             {editable && <Th width={widths.acciones} onResizeStart={startResize("acciones")} className="px-3 py-2 text-center">Quitar</Th>}
                           </tr>
@@ -597,8 +598,8 @@ function PanelRemision({ remisionId, onClose, onCambio }) {
                               <td className="px-3 py-2 truncate" title={`${l.DescripcionProceso} ${l.DescripcionTalla} ${l.DescripcionPresentacion}`}>
                                 {l.DescripcionProceso} {l.DescripcionTalla} {l.DescripcionPresentacion}
                               </td>
-                              <td className="px-3 py-2 text-right">{l.PesoMasterKG.toFixed(2)}</td>
-                              <td className="px-3 py-2 text-right">{l.PesoMasterLb.toFixed(2)}</td>
+                              <td className="px-3 py-2 text-right">{fmtNum(l.PesoMasterKG)}</td>
+                              <td className="px-3 py-2 text-right">{fmtNum(l.PesoMasterLb)}</td>
                               {editable && (
                                 <td className="px-3 py-2 text-center">
                                   <button onClick={() => handleQuitar(l.RemisionDetalleId, l.Correlativo)} className="text-red-600 hover:text-red-800 font-medium">Quitar</button>
@@ -683,6 +684,13 @@ export default function RemisionesPage() {
   const [modal, setModal] = useState(null); // { remision } — null = cerrado
   const [panelId, setPanelId] = useState(null);
   const [widths, startResize] = useColWidths("remisiones", COL_DEFAULTS);
+  const [ordenLista, alternarOrdenLista] = useOrden();
+  // Fecha del documento por su ISO; Creado por la marca de tiempo, no por el "usuario · fecha".
+  const remisionesOrdenadas = ordenarFilas(remisiones, ordenLista, {
+    folio: r => r.Folio, tipo: r => r.NombreTipo, estatus: r => r.Estatus, fecha: r => r.Fecha,
+    destino: r => destinoDe(r), masters: r => r.CantidadMasters, kg: r => r.PesoKg,
+    creado: r => r.CreadoEn,
+  });
 
   useEffect(() => {
     fetch(`${API}/series`, { headers: authHeader() }).then(r => r.json())
@@ -762,14 +770,14 @@ export default function RemisionesPage() {
             <Colgroup columns={COLS} widths={widths} />
             <thead className="bg-gray-50 text-gray-500 border-b border-gray-200">
               <tr>
-                <Th width={widths.folio} onResizeStart={startResize("folio")} className="px-4 py-3 text-left">Folio</Th>
-                <Th width={widths.tipo} onResizeStart={startResize("tipo")} className="px-4 py-3 text-left">Tipo</Th>
-                <Th width={widths.estatus} onResizeStart={startResize("estatus")} className="px-4 py-3 text-center">Estatus</Th>
-                <Th width={widths.fecha} onResizeStart={startResize("fecha")} className="px-4 py-3 text-left">Fecha</Th>
-                <Th width={widths.destino} onResizeStart={startResize("destino")} className="px-4 py-3 text-left">Destino</Th>
-                <Th width={widths.masters} onResizeStart={startResize("masters")} className="px-4 py-3 text-right">Masters</Th>
+                <Th width={widths.folio} onResizeStart={startResize("folio")} sortKey="folio" orden={ordenLista} onOrdenar={alternarOrdenLista} className="px-4 py-3 text-left">Folio</Th>
+                <Th width={widths.tipo} onResizeStart={startResize("tipo")} sortKey="tipo" orden={ordenLista} onOrdenar={alternarOrdenLista} className="px-4 py-3 text-left">Tipo</Th>
+                <Th width={widths.estatus} onResizeStart={startResize("estatus")} sortKey="estatus" orden={ordenLista} onOrdenar={alternarOrdenLista} className="px-4 py-3 text-center">Estatus</Th>
+                <Th width={widths.fecha} onResizeStart={startResize("fecha")} sortKey="fecha" orden={ordenLista} onOrdenar={alternarOrdenLista} className="px-4 py-3 text-left">Fecha</Th>
+                <Th width={widths.destino} onResizeStart={startResize("destino")} sortKey="destino" orden={ordenLista} onOrdenar={alternarOrdenLista} className="px-4 py-3 text-left">Destino</Th>
+                <Th width={widths.masters} onResizeStart={startResize("masters")} sortKey="masters" orden={ordenLista} onOrdenar={alternarOrdenLista} className="px-4 py-3 text-right">Masters</Th>
                 <Th width={widths.kg} onResizeStart={startResize("kg")} className="px-4 py-3 text-right">Kg</Th>
-                <Th width={widths.creado} onResizeStart={startResize("creado")} className="px-4 py-3 text-left">Creado</Th>
+                <Th width={widths.creado} onResizeStart={startResize("creado")} sortKey="creado" orden={ordenLista} onOrdenar={alternarOrdenLista} className="px-4 py-3 text-left">Creado</Th>
                 <Th width={widths.acciones} onResizeStart={startResize("acciones")} className="px-4 py-3 text-center">Acciones</Th>
               </tr>
             </thead>
@@ -778,7 +786,7 @@ export default function RemisionesPage() {
                 <tr><td colSpan={9} className="px-4 py-8 text-center text-gray-400">Cargando…</td></tr>
               ) : remisiones.length === 0 ? (
                 <tr><td colSpan={9} className="px-4 py-8 text-center text-gray-400">Sin remisiones para este filtro</td></tr>
-              ) : remisiones.map(r => (
+              ) : remisionesOrdenadas.map(r => (
                 <tr key={r.RemisionId} className="border-t border-gray-100 hover:bg-gray-50">
                   <td className="px-4 py-3 font-mono font-semibold">
                     {r.Folio}
@@ -793,7 +801,7 @@ export default function RemisionesPage() {
                   <td className="px-4 py-3 whitespace-nowrap">{fmtDia(r.Fecha)}</td>
                   <td className="px-4 py-3 truncate" title={destinoDe(r)}>{destinoDe(r)}</td>
                   <td className="px-4 py-3 text-right font-mono">{r.CantidadMasters}</td>
-                  <td className="px-4 py-3 text-right font-mono">{r.PesoKg.toFixed(2)}</td>
+                  <td className="px-4 py-3 text-right font-mono">{fmtNum(r.PesoKg)}</td>
                   <td className="px-4 py-3 whitespace-nowrap text-gray-500 truncate">{r.CreadoPor} · {fmtFecha(r.CreadoEn)}</td>
                   <td className="px-4 py-3 text-center">
                     <div className="flex justify-center gap-2">

@@ -35,6 +35,13 @@ export const diaLocal = (fechaHora) => new Date(fechaHora).toLocaleDateString("s
 // marcar entrada al área cada día (Transferencias puede quedar abierta varios días sin un nuevo
 // registro), un EntradaArea de días atrás producía bloques de 60-100+ horas para una jornada normal de
 // 8 horas. Sin ancla confiable ese primer bloque queda inválido, igual que si no hubiera EntradaArea.
+//
+// El ÚNICO ancla válida es la entrada al área de destajo (Transferencias a Pelado/Descabezado/
+// Pinchado). La Entrada general de Movimientos NO se usa ni como respaldo: es un dato de ASISTENCIA
+// (a qué hora llegó a planta), no de cuándo empezó a trabajar el destajo — entre marcar asistencia y
+// pararse en la línea puede pasar cualquier cosa, y contar ese rato como tiempo de producción le
+// bajaría la tasa a la persona por algo que no hizo. Si no hay entrada al área del día, el bloque se
+// descarta y la corrección va en Transferencias, no en el cálculo (ver resumenValidez más abajo).
 // obtenerGrupo(p) decide en qué se agrupa cada pesada (por Área, por Producto+Talla, etc.) — pero
 // también importa para el cálculo de horas: si esta pesada cae en un grupo distinto al de la pesada
 // inmediatamente anterior de la misma persona, se exige el mismo mínimo de 15 min que al arranque del
@@ -45,7 +52,34 @@ export const diaLocal = (fechaHora) => new Date(fechaHora).toLocaleDateString("s
 // pesada. Dentro de un mismo grupo y mismo día no hay mínimo ni tope: ahí sigue aplicando que un hueco
 // largo es el ritmo normal del trabajo (lote grande acumulado), no una pausa. Un bloque inválido no
 // aporta ni peso ni tiempo al total — igual que LIBRA VALIDA/HR VALIDA en la planilla de referencia.
-export function calcularLbHora(porPersona, obtenerGrupo) {
+//
+// `pausas` son las Transferencias a áreas que "No Genera Paga" (cafetería, baño, permisos — ver
+// GET /api/reportes/produccion en reportes.ts) que trae cada fila de porPersona. Sin esto, si alguien
+// sale a cafetería y vuelve a pesar en la misma área, el hueco quedaba dentro de un bloque normal
+// (mismo grupo, mismo día) y se contaba entero como tiempo trabajado, diluyendo su Lb/Hora real —
+// obtenerGrupo agrupa por el NOMBRE del área, así que un viaje de ida y vuelta a cafetería no genera
+// un cambio de grupo que dispare el mínimo de 15 min. Acá se resta el tiempo de pausa que se solapa
+// con cada bloque ANTES de exigir el mínimo, para que un bloque que sin la pausa cumplía 15 min pero
+// que en realidad son 5 min de trabajo y 10 de cafetería quede correctamente descartado.
+export function calcularLbHora(porPersona, obtenerGrupo, pausas = []) {
+  const pausasPorEmpleado = new Map();
+  for (const pa of pausas) {
+    if (!pausasPorEmpleado.has(pa.IdEmpleado)) pausasPorEmpleado.set(pa.IdEmpleado, []);
+    pausasPorEmpleado.get(pa.IdEmpleado).push(pa);
+  }
+  function minutosPausa(idEmpleado, inicio, fin) {
+    const lista = pausasPorEmpleado.get(idEmpleado);
+    if (!lista || !lista.length || fin <= inicio) return 0;
+    let minutos = 0;
+    for (const pa of lista) {
+      const paInicio = new Date(pa.FechaHora).getTime();
+      const paFin = pa.FechaSalida ? new Date(pa.FechaSalida).getTime() : fin;
+      const solape = Math.min(fin, paFin) - Math.max(inicio, paInicio);
+      if (solape > 0) minutos += solape / 60000;
+    }
+    return minutos;
+  }
+
   const porEmpleado = new Map();
   for (const p of porPersona) {
     if (!porEmpleado.has(p.IdEmpleado)) porEmpleado.set(p.IdEmpleado, { Nombre: p.Nombre, pesadas: [] });
@@ -70,11 +104,12 @@ export function calcularLbHora(porPersona, obtenerGrupo) {
       let valido = false;
       if (esDiaNuevo) {
         if (p.EntradaArea && diaLocal(p.EntradaArea) === diaActual) {
-          minutosBloque = (horaActual - new Date(p.EntradaArea).getTime()) / 60000;
+          const inicioBloque = new Date(p.EntradaArea).getTime();
+          minutosBloque = Math.max(0, (horaActual - inicioBloque) / 60000 - minutosPausa(idEmpleado, inicioBloque, horaActual));
           valido = minutosBloque >= MINIMO_BLOQUE_MINUTOS;
         }
       } else {
-        minutosBloque = (horaActual - horaAnterior) / 60000;
+        minutosBloque = Math.max(0, (horaActual - horaAnterior) / 60000 - minutosPausa(idEmpleado, horaAnterior, horaActual));
         valido = esGrupoNuevo ? minutosBloque >= MINIMO_BLOQUE_MINUTOS : minutosBloque > 0;
       }
 
@@ -84,20 +119,29 @@ export function calcularLbHora(porPersona, obtenerGrupo) {
 
       const bucketKey = `${idEmpleado}|${key}`;
       if (!buckets.has(bucketKey)) {
-        buckets.set(bucketKey, { IdEmpleado: idEmpleado, Nombre, ...campos, Kilos: 0, Horas: 0, NumPesadas: 0 });
+        buckets.set(bucketKey, {
+          IdEmpleado: idEmpleado, Nombre, ...campos,
+          Kilos: 0, Horas: 0, NumPesadas: 0, KilosSinTiempo: 0, PesadasSinTiempo: 0,
+        });
       }
       const b = buckets.get(bucketKey);
       b.NumPesadas += 1;
       if (valido) {
         b.Kilos += p.Kilos;
         b.Horas += minutosBloque / 60;
+      } else {
+        // Se lleva aparte lo que el bloque inválido dejó fuera. No entra en Lb (que sigue siendo
+        // "libra válida": peso con tiempo medible), pero sin esto la diferencia contra el Procesado
+        // del Reporte General quedaba invisible y el reporte parecía estar perdiendo producción.
+        b.KilosSinTiempo += p.Kilos;
+        b.PesadasSinTiempo += 1;
       }
     });
   }
 
-  return [...buckets.values()].map(({ Kilos, ...b }) => {
+  return [...buckets.values()].map(({ Kilos, KilosSinTiempo, ...b }) => {
     const lb = Kilos * LB_POR_KG;
-    return { ...b, Lb: lb, LbPorHora: b.Horas > 0 ? lb / b.Horas : null };
+    return { ...b, Lb: lb, LbSinTiempo: KilosSinTiempo * LB_POR_KG, LbPorHora: b.Horas > 0 ? lb / b.Horas : null };
   });
 }
 
@@ -151,4 +195,24 @@ export function totalLbHora(filas) {
   const sumLb = conTasa.reduce((s, f) => s + f.Lb, 0);
   const sumHoras = conTasa.reduce((s, f) => s + f.Horas, 0);
   return { TotalLb: totalLb, PromedioLbHora: sumHoras > 0 ? sumLb / sumHoras : null };
+}
+
+// Cuánta producción quedó FUERA del "Lb Total" de Lb/Hora y Por Talla, y por qué. Estas dos vistas
+// muestran libra válida (peso con tiempo medible), así que su total nunca iguala al Procesado del
+// Reporte General; la diferencia se explica sola aquí en vez de parecer producción perdida.
+//
+// El caso que más pesa en la práctica: alguien que pesó pero cuya Transferencia de área quedó
+// abierta desde un día anterior (olvidó marcar salida y no volvió a marcar su entrada AL ÁREA). Sin
+// ancla del mismo día su primer bloque no tiene tiempo confiable, y esa pesada se descarta entera.
+// Es un problema de marcaje, no de cálculo — por eso se nombra a la gente: es la lista de a quién hay
+// que corregirle la transferencia para que su producción vuelva a contar. La corrección se hace en
+// Transferencias; que la persona tenga o no Entrada general de asistencia ese día es irrelevante acá.
+export function resumenValidez(filas) {
+  const lbSinTiempo = filas.reduce((s, f) => s + f.LbSinTiempo, 0);
+  const pesadasSinTiempo = filas.reduce((s, f) => s + f.PesadasSinTiempo, 0);
+  const personas = [...new Map(
+    filas.filter(f => f.PesadasSinTiempo > 0).map(f => [f.IdEmpleado, f.Nombre])
+  )].map(([IdEmpleado, Nombre]) => ({ IdEmpleado, Nombre }));
+  const totalLb = filas.reduce((s, f) => s + f.Lb, 0) + lbSinTiempo;
+  return { LbSinTiempo: lbSinTiempo, PesadasSinTiempo: pesadasSinTiempo, Personas: personas, LbProcesadas: totalLb };
 }

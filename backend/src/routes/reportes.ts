@@ -129,8 +129,22 @@ router.get("/produccion", requireAuth, requirePerm("destajo", "ver"), async (req
       ORDER BY pd.FechaHora DESC
     `, desde, hasta, ...argsFinca);
 
-    const [porLote, porTermo, porLoteTalla, porTalla, porPersona] =
-      await Promise.all([pLote, pTermo, pLoteTalla, pTalla, pPersona]) as any[][];
+    // Transferencias a áreas que "No Genera Paga" (cafetería, baño, permisos, etc. — ver
+    // createAreasTransferencias.ts) que se solapan con el rango del reporte. calcularLbHora
+    // (utils/destajo.js) las usa para restar del bloque de tiempo entre dos pesadas consecutivas de
+    // la misma persona: sin esto, si alguien sale a cafetería y vuelve a pesar en la misma área, ese
+    // hueco se contaba entero como horas trabajadas y diluía su Lb/Hora real.
+    const pPausas = prisma.$queryRawUnsafe(`
+      SELECT tr.Codigo AS IdEmpleado, tr.FechaHora, tr.FechaSalida
+      FROM Transferencias tr
+      JOIN Areas a ON tr.CodigoArea = a.Codigo
+      WHERE a.FormaPago = 'No Genera Paga'
+        AND tr.FechaHora < DATE_ADD(?, INTERVAL 1 DAY)
+        AND (tr.FechaSalida IS NULL OR tr.FechaSalida >= ?)
+    `, hasta, desde);
+
+    const [porLote, porTermo, porLoteTalla, porTalla, porPersona, pausasNoPaga] =
+      await Promise.all([pLote, pTermo, pLoteTalla, pTalla, pPersona, pPausas]) as any[][];
 
     const lotesFmt = numerizar(porLote, ["PesoIngreso", "Procesado", "NumTransacciones"])
       .map(l => ({ ...l, Pendiente: l.PesoIngreso - l.Procesado, Rendimiento: l.PesoIngreso > 0 ? (l.Procesado / l.PesoIngreso * 100) : 0 }));
@@ -151,6 +165,7 @@ router.get("/produccion", requireAuth, requirePerm("destajo", "ver"), async (req
       porTalla: tallaFmt,
       porTermo: termoFmt,
       porPersona: personaFmt,
+      pausasNoPaga,
       totales: { ...totales, Pendiente: totales.PesoIngreso - totales.Procesado, Rendimiento: totales.PesoIngreso > 0 ? (totales.Procesado / totales.PesoIngreso * 100) : 0 },
     });
   } catch (err: any) {
