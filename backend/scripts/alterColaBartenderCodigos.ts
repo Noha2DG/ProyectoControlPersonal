@@ -8,6 +8,10 @@
 // Se agrega también DescripcionClase: la etiqueta mostraba "P&D T-OFF" (la descripción del proceso),
 // que no es lo mismo que "CULTIVO PELADO P&D T-OFF" (la de la clase). Con las dos, el diseño elige.
 //
+// El código del proceso a secas (41) NO se guarda: el que se imprime es el de la clase (E41), y
+// tener las dos cosas llamadas "código del proceso" hizo que se enlazara la equivocada dos veces.
+// Clase se guarda y no se calcula — 17 de las 186 clases no son familia+proceso (P01 lleva cero).
+//
 // Igual que el resto de la cola, son valores COPIADOS, no referencias: si mañana se edita el pedido,
 // la fila conserva lo que de verdad se imprimió.
 //
@@ -24,8 +28,7 @@ const COLUMNAS: [string, string, string][] = [
   ["CodigoSubcliente",   "VARCHAR(10) NULL",  "CodigoCliente"],
   ["Clase",              "VARCHAR(10) NULL",  "CodigoSubcliente"],
   ["DescripcionClase",   "VARCHAR(150) NULL", "Clase"],
-  ["CodigoProceso",      "INT NULL",          "DescripcionClase"],
-  ["CodigoTalla",        "INT NULL",          "Proceso"],
+  ["CodigoTalla",        "INT NULL",          "DescripcionClase"],
   ["CodigoPresentacion", "VARCHAR(5) NULL",   "Talla"],
 ];
 
@@ -55,7 +58,6 @@ async function agregar() {
            c.CodigoSubcliente   = ped.CodigoSubcliente,
            c.Clase              = dp.Clase,
            c.DescripcionClase   = cl.Descripcion,
-           c.CodigoProceso      = cl.Proceso,
            c.CodigoTalla        = dp.Talla,
            c.CodigoPresentacion = dp.Presentacion
      WHERE c.CodigoCliente IS NULL`);

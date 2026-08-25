@@ -137,14 +137,19 @@ etiqueta; el código, para que el cliente o la aduana la crucen contra su propio
 | Cliente | `CodigoCliente` | `Cliente` | `14` · GOLD LAKE |
 | Subcliente | `CodigoSubcliente` | `Subcliente` | `S032` · GOLDEN PROFIT SEA FOODS Co. LTD |
 | Tipo de producto | `Clase` | `DescripcionClase` | `C20` · CULTIVO CABEZA ENTERO |
-| Proceso | `CodigoProceso` | `Proceso` | `20` · ENTERO |
+| Proceso | `Clase` | `Proceso` | `C20` · ENTERO |
 | Talla | `CodigoTalla` | `Talla` | `221` · 20/30 |
 | Presentación | `CodigoPresentacion` | `Presentacion` | `MA` · 12/450 gr (5.4 kg) |
 | Lote | — | `Lote` | G235Q002 |
 
-Hay dos formas de "tipo de producto" porque son cosas distintas: la **clase** es la clasificación
-completa del producto (`CULTIVO CABEZA ENTERO`) y el **proceso** es solo lo que se le hizo
-(`ENTERO`). El diseño elige la que corresponda a cada cliente.
+**El código del proceso es `Clase`** — `C20`, `E41`, `P01` — no el número suelto. Hay dos
+descripciones porque son cosas distintas: `DescripcionClase` es la clasificación completa
+(`CULTIVO CABEZA ENTERO`) y `Proceso` es solo lo que se le hizo (`ENTERO`). El código es el mismo
+para las dos.
+
+`Clase` se guarda y no se calcula: 17 de las 186 clases no son familia+proceso — las `P0x` llevan
+cero de relleno (`P01`, no `P1`). Componerla en la plantilla sacaría esas 17 mal, y nadie lo notaría
+hasta que un cliente reclamara.
 
 El resto de campos de la fila: `Correlativo`, `CodigoPedido`, `Color`, `Origen`, `Congelacion`,
 `Area`, `FechaProduccion`.

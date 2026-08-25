@@ -52,7 +52,7 @@ async function obtenerDatosOrden(ordenId: number) {
            pr.Descripcion AS DescripcionPresentacion,
            -- Códigos además de las descripciones: la descripción sirve para leer la etiqueta, el
            -- código para que el cliente o la aduana la crucen contra su propio catálogo.
-           dp.Clase, cl.Descripcion AS DescripcionClase, cl.Proceso AS CodigoProceso,
+           dp.Clase, cl.Descripcion AS DescripcionClase,
            dp.Talla AS CodigoTalla, dp.Presentacion AS CodigoPresentacion,
            cli.RazonSocial AS NombreCliente, sub.RazonSocial AS NombreSubcliente,
            ped.CodigoCliente, ped.CodigoSubcliente,
@@ -185,13 +185,13 @@ router.post("/", requireAuth, requirePerm("etiquetado", "imprimir"), async (req:
           INSERT INTO ColaEtiquetaBartender
             (EtiquetaId, OrdenId, Correlativo, CodigoPedido,
              Cliente, CodigoCliente, Subcliente, CodigoSubcliente,
-             Clase, DescripcionClase, CodigoProceso, Proceso,
+             Clase, DescripcionClase, Proceso,
              CodigoTalla, Talla, CodigoPresentacion, Presentacion,
              Lote, Color, Origen, Congelacion, Area, FechaProduccion)
           VALUES (${id}, ${Number(OrdenId)}, ${"E" + id}, ${orden.CodigoPedido},
                   ${orden.NombreCliente}, ${orden.CodigoCliente},
                   ${orden.NombreSubcliente}, ${orden.CodigoSubcliente},
-                  ${orden.Clase}, ${orden.DescripcionClase}, ${orden.CodigoProceso}, ${orden.DescripcionProceso},
+                  ${orden.Clase}, ${orden.DescripcionClase}, ${orden.DescripcionProceso},
                   ${orden.CodigoTalla}, ${orden.DescripcionTalla},
                   ${orden.CodigoPresentacion}, ${orden.DescripcionPresentacion},
                   ${orden.Lote}, ${orden.Color},
