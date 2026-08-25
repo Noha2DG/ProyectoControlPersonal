@@ -36,6 +36,7 @@ function formatear(rows: any[]) {
     Talla: Number(r.Talla),
     CantidadMaster: Number(r.CantidadMaster),
     Impresas: Number(r.Impresas),
+    EnPapel: Number(r.EnPapel),
     Anuladas: Number(r.Anuladas),
     Escaneadas: Number(r.Escaneadas),
     EsGeneral: Number(r.EsGeneral) === 1,
@@ -67,6 +68,10 @@ const SELECT_ORDEN = `
          ped.EsGeneral,
          cli.RazonSocial AS NombreCliente, sub.RazonSocial AS NombreSubcliente,
          (SELECT COUNT(*) FROM EtiquetaImpresa ei WHERE ei.OrdenId = oe.OrdenId AND ei.Estatus = 'Activa') AS Impresas,
+         -- Impresas cuenta correlativos RESERVADOS; EnPapel, los que BarTender confirmó haber
+         -- mandado a la impresora. Son dos cosas distintas y la pantalla las muestra aparte: si
+         -- fallara el enlace con BarTender, la captura se veía completa sin que saliera un papel.
+         (SELECT COUNT(*) FROM ColaEtiquetaBartender cb WHERE cb.OrdenId = oe.OrdenId AND cb.ImpresoEn IS NOT NULL) AS EnPapel,
          (SELECT COUNT(*) FROM EtiquetaImpresa ei WHERE ei.OrdenId = oe.OrdenId AND ei.Estatus = 'Anulada') AS Anuladas,
          (SELECT COUNT(*) FROM Masters m JOIN EtiquetaImpresa ei ON m.EtiquetaId = ei.EtiquetaId WHERE ei.OrdenId = oe.OrdenId) AS Escaneadas
   FROM OrdenEtiquetado oe

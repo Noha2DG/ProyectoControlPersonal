@@ -2,18 +2,10 @@ import { Router, Request, Response } from "express";
 import jwt from "jsonwebtoken";
 import prisma from "../lib/prisma.ts";
 import { requireAuth, requirePerm, requireAnyPerm, tienePermiso } from "../middleware/auth.ts";
-import {
-  construirZPL, TAMANOS_ETIQUETA, TAMANO_DEFECTO, CAMPOS_DISENO,
-  type DatosEtiqueta, type Posiciones, type TamanoId,
-} from "../lib/zpl.ts";
-import { obtenerPosiciones } from "./disenoEtiqueta.ts";
-import { buscarMasterPorEtiqueta, buscarMastersEnRango, calcularTechoLinea } from "../lib/masters.ts";
+import { resolverRutaBtw } from "./disenoEtiquetaCliente.ts";
+import { buscarMasterPorEtiqueta, calcularTechoLinea } from "../lib/masters.ts";
 
 const router = Router();
-
-function tamanoValido(tamano: any): tamano is TamanoId {
-  return typeof tamano === "string" && tamano in TAMANOS_ETIQUETA;
-}
 
 // Error de negocio lanzado DENTRO de una transacción (donde no se puede responder directo al
 // cliente) — el catch de la ruta lo traduce a su status HTTP en vez de un 500 genérico.
@@ -24,6 +16,14 @@ class ErrorNegocio extends Error {
     this.status = status;
   }
 }
+
+// El aviso de impresión de BarTender viaja con un JWT propio, no con la sesión del operador: quien
+// llama es un programa de escritorio que no tiene login. Se distingue por el subject para que un
+// token de sesión normal no sirva de credencial de impresión ni al revés.
+const TOKEN_BARTENDER_SUBJECT = "bartender-impreso";
+// 12 horas: cubre un turno completo. Una tanda que se quedó abierta en el Designer de un día para
+// otro deja de poder confirmarse sola — se vuelve a abrir desde la pantalla y se emite otro token.
+const TOKEN_BARTENDER_VIGENCIA = "12h";
 
 // Acepta el correlativo tal como lo ve el operador ("E120") o el número pelado (120).
 function parseCorrelativo(valor: any): number | null {
@@ -51,6 +51,7 @@ async function obtenerDatosOrden(ordenId: number) {
            dp.CodigoPedido, pc.Descripcion AS DescripcionProceso, ta.Descripcion AS DescripcionTalla,
            pr.Descripcion AS DescripcionPresentacion,
            cli.RazonSocial AS NombreCliente, sub.RazonSocial AS NombreSubcliente,
+           ped.CodigoCliente, ped.CodigoSubcliente,
            org.Descripcion AS DescripcionOrigen, cong.Descripcion AS DescripcionCongelacion, ar.Nombre AS NombreArea
     FROM OrdenEtiquetado oe
     JOIN DetallePedido dp ON oe.DetalleId = dp.DetalleId
@@ -87,36 +88,6 @@ function datosDesdeOrden(orden: any, correlativo: string) {
   };
 }
 
-function armarZPL(orden: any, correlativo: string, posiciones: Posiciones, tamano: TamanoId) {
-  return construirZPL(datosDesdeOrden(orden, correlativo), posiciones, tamano);
-}
-
-// Datos de ejemplo para calibrar el diseño (posiciones/tamaño de los campos) sin necesitar un pedido
-// real ni gastar cupo/correlativos — antes esto solo se podía probar abriendo la vista previa de una
-// captura real, y una vez que "Impresas" llegaba al declarado ya no quedaba ningún botón que la abriera.
-const DATOS_PRUEBA: DatosEtiqueta = {
-  correlativo: "E9999",
-  codigoPedido: "PRUEBA-000",
-  cliente: "CLIENTE DE PRUEBA",
-  subcliente: null,
-  proceso: "PROCESO DE PRUEBA",
-  talla: "00/00",
-  presentacion: "00/000 gr (0.0 kg)",
-  lote: "LOTE-PRUEBA-00",
-  color: "COLOR DE PRUEBA",
-  origen: "ORIGEN DE PRUEBA",
-  congelacion: "CONGELACIÓN DE PRUEBA",
-  area: "ÁREA DE PRUEBA",
-  fechaProduccion: new Date().toISOString().slice(0, 10),
-};
-
-function posicionesValidas(body: any): body is Posiciones {
-  if (!body || typeof body !== "object") return false;
-  return CAMPOS_DISENO.every((campo) => {
-    const val = body[campo];
-    return val && Number.isFinite(Number(val.X)) && Number.isFinite(Number(val.Y));
-  });
-}
 
 // GET /api/etiqueta-impresa?orden=123 — histórico de etiquetas impresas de una captura
 router.get("/", requireAuth, requirePerm("etiquetado", "imprimir"), async (req: Request, res: Response) => {
@@ -124,7 +95,7 @@ router.get("/", requireAuth, requirePerm("etiquetado", "imprimir"), async (req: 
     const ordenId = req.query.orden ? Number(req.query.orden) : undefined;
     if (!ordenId) { res.status(400).json({ error: "Parámetro 'orden' requerido" }); return; }
     const rows: any[] = await prisma.$queryRaw`
-      SELECT ei.EtiquetaId, ei.OrdenId, ei.Tamano, ei.Estatus, ei.RegistradoPor, ei.CreadoEn,
+      SELECT ei.EtiquetaId, ei.OrdenId, ei.Estatus, ei.RegistradoPor, ei.CreadoEn,
              (SELECT COUNT(*) FROM ImpresionLog il WHERE il.EtiquetaId = ei.EtiquetaId) AS VecesImpresa
       FROM EtiquetaImpresa ei
       WHERE ei.OrdenId = ${ordenId}
@@ -139,65 +110,6 @@ router.get("/", requireAuth, requirePerm("etiquetado", "imprimir"), async (req: 
   }
 });
 
-// GET /api/etiqueta-impresa/vista-previa/:ordenId?tamano=4x2
-// Mismos datos que se van a imprimir, SIN crear una EtiquetaImpresa ni consumir cupo — para
-// mostrar en el frontend antes de confirmar la impresión física. El tamaño lo elige el operador
-// en pantalla según el rollo físico que tenga cargado en ese momento (no se detecta solo).
-router.get("/vista-previa/:ordenId", requireAuth, requirePerm("etiquetado", "imprimir"), async (req: Request, res: Response) => {
-  try {
-    const ordenId = Number(req.params.ordenId);
-    const tamano = tamanoValido(req.query.tamano) ? req.query.tamano : TAMANO_DEFECTO;
-    const orden = await obtenerDatosOrden(ordenId);
-    if (!orden) { res.status(404).json({ error: "Orden de etiquetado no encontrada" }); return; }
-    const posiciones = await obtenerPosiciones(tamano);
-
-    res.json({
-      Tamano: tamano,
-      AnchoPuntos: TAMANOS_ETIQUETA[tamano].AnchoPuntos,
-      AltoPuntos: TAMANOS_ETIQUETA[tamano].AltoPuntos,
-      Posiciones: posiciones,
-      Datos: datosDesdeOrden(orden, "(pendiente)"),
-    });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// GET /api/etiqueta-impresa/prueba?tamano=3x1
-// Mismo formato que vista-previa, pero con datos de ejemplo (DATOS_PRUEBA) en vez de un pedido real
-// — para abrir el editor de diseño (arrastrar campos) sin depender de que exista una captura con
-// etiquetas pendientes.
-router.get("/prueba", requireAuth, requirePerm("etiquetado", "imprimir"), async (req: Request, res: Response) => {
-  try {
-    const tamano = tamanoValido(req.query.tamano) ? req.query.tamano : TAMANO_DEFECTO;
-    const posiciones = await obtenerPosiciones(tamano);
-    res.json({
-      Tamano: tamano,
-      AnchoPuntos: TAMANOS_ETIQUETA[tamano].AnchoPuntos,
-      AltoPuntos: TAMANOS_ETIQUETA[tamano].AltoPuntos,
-      Posiciones: posiciones,
-      Datos: DATOS_PRUEBA,
-    });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// POST /api/etiqueta-impresa/prueba-zpl  { Tamano, Posiciones }
-// Arma el ZPL de una etiqueta de prueba con las posiciones que mande el frontend — pueden ser las
-// guardadas o las que se están arrastrando en pantalla todavía sin guardar, para poder probar en la
-// impresora física antes de confirmar el diseño con "Guardar diseño". No toca la base de datos.
-router.post("/prueba-zpl", requireAuth, requirePerm("etiquetado", "imprimir"), (req: Request, res: Response) => {
-  try {
-    const tamano = tamanoValido(req.body.Tamano) ? req.body.Tamano : TAMANO_DEFECTO;
-    if (!posicionesValidas(req.body.Posiciones)) { res.status(400).json({ error: "Posiciones inválidas o incompletas" }); return; }
-    const zpl = construirZPL(DATOS_PRUEBA, req.body.Posiciones, tamano);
-    res.json({ Zpl: zpl });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
 // POST /api/etiqueta-impresa  { OrdenId }
 // Crea TODAS las etiquetas pendientes de esa captura (CantidadMaster - Impresas) de una vez —
 // revisado jul 2026: ya no es una por una bajo demanda, se declara e imprime en bloque al confirmar.
@@ -205,9 +117,8 @@ router.post("/prueba-zpl", requireAuth, requirePerm("etiquetado", "imprimir"), (
 // (varios bloques ^XA...^XZ) en un solo envío a Browser Print, que la impresora imprime en secuencia.
 router.post("/", requireAuth, requirePerm("etiquetado", "imprimir"), async (req: Request, res: Response) => {
   try {
-    const { OrdenId, Tamano, ConfirmarLineaCompleta } = req.body;
+    const { OrdenId, ConfirmarLineaCompleta } = req.body;
     if (!OrdenId) { res.status(400).json({ error: "OrdenId es requerido" }); return; }
-    if (!tamanoValido(Tamano)) { res.status(400).json({ error: "Tamano de etiqueta inválido" }); return; }
 
     const orden = await obtenerDatosOrden(Number(OrdenId));
     if (!orden) { res.status(404).json({ error: "Orden de etiquetado no encontrada" }); return; }
@@ -230,7 +141,6 @@ router.post("/", requireAuth, requirePerm("etiquetado", "imprimir"), async (req:
     }
 
     const operador = getOperador(req);
-    const posiciones = await obtenerPosiciones(Tamano);
     const correlativos: string[] = [];
     let impresas = 0;
     let pendientes = 0;
@@ -257,23 +167,35 @@ router.post("/", requireAuth, requirePerm("etiquetado", "imprimir"), async (req:
       if (pendientes <= 0) throw new ErrorNegocio(400, `Ya se imprimieron las ${cantidadMaster} etiquetas declaradas para esta captura`);
 
       for (let i = 0; i < pendientes; i++) {
-        await tx.$executeRaw`INSERT INTO EtiquetaImpresa (OrdenId, Tamano, RegistradoPor) VALUES (${Number(OrdenId)}, ${Tamano}, ${operador})`;
+        await tx.$executeRaw`INSERT INTO EtiquetaImpresa (OrdenId, RegistradoPor) VALUES (${Number(OrdenId)}, ${operador})`;
         const fila: any[] = await tx.$queryRaw`SELECT LAST_INSERT_ID() AS id`;
         const id = Number(fila[0].id);
         await tx.$executeRaw`INSERT INTO ImpresionLog (EtiquetaId, Motivo, ImpresoPor) VALUES (${id}, ${"Impresión inicial"}, ${operador})`;
+
+        // Cola de la etiqueta de CLIENTE (BarTender -> Epson A4). Va en la misma transacción que la
+        // etiqueta interna de Zebra porque un master necesita las dos: si la transacción se revierte,
+        // no debe quedar una pidiendo imprimirse sin la otra.
+        // Los descriptivos se copian, no se referencian: la fila debe conservar lo que se imprimió
+        // aunque el pedido se edite después. ImpresoEn queda NULL hasta que BarTender confirme.
+        await tx.$executeRaw`
+          INSERT INTO ColaEtiquetaBartender
+            (EtiquetaId, OrdenId, Correlativo, CodigoPedido, Cliente, Subcliente, Proceso, Talla,
+             Presentacion, Lote, Color, Origen, Congelacion, Area, FechaProduccion)
+          VALUES (${id}, ${Number(OrdenId)}, ${"E" + id}, ${orden.CodigoPedido}, ${orden.NombreCliente},
+                  ${orden.NombreSubcliente}, ${orden.DescripcionProceso}, ${orden.DescripcionTalla},
+                  ${orden.DescripcionPresentacion}, ${orden.Lote}, ${orden.Color},
+                  ${orden.DescripcionOrigen}, ${orden.DescripcionCongelacion}, ${orden.NombreArea},
+                  ${orden.FechaProduccion})
+        `;
         correlativos.push("E" + id);
       }
     }, { timeout: 60_000 });
 
-    // Bloques individuales (no un solo string concatenado): el frontend los envía a la impresora
-    // en tandas con progreso, y si el envío falla a medias sabe exactamente qué correlativos
-    // faltaron para reintentar solo esos.
-    const bloques = correlativos.map(correlativo => ({
-      Correlativo: correlativo,
-      Zpl: armarZPL(orden, correlativo, posiciones, Tamano),
-    }));
+    // Ya no se devuelve ZPL: la impresión física la hace BarTender leyendo ColaEtiquetaBartender.
+    // Acá solo se reservan los correlativos y se deja la cola lista para que el operador abra
+    // BarTender con el rango recién creado.
     res.status(201).json({
-      ok: true, Cantidad: pendientes, Correlativos: correlativos, Bloques: bloques,
+      ok: true, Cantidad: pendientes, Correlativos: correlativos,
       Impresas: impresas + pendientes, CantidadMaster: Number(orden.CantidadMaster),
     });
   } catch (err: any) {
@@ -282,125 +204,267 @@ router.post("/", requireAuth, requirePerm("etiquetado", "imprimir"), async (req:
   }
 });
 
-// Un rango de recuperación (atasco a medio camino) puede mezclar correlativos ya confirmados en
-// bodega con otros que no — a diferencia de la reimpresión individual, aquí NO se pide forzar: los
-// ya escaneados simplemente se excluyen del lote y se reportan aparte, porque su master físico ya
-// llegó a destino y no tiene sentido forzarlos desde una recuperación masiva. Compartida entre el
-// chequeo liviano (GET /rango-estado, sin escribir nada) y el commit real (POST /reimprimir-bloque)
-// — mismo criterio que buscarMasterPorEtiqueta/consultar para la reimpresión individual.
-async function resolverRangoReimpresion(ordenId: number, desde: number, hasta: number) {
-  // Solo etiquetas activas de ESTA captura dentro del rango — correlativos de otras capturas que
-  // caigan en el rango numérico se ignoran, no se pueden reimprimir desde aquí.
-  const etiquetas: any[] = await prisma.$queryRaw`
-    SELECT EtiquetaId, Tamano FROM EtiquetaImpresa
-    WHERE OrdenId = ${ordenId} AND EtiquetaId BETWEEN ${desde} AND ${hasta} AND Estatus = 'Activa'
-    ORDER BY EtiquetaId ASC
-  `;
-  const yaEscaneados = await buscarMastersEnRango(prisma, desde, hasta);
-  const paraReimprimir = etiquetas.filter(e => !yaEscaneados.has(Number(e.EtiquetaId)));
-  const saltadas = etiquetas
-    .filter(e => yaEscaneados.has(Number(e.EtiquetaId)))
-    .map(e => {
-      const info = yaEscaneados.get(Number(e.EtiquetaId))!;
-      return { Correlativo: "E" + Number(e.EtiquetaId), ...info };
-    });
-  return { etiquetas, paraReimprimir, saltadas };
-}
-
-// GET /api/etiqueta-impresa/rango-estado?ordenId=6&desde=E47&hasta=E50
-// Dry-run de reimprimir-bloque: qué se reimprimiría y qué se saltaría por ya escaneado, SIN escribir
-// nada. Se usa ANTES de tocar la impresora física — mismo motivo que consultar individual: si
-// TODO el rango ya está escaneado no hay nada que hacer, y no tiene sentido (ni es justo) que un
-// problema de Browser Print tape esa información.
-router.get("/rango-estado", requireAuth, requirePerm("etiquetado", "imprimir"), async (req: Request, res: Response) => {
+// GET /api/etiqueta-impresa/orden/:ordenId/bartender[?desde=28&hasta=37]
+// Datos para abrir BarTender Designer con la etiqueta de CLIENTE (la de arte complejo, que va a la
+// Epson A4). No sustituye la etiqueta interna 3x1 de la Zebra: son dos caminos paralelos.
+//
+// Devuelve una URL del protocolo oroetiqueta://, que un manejador registrado en la PC del operador
+// traduce a `BarTend.exe /F="plantilla.btw" /?Orden= /?Desde= /?Hasta=` (ver
+// herramientas/bartender/). Esa vuelta existe porque el backend corre en kronos, en internet, y no
+// puede lanzar programas en la máquina del operador; el navegador tampoco.
+//
+// El filtro lleva OrdenId ADEMÁS del rango, nunca el rango solo: los EtiquetaId son
+// autoincrementales y otra orden imprimiendo a la vez puede intercalar ids, así que un rango suelto
+// podría arrastrar etiquetas de otro pedido.
+router.get("/orden/:ordenId/bartender", requireAuth, requirePerm("etiquetado", "imprimir"), async (req: Request, res: Response) => {
   try {
-    const ordenId = Number(req.query.ordenId);
-    const desde = parseCorrelativo(req.query.desde);
-    const hasta = parseCorrelativo(req.query.hasta);
-    if (!ordenId) { res.status(400).json({ error: "ordenId es requerido" }); return; }
-    if (!desde || !hasta || desde > hasta) { res.status(400).json({ error: "Rango de correlativos inválido" }); return; }
-    if (hasta - desde + 1 > 1000) { res.status(400).json({ error: "Rango demasiado grande (máximo 1000 etiquetas por bloque)" }); return; }
+    const ordenId = Number(req.params.ordenId);
+    const orden = await obtenerDatosOrden(ordenId);
+    if (!orden) { res.status(404).json({ error: "Orden de etiquetado no encontrada" }); return; }
 
-    const { paraReimprimir, saltadas } = await resolverRangoReimpresion(ordenId, desde, hasta);
-    res.json({ ParaReimprimir: paraReimprimir.map(e => "E" + Number(e.EtiquetaId)), Saltadas: saltadas });
+    const rutaBtw = await resolverRutaBtw(Number(orden.CodigoCliente), orden.CodigoSubcliente);
+    if (!rutaBtw) {
+      res.status(400).json({
+        error: `No hay diseño de BarTender asignado a ${orden.NombreSubcliente || orden.NombreCliente}. ` +
+               `Asígnalo en Pedidos y Clientes → Clientes y Subclientes.`,
+      });
+      return;
+    }
+
+    // Sin rango explícito se abre todo lo que siga activo de esta orden.
+    let desde = parseCorrelativo(req.query.desde);
+    let hasta = parseCorrelativo(req.query.hasta);
+    if (desde === null || hasta === null) {
+      const rango: any[] = await prisma.$queryRaw`
+        SELECT MIN(EtiquetaId) AS minId, MAX(EtiquetaId) AS maxId
+        FROM EtiquetaImpresa WHERE OrdenId = ${ordenId} AND Estatus = 'Activa'
+      `;
+      if (rango[0].minId === null) { res.status(400).json({ error: "Esta captura no tiene etiquetas activas que imprimir" }); return; }
+      desde = Number(rango[0].minId);
+      hasta = Number(rango[0].maxId);
+    }
+    if (desde > hasta) { res.status(400).json({ error: "El correlativo inicial no puede ser mayor que el final" }); return; }
+
+    // Se cuenta contra la cola, no contra EtiquetaImpresa, para poder distinguir lo ya impreso por
+    // BarTender (ImpresoEn con fecha) de lo que sigue pendiente en papel.
+    const conteo: any[] = await prisma.$queryRaw`
+      SELECT COUNT(*) AS total, SUM(ImpresoEn IS NULL) AS pendientes
+      FROM ColaEtiquetaBartender
+      WHERE OrdenId = ${ordenId} AND EtiquetaId BETWEEN ${desde} AND ${hasta}
+    `;
+
+    // Credencial de un solo uso para que BarTender pueda avisar que imprimió (ver POST
+    // /bartender/impreso). Va firmada con el rango adentro: no es una llave general de la API, solo
+    // permite marcar ESTE tramo de ESTA captura, y caduca. Así el .btw no guarda ninguna contraseña
+    // permanente — es un archivo que cualquiera puede abrir desde el recurso compartido.
+    const token = jwt.sign(
+      { o: ordenId, d: desde, h: hasta },
+      process.env.JWT_SECRET!,
+      { subject: TOKEN_BARTENDER_SUBJECT, expiresIn: TOKEN_BARTENDER_VIGENCIA }
+    );
+
+    const url = `oroetiqueta://imprimir?btw=${encodeURIComponent(rutaBtw)}`
+      + `&orden=${ordenId}&desde=${desde}&hasta=${hasta}&token=${encodeURIComponent(token)}`;
+
+    res.json({
+      OrdenId: ordenId,
+      RutaBtw: rutaBtw,
+      Desde: desde,
+      Hasta: hasta,
+      Correlativos: `E${desde} a E${hasta}`,
+      Etiquetas: Number(conteo[0].total),
+      Pendientes: Number(conteo[0].pendientes ?? 0),
+      Cliente: orden.NombreCliente,
+      Subcliente: orden.NombreSubcliente,
+      Url: url,
+    });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// POST /api/etiqueta-impresa/reimprimir-bloque  { OrdenId, Desde, Hasta, Motivo }
-// Recuperación de una tanda que falló a medias camino a la impresora (atasco, rollo agotado,
-// Browser Print caído): reimprime en bloque un rango de correlativos YA registrados de esa
-// captura. No crea etiquetas nuevas ni consume cupo — solo audita un ImpresionLog por etiqueta,
-// igual que la reimpresión individual. Cada etiqueta respeta el tamaño con el que se registró.
-router.post("/reimprimir-bloque", requireAuth, requirePerm("etiquetado", "imprimir"), async (req: Request, res: Response) => {
+// POST /api/etiqueta-impresa/orden/:ordenId/reservar  { Desde, Hasta }
+// Deja escrito en la cola qué tanda va a salir AHORA, justo antes de abrir BarTender. La plantilla
+// filtra por eso y no por rango, así que su consulta es una línea fija sin solicitudes de consulta:
+//
+//     SELECT * FROM ColaEtiquetaBartender
+//      WHERE SolicitadoEn IS NOT NULL AND ImpresoEn IS NULL
+//      ORDER BY EtiquetaId
+//
+// LIMITACIÓN CONOCIDA: una tanda a la vez. Reservar suelta lo reservado antes, así que dos
+// estaciones imprimiendo simultáneamente se pisan — la segunda le quita la tanda a la primera, que
+// termina imprimiendo etiquetas ajenas y confirmando las suyas sin que hayan salido. Se probó una
+// versión con un id por reserva que lo resolvía (columna ReservaId + una solicitud ?Reserva en la
+// plantilla) y se descartó porque complicaba la configuración de los diseños.
+//
+// El paso 1 (soltar lo anterior) y el paso 2 (reservar) van en la MISMA transacción: si se
+// separaran, un fallo entre ambos dejaría la cola vacía y BarTender imprimiría cero etiquetas.
+router.post("/orden/:ordenId/reservar", requireAuth, requirePerm("etiquetado", "imprimir"), async (req: Request, res: Response) => {
   try {
-    const { OrdenId, Desde, Hasta, Motivo } = req.body;
-    if (!OrdenId) { res.status(400).json({ error: "OrdenId es requerido" }); return; }
-    const desde = parseCorrelativo(Desde);
-    const hasta = parseCorrelativo(Hasta);
-    if (!desde || !hasta || desde > hasta) { res.status(400).json({ error: "Rango de correlativos inválido (ej. Desde E120, Hasta E180)" }); return; }
-    if (hasta - desde + 1 > 1000) { res.status(400).json({ error: "Rango demasiado grande (máximo 1000 etiquetas por bloque)" }); return; }
-    if (!Motivo || !String(Motivo).trim()) { res.status(400).json({ error: "El motivo de la reimpresión es requerido" }); return; }
+    const ordenId = Number(req.params.ordenId);
+    if (!ordenId) { res.status(400).json({ error: "OrdenId inválido" }); return; }
+    const desde = parseCorrelativo(req.body?.Desde);
+    const hasta = parseCorrelativo(req.body?.Hasta);
+    if (!desde || !hasta || desde > hasta) { res.status(400).json({ error: "Rango de correlativos inválido" }); return; }
 
-    const orden = await obtenerDatosOrden(Number(OrdenId));
-    if (!orden) { res.status(404).json({ error: "Orden de etiquetado no encontrada" }); return; }
-    if (orden.EstatusOrden === "Cancelada") {
-      res.status(400).json({ error: "Esta captura está cancelada, no se puede reimprimir." });
-      return;
-    }
+    const operador = getOperador(req);
 
-    const { etiquetas, paraReimprimir, saltadas } = await resolverRangoReimpresion(Number(OrdenId), desde, hasta);
-    if (!etiquetas.length) { res.status(400).json({ error: "No hay etiquetas activas de esta captura en ese rango de correlativos" }); return; }
-    if (!paraReimprimir.length) {
-      res.status(400).json({
-        error: "Todas las etiquetas de este rango ya fueron escaneadas en bodega — no hay nada que reimprimir.",
-        Saltadas: saltadas,
+    const reservadas = await prisma.$transaction(async (tx) => {
+      // Lo que quedó reservado de un intento anterior se suelta: si el operador abrió BarTender y no
+      // imprimió, esas etiquetas siguen pendientes, solo dejan de estar en la cola de "imprimir ahora".
+      await tx.$executeRaw`
+        UPDATE ColaEtiquetaBartender
+           SET SolicitadoEn = NULL, SolicitadoPor = NULL
+         WHERE SolicitadoEn IS NOT NULL AND ImpresoEn IS NULL
+      `;
+      return await tx.$executeRaw`
+        UPDATE ColaEtiquetaBartender
+           SET SolicitadoEn = NOW(), SolicitadoPor = ${operador}
+         WHERE OrdenId = ${ordenId} AND EtiquetaId BETWEEN ${desde} AND ${hasta} AND ImpresoEn IS NULL
+      `;
+      // 60 s como el resto del módulo: el valor por omisión de Prisma son 5 s, y con la base en otro
+      // servidor (~111 ms por ida y vuelta) dos UPDATE más BEGIN/COMMIT se pasaban de ese margen.
+    }, { timeout: 60_000 });
+
+    res.json({ ok: true, OrdenId: ordenId, Desde: desde, Hasta: hasta, Reservadas: Number(reservadas) });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/etiqueta-impresa/bartender/impreso  { Token, Orden, Desde, Hasta, Impresora }
+// Aviso de BarTender al terminar de imprimir — es lo que cierra el ciclo. Sin esto "impresa" solo
+// quiere decir "correlativo reservado", que es lo que la pantalla muestra como Generadas: papel y
+// base de datos podían discrepar sin que nadie se enterara (ej. la PC sin el protocolo instalado,
+// donde el botón no abría nada y la captura igual se veía completa).
+//
+// Lo dispara el evento de documento "Print Job Sent" con la acción "Send Web Service Request" —
+// ver herramientas/bartender/README.md para cómo se configura del lado de la plantilla.
+//
+// NO lleva requireAuth a propósito: quien llama es BarTender, un programa de escritorio que no
+// tiene sesión. La credencial es el token firmado que se emitió al abrir la plantilla.
+router.post("/bartender/impreso", async (req: Request, res: Response) => {
+  try {
+    const { Token, Orden, Desde, Hasta, Impresora } = req.body ?? {};
+    if (!Token) { res.status(401).json({ error: "Falta el token de impresión" }); return; }
+
+    let permiso: any;
+    try {
+      permiso = jwt.verify(String(Token), process.env.JWT_SECRET!, { subject: TOKEN_BARTENDER_SUBJECT });
+    } catch (err: any) {
+      res.status(401).json({
+        error: err?.name === "TokenExpiredError"
+          ? "El permiso de impresión venció. Vuelve a abrir la plantilla desde Impresión de Etiquetas."
+          : "Token de impresión inválido",
       });
       return;
     }
 
-    const operador = getOperador(req);
-    const motivo = String(Motivo).trim();
-    await prisma.$transaction(async (tx) => {
-      for (const e of paraReimprimir) {
-        await tx.$executeRaw`INSERT INTO ImpresionLog (EtiquetaId, Motivo, ImpresoPor) VALUES (${Number(e.EtiquetaId)}, ${motivo}, ${operador})`;
-      }
-    }, { timeout: 60_000 });
+    const ordenId = Number(permiso.o);
+    const techoDesde = Number(permiso.d);
+    const techoHasta = Number(permiso.h);
 
-    const posPorTamano = new Map<TamanoId, Posiciones>();
-    const bloques: { Correlativo: string; Zpl: string }[] = [];
-    for (const e of paraReimprimir) {
-      const tamano: TamanoId = tamanoValido(e.Tamano) ? e.Tamano : TAMANO_DEFECTO;
-      if (!posPorTamano.has(tamano)) posPorTamano.set(tamano, await obtenerPosiciones(tamano));
-      const correlativo = "E" + Number(e.EtiquetaId);
-      bloques.push({ Correlativo: correlativo, Zpl: armarZPL(orden, correlativo, posPorTamano.get(tamano)!, tamano) });
+    // El rango del cuerpo son los prompts con los que BarTender REALMENTE imprimió: el operador pudo
+    // estrecharlos en el diálogo de la plantilla, y ese es el dato verdadero. El token solo pone el
+    // techo — nunca se marca fuera de lo que se autorizó. Sin rango en el cuerpo se toma el techo.
+    //
+    // Un valor presente pero ilegible NO se degrada al techo: si el prompt del .btw quedó mal
+    // nombrado, BarTender manda basura sin quejarse, y confirmar la tanda completa por eso sería
+    // decir que salió papel que nadie vio. Mejor un error visible en la bitácora de BarTender.
+    const rangoInformado = (valor: any, porDefecto: number): number => {
+      if (valor === undefined || valor === null || String(valor).trim() === "") return porDefecto;
+      const n = parseCorrelativo(valor);
+      if (n === null) throw new ErrorNegocio(400, `Correlativo inválido en el aviso de impresión: "${valor}"`);
+      return n;
+    };
+    const desde = rangoInformado(Desde, techoDesde);
+    const hasta = rangoInformado(Hasta, techoHasta);
+    if (Orden != null && Number(Orden) !== ordenId) {
+      res.status(403).json({ error: "El token no corresponde a esa captura" }); return;
     }
-    res.json({
-      ok: true, Cantidad: bloques.length,
-      Desde: bloques[0].Correlativo, Hasta: bloques[bloques.length - 1].Correlativo,
-      Bloques: bloques, Saltadas: saltadas,
-    });
+    if (desde > hasta || desde < techoDesde || hasta > techoHasta) {
+      res.status(403).json({ error: "El rango informado se sale del que autorizó el token" }); return;
+    }
+
+    const impresora = typeof Impresora === "string" && Impresora.trim()
+      ? Impresora.trim().slice(0, 200) : null;
+
+    // ImpresoEn IS NULL deja la operación idempotente: la acción de BarTender trae reintentos
+    // propios, y un aviso repetido no debe correr la hora ni contar la etiqueta dos veces.
+    const marcadas = await prisma.$executeRaw`
+      UPDATE ColaEtiquetaBartender
+         SET ImpresoEn = NOW(), Impresora = ${impresora}
+       WHERE OrdenId = ${ordenId} AND EtiquetaId BETWEEN ${desde} AND ${hasta} AND ImpresoEn IS NULL
+    `;
+
+    res.json({ ok: true, OrdenId: ordenId, Desde: desde, Hasta: hasta, Marcadas: Number(marcadas) });
+  } catch (err: any) {
+    if (err instanceof ErrorNegocio) { res.status(err.status).json({ error: err.message }); return; }
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/etiqueta-impresa/orden/:ordenId/confirmar-impresion  { Desde, Hasta }
+// Confirmación HUMANA de que la tanda salió en papel, para cuando BarTender no avisa solo (la
+// plantilla sin la acción configurada, una PC vieja, la impresora conectada a otra máquina).
+//
+// Existe porque la alternativa es peor: sin esto, la única salida cuando el aviso falla es entrar a
+// la base a mano, y una captura que se quedó sin confirmar bloquea el filtro `ImpresoEn IS NULL`
+// para siempre.
+//
+// Lo que NO hace es marcar solo. Aquí una persona con permiso de impresión afirma haber visto el
+// papel, y queda escrito quién fue: Impresora guarda "Confirmado por X" en vez del nombre real del
+// equipo, para que después se distinga de un aviso automático de BarTender. Esa diferencia importa
+// — un dato que el sistema observó y uno que alguien aseguró no valen lo mismo al investigar.
+router.post("/orden/:ordenId/confirmar-impresion", requireAuth, requirePerm("etiquetado", "imprimir"), async (req: Request, res: Response) => {
+  try {
+    const ordenId = Number(req.params.ordenId);
+    if (!ordenId) { res.status(400).json({ error: "Captura inválida" }); return; }
+    const { Desde, Hasta } = req.body ?? {};
+
+    // Sin rango se confirma todo lo pendiente de la captura.
+    const desde = parseCorrelativo(Desde);
+    const hasta = parseCorrelativo(Hasta);
+    if ((Desde != null && desde === null) || (Hasta != null && hasta === null)) {
+      res.status(400).json({ error: "Rango de correlativos inválido" }); return;
+    }
+    if (desde !== null && hasta !== null && desde > hasta) {
+      res.status(400).json({ error: "El correlativo inicial no puede ser mayor que el final" }); return;
+    }
+
+    const operador = getOperador(req);
+    const marca = `Confirmado por ${operador}`.slice(0, 200);
+
+    const marcadas = desde !== null && hasta !== null
+      ? await prisma.$executeRaw`
+          UPDATE ColaEtiquetaBartender SET ImpresoEn = NOW(), Impresora = ${marca}
+           WHERE OrdenId = ${ordenId} AND EtiquetaId BETWEEN ${desde} AND ${hasta} AND ImpresoEn IS NULL`
+      : await prisma.$executeRaw`
+          UPDATE ColaEtiquetaBartender SET ImpresoEn = NOW(), Impresora = ${marca}
+           WHERE OrdenId = ${ordenId} AND ImpresoEn IS NULL`;
+
+    if (Number(marcadas) === 0) {
+      res.status(400).json({ error: "No hay etiquetas pendientes de confirmar en esa captura" }); return;
+    }
+    res.json({ ok: true, OrdenId: ordenId, Marcadas: Number(marcadas), ConfirmadoPor: operador });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
 });
 
 // GET /api/etiqueta-impresa/:id/consultar  (acepta "E47" o "47" en :id)
-// Consulta completa de un correlativo: existencia/Estatus, qué producto lleva, historial completo
-// de impresión/reimpresión (ImpresionLog), y si ya está escaneado en bodega (y dónde). Sirve en dos
-// lugares: en Impresión, ANTES de tocar la impresora al reimprimir (reemplaza al extinto
-// estado-escaneo — mismo motivo: no gastar la verificación de Browser Print en algo que de todas
-// formas se va a advertir, y no dejar que un problema de impresora tape esa advertencia); y en
-// Bodega, para investigar un escaneo rechazado o una caja que aparece sin explicación — por eso
-// acepta también el permiso bodega.ver, no solo etiquetado.imprimir.
+// Consulta completa de un correlativo: existencia/Estatus, qué producto lleva, historial de
+// impresión (ImpresionLog), y si ya está escaneado en bodega (y dónde). Sirve en dos lugares: en
+// Impresión, para investigar un correlativo antes de anularlo; y en Bodega, para entender un escaneo
+// rechazado o una caja que aparece sin explicación — por eso acepta también el permiso bodega.ver,
+// no solo etiquetado.imprimir.
 router.get("/:id/consultar", requireAuth, requireAnyPerm([["etiquetado", "imprimir"], ["bodega", "ver"]]), async (req: Request, res: Response) => {
   try {
     const etiquetaId = parseCorrelativo(req.params.id);
     if (!etiquetaId) { res.status(400).json({ error: "Correlativo inválido" }); return; }
 
     const etiquetaRows: any[] = await prisma.$queryRaw`
-      SELECT EtiquetaId, OrdenId, Tamano, Estatus, RegistradoPor, CreadoEn, AnuladoPor, AnuladoEn, MotivoAnulacion
+      SELECT EtiquetaId, OrdenId, Estatus, RegistradoPor, CreadoEn, AnuladoPor, AnuladoEn, MotivoAnulacion
       FROM EtiquetaImpresa WHERE EtiquetaId = ${etiquetaId} LIMIT 1
     `;
     if (!etiquetaRows.length) { res.status(404).json({ error: `No existe ninguna etiqueta con el correlativo E${etiquetaId}` }); return; }
@@ -419,7 +483,6 @@ router.get("/:id/consultar", requireAuth, requireAnyPerm([["etiquetado", "imprim
       EtiquetaId: etiquetaId,
       Correlativo: "E" + etiquetaId,
       Estatus: etiqueta.Estatus,
-      Tamano: etiqueta.Tamano,
       Anulacion: etiqueta.Estatus === "Anulada"
         ? { AnuladoPor: etiqueta.AnuladoPor, AnuladoEn: etiqueta.AnuladoEn, Motivo: etiqueta.MotivoAnulacion }
         : null,
@@ -439,12 +502,12 @@ router.get("/:id/consultar", requireAuth, requireAnyPerm([["etiquetado", "imprim
 });
 
 // PUT /api/etiqueta-impresa/:id/anular  { Motivo }
-// Cierra el hueco real que tenía el estatus 'Anulada': existía en el schema y se validaba en
-// reimprimir/escanear, pero no había ninguna ruta que lo estableciera. Para una etiqueta cuyo master
+// Cierra el hueco real que tenía el estatus 'Anulada': existía en el schema y se validaba al
+// escanear, pero no había ninguna ruta que lo estableciera. Para una etiqueta cuyo master
 // físico se dañó, se reprocesó o se descartó ANTES de llegar a bodega — sin esto, esa etiqueta queda
 // "Activa" para siempre: cuenta como impresa pero nunca se va a poder escanear, y cualquier reporte
 // de Declarado/Impreso/Escaneado muestra un faltante fantasma permanente. Requiere etiquetado.editar
-// (no solo imprimir) — misma barrera que ya se usa para forzar una reimpresión, es una corrección
+// (no solo imprimir) — es una corrección
 // administrativa, no la operación diaria.
 router.put("/:id/anular", requireAuth, requirePerm("etiquetado", "editar"), async (req: Request, res: Response) => {
   try {
@@ -456,8 +519,8 @@ router.put("/:id/anular", requireAuth, requirePerm("etiquetado", "editar"), asyn
     if (!etiquetaRows.length) { res.status(404).json({ error: "Etiqueta no encontrada" }); return; }
     if (etiquetaRows[0].Estatus !== "Activa") { res.status(400).json({ error: "Esta etiqueta ya está anulada" }); return; }
 
-    // A propósito NO se rechaza aquí si la captura padre está Cancelada — al revés que reimprimir y
-    // reactivar, anular es exactamente la herramienta correcta para cerrar una etiqueta huérfana de
+    // A propósito NO se rechaza aquí si la captura padre está Cancelada — al revés que reactivar,
+    // anular es exactamente la herramienta correcta para cerrar una etiqueta huérfana de
     // una captura cancelada (nunca va a escanearse), así que bloquearla dejaría esas etiquetas sin
     // ninguna salida posible.
 
@@ -566,85 +629,6 @@ router.get("/atascadas", requireAuth, requirePerm("etiquetado", "imprimir"), asy
       Correlativo: "E" + Number(r.EtiquetaId),
       HorasDesdeImpresion: Number(r.HorasDesdeImpresion),
     })));
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// POST /api/etiqueta-impresa/:id/reimprimir  { Motivo, Forzar? }
-// Repite el mismo correlativo/QR — no crea una etiqueta nueva ni consume cupo, solo audita el reimpreso.
-// Si el master de esta etiqueta ya está confirmado en bodega (existe en Masters), reimprimir casi
-// siempre es un error operativo (el master físico ya viajó) — se detiene con 409 y los datos de
-// dónde quedó, en vez de dejar salir una segunda etiqueta física con el mismo QR sin aviso.
-// Forzar=true la permite de todas formas, pero exige además el permiso etiquetado.editar (no solo
-// imprimir) y queda marcada en ImpresionLog.ReimpresionForzada para poder auditarla después.
-router.post("/:id/reimprimir", requireAuth, requirePerm("etiquetado", "imprimir"), async (req: Request, res: Response) => {
-  try {
-    const etiquetaId = Number(req.params.id);
-    const { Motivo, Forzar } = req.body;
-    if (!Motivo || !String(Motivo).trim()) { res.status(400).json({ error: "El motivo de la reimpresión es requerido" }); return; }
-
-    const etiquetaRows: any[] = await prisma.$queryRaw`
-      SELECT EtiquetaId, OrdenId, Tamano, Estatus FROM EtiquetaImpresa WHERE EtiquetaId = ${etiquetaId} LIMIT 1
-    `;
-    if (!etiquetaRows.length) { res.status(404).json({ error: "Etiqueta no encontrada" }); return; }
-    if (etiquetaRows[0].Estatus !== "Activa") { res.status(400).json({ error: "Esta etiqueta está anulada, no se puede reimprimir" }); return; }
-
-    const masterExistente = await buscarMasterPorEtiqueta(prisma, etiquetaId);
-    // Mismo candado que en anular, y por la misma razón: al despacharse se liberó la posición, así
-    // que sin esto un master ya embarcado volvería a ser reimprimible (con Forzar) — reimprimir la
-    // etiqueta de un master que ya está con el cliente es exactamente lo que el sellado evita.
-    if (masterExistente?.Estatus === "Salido") {
-      res.status(400).json({
-        error: `Este master ya salió de bodega${masterExistente.RemisionFolio ? ` en la remisión ${masterExistente.RemisionFolio}` : ""} — no se puede reimprimir su etiqueta.`,
-      });
-      return;
-    }
-    // Candado de posicionamiento: si el pallet del master ya tiene posición física, la reimpresión
-    // se bloquea en seco — sin opción de Forzar (a diferencia del caso "escaneado pero aún en
-    // bodega virtual", donde forzar con permiso de edición sigue permitido).
-    if (masterExistente?.PosicionCodigo) {
-      res.status(400).json({
-        error: `Este master está en el pallet ${masterExistente.PalletCodigo}, ya posicionado en bodega física (${masterExistente.PosicionCodigo}) — su contenido está sellado y no se puede reimprimir.`,
-      });
-      return;
-    }
-    if (masterExistente && !Forzar) {
-      res.status(409).json({
-        error: `Este master ya fue escaneado en bodega — pallet ${masterExistente.PalletCodigo}` +
-          `${masterExistente.NombreArea ? " (" + masterExistente.NombreArea + ")" : ""}, ` +
-          `${new Date(masterExistente.FechaIngreso).toLocaleString("es-GT")}. Reimprimir puede generar una etiqueta física duplicada.`,
-        YaEscaneado: true,
-        Master: masterExistente,
-      });
-      return;
-    }
-    if (masterExistente && Forzar && !tienePermiso(req as any, "etiquetado", "editar")) {
-      res.status(403).json({ error: "Reimprimir la etiqueta de un master ya escaneado requiere permiso de edición en Etiquetado." });
-      return;
-    }
-
-    const orden = await obtenerDatosOrden(Number(etiquetaRows[0].OrdenId));
-    if (!orden) { res.status(404).json({ error: "Orden de etiquetado no encontrada" }); return; }
-    if (orden.EstatusOrden === "Cancelada") {
-      res.status(400).json({ error: "La captura de esta etiqueta está cancelada, no se puede reimprimir." });
-      return;
-    }
-
-    // El tamaño se toma de la propia etiqueta (el que se usó al imprimirla la primera vez), no de
-    // lo que esté seleccionado en pantalla ahora mismo — una reimpresión debe respetar el rollo con
-    // el que se generó originalmente esa etiqueta.
-    const tamano: TamanoId = tamanoValido(etiquetaRows[0].Tamano) ? etiquetaRows[0].Tamano : TAMANO_DEFECTO;
-
-    const operador = getOperador(req);
-    await prisma.$executeRaw`
-      INSERT INTO ImpresionLog (EtiquetaId, Motivo, ReimpresionForzada, ImpresoPor)
-      VALUES (${etiquetaId}, ${String(Motivo).trim()}, ${masterExistente ? 1 : 0}, ${operador})
-    `;
-
-    const correlativo = "E" + etiquetaId;
-    const zpl = armarZPL(orden, correlativo, await obtenerPosiciones(tamano), tamano);
-    res.json({ ok: true, EtiquetaId: etiquetaId, Correlativo: correlativo, Tamano: tamano, Zpl: zpl });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

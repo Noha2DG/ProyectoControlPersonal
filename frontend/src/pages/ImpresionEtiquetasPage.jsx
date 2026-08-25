@@ -1,29 +1,21 @@
-import { useState, useEffect, useCallback, useRef, Fragment } from "react";
-import { QRCodeSVG } from "qrcode.react";
+import { useState, useEffect, useCallback, Fragment } from "react";
 import { authHeader, usePuede } from "../context/AuthContext.jsx";
 import { useColWidths, Th, Colgroup } from "../components/ResizableTh.jsx";
 import ConsultarEtiquetaModal from "../components/ConsultarEtiquetaModal.jsx";
 import AvisoModal from "../components/AvisoModal.jsx";
 import { useAviso } from "../hooks/useAviso.js";
 
+// Toda la impresión física la hace BarTender leyendo ColaEtiquetaBartender por ODBC. Esta pantalla
+// ya no habla con ninguna impresora: reserva correlativos y abre BarTender con el rango recién
+// creado. El camino anterior (ZPL armado en el backend y enviado por Zebra Browser Print desde el
+// navegador) se retiró en agosto 2026 junto con lib/zpl.ts, la tabla DisenoEtiqueta y el XML de
+// prueba para Zebra.
+
 const COL_DEFAULTS = {
-  fecha: 120, pedido: 110, cliente: 150, proceso: 140, lote: 130, declarado: 100, impresas: 100,
-  anuladas: 100, escaneadas: 100, linea: 140, acciones: 220,
+  fecha: 120, pedido: 110, cliente: 150, proceso: 140, lote: 130, declarado: 100, generadas: 100,
+  enPapel: 100, escaneadas: 100, linea: 140, acciones: 220,
 };
 const COLS = Object.keys(COL_DEFAULTS);
-
-// Único tamaño verificado contra impresión física real (ver TAMANOS_ETIQUETA en backend/src/lib/zpl.ts)
-// — sin selector en pantalla porque no hay otro rollo entre el cual elegir todavía.
-const TAMANO = "3x1";
-
-// Debe coincidir con el QR real de la etiqueta (^BQN,2,4 en backend/src/lib/zpl.ts) para que el
-// tamaño del QR en la vista previa sea el tamaño físico real, no un cuadro genérico — si se cambia
-// la magnificación allá, hay que cambiar QR_MAGNIFICACION acá. QR_MODULOS asume Versión 1 (21x21),
-// válido para cualquier correlativo real ("E" + unos pocos dígitos, siempre corto); QR_MARGEN_MODULOS
-// es la zona de silencio mínima del estándar QR (4 módulos), que Zebra agrega alrededor del símbolo.
-const QR_MAGNIFICACION = 4;
-const QR_MODULOS = 21;
-const QR_MARGEN_MODULOS = 4;
 
 const LINEA_BADGE = {
   Completo:   "bg-green-100 text-green-700",
@@ -35,352 +27,21 @@ function cuadreLinea(objetivo, escaneado) {
   if (escaneado === objetivo) return "Completo";
   return escaneado < objetivo ? "Incompleto" : "Sobrante";
 }
-const HIST_COL_DEFAULTS = { correlativo: 100, tamano: 90, estatus: 90, impresoPor: 110, fecha: 130, veces: 100, acciones: 110 };
+
+const HIST_COL_DEFAULTS = { correlativo: 110, estatus: 90, impresoPor: 110, fecha: 130, veces: 100, acciones: 110 };
 const HIST_COLS = Object.keys(HIST_COL_DEFAULTS);
 
-// Busca la impresora Zebra en Browser Print (SDK cargado global en index.html). Se vuelve a llamar
-// justo antes de cada impresión (no se reusa un device guardado de cuando se entró a la pantalla):
-// el handle USB de Browser Print puede quedar inválido si la conexión se corta un momento
-// ("Failed to write to device: Error writing to port, connection closed"), aunque la impresora
-// siga físicamente bien — hay que redetectarla en cada intento, no cachearla para toda la sesión.
-// getDefaultDevice a veces devuelve un dispositivo sin "name" ("No value for name") — se prefiere
-// getLocalDevices, que sí trae el nombre real.
-// Sin service = sin nada que leer: el SDK habla contra un servicio local de Windows en
-// http://127.0.0.1:9100 (no contra el driver directamente — ver BrowserPrint-3.1.250.min.js). Si
-// ese servicio no está corriendo, el XHR falla a nivel de red y el callback de error del SDK llega
-// con la respuesta vacía ("") — de ahí que antes el mensaje se cortara en "No se pudo listar
-// impresoras Zebra: " sin nada después. Un err vacío/ausente SIEMPRE es el servicio caído, no la
-// impresora ni el USB — se detecta ese caso puntual para decirlo explícito en vez de dejarlo en blanco.
-function mensajeErrorServicio(err, contexto) {
-  const texto = err == null ? "" : String(err).trim();
-  if (texto) return `${contexto}: ${texto}`;
-  return `${contexto}: el servicio "Zebra Browser Print" no responde en esta computadora. Ábrelo desde la bandeja del sistema (o Inicio → Zebra Browser Print) y volvé a intentar.`;
-}
-
-function detectarDispositivo() {
-  return new Promise((resolve, reject) => {
-    if (!window.BrowserPrint) { reject(new Error("El SDK de Browser Print no cargó — revisa que el servicio esté instalado y corriendo.")); return; }
-    window.BrowserPrint.getLocalDevices(
-      (lista) => {
-        const valido = (lista || []).find(d => d && d.name);
-        if (valido) { resolve(valido); return; }
-        window.BrowserPrint.getDefaultDevice(
-          "printer",
-          (dev) => {
-            if (dev && dev.name) resolve(dev);
-            else reject(new Error("Se detectó la impresora pero sin nombre válido — probá reiniciar Browser Print."));
-          },
-          (err) => reject(new Error(mensajeErrorServicio(err, "No se encontró impresora Zebra conectada")))
-        );
-      },
-      (err) => reject(new Error(mensajeErrorServicio(err, "No se pudo listar impresoras Zebra"))),
-      "printer"
-    );
-  });
-}
-
-function enviarZPL(device, zpl) {
-  return new Promise((resolve, reject) => {
-    device.send(zpl, () => resolve(), (err) => reject(new Error(String(err))));
-  });
-}
-
-// Detalle legible de los correlativos que reimprimir-bloque excluyó por estar ya escaneados en
-// bodega (su master físico ya llegó a destino, forzarlos desde una recuperación masiva no aplica).
-// Distingue "sellado en bodega física" (ya es inventario) de "solo escaneado" (aún en bodega
-// virtual) — mismo motivo por el que se distingue en la reimpresión individual.
-function formatearSaltadas(saltadas) {
-  return saltadas.map(s => `${s.Correlativo} — pallet ${s.PalletCodigo}${s.NombreArea ? ` (${s.NombreArea})` : ""}` +
-    (s.PosicionCodigo ? ` · sellado en posición ${s.PosicionCodigo}` : "")).join("\n");
-}
-
-// Se probó leer el estatus físico de la impresora por USB (~HQES y variables SGD) para adelantar
-// errores de hardware (sin papel, cabezal abierto) antes de imprimir — pero la lectura por este canal
-// resultó no confiable (respuestas vacías o cruzadas entre comandos, según pruebas jul 2026). Se
-// quitó esa verificación: los llamados que antes usaban verificarImpresora() ahora detectan el
-// dispositivo directo con detectarDispositivo() (arriba), sin intentar leer su estado físico de vuelta.
-
-// Envía los bloques ZPL en tandas (no un solo string gigante): da progreso real en pantalla y,
-// si el envío falla a medias, el error lleva .enviadas/.restantes para que quien llama ofrezca
-// reintentar exactamente lo que faltó (los correlativos ya están registrados, no se crean nuevos).
-const ETIQUETAS_POR_TANDA = 25;
-async function enviarBloques(device, bloques, onProgreso) {
-  let enviadas = 0;
-  while (enviadas < bloques.length) {
-    const tanda = bloques.slice(enviadas, enviadas + ETIQUETAS_POR_TANDA);
-    try {
-      await enviarZPL(device, tanda.map((b) => b.Zpl).join("\n"));
-    } catch (err) {
-      const fallo = new Error(err.message);
-      fallo.enviadas = enviadas;
-      fallo.restantes = bloques.slice(enviadas);
-      throw fallo;
-    }
-    enviadas += tanda.length;
-    onProgreso?.(enviadas, bloques.length);
-  }
-}
-
-// px en pantalla — límites de la maqueta (no un tamaño fijo): la escala se calcula para que la
-// etiqueta quepa dentro de este recuadro sea cual sea su proporción real, en vez de forzar siempre
-// el mismo ancho en pantalla (eso hacía que una etiqueta angosta y larga como 3x1 se viera gigante
-// y desproporcionada — necesitaba un scroll enorme para verla completa).
-const ANCHO_MAX_VISTA = 420;
-const ALTO_MAX_VISTA = 420;
-
-// Campos disponibles en la etiqueta — espejo de CAMPOS_DISENO/ETIQUETA_CAMPO_LABEL en backend/src/lib/zpl.ts.
-// Los que no son de la orden real (Color/Origen/Congelación/Área/Fecha) vienen ocultos por defecto;
-// se activan y se reposicionan desde el checklist de abajo cuando algún pedido los necesita.
-const ETIQUETA_CAMPOS = [
-  { key: "pedido", label: "Pedido", render: d => <span className="text-lg font-bold whitespace-nowrap">{d.codigoPedido}</span> },
-  { key: "clienteSubcliente", label: "Cliente-Subcliente", render: d => <span className="text-sm whitespace-nowrap">{d.cliente}{d.subcliente ? `-${d.subcliente}` : ""}</span> },
-  { key: "lote", label: "Lote", render: d => <span className="text-base font-mono font-semibold whitespace-nowrap">{d.lote}</span> },
-  { key: "procesoTallaPresentacion", label: "Proceso + Talla + Presentación", render: d => <span className="text-sm whitespace-nowrap">{d.proceso} {d.talla}  {d.presentacion}</span> },
-  { key: "color", label: "Color", render: d => <span className="text-sm whitespace-nowrap">{d.color || "-"}</span> },
-  { key: "origen", label: "Origen", render: d => <span className="text-sm whitespace-nowrap">{d.origen || "-"}</span> },
-  { key: "congelacion", label: "Congelación", render: d => <span className="text-sm whitespace-nowrap">{d.congelacion || "-"}</span> },
-  { key: "area", label: "Área", render: d => <span className="text-sm whitespace-nowrap">{d.area || "-"}</span> },
-  { key: "fechaProduccion", label: "Fecha Producción", render: d => <span className="text-sm whitespace-nowrap">{d.fechaProduccion || "-"}</span> },
-  // Tamaño real (no un cuadro genérico): mismo cálculo en dots que la etiqueta física, escalado al
-  // lienzo de la vista previa — ver QR_MAGNIFICACION/QR_MODULOS/QR_MARGEN_MODULOS arriba.
-  { key: "qr", label: "Código QR", render: (d, escala) => (
-    <QRCodeSVG value={d.correlativo} level="Q" marginSize={QR_MARGEN_MODULOS}
-      size={Math.round((QR_MODULOS + QR_MARGEN_MODULOS * 2) * QR_MAGNIFICACION * escala)} />
-  ) },
-  { key: "correlativoTexto", label: "Correlativo (texto)", render: d => <span className="text-xs text-gray-400 italic whitespace-nowrap">{d.correlativo === "(pendiente)" ? "correlativo se asigna al confirmar" : d.correlativo}</span> },
-];
-
-// Caja arrastrable de un campo de la etiqueta — componente propio (no se puede definir dentro de
-// VistaPreviaModal: React recrearía el tipo de componente en cada render y perdería el estado).
-function CampoArrastrable({ nombre, posiciones, escala, editando, onIniciarArrastre, children }) {
-  return (
-    <div onMouseDown={onIniciarArrastre(nombre)}
-      className={`absolute ${editando ? "cursor-move ring-1 ring-dashed ring-blue-400" : ""}`}
-      style={{ left: posiciones[nombre].X * escala, top: posiciones[nombre].Y * escala }}>
-      {children}
-    </div>
-  );
-}
-
-// Maqueta HTML de la etiqueta — no es render exacto del ZPL, es para que el operador confirme los
-// DATOS (cliente/lote/talla correctos) antes de gastar una etiqueta física, y para reposicionar los
-// campos arrastrándolos cuando el diseño real no coincide (guarda las posiciones en DisenoEtiqueta,
-// que es lo que también usa el backend al armar el ZPL real).
-function VistaPreviaModal({ preview, onConfirmar, onCancelar, confirmando, progreso, onGuardarDiseno, onImprimirPrueba, puedeImprimir }) {
-  const { AnchoPuntos, AltoPuntos, Datos: d } = preview;
-  const pendientes = preview.orden ? preview.orden.CantidadMaster - preview.orden.Impresas : 0;
-  const [editando, setEditando] = useState(false);
-  const [posiciones, setPosiciones] = useState(preview.Posiciones);
-  const [guardando, setGuardando] = useState(false);
-  const [imprimiendoPrueba, setImprimiendoPrueba] = useState(false);
-  const arrastre = useRef(null);
-
-  useEffect(() => { setPosiciones(preview.Posiciones); }, [preview.Posiciones]);
-
-  const escala = Math.min(ANCHO_MAX_VISTA / AnchoPuntos, ALTO_MAX_VISTA / AltoPuntos);
-  const anchoVista = AnchoPuntos * escala;
-  const altoVista = AltoPuntos * escala;
-
-  const iniciarArrastre = (campo) => (e) => {
-    if (!editando) return;
-    const contenedor = e.currentTarget.parentElement.getBoundingClientRect();
-    arrastre.current = {
-      campo,
-      offsetX: e.clientX - contenedor.left - posiciones[campo].X * escala,
-      offsetY: e.clientY - contenedor.top - posiciones[campo].Y * escala,
-    };
-  };
-  const moverArrastre = (e) => {
-    if (!arrastre.current) return;
-    const contenedor = e.currentTarget.getBoundingClientRect();
-    const x = Math.max(0, Math.round((e.clientX - contenedor.left - arrastre.current.offsetX) / escala));
-    const y = Math.max(0, Math.round((e.clientY - contenedor.top - arrastre.current.offsetY) / escala));
-    setPosiciones(p => ({ ...p, [arrastre.current.campo]: { ...p[arrastre.current.campo], X: x, Y: y } }));
-  };
-  const soltarArrastre = () => { arrastre.current = null; };
-
-  const guardarDiseno = async () => {
-    setGuardando(true);
-    try { await onGuardarDiseno(posiciones); setEditando(false); }
-    finally { setGuardando(false); }
-  };
-  const cancelarEdicion = () => { setPosiciones(preview.Posiciones); setEditando(false); };
-  const toggleVisible = (campo) => {
-    setPosiciones(p => ({ ...p, [campo]: { ...p[campo], Visible: !p[campo].Visible } }));
-  };
-  const imprimirPrueba = async () => {
-    setImprimiendoPrueba(true);
-    try { await onImprimirPrueba(posiciones); }
-    finally { setImprimiendoPrueba(false); }
-  };
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
-      onClick={(e) => { if (e.target === e.currentTarget) onCancelar(); }}>
-      <div className={`bg-white rounded-2xl shadow-xl w-full flex flex-col max-h-full transition-all ${editando ? "max-w-3xl" : "max-w-lg"}`}>
-        <div className="px-6 py-4 border-b flex items-center justify-between shrink-0">
-          <div>
-            <h2 className="text-base font-semibold text-gray-800">{preview.esPrueba ? "Etiqueta de prueba" : "Vista previa de la etiqueta"}</h2>
-            <p className="text-xs text-gray-400 mt-0.5">
-              {preview.esPrueba
-                ? "Datos de ejemplo — no se registra en el sistema ni consume cupo. Imprime cuantas veces necesites para calibrar."
-                : `Tamaño: ${preview.Tamano} — verifica que coincida con el rollo cargado en la impresora`}
-            </p>
-          </div>
-          <button onClick={onCancelar} className="text-gray-400 hover:text-gray-600 text-xl leading-none">&times;</button>
-        </div>
-        <div className="px-6 py-5 flex flex-col md:flex-row gap-6 overflow-y-auto">
-          <div className="mx-auto md:mx-0 shrink-0">
-            <div className="relative border-2 border-gray-800 rounded-sm bg-white select-none"
-              style={{ width: anchoVista, height: altoVista }}
-              onMouseMove={moverArrastre} onMouseUp={soltarArrastre} onMouseLeave={soltarArrastre}>
-              {ETIQUETA_CAMPOS.filter(c => posiciones[c.key].Visible).map(c => (
-                <CampoArrastrable key={c.key} nombre={c.key} posiciones={posiciones} escala={escala} editando={editando} onIniciarArrastre={iniciarArrastre}>
-                  {c.render(d, escala)}
-                </CampoArrastrable>
-              ))}
-            </div>
-            <p className="text-xs text-gray-400 mt-3 text-center" style={{ width: Math.max(anchoVista, 220) }}>
-              {editando
-                ? "Arrastra cada campo para reposicionarlo."
-                : preview.esPrueba
-                  ? "Esto es una maqueta de los datos, no el diseño exacto que imprime la Zebra — usa \"Imprimir prueba\" para verlo en físico."
-                  : `Esto es una maqueta de los datos, no el diseño exacto que imprime la Zebra. Al confirmar se imprimirán las ${pendientes} etiqueta${pendientes !== 1 ? "s" : ""} pendientes de esta captura.`}
-            </p>
-          </div>
-          {editando && (
-            <div className="flex-1 min-w-0 border-t md:border-t-0 md:border-l border-gray-200 pt-4 md:pt-0 md:pl-6">
-              <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Campos de la etiqueta</h3>
-              <div className="space-y-1.5 max-h-64 overflow-y-auto">
-                {ETIQUETA_CAMPOS.map(c => (
-                  <label key={c.key} className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer hover:bg-gray-50 rounded px-1.5 py-1">
-                    <input type="checkbox" checked={posiciones[c.key].Visible} onChange={() => toggleVisible(c.key)}
-                      className="rounded border-gray-300" />
-                    {c.label}
-                  </label>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-        <div className="px-6 py-4 border-t flex justify-between items-center gap-3 shrink-0">
-          {editando ? (
-            <>
-              <button onClick={cancelarEdicion} className="px-4 py-2 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 transition">
-                Cancelar edición
-              </button>
-              <div className="flex gap-3">
-                <button onClick={guardarDiseno} disabled={guardando}
-                  className="px-5 py-2 text-sm bg-gray-800 text-white font-semibold rounded-lg hover:bg-gray-900 transition disabled:opacity-50">
-                  {guardando ? "Guardando..." : "Guardar diseño"}
-                </button>
-                {preview.esPrueba && (
-                  <button onClick={imprimirPrueba} disabled={imprimiendoPrueba}
-                    className="px-5 py-2 text-sm bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 transition disabled:opacity-50">
-                    {imprimiendoPrueba ? "Imprimiendo..." : "Imprimir prueba"}
-                  </button>
-                )}
-              </div>
-            </>
-          ) : (
-            <>
-              {puedeImprimir ? (
-                <button onClick={() => setEditando(true)} className="px-4 py-2 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 transition">
-                  Editar diseño
-                </button>
-              ) : <span />}
-              <div className="flex gap-3">
-                <button onClick={onCancelar} className="px-4 py-2 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 transition">
-                  {preview.esPrueba ? "Cerrar" : "Cancelar"}
-                </button>
-                {puedeImprimir && (preview.esPrueba ? (
-                  <button onClick={imprimirPrueba} disabled={imprimiendoPrueba}
-                    className="px-5 py-2 text-sm bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 transition disabled:opacity-50">
-                    {imprimiendoPrueba ? "Imprimiendo..." : "Imprimir prueba"}
-                  </button>
-                ) : (
-                  <button onClick={onConfirmar} disabled={confirmando}
-                    className="px-5 py-2 text-sm bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 transition disabled:opacity-50">
-                    {confirmando
-                      ? (progreso ? `Imprimiendo ${progreso.hechas}/${progreso.total}...` : `Imprimiendo ${pendientes}...`)
-                      : `Confirmar e imprimir (${pendientes})`}
-                  </button>
-                ))}
-              </div>
-            </>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// Aparece cuando una tanda falló a medias camino a la impresora: las etiquetas YA quedaron
-// registradas (el cupo se consumió), solo faltó el envío físico de una parte. Ofrece reintentar
-// exactamente los correlativos que faltaron, sin crear nuevos. Si se cierra, ese mismo rango se
-// recupera después con "Reimprimir rango" en el historial de la captura.
-function RecuperacionEnvioModal({ fallo, progreso, reintentando, onReintentar, onCerrar }) {
-  const primera = fallo.bloques[0].Correlativo;
-  const ultima = fallo.bloques[fallo.bloques.length - 1].Correlativo;
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="bg-white rounded-2xl shadow-xl w-full max-w-md">
-        <div className="px-6 py-4 border-b">
-          <h2 className="text-base font-semibold text-red-700">La impresión se interrumpió</h2>
-        </div>
-        <div className="px-6 py-4 text-sm text-gray-700 space-y-2">
-          <p>Se enviaron <b>{fallo.enviadas}</b> de <b>{fallo.total}</b> etiquetas a la impresora antes del error: <span className="text-red-600">{fallo.mensaje}</span></p>
-          <p>
-            Las <b>{fallo.bloques.length}</b> restantes (<span className="font-mono">{primera}</span> a <span className="font-mono">{ultima}</span>) ya
-            están registradas en el sistema — al reintentar NO se crean correlativos nuevos, solo se vuelve a enviar lo que faltó.
-          </p>
-          <p className="text-xs text-gray-400">
-            Revisa la impresora (rollo, atasco, Browser Print) antes de reintentar. Si cierras esta ventana, puedes recuperar el
-            mismo rango después con "Reimprimir rango" en el historial de la captura.
-          </p>
-        </div>
-        <div className="px-6 py-4 border-t flex justify-end gap-3">
-          <button onClick={onCerrar} disabled={reintentando}
-            className="px-4 py-2 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 transition disabled:opacity-50">
-            Cerrar
-          </button>
-          <button onClick={onReintentar} disabled={reintentando}
-            className="px-5 py-2 text-sm bg-red-600 text-white font-semibold rounded-lg hover:bg-red-700 transition disabled:opacity-50">
-            {reintentando
-              ? (progreso ? `Enviando ${progreso.hechas}/${progreso.total}...` : "Enviando...")
-              : `Reintentar envío (${fallo.bloques.length})`}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// Reimpresión en bloque por rango de correlativos — la vía de recuperación cuando una tanda
-// falló y ya no está abierta la ventana de reintento (o el problema se descubrió después, ej.
-// etiquetas ilegibles por cabezal sucio). Exige motivo, igual que la reimpresión individual.
-function ReimprimirRangoForm({ enCurso, progreso, onEjecutar }) {
-  const [desde, setDesde] = useState("");
-  const [hasta, setHasta] = useState("");
-  const [motivo, setMotivo] = useState("");
-  const listo = desde.trim() && hasta.trim() && motivo.trim();
-  return (
-    <div className="mt-3 pt-3 border-t border-gray-200 flex flex-wrap items-center gap-2">
-      <span className="text-xs text-gray-500">Reimprimir rango (recuperar tanda fallida):</span>
-      <input type="text" value={desde} onChange={e => setDesde(e.target.value)} placeholder="Desde (ej. E120)"
-        className="border border-gray-300 rounded-lg px-2 py-1 text-xs font-mono w-28 focus:outline-none focus:ring-2 focus:ring-orange-400" />
-      <input type="text" value={hasta} onChange={e => setHasta(e.target.value)} placeholder="Hasta (ej. E180)"
-        className="border border-gray-300 rounded-lg px-2 py-1 text-xs font-mono w-28 focus:outline-none focus:ring-2 focus:ring-orange-400" />
-      <input type="text" value={motivo} onChange={e => setMotivo(e.target.value)} placeholder="Motivo (ej. atasco a mitad de tanda)"
-        className="border border-gray-300 rounded-lg px-2 py-1 text-xs w-64 focus:outline-none focus:ring-2 focus:ring-orange-400" />
-      <button disabled={!listo || enCurso} onClick={() => onEjecutar(desde.trim(), hasta.trim(), motivo.trim())}
-        className="px-3 py-1.5 text-xs bg-orange-600 text-white font-semibold rounded-lg hover:bg-orange-700 transition disabled:opacity-50">
-        {enCurso
-          ? (progreso ? `Enviando ${progreso.hechas}/${progreso.total}...` : "Enviando...")
-          : "Reimprimir rango"}
-      </button>
-    </div>
-  );
+// Navega al protocolo oroetiqueta://, que un manejador registrado en Windows traduce al comando de
+// BarTender (ver herramientas/bartender/). Se usa un <a> con clic sintético y no
+// window.location.href: Chromium trata mejor el clic sobre un enlace para protocolos externos, y no
+// deja una navegación fallida en el historial si el protocolo no está instalado en esta PC.
+function lanzarProtocolo(url) {
+  const enlace = document.createElement("a");
+  enlace.href = url;
+  enlace.style.display = "none";
+  document.body.appendChild(enlace);
+  enlace.click();
+  enlace.remove();
 }
 
 // Lista de etiquetas impresas hace más de 24h sin master correspondiente en bodega — la señal más
@@ -439,21 +100,17 @@ export default function ImpresionEtiquetasPage() {
   const [ordenes, setOrdenes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [busqueda, setBusqueda] = useState("");
-  const [device, setDevice] = useState(null);
-  const [deviceError, setDeviceError] = useState("");
   const [expandidoId, setExpandidoId] = useState(null);
   const [etiquetas, setEtiquetas] = useState([]);
   const [mostrarConsulta, setMostrarConsulta] = useState(false);
   const [atascadas, setAtascadas] = useState([]);
   const [mostrarAtascadas, setMostrarAtascadas] = useState(false);
   const [ordenEnCurso, setOrdenEnCurso] = useState(null);
-  const [preview, setPreview] = useState(null); // { orden, Tamano, AnchoPuntos, AltoPuntos, Datos }
-  const [cargandoPreview, setCargandoPreview] = useState(false);
-  const [fecha, setFecha] = useState("");
-  const [progreso, setProgreso] = useState(null); // { hechas, total } durante un envío por tandas
-  const [falloEnvio, setFalloEnvio] = useState(null); // { bloques, enviadas, total, mensaje, ordenId } si un envío quedó a medias
-  const [reintentando, setReintentando] = useState(false);
-  const [rangoEnCurso, setRangoEnCurso] = useState(null); // OrdenId con reimpresión de rango en marcha
+  // Arranca en hoy: lo normal es etiquetar lo que se produjo el mismo día, y sin filtro la tabla
+  // trae hasta 500 capturas históricas. La zona horaria va explícita —igual que en el resto del
+  // proyecto— porque toISOString() daría UTC y en Guatemala (UTC-6) eso cambia de día a las 18:00.
+  const [fecha, setFecha] = useState(() =>
+    new Date().toLocaleDateString("sv-SE", { timeZone: "America/Guatemala" }));
   const [widths, startResize] = useColWidths("etiquetas_ordenes", COL_DEFAULTS);
   const [widthsHist, startResizeHist] = useColWidths("etiquetas_historial", HIST_COL_DEFAULTS);
 
@@ -479,30 +136,6 @@ export default function ImpresionEtiquetasPage() {
   }, []);
   useEffect(() => { fetchAtascadas(); }, [fetchAtascadas]);
 
-  // Solo para el indicador de estatus en pantalla — antes de cada impresión se vuelve a detectar
-  // (ver detectarDispositivo), esto de aquí no se reusa para imprimir.
-  // Antes se detectaba una sola vez al montar: si Browser Print o el USB no estaban listos en ese
-  // instante exacto (servicio Zebra recién arrancando, cable conectado un segundo tarde), el aviso
-  // rojo quedaba pegado para siempre hasta recargar la página entera. Ahora se reintenta solo cada
-  // pocos segundos mientras no haya impresora detectada, y hay un botón para forzarlo al toque.
-  const intentarDetectar = useCallback(async () => {
-    try {
-      const dev = await detectarDispositivo();
-      setDevice(dev);
-      setDeviceError("");
-    } catch (err) {
-      setDevice(null);
-      setDeviceError(err.message);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (device) return; // ya detectada — nada que reintentar
-    intentarDetectar();
-    const id = setInterval(intentarDetectar, 4000);
-    return () => clearInterval(id);
-  }, [intentarDetectar, device]);
-
   const cargarEtiquetas = useCallback(async (ordenId) => {
     const res = await fetch(`/api/etiqueta-impresa?orden=${ordenId}`, { headers: authHeader() });
     const data = await res.json();
@@ -515,286 +148,164 @@ export default function ImpresionEtiquetasPage() {
     cargarEtiquetas(orden.OrdenId);
   };
 
-  const abrirVistaPrevia = async (orden) => {
+  // Marca en la cola lo que el operador dice haber visto salir. Compartido por los dos caminos que
+  // llevan a lo mismo: el aviso que sale justo después de imprimir y el botón ámbar de la tabla.
+  const marcarImpresas = async (ordenId, desde = null, hasta = null) => {
+    try {
+      const res = await fetch(`/api/etiqueta-impresa/orden/${ordenId}/confirmar-impresion`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeader() },
+        body: JSON.stringify(desde != null && hasta != null ? { Desde: desde, Hasta: hasta } : {}),
+      });
+      const data = await res.json();
+      if (!res.ok) { await mostrarAlerta("Error: " + data.error); return false; }
+      return true;
+    } catch (err) {
+      await mostrarAlerta("No se pudo confirmar: " + err.message);
+      return false;
+    } finally {
+      fetchOrdenes(fecha);
+    }
+  };
+
+  // Pide al backend la plantilla y el rango, confirma con el operador y lanza el protocolo.
+  // desde/hasta son EtiquetaId numéricos; si van en null, el backend abre todo lo activo de la orden.
+  const abrirBartender = async (ordenId, desde = null, hasta = null) => {
+    const params = desde != null && hasta != null ? `?desde=${desde}&hasta=${hasta}` : "";
+    const res = await fetch(`/api/etiqueta-impresa/orden/${ordenId}/bartender${params}`, { headers: authHeader() });
+    const data = await res.json();
+    if (!res.ok) { await mostrarAlerta(data.error); return false; }
+
+    const nombre = data.RutaBtw.split(/[\\/]/).pop();
+    const confirmado = await pedirConfirmacion(
+      `Se abrirá BarTender con:\n\n` +
+      `Diseño: ${nombre}\n` +
+      `Cliente: ${data.Subcliente || data.Cliente}\n` +
+      `Correlativos: ${data.Correlativos} (${data.Etiquetas} etiqueta(s))\n` +
+      (data.Pendientes < data.Etiquetas
+        ? `Ya impresas en BarTender: ${data.Etiquetas - data.Pendientes} · pendientes: ${data.Pendientes}\n`
+        : `Ninguna se ha impreso todavía en BarTender.\n`) + `\n` +
+      `Si no ocurre nada, esta PC no tiene instalado el enlace con BarTender ` +
+      `(ver herramientas/bartender/instalarProtocolo.ps1).`,
+      { textoConfirmar: "Abrir BarTender" }
+    );
+    if (!confirmado) return false;
+
+    // Deja reservada la tanda ANTES de lanzar. La plantilla de BarTender ya no filtra por rango:
+    // lee lo que quedó marcado como "imprimir ahora" (SolicitadoEn), así que su consulta es una
+    // línea fija y no hace falta configurar solicitudes de consulta en cada diseño.
+    //
+    // Si la reserva falla no se abre BarTender: es preferible un error a la vista que una plantilla
+    // que salga con la tanda anterior — el operador no tendría cómo notar la diferencia.
+    const resReserva = await fetch(`/api/etiqueta-impresa/orden/${ordenId}/reservar`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeader() },
+      body: JSON.stringify({ Desde: data.Desde, Hasta: data.Hasta }),
+    });
+    const reserva = await resReserva.json();
+    if (!resReserva.ok) { await mostrarAlerta("No se pudo preparar la tanda: " + reserva.error); return false; }
+    if (!reserva.Reservadas) {
+      await mostrarAlerta(
+        "No quedó ninguna etiqueta por imprimir en ese rango — ya están todas confirmadas. " +
+        "Si necesitas volver a sacarlas, usa la reimpresión.", "advertencia");
+      return false;
+    }
+
+    lanzarProtocolo(data.Url);
+
+    // El aviso sale AQUÍ, no como un botón que haya que ir a buscar después: este es el momento en
+    // que el operador tiene la impresora enfrente. Es el mismo flujo del sistema anterior, que
+    // confirmaba por mensaje al terminar de imprimir.
+    //
+    // Se pregunta por el rango exacto que se acaba de abrir (data.Desde/data.Hasta), no por toda la
+    // captura: si alguien abre dos tandas seguidas, cada aviso confirma la suya.
+    //
+    // Si algún día BarTender avisa solo — la acción del evento "Trabajo de impresión enviado" —
+    // esto queda redundante pero inofensivo: la captura ya llega confirmada y no hay nada que marcar.
+    const salieron = await pedirConfirmacion(
+      `BarTender se abrió con ${data.Correlativos}.
+
+` +
+      `Cuando termine de imprimir, confirma aquí.
+
+` +
+      `Responde "Sí, salieron" SOLO si viste las etiquetas salir de la impresora. Si algo falló ` +
+      `—atasco, impresora apagada, cerraste el diálogo sin imprimir— responde "Todavía no" y ` +
+      `quedan pendientes para volver a intentarlo.`,
+      { textoConfirmar: "Sí, salieron", textoCancelar: "Todavía no" }
+    );
+    if (salieron) await marcarImpresas(ordenId, data.Desde, data.Hasta);
+    return true;
+  };
+
+  // Reserva los correlativos pendientes de la captura y abre BarTender con ese rango recién creado.
+  // El registro va primero a propósito: los correlativos deben existir en la cola antes de que
+  // BarTender los consulte por ODBC.
+  const imprimirPendientes = async (orden) => {
     // Aviso (no bloqueo) si la línea de pedido ya alcanzó su objetivo según lo confirmado en bodega
-    // — mismo principio que la reimpresión de un master ya escaneado: detectar el problema en la
-    // etapa anterior, no recién cuando alguien intente escanear el sobrante. La línea puede tener
-    // una razón legítima para seguir (reemplazo de producto rechazado), por eso solo advierte.
+    // — la línea puede tener una razón legítima para seguir (reemplazo de producto rechazado).
     if (orden.ObjetivoLinea != null && orden.EscaneadoLinea >= orden.ObjetivoLinea) {
       const seguir = await pedirConfirmacion(
         `La línea de este pedido (${orden.CodigoPedido} · ${orden.DescripcionProceso} · ${orden.DescripcionTalla}) ya tiene ` +
         `${orden.EscaneadoLinea}/${orden.ObjetivoLinea} masters escaneados en bodega — ya alcanzó su objetivo.\n\n` +
-        `¿Continuar de todas formas imprimiendo más etiquetas de esta captura?`,
+        `¿Continuar de todas formas generando más etiquetas de esta captura?`,
         { textoConfirmar: "Continuar de todas formas" }
       );
       if (!seguir) return;
     }
-    setCargandoPreview(true);
-    try {
-      const res = await fetch(`/api/etiqueta-impresa/vista-previa/${orden.OrdenId}?tamano=${TAMANO}`, { headers: authHeader() });
-      const data = await res.json();
-      if (!res.ok) { await mostrarAlerta("Error: " + data.error); return; }
-      setPreview({ orden, ...data });
-    } finally { setCargandoPreview(false); }
-  };
 
-  // Abre el mismo editor de diseño pero con datos de ejemplo (sin "orden") — para calibrar el
-  // diseño en cualquier momento, no solo cuando hay una captura con etiquetas pendientes.
-  const abrirPrueba = async () => {
-    setCargandoPreview(true);
-    try {
-      const res = await fetch(`/api/etiqueta-impresa/prueba?tamano=${TAMANO}`, { headers: authHeader() });
-      const data = await res.json();
-      if (!res.ok) { await mostrarAlerta("Error: " + data.error); return; }
-      setPreview({ orden: null, esPrueba: true, ...data });
-    } finally { setCargandoPreview(false); }
-  };
-
-  // Llamado desde dentro del modal con las posiciones QUE ESTÉ VIENDO en ese momento (guardadas o
-  // recién arrastradas sin guardar todavía) — así se puede probar en la impresora física antes de
-  // comprometerse a "Guardar diseño". No pasa por /api/etiqueta-impresa: no crea EtiquetaImpresa, no
-  // consume cupo ni correlativos.
-  const imprimirPrueba = async (posiciones) => {
-    try {
-      const dispositivo = await detectarDispositivo();
-      setDevice(dispositivo); setDeviceError("");
-      const res = await fetch("/api/etiqueta-impresa/prueba-zpl", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...authHeader() },
-        body: JSON.stringify({ Tamano: preview.Tamano, Posiciones: posiciones }),
-      });
-      const data = await res.json();
-      if (!res.ok) { await mostrarAlerta("Error: " + data.error); return; }
-      await enviarZPL(dispositivo, data.Zpl);
-    } catch (err) {
-      await mostrarAlerta("No se pudo imprimir la prueba: " + err.message);
-    }
-  };
-
-  const confirmarImpresion = async () => {
-    const orden = preview.orden;
     setOrdenEnCurso(orden.OrdenId);
-    setProgreso(null);
     try {
-      // 1. Impresora verificada ANTES de registrar nada: si Browser Print está caído o la
-      // impresora reporta un problema (sin rollo, cabezal abierto), se aborta aquí sin haber
-      // consumido cupo ni creado correlativos huérfanos en la base de datos.
-      let dispositivo;
-      try {
-        dispositivo = await detectarDispositivo();
-        setDevice(dispositivo); setDeviceError("");
-      } catch (err) {
-        await mostrarAlerta("Impresora no lista — no se registró ninguna etiqueta.\n" + err.message);
-        return;
-      }
-      // 2. Registrar la tanda completa (correlativos + cupo, transacción con candado en backend).
-      // ConfirmarLineaCompleta siempre va en true aquí: si la línea ya estaba completa, el usuario
-      // ya lo confirmó explícitamente en abrirVistaPrevia antes de poder llegar hasta acá (si hubiera
-      // cancelado, "preview" nunca se habría llegado a abrir). El backend igual vuelve a validar esto
-      // por su cuenta — ese respaldo protege contra una llamada directa a la API, no contra este flujo.
       const res = await fetch("/api/etiqueta-impresa", {
         method: "POST",
         headers: { "Content-Type": "application/json", ...authHeader() },
-        body: JSON.stringify({ OrdenId: orden.OrdenId, Tamano: preview.Tamano, ConfirmarLineaCompleta: true }),
+        body: JSON.stringify({ OrdenId: orden.OrdenId, ConfirmarLineaCompleta: true }),
       });
       const data = await res.json();
-      if (res.status === 409 && data.LineaCompleta) {
-        await mostrarAlerta(data.error, "advertencia");
-        return;
-      }
+      if (res.status === 409 && data.LineaCompleta) { await mostrarAlerta(data.error, "advertencia"); return; }
       if (!res.ok) { await mostrarAlerta("Error: " + data.error); return; }
-      // 3. Enviar a la impresora en tandas con progreso; si falla a medias, abrir la ventana de
-      // recuperación con exactamente los correlativos que faltaron.
-      try {
-        await enviarBloques(dispositivo, data.Bloques, (hechas, total) => setProgreso({ hechas, total }));
-      } catch (err) {
-        setPreview(null);
-        setFalloEnvio({
-          bloques: err.restantes, enviadas: err.enviadas, total: data.Bloques.length,
-          mensaje: err.message, ordenId: orden.OrdenId,
-        });
-        return;
-      }
-      setPreview(null);
-      await mostrarAlerta(`Se imprimieron las ${data.Cantidad} etiquetas (${data.Bloques[0].Correlativo} a ${data.Bloques[data.Bloques.length - 1].Correlativo}).`, "exito");
+
+      // Los correlativos vienen como "E123": el rango que espera BarTender es el número.
+      const ids = data.Correlativos.map(c => Number(String(c).replace(/^E/, "")));
+      await abrirBartender(orden.OrdenId, Math.min(...ids), Math.max(...ids));
     } catch (err) {
-      await mostrarAlerta("No se pudo imprimir: " + err.message);
+      await mostrarAlerta("No se pudo generar la tanda: " + err.message);
     } finally {
       setOrdenEnCurso(null);
-      setProgreso(null);
       fetchOrdenes(fecha);
       if (expandidoId === orden.OrdenId) cargarEtiquetas(orden.OrdenId);
     }
   };
 
-  // Reintento desde la ventana de recuperación: reenvía SOLO los bloques que faltaron (ya
-  // registrados). Si vuelve a fallar, la ventana se actualiza con lo que siga pendiente.
-  const reintentarEnvio = async () => {
-    setReintentando(true);
-    setProgreso(null);
+  // Confirmación humana de que la tanda salió en papel. Es la salida cuando BarTender no avisa
+  // solo; el texto pide ver el papel antes de confirmar, no dar por hecho que salió.
+  const confirmarImpresion = async (orden) => {
+    const faltan = orden.CantidadMaster - (orden.EnPapel ?? 0);
+    const ok = await pedirConfirmacion(
+      `Vas a marcar ${faltan} etiqueta(s) de esta captura como impresas en papel.
+
+` +
+      `${orden.CodigoPedido} · ${orden.DescripcionProceso} · ${orden.DescripcionTalla}
+` +
+      `Lote ${orden.Lote}
+
+` +
+      `Hazlo SOLO si ya viste salir las etiquetas de la impresora. Quedará registrado que lo ` +
+      `confirmaste tú, y una vez marcadas dejan de aparecer como pendientes en BarTender.`,
+      { textoConfirmar: "Sí, ya salieron en papel" }
+    );
+    if (!ok) return;
+    setOrdenEnCurso(orden.OrdenId);
     try {
-      let dispositivo;
-      try {
-        dispositivo = await detectarDispositivo();
-        setDevice(dispositivo); setDeviceError("");
-      } catch (err) {
-        await mostrarAlerta("Impresora no lista: " + err.message);
-        return;
-      }
-      try {
-        await enviarBloques(dispositivo, falloEnvio.bloques, (hechas, total) => setProgreso({ hechas, total }));
-        const ordenId = falloEnvio.ordenId;
-        setFalloEnvio(null);
-        if (expandidoId === ordenId) cargarEtiquetas(ordenId);
-      } catch (err) {
-        setFalloEnvio(f => ({
-          ...f, enviadas: f.enviadas + err.enviadas, bloques: err.restantes, mensaje: err.message,
-        }));
-      }
+      await marcarImpresas(orden.OrdenId);
     } finally {
-      setReintentando(false);
-      setProgreso(null);
-    }
-  };
-
-  // Reimpresión en bloque por rango de correlativos (recuperación tardía de una tanda fallida).
-  const reimprimirRango = async (orden, desde, hasta, motivo) => {
-    setRangoEnCurso(orden.OrdenId);
-    setProgreso(null);
-    try {
-      // Chequeo liviano ANTES de tocar la impresora: si TODO el rango ya está escaneado no hay nada
-      // que imprimir, y no tiene sentido gastar la verificación de Browser Print para eso — mismo
-      // criterio que la reimpresión individual (ver handleReimprimir).
-      const chk = await fetch(`/api/etiqueta-impresa/rango-estado?ordenId=${orden.OrdenId}&desde=${desde}&hasta=${hasta}`, { headers: authHeader() });
-      const chkData = await chk.json();
-      if (!chk.ok) { await mostrarAlerta("Error: " + chkData.error); return; }
-      if (!chkData.ParaReimprimir.length) {
-        await mostrarAlerta(
-          "Todas las etiquetas de este rango ya fueron escaneadas en bodega — no hay nada que reimprimir.\n\n" +
-          formatearSaltadas(chkData.Saltadas),
-          "advertencia"
-        );
-        return;
-      }
-
-      let dispositivo;
-      try {
-        dispositivo = await detectarDispositivo();
-        setDevice(dispositivo); setDeviceError("");
-      } catch (err) {
-        await mostrarAlerta("Impresora no lista: " + err.message);
-        return;
-      }
-      const res = await fetch("/api/etiqueta-impresa/reimprimir-bloque", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...authHeader() },
-        body: JSON.stringify({ OrdenId: orden.OrdenId, Desde: desde, Hasta: hasta, Motivo: motivo }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        await mostrarAlerta("Error: " + data.error + (data.Saltadas?.length ? "\n\n" + formatearSaltadas(data.Saltadas) : ""));
-        return;
-      }
-      try {
-        await enviarBloques(dispositivo, data.Bloques, (hechas, total) => setProgreso({ hechas, total }));
-      } catch (err) {
-        setFalloEnvio({
-          bloques: err.restantes, enviadas: err.enviadas, total: data.Bloques.length,
-          mensaje: err.message, ordenId: orden.OrdenId,
-        });
-        return;
-      }
-      cargarEtiquetas(orden.OrdenId);
-      await mostrarAlerta(
-        `Se reimprimieron ${data.Cantidad} etiquetas (${data.Desde} a ${data.Hasta}).` +
-        (data.Saltadas?.length
-          ? `\n\n${data.Saltadas.length} NO se reimprimieron por estar ya escaneadas en bodega:\n${formatearSaltadas(data.Saltadas)}`
-          : ""),
-        "exito"
-      );
-    } catch (err) {
-      await mostrarAlerta("No se pudo reimprimir el rango: " + err.message);
-    } finally {
-      setRangoEnCurso(null);
-      setProgreso(null);
-    }
-  };
-
-  const guardarDisenoEtiqueta = async (posiciones) => {
-    const res = await fetch(`/api/diseno-etiqueta?tamano=${preview.Tamano}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json", ...authHeader() },
-      body: JSON.stringify(posiciones),
-    });
-    const data = await res.json();
-    if (!res.ok) { await mostrarAlerta("Error: " + data.error); return; }
-    setPreview(p => (p ? { ...p, Posiciones: posiciones } : p));
-  };
-
-  const handleReimprimir = async (etiqueta) => {
-    const motivo = prompt("Motivo de la reimpresión (ej. etiqueta dañada al pegar):");
-    if (!motivo || !motivo.trim()) return;
-    try {
-      // Chequeo liviano ANTES de tocar la impresora: si el master ya está escaneado en bodega, no
-      // tiene sentido gastar la verificación de Browser Print para algo que de todas formas se va a
-      // advertir — y así un problema real de impresora no tapa esta advertencia (lo que pasaba antes,
-      // cuando detectarDispositivo() corría primero y cualquier error suyo abortaba todo el flujo).
-      let forzar = false;
-      const chk = await fetch(`/api/etiqueta-impresa/${etiqueta.EtiquetaId}/consultar`, { headers: authHeader() });
-      const chkData = await chk.json();
-      if (chk.ok && chkData.YaEscaneado) {
-        const m = chkData.Master;
-        // Sellado en bodega física: bloqueo TOTAL, sin botón de "forzar" — el backend lo va a
-        // rechazar igual aunque se insista (ver POST /:id/reimprimir), así que ni se ofrece la
-        // opción. Antes esto caía al mismo diálogo de "ya escaneado" con botón de forzar, que
-        // terminaba en otro error si lo presionaban — confuso y engañoso.
-        if (m.PosicionCodigo) {
-          await mostrarAlerta(
-            `Este master está en el pallet ${m.PalletCodigo}, ya posicionado en bodega física (${m.PosicionCodigo}) — ` +
-            `su contenido está sellado y no se puede reimprimir. La única corrección es des-ubicar el pallet desde Bodega Física.`
-          );
-          return;
-        }
-        const detalle = `Pallet ${m.PalletCodigo}${m.NombreArea ? " (" + m.NombreArea + ")" : ""}\n` +
-          `Escaneado: ${new Date(m.FechaIngreso).toLocaleString("es-GT")}${m.IngresadoPor ? " por " + m.IngresadoPor : ""}`;
-        const confirmar = await pedirConfirmacion(
-          `Este master YA fue escaneado en bodega:\n\n${detalle}\n\n` +
-          `Reimprimir puede generar una etiqueta física duplicada circulando. ¿Reimprimir de todas formas?`,
-          { textoConfirmar: "Reimprimir de todas formas" }
-        );
-        if (!confirmar) return;
-        forzar = true;
-      }
-
-      // Impresora verificada antes de registrar el evento en el log — mismo criterio que la
-      // impresión en bloque: no dejar rastro en BD de algo que físicamente no va a salir.
-      const dispositivo = await detectarDispositivo();
-      setDevice(dispositivo); setDeviceError("");
-
-      const res = await fetch(`/api/etiqueta-impresa/${etiqueta.EtiquetaId}/reimprimir`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...authHeader() },
-        body: JSON.stringify({ Motivo: motivo.trim(), Forzar: forzar }),
-      });
-      const data = await res.json();
-      // Defensa ante la ventana rara entre el chequeo y este envío (ej. alguien lo escaneó justo en
-      // el medio) — el backend vuelve a validar todo desde cero antes de escribir nada.
-      if (res.status === 409 && data.YaEscaneado) {
-        await mostrarAlerta("Este master se acaba de escanear en bodega justo ahora — vuelve a intentar la reimpresión.");
-        return;
-      }
-      if (!res.ok) { await mostrarAlerta("Error: " + data.error); return; }
-      await enviarZPL(dispositivo, data.Zpl);
-      cargarEtiquetas(etiqueta.OrdenId);
-    } catch (err) {
-      await mostrarAlerta("No se pudo reimprimir: " + err.message);
+      setOrdenEnCurso(null);
     }
   };
 
   // Anular saca de circulación una etiqueta cuyo master físico nunca va a llegar a bodega (producto
   // dañado/reprocesado antes de sellar) — sin esto quedaba "Activa" para siempre, contando como
-  // impresa pero sin poder escanearse jamás. Refresca tanto el historial como la fila de la captura
-  // (Impresas/Anuladas cambian).
+  // impresa pero sin poder escanearse jamás.
   const handleAnular = async (etiqueta) => {
     const motivo = prompt("Motivo de la anulación (ej. producto dañado antes de llegar a bodega):");
     if (!motivo || !motivo.trim()) return;
@@ -815,7 +326,7 @@ export default function ImpresionEtiquetasPage() {
 
   const handleReactivar = async (etiqueta) => {
     const confirmado = await pedirConfirmacion(
-      `¿Reactivar ${etiqueta.Correlativo}? Volverá a poder reimprimirse y escanearse.`,
+      `¿Reactivar ${etiqueta.Correlativo}? Volverá a contar como etiqueta activa y a poder escanearse en bodega.`,
       { textoConfirmar: "Reactivar" }
     );
     if (!confirmado) return;
@@ -837,7 +348,10 @@ export default function ImpresionEtiquetasPage() {
       || o.CodigoPedido.toLowerCase().includes(q)
       || (o.NombreCliente || "").toLowerCase().includes(q)
       || o.Lote.toLowerCase().includes(q));
-  const conPendientes = capturas.filter(o => o.Impresas < o.CantidadMaster).length;
+  // "Sin imprimir" se mide contra lo que BarTender confirmó en papel, no contra los correlativos
+  // generados: generar un correlativo no imprime nada, y confundir las dos cosas es justo lo que
+  // hacía que una captura se viera completa con la impresora sin tocar.
+  const sinImprimir = capturas.filter(o => (o.EnPapel ?? 0) < o.CantidadMaster).length;
 
   return (
     <div>
@@ -849,29 +363,17 @@ export default function ImpresionEtiquetasPage() {
         {fecha && (
           <button onClick={() => setFecha("")} className="text-xs text-gray-500 hover:text-gray-700 underline">Quitar fecha</button>
         )}
-        <span className="text-sm text-gray-500">{capturas.length} captura{capturas.length !== 1 ? "s" : ""} ({conPendientes} pendiente{conPendientes !== 1 ? "s" : ""} de imprimir)</span>
+        <span className="text-sm text-gray-500">{capturas.length} captura{capturas.length !== 1 ? "s" : ""} ({sinImprimir} sin imprimir en BarTender)</span>
         <button onClick={() => setMostrarConsulta(true)}
           className="text-sm text-blue-600 border border-blue-200 rounded-lg px-3 py-2 hover:bg-blue-50 transition">
           Consultar etiqueta
         </button>
-        {puedeImprimir && (
-          <button onClick={abrirPrueba} disabled={cargandoPreview}
-            className="text-sm text-gray-600 border border-gray-300 rounded-lg px-3 py-2 hover:bg-gray-50 transition disabled:opacity-50">
-            Editar diseño
-          </button>
-        )}
         {atascadas.length > 0 && (
           <button onClick={() => setMostrarAtascadas(true)}
             className="text-sm text-amber-700 border border-amber-300 bg-amber-50 rounded-lg px-3 py-2 hover:bg-amber-100 transition font-medium">
             ⚠ {atascadas.length} sin escanear +24h
           </button>
         )}
-        <div className={`ml-auto flex items-center gap-2 text-xs font-medium px-3 py-1.5 rounded-lg ${device ? "bg-green-100 text-green-700" : "bg-red-100 text-red-600"}`}>
-          {device ? `Impresora: ${device.name}` : deviceError || "Buscando impresora..."}
-          {!device && (
-            <button onClick={intentarDetectar} className="underline hover:no-underline font-semibold">Reintentar</button>
-          )}
-        </div>
       </div>
 
       {loading ? (
@@ -888,8 +390,8 @@ export default function ImpresionEtiquetasPage() {
                 <Th width={widths.proceso} onResizeStart={startResize("proceso")} className="px-4 py-3 text-left whitespace-nowrap">Proceso · Talla</Th>
                 <Th width={widths.lote} onResizeStart={startResize("lote")} className="px-4 py-3 text-left whitespace-nowrap">Lote</Th>
                 <Th width={widths.declarado} onResizeStart={startResize("declarado")} className="px-4 py-3 text-right whitespace-nowrap">Declarado</Th>
-                <Th width={widths.impresas} onResizeStart={startResize("impresas")} className="px-4 py-3 text-right whitespace-nowrap">Impresas</Th>
-                <Th width={widths.anuladas} onResizeStart={startResize("anuladas")} className="px-4 py-3 text-right whitespace-nowrap">Anuladas</Th>
+                <Th width={widths.generadas} onResizeStart={startResize("generadas")} className="px-4 py-3 text-right whitespace-nowrap" title="Correlativos reservados en el sistema — todavía no dicen nada del papel">Generadas</Th>
+                <Th width={widths.enPapel} onResizeStart={startResize("enPapel")} className="px-4 py-3 text-right whitespace-nowrap" title="Confirmadas por BarTender al mandarlas a la impresora">En papel</Th>
                 <Th width={widths.escaneadas} onResizeStart={startResize("escaneadas")} className="px-4 py-3 text-right whitespace-nowrap">Escaneadas</Th>
                 <Th width={widths.linea} onResizeStart={startResize("linea")} className="px-4 py-3 text-center whitespace-nowrap">Pedido</Th>
                 <Th width={widths.acciones} onResizeStart={startResize("acciones")} className="px-4 py-3 text-center whitespace-nowrap">Acciones</Th>
@@ -898,18 +400,23 @@ export default function ImpresionEtiquetasPage() {
             <tbody className="divide-y divide-gray-100">
               {capturas.map(o => {
                 const pend = o.CantidadMaster - o.Impresas;
+                const enPapel = o.EnPapel ?? 0;
+                const faltaPapel = o.CantidadMaster - enPapel;
                 const cuadre = cuadreLinea(o.ObjetivoLinea, o.EscaneadoLinea);
                 return (
                 <Fragment key={o.OrdenId}>
                   <tr className="hover:bg-gray-50 transition">
                     <td className="px-4 py-3 whitespace-nowrap text-gray-500">{String(o.FechaProduccion).slice(0, 10)}</td>
                     <td className="px-4 py-3 font-mono font-bold text-gray-700 whitespace-nowrap">{o.CodigoPedido}</td>
-                    <td className="px-4 py-3 whitespace-nowrap">{o.NombreCliente}{o.NombreSubcliente ? ` - ${o.NombreSubcliente}` : ""}</td>
-                    <td className="px-4 py-3 whitespace-nowrap">{o.DescripcionProceso} · {o.DescripcionTalla}</td>
-                    <td className="px-4 py-3 font-mono text-gray-700 whitespace-nowrap">{o.Lote}</td>
+                    <td className="px-4 py-3 truncate" title={`${o.NombreCliente}${o.NombreSubcliente ? ` - ${o.NombreSubcliente}` : ""}`}>{o.NombreCliente}{o.NombreSubcliente ? ` - ${o.NombreSubcliente}` : ""}</td>
+                    <td className="px-4 py-3 truncate" title={`${o.DescripcionProceso} · ${o.DescripcionTalla}`}>{o.DescripcionProceso} · {o.DescripcionTalla}</td>
+                    <td className="px-4 py-3 font-mono text-gray-700 truncate" title={o.Lote}>{o.Lote}</td>
                     <td className="px-4 py-3 text-right whitespace-nowrap">{o.CantidadMaster}</td>
                     <td className="px-4 py-3 text-right whitespace-nowrap">{o.Impresas}</td>
-                    <td className="px-4 py-3 text-right whitespace-nowrap text-gray-400">{o.Anuladas || "-"}</td>
+                    <td className={`px-4 py-3 text-right whitespace-nowrap font-semibold ${enPapel === 0 ? "text-gray-400" : enPapel >= o.Impresas ? "text-green-700" : "text-amber-700"}`}
+                      title={enPapel >= o.Impresas ? "BarTender confirmó todas" : `BarTender confirmó ${enPapel} de ${o.Impresas} generadas`}>
+                      {enPapel}
+                    </td>
                     <td className="px-4 py-3 text-right whitespace-nowrap">{o.Escaneadas}</td>
                     <td className="px-4 py-3 text-center whitespace-nowrap">
                       {cuadre && (
@@ -921,12 +428,26 @@ export default function ImpresionEtiquetasPage() {
                     <td className="px-4 py-3 text-center whitespace-nowrap">
                       <div className="flex justify-center gap-2">
                         {pend > 0 && puedeImprimir ? (
-                          <button onClick={() => abrirVistaPrevia(o)} disabled={cargandoPreview || ordenEnCurso === o.OrdenId}
+                          <button onClick={() => imprimirPendientes(o)} disabled={ordenEnCurso === o.OrdenId}
+                            title="Reserva los correlativos pendientes y abre BarTender con ese rango"
                             className="px-3 py-1.5 text-xs bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 transition disabled:opacity-50">
-                            {ordenEnCurso === o.OrdenId ? "Imprimiendo..." : `Imprimir pendientes (${pend})`}
+                            {ordenEnCurso === o.OrdenId ? "Generando..." : `Imprimir pendientes (${pend})`}
                           </button>
-                        ) : pend > 0 ? null : (
-                          <span className="px-3 py-1.5 text-xs bg-green-100 text-green-700 font-semibold rounded-lg">Completo</span>
+                        ) : pend > 0 ? null : faltaPapel > 0 ? (
+                          <button onClick={() => confirmarImpresion(o)} disabled={ordenEnCurso === o.OrdenId}
+                            title="BarTender no avisó que las imprimió. Si ya viste el papel, confírmalo aquí."
+                            className="px-3 py-1.5 text-xs bg-amber-100 text-amber-700 font-semibold rounded-lg hover:bg-amber-200 transition disabled:opacity-50">
+                            Falta imprimir {faltaPapel}
+                          </button>
+                        ) : (
+                          <span className="px-3 py-1.5 text-xs bg-green-100 text-green-700 font-semibold rounded-lg">Impreso</span>
+                        )}
+                        {o.Impresas > 0 && puedeImprimir && (
+                          <button onClick={() => abrirBartender(o.OrdenId)} disabled={ordenEnCurso === o.OrdenId}
+                            title="Reabre en BarTender los correlativos ya generados de esta captura"
+                            className="px-3 py-1.5 text-xs text-indigo-700 border border-indigo-300 font-semibold rounded-lg hover:bg-indigo-50 transition disabled:opacity-50">
+                            BarTender
+                          </button>
                         )}
                         <button onClick={() => toggleExpandir(o)}
                           className="px-3 py-1.5 text-xs text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 transition">
@@ -943,9 +464,8 @@ export default function ImpresionEtiquetasPage() {
                           <thead>
                             <tr className="text-gray-500 uppercase tracking-wider">
                               <Th width={widthsHist.correlativo} onResizeStart={startResizeHist("correlativo")} className="px-2 py-1 text-left">Correlativo</Th>
-                              <Th width={widthsHist.tamano} onResizeStart={startResizeHist("tamano")} className="px-2 py-1 text-left">Tamaño</Th>
                               <Th width={widthsHist.estatus} onResizeStart={startResizeHist("estatus")} className="px-2 py-1 text-left">Estatus</Th>
-                              <Th width={widthsHist.impresoPor} onResizeStart={startResizeHist("impresoPor")} className="px-2 py-1 text-left">Impreso por</Th>
+                              <Th width={widthsHist.impresoPor} onResizeStart={startResizeHist("impresoPor")} className="px-2 py-1 text-left">Registrado por</Th>
                               <Th width={widthsHist.fecha} onResizeStart={startResizeHist("fecha")} className="px-2 py-1 text-left">Fecha</Th>
                               <Th width={widthsHist.veces} onResizeStart={startResizeHist("veces")} className="px-2 py-1 text-right">Veces impresa</Th>
                               <Th width={widthsHist.acciones} onResizeStart={startResizeHist("acciones")} className="px-2 py-1 text-center">Acciones</Th>
@@ -955,15 +475,11 @@ export default function ImpresionEtiquetasPage() {
                             {etiquetas.map(e => (
                               <tr key={e.EtiquetaId}>
                                 <td className="px-2 py-1 font-mono">{e.Correlativo}</td>
-                                <td className="px-2 py-1">{e.Tamano}</td>
                                 <td className="px-2 py-1">{e.Estatus}</td>
-                                <td className="px-2 py-1">{e.RegistradoPor}</td>
+                                <td className="px-2 py-1 truncate" title={e.RegistradoPor}>{e.RegistradoPor}</td>
                                 <td className="px-2 py-1">{e.CreadoEn?.slice(0, 16).replace("T", " ")}</td>
                                 <td className="px-2 py-1 text-right">{e.VecesImpresa}</td>
                                 <td className="px-2 py-1 text-center space-x-2">
-                                  {e.Estatus === "Activa" && puedeImprimir && (
-                                    <button onClick={() => handleReimprimir(e)} className="text-orange-600 hover:text-orange-800 font-medium">Reimprimir</button>
-                                  )}
                                   {e.Estatus === "Activa" && puedeEditar && (
                                     <button onClick={() => handleAnular(e)} className="text-red-600 hover:text-red-800 font-medium">Anular</button>
                                   )}
@@ -974,14 +490,10 @@ export default function ImpresionEtiquetasPage() {
                               </tr>
                             ))}
                             {etiquetas.length === 0 && (
-                              <tr><td colSpan={7} className="px-2 py-3 text-center text-gray-400">Sin etiquetas impresas todavía</td></tr>
+                              <tr><td colSpan={6} className="px-2 py-3 text-center text-gray-400">Sin etiquetas generadas todavía</td></tr>
                             )}
                           </tbody>
                         </table>
-                        {etiquetas.length > 0 && puedeImprimir && (
-                          <ReimprimirRangoForm enCurso={rangoEnCurso === o.OrdenId} progreso={rangoEnCurso === o.OrdenId ? progreso : null}
-                            onEjecutar={(desde, hasta, motivo) => reimprimirRango(o, desde, hasta, motivo)} />
-                        )}
                       </td>
                     </tr>
                   )}
@@ -994,19 +506,6 @@ export default function ImpresionEtiquetasPage() {
             </tbody>
           </table>
         </div>
-      )}
-
-      {preview && (
-        <VistaPreviaModal preview={preview} confirmando={!!preview.orden && ordenEnCurso === preview.orden.OrdenId}
-          progreso={!!preview.orden && ordenEnCurso === preview.orden.OrdenId ? progreso : null}
-          onConfirmar={confirmarImpresion} onCancelar={() => setPreview(null)} onGuardarDiseno={guardarDisenoEtiqueta}
-          onImprimirPrueba={imprimirPrueba} puedeImprimir={puedeImprimir} />
-      )}
-
-      {falloEnvio && (
-        <RecuperacionEnvioModal fallo={falloEnvio} progreso={progreso} reintentando={reintentando}
-          onReintentar={reintentarEnvio}
-          onCerrar={() => { setFalloEnvio(null); fetchOrdenes(fecha); }} />
       )}
 
       {mostrarConsulta && <ConsultarEtiquetaModal onCerrar={() => setMostrarConsulta(false)} />}
