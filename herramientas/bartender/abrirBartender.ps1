@@ -36,6 +36,9 @@ param(
 # ---------------------------------------------------------------------------
 # Configuración — ajustar en cada PC si cambia la instalación o la carpeta.
 # ---------------------------------------------------------------------------
+# Ruta preferida de BarTender. Si en esta PC esta instalado en otro lado (otra version, u otra
+# unidad), NO hay que editar este archivo: mas abajo se busca solo. Asi la carpeta se copia igual a
+# todas las estaciones y no hay un archivo distinto por equipo, que es como se pierden las cosas.
 $BarTendExe   = "C:\Program Files\Seagull\BarTender 12.1\BarTend.exe"
 # Las dos opciones de abajo van juntas, y por eso estan las dos apagadas.
 #
@@ -159,6 +162,21 @@ if (-not $btwNormalizado.StartsWith($raizNormalizada, [System.StringComparison]:
   Terminar-Con-Error "La plantilla está fuera de la carpeta autorizada.`n`nPlantilla: $btwNormalizado`nCarpeta:   $raizNormalizada"
 }
 
+# Si la ruta configurada no existe, se busca BarTender en las ubicaciones habituales antes de darse
+# por vencido. Evita tener que tocar el script en cada PC donde cambie la version.
+if (-not (Test-Path $BarTendExe)) {
+  $candidatos = @()
+  foreach ($raiz in @("$env:ProgramFiles\Seagull", "${env:ProgramFiles(x86)}\Seagull")) {
+    if (Test-Path $raiz) {
+      $candidatos += Get-ChildItem $raiz -Directory -ErrorAction SilentlyContinue |
+        ForEach-Object { Join-Path $_.FullName "BarTend.exe" } | Where-Object { Test-Path $_ }
+    }
+  }
+  if ($candidatos.Count -gt 0) {
+    $BarTendExe = $candidatos | Sort-Object -Descending | Select-Object -First 1
+    Escribir-Bitacora "BarTender no estaba en la ruta configurada; se uso el encontrado: $BarTendExe"
+  }
+}
 if (-not (Test-Path $BarTendExe))   { Terminar-Con-Error "No se encontró BarTender en:`n$BarTendExe" }
 if (-not (Test-Path $btwNormalizado)) { Terminar-Con-Error "No se encontró la plantilla:`n$btwNormalizado" }
 

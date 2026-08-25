@@ -50,6 +50,10 @@ async function obtenerDatosOrden(ordenId: number) {
     SELECT oe.OrdenId, oe.DetalleId, oe.Lote, oe.CantidadMaster, oe.Estatus AS EstatusOrden, oe.Color, oe.FechaProduccion,
            dp.CodigoPedido, pc.Descripcion AS DescripcionProceso, ta.Descripcion AS DescripcionTalla,
            pr.Descripcion AS DescripcionPresentacion,
+           -- Códigos además de las descripciones: la descripción sirve para leer la etiqueta, el
+           -- código para que el cliente o la aduana la crucen contra su propio catálogo.
+           dp.Clase, cl.Descripcion AS DescripcionClase, cl.Proceso AS CodigoProceso,
+           dp.Talla AS CodigoTalla, dp.Presentacion AS CodigoPresentacion,
            cli.RazonSocial AS NombreCliente, sub.RazonSocial AS NombreSubcliente,
            ped.CodigoCliente, ped.CodigoSubcliente,
            org.Descripcion AS DescripcionOrigen, cong.Descripcion AS DescripcionCongelacion, ar.Nombre AS NombreArea
@@ -179,11 +183,18 @@ router.post("/", requireAuth, requirePerm("etiquetado", "imprimir"), async (req:
         // aunque el pedido se edite después. ImpresoEn queda NULL hasta que BarTender confirme.
         await tx.$executeRaw`
           INSERT INTO ColaEtiquetaBartender
-            (EtiquetaId, OrdenId, Correlativo, CodigoPedido, Cliente, Subcliente, Proceso, Talla,
-             Presentacion, Lote, Color, Origen, Congelacion, Area, FechaProduccion)
-          VALUES (${id}, ${Number(OrdenId)}, ${"E" + id}, ${orden.CodigoPedido}, ${orden.NombreCliente},
-                  ${orden.NombreSubcliente}, ${orden.DescripcionProceso}, ${orden.DescripcionTalla},
-                  ${orden.DescripcionPresentacion}, ${orden.Lote}, ${orden.Color},
+            (EtiquetaId, OrdenId, Correlativo, CodigoPedido,
+             Cliente, CodigoCliente, Subcliente, CodigoSubcliente,
+             Clase, DescripcionClase, CodigoProceso, Proceso,
+             CodigoTalla, Talla, CodigoPresentacion, Presentacion,
+             Lote, Color, Origen, Congelacion, Area, FechaProduccion)
+          VALUES (${id}, ${Number(OrdenId)}, ${"E" + id}, ${orden.CodigoPedido},
+                  ${orden.NombreCliente}, ${orden.CodigoCliente},
+                  ${orden.NombreSubcliente}, ${orden.CodigoSubcliente},
+                  ${orden.Clase}, ${orden.DescripcionClase}, ${orden.CodigoProceso}, ${orden.DescripcionProceso},
+                  ${orden.CodigoTalla}, ${orden.DescripcionTalla},
+                  ${orden.CodigoPresentacion}, ${orden.DescripcionPresentacion},
+                  ${orden.Lote}, ${orden.Color},
                   ${orden.DescripcionOrigen}, ${orden.DescripcionCongelacion}, ${orden.NombreArea},
                   ${orden.FechaProduccion})
         `;

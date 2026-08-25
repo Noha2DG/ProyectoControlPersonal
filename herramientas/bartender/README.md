@@ -127,6 +127,34 @@ Se probó una versión con un identificador por reserva (columna `ReservaId` y u
 solicitud de consulta en cada diseño — justo lo que costó más trabajo dejar atrás. Si más adelante
 hacen falta varias estaciones, ese es el camino conocido.
 
+### 2.2.1 Campos disponibles para el diseño
+
+Cada concepto viaja con su **código** y su **descripción**. La descripción sirve para leer la
+etiqueta; el código, para que el cliente o la aduana la crucen contra su propio catálogo.
+
+| Concepto | Código | Descripción | Ejemplo |
+|---|---|---|---|
+| Cliente | `CodigoCliente` | `Cliente` | `14` · GOLD LAKE |
+| Subcliente | `CodigoSubcliente` | `Subcliente` | `S032` · GOLDEN PROFIT SEA FOODS Co. LTD |
+| Tipo de producto | `Clase` | `DescripcionClase` | `C20` · CULTIVO CABEZA ENTERO |
+| Proceso | `CodigoProceso` | `Proceso` | `20` · ENTERO |
+| Talla | `CodigoTalla` | `Talla` | `221` · 20/30 |
+| Presentación | `CodigoPresentacion` | `Presentacion` | `MA` · 12/450 gr (5.4 kg) |
+| Lote | — | `Lote` | G235Q002 |
+
+Hay dos formas de "tipo de producto" porque son cosas distintas: la **clase** es la clasificación
+completa del producto (`CULTIVO CABEZA ENTERO`) y el **proceso** es solo lo que se le hizo
+(`ENTERO`). El diseño elige la que corresponda a cada cliente.
+
+El resto de campos de la fila: `Correlativo`, `CodigoPedido`, `Color`, `Origen`, `Congelacion`,
+`Area`, `FechaProduccion`.
+
+Todos son valores **copiados**, no referencias: si mañana se edita el pedido, la fila conserva lo
+que de verdad se imprimió. Eso es lo que uno quiere de un registro de trazabilidad.
+
+Para usarlos en la plantilla: panel **Orígenes de datos** → nodo **Campos de la base de datos**, y
+arrastra el campo al objeto de texto.
+
 ### 2.3 El aviso de impresión — DIFERIDO (agosto 2026)
 
 > **Estado actual: la confirmación la da el operador, no BarTender.**
