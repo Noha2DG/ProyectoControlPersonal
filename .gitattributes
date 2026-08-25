@@ -1,0 +1,5 @@
+# Los .bat DEBEN llevar CRLF: con LF, cmd.exe no los procesa y la ventana se cierra sin hacer nada.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+# PowerShell tolera LF, pero se mantienen igual para que no cambien solos entre equipos.
+*.ps1 text eol=crlf
