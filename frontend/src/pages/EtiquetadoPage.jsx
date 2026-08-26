@@ -19,7 +19,7 @@ export default function EtiquetadoPage() {
   const puedeEditar = usePuede("etiquetado", "editar");
   const puedeEliminar = usePuede("etiquetado", "eliminar");
   const [pedidos, setPedidos] = useState([]);
-  const [busquedaPedido, setBusquedaPedido] = useState("");
+  const [busquedaLinea, setBusquedaLinea] = useState("");
   const [pedidoSel, setPedidoSel] = useState(null);
   const [detalles, setDetalles] = useState([]);
   const [detalleSel, setDetalleSel] = useState(null);
@@ -96,6 +96,9 @@ export default function EtiquetadoPage() {
 
   const seleccionarPedido = async (p) => {
     setPedidoSel(p);
+    // El filtro es de las líneas del pedido abierto: al cambiar de pedido no tiene sentido
+    // arrastrarlo, dejaría la lista nueva recortada sin que se note por qué.
+    setBusquedaLinea("");
     setDetalleSel(null);
     setResumen(null);
     setCapturas([]);
@@ -190,10 +193,15 @@ export default function EtiquetadoPage() {
     ? componerCodigoLote(piscinaSel.Nombre, form.FechaProduccion, requiereCiclo ? form.Ciclo : "")
     : null;
 
-  const qPed = busquedaPedido.toLowerCase();
-  const pedidosFiltrados = pedidos
-    .filter(p => p.Estatus === "Proceso")
-    .filter(p => !qPed || p.CodigoPedido.toLowerCase().includes(qPed) || p.Descripcion.toLowerCase().includes(qPed));
+  const pedidosFiltrados = pedidos.filter(p => p.Estatus === "Proceso");
+
+  // Un pedido general de tienda trae decenas de líneas (1205070 pasó de 2 a 18 en un día), y en esta
+  // pantalla se busca UNA para capturar. Se filtra por lo mismo que se ve en la fila —proceso, talla
+  // y presentación ya traducidos— y no por los códigos crudos, que aquí nunca se muestran.
+  const qLinea = busquedaLinea.trim().toLowerCase();
+  const detallesFiltrados = qLinea
+    ? detalles.filter(d => `${descProcesoDeClase(d.Clase)} ${descTalla(d.Talla)} ${descPresentacion(d.Presentacion)}`.toLowerCase().includes(qLinea))
+    : detalles;
 
   if (loading) return (
     <div className="flex justify-center py-16"><div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" /></div>
@@ -203,8 +211,7 @@ export default function EtiquetadoPage() {
     <div className="flex flex-col lg:flex-row gap-4">
       {/* Columna 1: Pedidos */}
       <div className="w-full lg:w-64 shrink-0">
-        <input type="text" placeholder="Buscar pedido..." value={busquedaPedido} onChange={e => setBusquedaPedido(e.target.value)}
-          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm mb-3 focus:outline-none focus:ring-2 focus:ring-blue-400" />
+        <h3 className="text-sm font-medium text-gray-600 mb-3">Pedidos</h3>
         <div className="bg-white rounded-xl shadow overflow-y-auto max-h-[70vh]">
           {pedidosFiltrados.map(p => (
             <button key={p.CodigoPedido} onClick={() => seleccionarPedido(p)}
@@ -232,18 +239,30 @@ export default function EtiquetadoPage() {
         {!pedidoSel ? (
           <div className="bg-white rounded-xl shadow px-4 py-8 text-center text-gray-400 text-sm">Seleccione un pedido</div>
         ) : (
-          <div className="bg-white rounded-xl shadow overflow-y-auto max-h-[70vh]">
-            {detalles.map(d => (
-              <button key={d.DetalleId} onClick={() => seleccionarLinea(d)}
-                className={`w-full text-left px-3 py-2.5 border-b border-gray-100 transition ${detalleSel?.DetalleId === d.DetalleId ? "bg-blue-50" : "hover:bg-gray-50"}`}>
-                <div className="text-sm font-semibold text-gray-800">{descProcesoDeClase(d.Clase)} · {descTalla(d.Talla)}</div>
-                {/* En un pedido general CantidadCajas es el centinela 1, no una cantidad pedida. */}
-                <div className="text-xs text-gray-500">
-                  {descPresentacion(d.Presentacion)}{pedidoSel?.EsGeneral ? "" : ` — ${d.CantidadCajas} cajas`}
-                </div>
-              </button>
-            ))}
-            {detalles.length === 0 && <div className="px-3 py-8 text-center text-gray-400 text-sm">Sin líneas en este pedido</div>}
+          // El buscador va DENTRO de la tarjeta y fuera del área que hace scroll: con 18 líneas la
+          // lista se desplaza, y un buscador que se va con ella obliga a subir cada vez que se
+          // quiere corregir lo escrito.
+          <div className="bg-white rounded-xl shadow max-h-[70vh] flex flex-col">
+            <div className="p-2 border-b border-gray-100 shrink-0">
+              <input type="text" placeholder="Buscar línea…" value={busquedaLinea} onChange={e => setBusquedaLinea(e.target.value)}
+                className="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
+            </div>
+            <div className="overflow-y-auto">
+              {detallesFiltrados.map(d => (
+                <button key={d.DetalleId} onClick={() => seleccionarLinea(d)}
+                  className={`w-full text-left px-3 py-2.5 border-b border-gray-100 transition ${detalleSel?.DetalleId === d.DetalleId ? "bg-blue-50" : "hover:bg-gray-50"}`}>
+                  <div className="text-sm font-semibold text-gray-800">{descProcesoDeClase(d.Clase)} · {descTalla(d.Talla)}</div>
+                  {/* En un pedido general CantidadCajas es el centinela 1, no una cantidad pedida. */}
+                  <div className="text-xs text-gray-500">
+                    {descPresentacion(d.Presentacion)}{pedidoSel?.EsGeneral ? "" : ` — ${d.CantidadCajas} cajas`}
+                  </div>
+                </button>
+              ))}
+              {detalles.length === 0 && <div className="px-3 py-8 text-center text-gray-400 text-sm">Sin líneas en este pedido</div>}
+              {detalles.length > 0 && detallesFiltrados.length === 0 && (
+                <div className="px-3 py-8 text-center text-gray-400 text-sm">Ninguna línea coincide con “{busquedaLinea}”</div>
+              )}
+            </div>
           </div>
         )}
       </div>

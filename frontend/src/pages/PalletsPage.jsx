@@ -12,7 +12,7 @@ const API = "/api/pallets";
 
 const MASTERS_COL_DEFAULTS = { correlativo: 100, pedido: 100, cliente: 150, lote: 110, procesoTallaPres: 170, kg: 80, lb: 80, hora: 130, acciones: 90 };
 const MASTERS_COLS_BASE = ["correlativo", "pedido", "cliente", "lote", "procesoTallaPres", "kg", "lb", "hora"];
-const PALLETS_COL_DEFAULTS = { pallet: 110, estatus: 100, area: 130, origen: 130, masters: 110, cuadre: 110, creado: 170, cerrado: 170, acciones: 130 };
+const PALLETS_COL_DEFAULTS = { pallet: 110, estatus: 100, area: 130, origen: 130, masters: 110, cuadre: 110, creado: 215, cerrado: 215, acciones: 130 };
 const PALLETS_COLS = Object.keys(PALLETS_COL_DEFAULTS);
 
 const ESTATUS_BADGE = {
@@ -622,8 +622,8 @@ export default function PalletsPage() {
                       {p.Estatus}
                     </span>
                   </td>
-                  <td className="px-4 py-3 whitespace-nowrap">{p.NombreBodegaVirtual || "-"}</td>
-                  <td className="px-4 py-3 whitespace-nowrap">{p.DescripcionOrigen || "-"}</td>
+                  <td className="px-4 py-3 truncate" title={p.NombreBodegaVirtual || ""}>{p.NombreBodegaVirtual || "-"}</td>
+                  <td className="px-4 py-3 truncate" title={p.DescripcionOrigen || ""}>{p.DescripcionOrigen || "-"}</td>
                   <td className="px-4 py-3 text-right font-mono">
                     {p.CantidadMasters}{p.CantidadMaster != null ? ` / ${p.CantidadMaster}` : ""}
                     {/* Un polín que despachó parte se ve "a medias" aquí: es la señal para ir a
@@ -641,8 +641,8 @@ export default function PalletsPage() {
                       </span>
                     )}
                   </td>
-                  <td className="px-4 py-3 whitespace-nowrap text-gray-500">{p.CreadoPor} · {fmtFecha(p.CreadoEn)}</td>
-                  <td className="px-4 py-3 whitespace-nowrap text-gray-500">{p.CerradoEn ? `${p.CerradoPor} · ${fmtFecha(p.CerradoEn)}` : "-"}</td>
+                  <td className="px-4 py-3 truncate text-gray-500" title={`${p.CreadoPor} · ${fmtFecha(p.CreadoEn)}`}>{p.CreadoPor} · {fmtFecha(p.CreadoEn)}</td>
+                  <td className="px-4 py-3 truncate text-gray-500" title={p.CerradoEn ? `${p.CerradoPor} · ${fmtFecha(p.CerradoEn)}` : ""}>{p.CerradoEn ? `${p.CerradoPor} · ${fmtFecha(p.CerradoEn)}` : "-"}</td>
                   <td className="px-4 py-3 text-center">
                     <div className="flex justify-center gap-2">
                       <button onClick={() => setPanelId(p.PalletId)} className="text-blue-600 hover:text-blue-800 text-xs font-medium px-2 py-1 rounded hover:bg-blue-50 transition">

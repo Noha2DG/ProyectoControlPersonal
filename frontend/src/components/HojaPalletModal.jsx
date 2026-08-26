@@ -1,10 +1,49 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, Fragment } from "react";
 import { createPortal } from "react-dom";
 import { QRCodeSVG } from "qrcode.react";
 import { authHeader } from "../context/AuthContext.jsx";
 
 function fmtFecha(iso) {
   return iso ? new Date(iso).toLocaleString("es-GT", { dateStyle: "short", timeStyle: "short" }) : "-";
+}
+
+// Un polín trae decenas de masters idénticos (mismo producto, mismo lote, mismo pedido): listarlos
+// uno por uno daba hojas de 35+ líneas imposibles de cotejar parado frente al polín. Se agrupan por
+// cliente y, dentro, por producto+lote+pedido, contando masters — el correlativo era lo que obligaba
+// a una línea por master, y para cotejar sirve el conteo de lo que se escanea, no el número de cada
+// etiqueta. Los despachados se agrupan aparte (el Estatus entra en la clave) para no sumar en una
+// misma línea lo que sigue arriba del polín con lo que ya salió.
+function agruparPorCliente(masters) {
+  const clientes = new Map();
+  for (const m of masters) {
+    const cliente = `${m.NombreCliente}${m.NombreSubcliente ? `-${m.NombreSubcliente}` : ""}`;
+    const producto = `${m.DescripcionProceso} ${m.DescripcionTalla} ${m.DescripcionPresentacion}`;
+    const lote = m.Lote ?? "";
+    const pedido = m.CodigoPedido ?? "";
+    const salido = m.Estatus === "Salido";
+    if (!clientes.has(cliente)) clientes.set(cliente, new Map());
+    const lineas = clientes.get(cliente);
+    const clave = `${producto}|${lote}|${pedido}|${salido}`;
+    const linea = lineas.get(clave) ?? { clave, producto, lote, pedido, salido, masters: 0, kg: 0, lb: 0 };
+    linea.masters += 1;
+    linea.kg += m.PesoMasterKG;
+    linea.lb += m.PesoMasterLb;
+    lineas.set(clave, linea);
+  }
+  return [...clientes.entries()]
+    .map(([cliente, lineas]) => {
+      const filas = [...lineas.values()].sort((a, b) =>
+        a.producto.localeCompare(b.producto) || a.lote.localeCompare(b.lote) || a.pedido.localeCompare(b.pedido));
+      const enPolin = filas.filter(f => !f.salido);
+      return {
+        cliente,
+        filas,
+        masters: enPolin.reduce((acc, f) => acc + f.masters, 0),
+        kg: enPolin.reduce((acc, f) => acc + f.kg, 0),
+        lb: enPolin.reduce((acc, f) => acc + f.lb, 0),
+      };
+    })
+    .sort((a, b) => a.cliente.localeCompare(b.cliente));
 }
 
 // Contenido real de la hoja — vive DUPLICADO a propósito en dos lugares (vista previa en pantalla
@@ -14,6 +53,7 @@ function ContenidoHoja({ pallet, totalKg, totalLb }) {
   // Lo que está ENCIMA del polín, que es contra lo que se coteja parado frente a él. Los despachados
   // siguen listados abajo como historia, pero sumarlos daría un total que el polín ya no tiene.
   const enPolin = pallet.Masters.filter(m => m.Estatus !== "Salido").length;
+  const grupos = agruparPorCliente(pallet.Masters);
   return (
     <>
       <div className="flex items-start justify-between mb-6">
@@ -49,31 +89,37 @@ function ContenidoHoja({ pallet, totalKg, totalLb }) {
       <table className="w-full text-base">
         <thead>
           <tr className="text-left text-gray-600 uppercase border-b-2 border-gray-800 text-sm">
-            <th className="py-2 pr-3">Correlativo</th>
-            <th className="py-2 pr-3">Pedido</th>
-            <th className="py-2 pr-3">Cliente</th>
-            <th className="py-2 pr-3">Lote</th>
             <th className="py-2 pr-3">Producto</th>
+            <th className="py-2 pr-3">Lote</th>
+            <th className="py-2 pr-3">Pedido</th>
+            <th className="py-2 pr-3 text-right">Masters</th>
             <th className="py-2 pr-3 text-right">Kg</th>
-            <th className="py-2 pr-3 text-right">Lb</th>
-            <th className="py-2">Hora</th>
+            <th className="py-2 text-right">Lb</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-gray-100">
-          {pallet.Masters.map(m => (
-            <tr key={m.MasterId} className={m.Estatus === "Salido" ? "text-gray-400 line-through" : ""}>
-              <td className="py-1.5 pr-3 font-mono">{m.Correlativo}</td>
-              <td className="py-1.5 pr-3 font-mono">{m.CodigoPedido}</td>
-              <td className="py-1.5 pr-3 whitespace-nowrap">{m.NombreCliente}{m.NombreSubcliente ? `-${m.NombreSubcliente}` : ""}</td>
-              <td className="py-1.5 pr-3 font-mono whitespace-nowrap">{m.Lote}</td>
-              <td className="py-1.5 pr-3 whitespace-nowrap">{m.DescripcionProceso} {m.DescripcionTalla} {m.DescripcionPresentacion}</td>
-              <td className="py-1.5 pr-3 text-right">{m.PesoMasterKG.toFixed(2)}</td>
-              <td className="py-1.5 pr-3 text-right">{m.PesoMasterLb.toFixed(2)}</td>
-              <td className="py-1.5 whitespace-nowrap">{fmtFecha(m.FechaIngreso)}</td>
-            </tr>
+          {grupos.map(g => (
+            <Fragment key={g.cliente}>
+              <tr className="bg-gray-100 border-t-2 border-gray-400">
+                <td className="py-1.5 pr-3 font-bold" colSpan={3}>{g.cliente}</td>
+                <td className="py-1.5 pr-3 text-right font-bold">{g.masters}</td>
+                <td className="py-1.5 pr-3 text-right font-bold">{g.kg.toFixed(2)}</td>
+                <td className="py-1.5 text-right font-bold">{g.lb.toFixed(2)}</td>
+              </tr>
+              {g.filas.map(f => (
+                <tr key={f.clave} className={f.salido ? "text-gray-400 line-through" : ""}>
+                  <td className="py-1.5 pr-3">{f.producto}</td>
+                  <td className="py-1.5 pr-3 font-mono whitespace-nowrap">{f.lote}</td>
+                  <td className="py-1.5 pr-3 font-mono">{f.pedido}</td>
+                  <td className="py-1.5 pr-3 text-right">{f.masters}</td>
+                  <td className="py-1.5 pr-3 text-right">{f.kg.toFixed(2)}</td>
+                  <td className="py-1.5 text-right">{f.lb.toFixed(2)}</td>
+                </tr>
+              ))}
+            </Fragment>
           ))}
           {pallet.Masters.length === 0 && (
-            <tr><td colSpan={8} className="py-6 text-center text-gray-400">Sin masters escaneados</td></tr>
+            <tr><td colSpan={6} className="py-6 text-center text-gray-400">Sin masters escaneados</td></tr>
           )}
         </tbody>
       </table>
