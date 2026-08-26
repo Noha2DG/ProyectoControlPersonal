@@ -21,9 +21,13 @@ const CLIENTES_COLS = Object.keys(CLIENTES_COL_DEFAULTS);
 const SUB_COL_DEFAULTS = { codigo: 120, razonSocial: 220, diseno: 210, estado: 100, acciones: 150 };
 const SUB_COLS = Object.keys(SUB_COL_DEFAULTS);
 
-// Solo el nombre del archivo: la ruta completa es de red y no cabe en la celda, pero se deja
-// como title para poder verificarla sin abrir el modal.
-const nombreBtw = (ruta) => (ruta ? ruta.split(/[\\/]/).pop() : null);
+// Cómo se resume una lista de diseños en una celda: el predeterminado (que el backend devuelve
+// primero) y cuántos más hay. Mostrarlos todos ensancharía la columna por un dato que solo importa
+// al abrir el modal; la ruta completa de cada uno queda en el title.
+const resumenDisenos = (lista) => {
+  if (!lista.length) return null;
+  return lista.length === 1 ? lista[0].Nombre : `${lista[0].Nombre} +${lista.length - 1}`;
+};
 
 function ClienteModal({ item, onSave, onClose }) {
   const isEdit = !!item;
@@ -115,15 +119,27 @@ function SubclienteModal({ item, codigoCliente, onSave, onClose }) {
   );
 }
 
-// Escoger el .btw de BarTender que le toca a un cliente/subcliente. No abre el explorador de
-// Windows a propósito: el navegador falsea la ruta de <input type="file"> ("C:\fakepath\..."), así
-// que la lista viene del backend leyendo la carpeta de red configurada. La ruta que se guarda de
-// ahí siempre existe y siempre la alcanza la PC de BarTender.
-function DisenoBtwModal({ titulo, actual, onSave, onQuitar, onClose }) {
+// Los .btw de BarTender que le tocan a un cliente/subcliente. Son VARIOS desde el 26 ago 2026: un
+// mismo subcliente puede tener el master de 1 lb, el de 4/5 lb y el provisional, y quién elige es
+// el operador al momento de imprimir. Este modal gestiona la lista; el modal de elegir vive en
+// Impresión de Etiquetas.
+//
+// El explorador de Windows NO se abre a propósito: el navegador falsea la ruta de
+// <input type="file"> ("C:\fakepath\..."), así que la lista de archivos viene del backend leyendo
+// la carpeta de red configurada. La ruta que se guarda de ahí siempre existe y siempre la alcanza
+// la PC de BarTender.
+function DisenosModal({ titulo, disenos, puedeEditar, onAgregar, onPredeterminado, onRenombrar, onQuitar, onClose }) {
   const [estado, setEstado] = useState(null);   // null = cargando
   const [error, setError] = useState("");
-  const [sel, setSel] = useState(actual || "");
+  const [agregando, setAgregando] = useState(disenos.length === 0);
+  // Se marcan VARIOS archivos y entran todos de una: un cliente estrena su carpeta con tres o
+  // cuatro artes, y agregarlos de uno en uno significaba reabrir este formulario por cada uno.
+  const [marcados, setMarcados] = useState([]);
+  const [rutaManual, setRutaManual] = useState("");
+  const [nombre, setNombre] = useState("");
   const [filtro, setFiltro] = useState("");
+  const [editandoId, setEditandoId] = useState(null);
+  const [editandoNombre, setEditandoNombre] = useState("");
 
   useEffect(() => {
     (async () => {
@@ -137,87 +153,207 @@ function DisenoBtwModal({ titulo, actual, onSave, onQuitar, onClose }) {
   }, []);
 
   const archivos = estado?.Archivos || [];
+  // Las rutas se comparan normalizadas: BTW_CARPETA puede venir con barras al derecho
+  // ("C:/Etiquetas") y lo guardado traerlas al revés, y Windows además no distingue mayúsculas.
+  // Sin esto, un archivo ya asignado se ofrecería como nuevo y chocaría contra la unicidad.
+  const norm = (r) => String(r).toLowerCase().replace(/\//g, "\\");
+  const yaAsignadas = new Set(disenos.map(d => norm(d.RutaBtw)));
 
-  const visibles = archivos.filter(a =>
-    !filtro || `${a.Carpeta} ${a.Nombre}`.toLowerCase().includes(filtro.toLowerCase()));
+  // El filtro busca también en la RUTA, no solo en el nombre: pegar una ruta completa —lo natural
+  // cuando se la pasaron a uno por mensaje— dejaba la lista vacía y parecía que la carpeta no
+  // tenía nada.
+  const q = norm(filtro.trim());
+  const visibles = archivos.filter(a => !q || norm(`${a.Carpeta} ${a.Nombre} ${a.Ruta}`).includes(q));
 
   // Solo se puede validar la forma de una ruta escrita a mano: absoluta (C:\… o \\servidor\…) y
   // terminada en .btw. Mismo criterio que aplica el backend cuando no alcanza la carpeta.
-  const rutaConFormato = /^([a-zA-Z]:[\\/]|\\\\[^\\/]+[\\/])/.test(sel.trim()) && /\.btw$/i.test(sel.trim());
+  const rutaConFormato = /^([a-zA-Z]:[\\/]|\\\\[^\\/]+[\\/])/.test(rutaManual.trim()) && /\.btw$/i.test(rutaManual.trim());
+  const puedeAgregar = estado?.Legible ? marcados.length > 0 : rutaConFormato;
+
+  const alternar = (ruta) =>
+    setMarcados(prev => prev.includes(ruta) ? prev.filter(r => r !== ruta) : [...prev, ruta]);
+
+  const limpiarAlta = () => { setMarcados([]); setRutaManual(""); setNombre(""); setFiltro(""); };
+
+  // Las altas van UNA POR UNA y en orden, no en paralelo: el backend marca como predeterminado al
+  // primero que entra en un grupo vacío, y con peticiones simultáneas ese "primero" sería el que
+  // ganara la carrera. El nombre escrito solo aplica cuando se marcó un archivo; con varios, cada
+  // uno toma el suyo, que es lo único que los distingue.
+  const confirmarAlta = async () => {
+    const rutas = estado?.Legible ? marcados : [rutaManual.trim()];
+    for (const ruta of rutas) {
+      await onAgregar({ RutaBtw: ruta, Nombre: rutas.length === 1 ? nombre.trim() : "" });
+    }
+    limpiarAlta();
+    setAgregando(false);
+  };
+
+  const guardarNombre = async (d) => {
+    const limpio = editandoNombre.trim();
+    setEditandoId(null);
+    if (limpio && limpio !== d.Nombre) await onRenombrar(d.DisenoId, limpio);
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-      <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg mx-4 flex flex-col max-h-[80vh]">
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg mx-4 flex flex-col max-h-[85vh]">
         <div className="px-6 py-4 border-b flex items-center justify-between">
-          <h2 className="text-base font-semibold text-gray-800">Diseño de etiqueta — {titulo}</h2>
+          <h2 className="text-base font-semibold text-gray-800">Diseños de etiqueta — {titulo}</h2>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl leading-none">&times;</button>
         </div>
 
-        <div className="px-6 py-4 flex-1 overflow-y-auto space-y-3">
-          {error ? (
-            <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg px-4 py-3">{error}</div>
-          ) : estado === null ? (
-            <div className="flex justify-center py-8"><div className="w-6 h-6 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" /></div>
-          ) : !estado.Legible ? (
-            /* El servidor no alcanza la carpeta (caso de producción: backend en internet, diseños
-               en la red de la oficina). Se escribe la ruta tal como la ve la PC de BarTender. */
-            <>
-              <div className="bg-amber-50 border border-amber-200 text-amber-800 text-xs rounded-lg px-3 py-2">
-                {estado.Motivo}
-              </div>
-              <label className="block text-xs font-medium text-gray-500">Ruta del archivo .btw</label>
-              <input value={sel} onChange={e => setSel(e.target.value)} autoFocus
-                placeholder="\\servidor\etiquetas\GREAT GARDEN\master.btw"
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-400" />
-              {sel.trim() && !rutaConFormato && (
-                <p className="text-xs text-red-500">
-                  Debe ser una ruta absoluta y terminar en .btw — por ejemplo <span className="font-mono">\\servidor\etiquetas\arte.btw</span>
-                </p>
-              )}
-              <p className="text-xs text-gray-400">
-                Escríbela como la ve la PC donde corre BarTender. Evita las unidades mapeadas
-                (<span className="font-mono">Z:\…</span>): pueden apuntar a otro lugar en otra máquina.
-              </p>
-            </>
-          ) : (
-            <>
-              <p className="text-xs text-gray-400 truncate" title={estado.Carpeta}>Carpeta: {estado.Carpeta}</p>
-              <input value={filtro} onChange={e => setFiltro(e.target.value)} placeholder="Buscar diseño…"
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
-              <div className="border border-gray-200 rounded-lg divide-y divide-gray-100">
-                {visibles.map(a => (
-                  <button key={a.Ruta} type="button" onClick={() => setSel(a.Ruta)}
-                    className={`w-full text-left px-3 py-2 transition ${sel === a.Ruta ? "bg-blue-50" : "hover:bg-gray-50"}`}>
-                    <div className="text-sm text-gray-800 truncate" title={a.Nombre}>{a.Nombre}</div>
-                    {a.Carpeta !== "." && <div className="text-xs text-gray-400 truncate" title={a.Carpeta}>{a.Carpeta}</div>}
+        <div className="px-6 py-4 flex-1 overflow-y-auto space-y-4">
+          {/* Lo que ya está asignado. La estrella marca cuál se usa sin preguntar: es el que abre
+              BarTender cuando hay uno solo, y el que viene preseleccionado en el modal de impresión. */}
+          {disenos.length > 0 && (
+            <div className="border border-gray-200 rounded-lg divide-y divide-gray-100">
+              {disenos.map(d => (
+                <div key={d.DisenoId} className="px-3 py-2 flex items-center gap-2">
+                  <button type="button" disabled={!puedeEditar || d.EsPredeterminado}
+                    onClick={() => onPredeterminado(d.DisenoId)}
+                    title={d.EsPredeterminado ? "Se usa sin preguntar" : "Usar este por omisión"}
+                    className={`text-base leading-none shrink-0 ${d.EsPredeterminado ? "text-amber-500" : "text-gray-300 hover:text-amber-400"} disabled:cursor-default`}>
+                    {d.EsPredeterminado ? "★" : "☆"}
                   </button>
-                ))}
-                {visibles.length === 0 && (
-                  <div className="px-3 py-6 text-center text-gray-400 text-sm">
-                    {archivos.length === 0 ? "No hay archivos .btw en la carpeta" : "Ningún diseño coincide"}
+                  <div className="min-w-0 flex-1">
+                    {editandoId === d.DisenoId ? (
+                      <input value={editandoNombre} autoFocus
+                        onChange={e => setEditandoNombre(e.target.value)}
+                        onBlur={() => guardarNombre(d)}
+                        onKeyDown={e => { if (e.key === "Enter") guardarNombre(d); if (e.key === "Escape") setEditandoId(null); }}
+                        className="w-full border border-blue-300 rounded px-2 py-0.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
+                    ) : (
+                      <button type="button" disabled={!puedeEditar}
+                        onClick={() => { setEditandoId(d.DisenoId); setEditandoNombre(d.Nombre); }}
+                        title={puedeEditar ? "Clic para renombrar" : d.Nombre}
+                        className="text-sm text-gray-800 truncate block text-left w-full disabled:cursor-default">
+                        {d.Nombre}
+                      </button>
+                    )}
+                    <div className="text-xs text-gray-400 truncate" title={d.RutaBtw}>{d.Archivo}</div>
                   </div>
-                )}
+                  {puedeEditar && (
+                    <button type="button" onClick={() => onQuitar(d.DisenoId)}
+                      title="Quitar de la lista"
+                      className="text-red-400 hover:text-red-600 text-xs font-medium px-2 py-1 rounded hover:bg-red-50 transition shrink-0">
+                      Quitar
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {puedeEditar && !agregando && (
+            <button type="button" onClick={() => setAgregando(true)}
+              className="text-blue-600 hover:text-blue-800 text-sm font-medium">
+              + Agregar diseño
+            </button>
+          )}
+
+          {puedeEditar && agregando && (
+            <div className="border border-blue-200 bg-blue-50/40 rounded-lg p-3 space-y-3">
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Nombre</label>
+                <input value={marcados.length > 1 ? "" : nombre} onChange={e => setNombre(e.target.value)}
+                  disabled={marcados.length > 1}
+                  placeholder={marcados.length > 1
+                    ? `${marcados.length} marcados — cada uno toma el nombre de su archivo`
+                    : "Master 4/5 lb — el que lee el operador al imprimir"}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 disabled:bg-gray-100 disabled:text-gray-400" />
               </div>
-              {sel && (
-                <p className="text-xs text-gray-400 font-mono truncate" title={sel}>{sel}</p>
+
+              {error ? (
+                <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg px-4 py-3">{error}</div>
+              ) : estado === null ? (
+                <div className="flex justify-center py-6"><div className="w-6 h-6 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" /></div>
+              ) : !estado.Legible ? (
+                /* El servidor no alcanza la carpeta (caso de producción: backend en internet, diseños
+                   en la red de la oficina). Se escribe la ruta tal como la ve la PC de BarTender. */
+                <>
+                  <div className="bg-amber-50 border border-amber-200 text-amber-800 text-xs rounded-lg px-3 py-2">
+                    {estado.Motivo}
+                  </div>
+                  <label className="block text-xs font-medium text-gray-500">Ruta del archivo .btw</label>
+                  <input value={rutaManual} onChange={e => setRutaManual(e.target.value)}
+                    placeholder="\\servidor\etiquetas\GREAT GARDEN\master.btw"
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-400" />
+                  {rutaManual.trim() && !rutaConFormato && (
+                    <p className="text-xs text-red-500">
+                      Debe ser una ruta absoluta y terminar en .btw — por ejemplo <span className="font-mono">\\servidor\etiquetas\arte.btw</span>
+                    </p>
+                  )}
+                  <p className="text-xs text-gray-400">
+                    Escríbela como la ve la PC donde corre BarTender. Evita las unidades mapeadas
+                    (<span className="font-mono">Z:\…</span>): pueden apuntar a otro lugar en otra máquina.
+                  </p>
+                </>
+              ) : (
+                <>
+                  <div className="flex items-baseline justify-between gap-2">
+                    <p className="text-xs text-gray-400 truncate" title={estado.Carpeta}>Carpeta: {estado.Carpeta}</p>
+                    <p className="text-xs text-gray-400 shrink-0">
+                      {visibles.length} de {archivos.length} archivo{archivos.length === 1 ? "" : "s"}
+                    </p>
+                  </div>
+                  <input value={filtro} onChange={e => setFiltro(e.target.value)}
+                    placeholder="Buscar por nombre, carpeta o ruta…"
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
+                  {/* Se marcan varios: la idea es dejar cargados de una vez todos los artes distintos
+                      del cliente. Los que ya están asignados salen apagados para no chocar contra la
+                      unicidad de (cliente, subcliente, archivo). */}
+                  <div className="border border-gray-200 rounded-lg divide-y divide-gray-100 max-h-52 overflow-y-auto bg-white">
+                    {visibles.map(a => {
+                      const yaEsta = yaAsignadas.has(norm(a.Ruta));
+                      const marcado = marcados.includes(a.Ruta);
+                      return (
+                        <button key={a.Ruta} type="button" disabled={yaEsta}
+                          onClick={() => { alternar(a.Ruta); if (!nombre.trim() && !marcado) setNombre(String(a.Nombre).replace(/\.btw$/i, "")); }}
+                          className={`w-full text-left px-3 py-2 flex items-start gap-2 transition ${marcado ? "bg-blue-50" : "hover:bg-gray-50"} disabled:bg-gray-50 disabled:cursor-default`}>
+                          <span className={`mt-0.5 w-4 h-4 rounded border-2 shrink-0 flex items-center justify-center text-[10px] leading-none ${
+                            yaEsta ? "border-gray-200 text-gray-300" : marcado ? "border-blue-600 bg-blue-600 text-white" : "border-gray-300 text-transparent"}`}>
+                            ✓
+                          </span>
+                          <span className="min-w-0 flex-1">
+                            <span className={`block text-sm truncate ${yaEsta ? "text-gray-400" : "text-gray-800"}`} title={a.Ruta}>{a.Nombre}</span>
+                            {a.Carpeta !== "." && <span className="block text-xs text-gray-400 truncate">{a.Carpeta}</span>}
+                          </span>
+                          {yaEsta && <span className="text-[10px] text-gray-400 shrink-0 mt-1">ya agregado</span>}
+                        </button>
+                      );
+                    })}
+                    {visibles.length === 0 && (
+                      <div className="px-3 py-6 text-center text-gray-400 text-sm">
+                        {archivos.length === 0 ? "No hay archivos .btw en la carpeta" : "Ningún diseño coincide con la búsqueda"}
+                      </div>
+                    )}
+                  </div>
+                  {marcados.length > 0 && (
+                    <p className="text-xs text-blue-700">{marcados.length} diseño{marcados.length === 1 ? "" : "s"} marcado{marcados.length === 1 ? "" : "s"}</p>
+                  )}
+                </>
               )}
-            </>
+
+              <div className="flex justify-end gap-2">
+                {disenos.length > 0 && (
+                  <button type="button" onClick={() => { setAgregando(false); limpiarAlta(); }}
+                    className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-800 transition">Cancelar</button>
+                )}
+                <button type="button" onClick={confirmarAlta} disabled={!puedeAgregar}
+                  className="bg-blue-600 text-white text-sm font-semibold px-4 py-1.5 rounded-lg hover:bg-blue-700 transition disabled:opacity-50">
+                  {marcados.length > 1 ? `Agregar ${marcados.length}` : "Agregar"}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {disenos.length === 0 && !agregando && (
+            <p className="text-sm text-gray-400">Sin diseños asignados.</p>
           )}
         </div>
 
-        <div className="px-6 py-4 border-t flex justify-between gap-3">
-          {actual ? (
-            <button onClick={onQuitar} className="text-red-500 hover:text-red-700 text-sm font-medium px-3 py-2 rounded hover:bg-red-50 transition">
-              Quitar asignación
-            </button>
-          ) : <span />}
-          <div className="flex gap-3">
-            <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 transition">Cancelar</button>
-            <button onClick={() => onSave(sel.trim())} disabled={!sel.trim() || (estado && !estado.Legible && !rutaConFormato)}
-              className="bg-blue-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-blue-700 transition disabled:opacity-50">
-              Guardar
-            </button>
-          </div>
+        <div className="px-6 py-4 border-t flex justify-end">
+          <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 transition">Cerrar</button>
         </div>
       </div>
     </div>
@@ -248,7 +384,8 @@ export default function ClientesPage() {
   const VALORES_CLI = { codigo: c => c.Codigo, razonSocial: c => c.RazonSocial, pais: c => c.Pais,
                         tipo: c => c.Tipo, estado: c => (c.Activo ? "Activo" : "Inactivo") };
   const VALORES_SUB = { codigo: x => x.CodigoSubcliente, razonSocial: x => x.RazonSocial,
-                        diseno: x => nombreBtw(rutaDe(x.CodigoSubcliente)) || "",
+                        // Ordena por el diseño que se ve primero en la celda: el predeterminado.
+                        diseno: x => disenosDe(x.CodigoSubcliente)[0]?.Nombre || "",
                         estado: x => (x.Activo ? "Activo" : "Inactivo") };
 
   const fetchClientes = useCallback(async () => {
@@ -281,30 +418,45 @@ export default function ClientesPage() {
 
   const seleccionarCliente = (c) => { setClienteSel(c); fetchSubclientes(c.Codigo); fetchDisenos(c.Codigo); };
 
-  const rutaDe = (codigoSubcliente) =>
-    disenos.find(d => d.CodigoSubcliente === (codigoSubcliente ?? ""))?.RutaBtw || null;
+  // Los diseños de un subcliente ("" = los del cliente), ya con el predeterminado al frente: es el
+  // orden en que los devuelve el backend y el mismo en que se ofrecen al imprimir.
+  const disenosDe = (codigoSubcliente) =>
+    disenos.filter(d => d.CodigoSubcliente === (codigoSubcliente ?? "") && d.Activo);
 
-  const guardarDiseno = async (ruta) => {
+  const agregarDiseno = async ({ RutaBtw, Nombre }) => {
     const res = await fetch("/api/diseno-etiqueta-cliente", {
-      method: "PUT",
+      method: "POST",
       headers: { "Content-Type": "application/json", ...authHeader() },
       body: JSON.stringify({
         CodigoCliente: clienteSel.Codigo,
         CodigoSubcliente: modalDiseno.sub,
-        RutaBtw: ruta,
+        RutaBtw, Nombre,
       }),
     });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) { alert(data.error || "No se pudo guardar el diseño"); return; }
-    setModalDiseno(null);
+    if (!res.ok) { alert(data.error || "No se pudo agregar el diseño"); return; }
     fetchDisenos(clienteSel.Codigo);
   };
 
-  const quitarDiseno = async () => {
-    const sub = modalDiseno.sub === "" ? "-" : modalDiseno.sub;
-    await fetch(`/api/diseno-etiqueta-cliente/${clienteSel.Codigo}/${encodeURIComponent(sub)}`,
-      { method: "DELETE", headers: authHeader() });
-    setModalDiseno(null);
+  const predeterminarDiseno = async (disenoId) => {
+    const res = await fetch(`/api/diseno-etiqueta-cliente/${disenoId}/predeterminado`,
+      { method: "PUT", headers: authHeader() });
+    if (!res.ok) { alert((await res.json().catch(() => ({}))).error || "No se pudo cambiar el predeterminado"); return; }
+    fetchDisenos(clienteSel.Codigo);
+  };
+
+  const renombrarDiseno = async (disenoId, Nombre) => {
+    const res = await fetch(`/api/diseno-etiqueta-cliente/${disenoId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", ...authHeader() },
+      body: JSON.stringify({ Nombre }),
+    });
+    if (!res.ok) { alert((await res.json().catch(() => ({}))).error || "No se pudo renombrar"); return; }
+    fetchDisenos(clienteSel.Codigo);
+  };
+
+  const quitarDiseno = async (disenoId) => {
+    await fetch(`/api/diseno-etiqueta-cliente/${disenoId}`, { method: "DELETE", headers: authHeader() });
     fetchDisenos(clienteSel.Codigo);
   };
 
@@ -452,17 +604,17 @@ export default function ClientesPage() {
             es el que se usa cuando el pedido no lleva subcliente. */}
         {clienteSel && (
           <div className="bg-white rounded-xl shadow px-4 py-3 mb-3 flex items-center gap-3">
-            <span className="text-xs font-medium text-gray-500 shrink-0">Diseño por defecto del cliente</span>
+            <span className="text-xs font-medium text-gray-500 shrink-0">Diseños por defecto del cliente</span>
             <div className="min-w-0 flex-1 text-right">
               {puedeEditar ? (
-                <button onClick={() => setModalDiseno({ sub: "", titulo: clienteSel.RazonSocial, actual: rutaDe("") })}
-                  className={`text-xs font-medium truncate max-w-full inline-block ${rutaDe("") ? "text-blue-600 hover:text-blue-800" : "text-gray-400 hover:text-blue-600"}`}
-                  title={rutaDe("") || "Sin diseño asignado"}>
-                  {nombreBtw(rutaDe("")) || "+ Asignar"}
+                <button onClick={() => setModalDiseno({ sub: "", titulo: clienteSel.RazonSocial })}
+                  className={`text-xs font-medium truncate max-w-full inline-block ${disenosDe("").length ? "text-blue-600 hover:text-blue-800" : "text-gray-400 hover:text-blue-600"}`}
+                  title={disenosDe("").map(d => d.RutaBtw).join("\n") || "Sin diseño asignado"}>
+                  {resumenDisenos(disenosDe("")) || "+ Asignar"}
                 </button>
               ) : (
-                <span className="text-xs text-gray-700 truncate inline-block max-w-full" title={rutaDe("") || ""}>
-                  {nombreBtw(rutaDe("")) || "—"}
+                <span className="text-xs text-gray-700 truncate inline-block max-w-full">
+                  {resumenDisenos(disenosDe("")) || "—"}
                 </span>
               )}
             </div>
@@ -494,21 +646,23 @@ export default function ClientesPage() {
                     <td className="px-4 py-3 text-gray-900 truncate" title={s.RazonSocial}>{s.RazonSocial}</td>
                     <td className="px-4 py-3">
                       {(() => {
-                        const ruta = rutaDe(s.CodigoSubcliente);
-                        const propio = nombreBtw(ruta);
-                        const heredado = nombreBtw(rutaDe(""));
+                        const propios = disenosDe(s.CodigoSubcliente);
+                        const propio = resumenDisenos(propios);
+                        const heredado = resumenDisenos(disenosDe(""));
+                        const abrir = () => setModalDiseno({ sub: s.CodigoSubcliente, titulo: s.RazonSocial });
                         if (propio) {
+                          const detalle = propios.map(d => `${d.EsPredeterminado ? "★ " : ""}${d.Nombre} — ${d.RutaBtw}`).join("\n");
                           return puedeEditar ? (
-                            <button onClick={() => setModalDiseno({ sub: s.CodigoSubcliente, titulo: s.RazonSocial, actual: ruta })}
-                              className="text-blue-600 hover:text-blue-800 text-xs font-medium truncate max-w-full block text-left" title={ruta}>
+                            <button onClick={abrir}
+                              className="text-blue-600 hover:text-blue-800 text-xs font-medium truncate max-w-full block text-left" title={detalle}>
                               {propio}
                             </button>
-                          ) : <span className="text-xs text-gray-700 truncate block" title={ruta}>{propio}</span>;
+                          ) : <span className="text-xs text-gray-700 truncate block" title={detalle}>{propio}</span>;
                         }
                         return puedeEditar ? (
-                          <button onClick={() => setModalDiseno({ sub: s.CodigoSubcliente, titulo: s.RazonSocial, actual: null })}
+                          <button onClick={abrir}
                             className="text-xs text-gray-400 hover:text-blue-600 truncate max-w-full block text-left"
-                            title={heredado ? `Usa el diseño del cliente: ${heredado}` : "Sin diseño asignado"}>
+                            title={heredado ? `Usa los diseños del cliente: ${heredado}` : "Sin diseño asignado"}>
                             {heredado ? `↳ ${heredado}` : "+ Asignar"}
                           </button>
                         ) : <span className="text-xs text-gray-400">{heredado ? `↳ ${heredado}` : "—"}</span>;
@@ -552,8 +706,9 @@ export default function ClientesPage() {
         <SubclienteModal item={modalSub.item} codigoCliente={clienteSel.Codigo} onSave={handleSaveSub} onClose={() => setModalSub({ open: false, item: null })} />
       )}
       {modalDiseno && clienteSel && (
-        <DisenoBtwModal titulo={modalDiseno.titulo} actual={modalDiseno.actual}
-          onSave={guardarDiseno} onQuitar={quitarDiseno} onClose={() => setModalDiseno(null)} />
+        <DisenosModal titulo={modalDiseno.titulo} disenos={disenosDe(modalDiseno.sub)} puedeEditar={puedeEditar}
+          onAgregar={agregarDiseno} onPredeterminado={predeterminarDiseno} onRenombrar={renombrarDiseno}
+          onQuitar={quitarDiseno} onClose={() => setModalDiseno(null)} />
       )}
     </div>
   );

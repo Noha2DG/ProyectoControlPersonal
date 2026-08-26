@@ -2,7 +2,7 @@ import { Router, Request, Response } from "express";
 import jwt from "jsonwebtoken";
 import prisma from "../lib/prisma.ts";
 import { requireAuth, requirePerm, requireAnyPerm, tienePermiso } from "../middleware/auth.ts";
-import { resolverRutaBtw } from "./disenoEtiquetaCliente.ts";
+import { resolverDiseno, resolverDisenos } from "./disenoEtiquetaCliente.ts";
 import { buscarMasterPorEtiqueta, calcularTechoLinea } from "../lib/masters.ts";
 
 const router = Router();
@@ -215,6 +215,31 @@ router.post("/", requireAuth, requirePerm("etiquetado", "imprimir"), async (req:
   }
 });
 
+// GET /api/etiqueta-impresa/orden/:ordenId/disenos
+// Los .btw que le tocan a esta captura, para que la pantalla ofrezca cuál usar cuando hay más de
+// uno. Se resuelve por la orden y no por el cliente suelto para que la pantalla no tenga que
+// conocer la regla de herencia subcliente → cliente: la sabe el backend, en un solo lugar.
+router.get("/orden/:ordenId/disenos", requireAuth, requirePerm("etiquetado", "imprimir"), async (req: Request, res: Response) => {
+  try {
+    const orden = await obtenerDatosOrden(Number(req.params.ordenId));
+    if (!orden) { res.status(404).json({ error: "Orden de etiquetado no encontrada" }); return; }
+    const disenos = await resolverDisenos(Number(orden.CodigoCliente), orden.CodigoSubcliente);
+    res.json({
+      OrdenId: Number(req.params.ordenId),
+      Cliente: orden.NombreCliente,
+      Subcliente: orden.NombreSubcliente,
+      // La ruta completa no viaja a la pantalla: no la necesita para elegir (muestra nombre y
+      // archivo) y así no queda a la vista de cualquiera con sesión.
+      Disenos: disenos.map(d => ({
+        DisenoId: d.DisenoId, Nombre: d.Nombre, Archivo: d.Archivo,
+        EsPredeterminado: d.EsPredeterminado, Heredado: d.Heredado,
+      })),
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/etiqueta-impresa/orden/:ordenId/bartender[?desde=28&hasta=37]
 // Datos para abrir BarTender Designer con la etiqueta de CLIENTE (la de arte complejo, que va a la
 // Epson A4). No sustituye la etiqueta interna 3x1 de la Zebra: son dos caminos paralelos.
@@ -233,11 +258,20 @@ router.get("/orden/:ordenId/bartender", requireAuth, requirePerm("etiquetado", "
     const orden = await obtenerDatosOrden(ordenId);
     if (!orden) { res.status(404).json({ error: "Orden de etiquetado no encontrada" }); return; }
 
-    const rutaBtw = await resolverRutaBtw(Number(orden.CodigoCliente), orden.CodigoSubcliente);
+    // La pantalla manda el DisenoId elegido en el modal; sin él se usa el predeterminado, que es
+    // el camino de los clientes con un solo arte. Nunca llega la ruta desde el navegador.
+    const disenoId = req.query.diseno ? Number(req.query.diseno) : null;
+    const diseno = await resolverDiseno(Number(orden.CodigoCliente), orden.CodigoSubcliente, disenoId);
+    const rutaBtw = diseno?.RutaBtw ?? null;
     if (!rutaBtw) {
+      // Se distinguen los dos casos: "este cliente no tiene arte" se arregla en Clientes, pero
+      // "el que elegiste ya no está" se arregla volviendo a abrir el modal — y pasa de verdad si
+      // alguien retira un diseño mientras otro lo tenía en pantalla.
       res.status(400).json({
-        error: `No hay diseño de BarTender asignado a ${orden.NombreSubcliente || orden.NombreCliente}. ` +
-               `Asígnalo en Pedidos y Clientes → Clientes y Subclientes.`,
+        error: disenoId
+          ? "El diseño que elegiste ya no está disponible para este cliente — vuelve a elegir."
+          : `No hay diseño de BarTender asignado a ${orden.NombreSubcliente || orden.NombreCliente}. ` +
+            `Asígnalo en Pedidos y Clientes → Clientes y Subclientes.`,
       });
       return;
     }
@@ -279,6 +313,8 @@ router.get("/orden/:ordenId/bartender", requireAuth, requirePerm("etiquetado", "
 
     res.json({
       OrdenId: ordenId,
+      DisenoId: diseno!.DisenoId,
+      Diseno: diseno!.Nombre,
       RutaBtw: rutaBtw,
       Desde: desde,
       Hasta: hasta,
@@ -320,6 +356,16 @@ router.post("/orden/:ordenId/reservar", requireAuth, requirePerm("etiquetado", "
 
     const operador = getOperador(req);
 
+    // Con qué arte sale esta tanda. Se guarda en la cola —columna que existía desde el principio y
+    // nunca se había escrito— para que el historial diga con cuál se imprimió cada etiqueta: con
+    // varios diseños por cliente, "se imprimió" ya no alcanza para saber qué salió en papel.
+    // Se vuelve a resolver aquí desde el DisenoId en vez de recibir la ruta: la pantalla nunca
+    // manda rutas.
+    const orden = await obtenerDatosOrden(ordenId);
+    const disenoId = req.body?.DisenoId ? Number(req.body.DisenoId) : null;
+    const diseno = orden ? await resolverDiseno(Number(orden.CodigoCliente), orden.CodigoSubcliente, disenoId) : null;
+    const rutaBtw = diseno?.RutaBtw ?? null;
+
     const reservadas = await prisma.$transaction(async (tx) => {
       // Lo que quedó reservado de un intento anterior se suelta: si el operador abrió BarTender y no
       // imprimió, esas etiquetas siguen pendientes, solo dejan de estar en la cola de "imprimir ahora".
@@ -330,7 +376,7 @@ router.post("/orden/:ordenId/reservar", requireAuth, requirePerm("etiquetado", "
       `;
       return await tx.$executeRaw`
         UPDATE ColaEtiquetaBartender
-           SET SolicitadoEn = NOW(), SolicitadoPor = ${operador}
+           SET SolicitadoEn = NOW(), SolicitadoPor = ${operador}, RutaBtw = ${rutaBtw}
          WHERE OrdenId = ${ordenId} AND EtiquetaId BETWEEN ${desde} AND ${hasta} AND ImpresoEn IS NULL
       `;
       // 60 s como el resto del módulo: el valor por omisión de Prisma son 5 s, y con la base en otro

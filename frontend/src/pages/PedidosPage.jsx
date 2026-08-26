@@ -7,11 +7,11 @@ const ESTATUS = ["Proceso", "Terminado"];
 
 const PEDIDOS_COL_DEFAULTS = { pedido: 130, descripcion: 220, estatus: 110, editar: 90 };
 const PEDIDOS_COLS = Object.keys(PEDIDOS_COL_DEFAULTS);
-const DETALLE_COL_DEFAULTS = { clase: 90, talla: 90, presentacion: 130, cajas: 90, kg: 90, acciones: 170 };
+const DETALLE_COL_DEFAULTS = { clase: 150, talla: 90, presentacion: 130, cajas: 90, kg: 90, acciones: 170 };
 const DETALLE_COLS = Object.keys(DETALLE_COL_DEFAULTS);
 // El avance va en su propia pestaña y no como columnas extra del detalle: son 8 columnas y el panel
 // vive a media pantalla, así que metidas junto a la proforma quedarían ilegibles.
-const AVANCE_COL_DEFAULTS = { clase: 70, talla: 80, presentacion: 95, objetivo: 80, agrupado: 85, bodega: 85, despachado: 90, dif: 90 };
+const AVANCE_COL_DEFAULTS = { clase: 140, talla: 80, presentacion: 95, objetivo: 80, agrupado: 85, bodega: 85, despachado: 90, dif: 90 };
 const AVANCE_COLS = Object.keys(AVANCE_COL_DEFAULTS);
 
 const fmtFecha = v => {
@@ -402,6 +402,7 @@ export default function PedidosPage() {
   const [clientes, setClientes] = useState([]);
   const [clases, setClases] = useState([]);
   const [tallas, setTallas] = useState([]);
+  const [procesos, setProcesos] = useState([]);
   const [presentaciones, setPresentaciones] = useState([]);
   const [empaques, setEmpaques] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -438,13 +439,15 @@ export default function PedidosPage() {
       fetch("/api/clase", { headers: authHeader() }).then(r => r.json()),
       fetch("/api/tallas", { headers: authHeader() }).then(r => r.json()),
       fetch("/api/presentacion", { headers: authHeader() }).then(r => r.json()),
+      fetch("/api/procesos", { headers: authHeader() }).then(r => r.json()),
       fetch("/api/empaques", { headers: authHeader() }).then(r => r.json()),
-    ]).then(([cl, ca, ta, pr, em]) => {
+    ]).then(([cl, ca, ta, pr, po, em]) => {
       if (Array.isArray(cl)) setClientes(cl.filter(c => c.Activo));
       if (Array.isArray(ca)) setClases(ca.filter(c => c.Activo));
       if (Array.isArray(ta)) setTallas(ta.filter(t => t.Activo));
       if (Array.isArray(pr)) setPresentaciones(pr.filter(p => p.Activo));
       if (Array.isArray(em)) setEmpaques(em.filter(e => e.Activo));
+      if (Array.isArray(po)) setProcesos(po);
     });
   }, [fetchPedidos]);
 
@@ -515,12 +518,24 @@ export default function PedidosPage() {
   const empaquesIndividual = empaques.filter(e => e.TipoEmpaque === "Individual");
 
   const tallaDesc = codigo => tallas.find(t => String(t.Codigo) === String(codigo))?.Descripcion || codigo;
+
+  // La columna Clase muestra el PRODUCTO (P&D T-OFF R), no el código (E43): quien arma la proforma
+  // lee el producto, el código solo queda en el title para cotejar contra el sistema viejo. El
+  // nombre sale del Proceso de la Clase, igual que en la pantalla de Agrupación.
+  const productoDesc = codigo => {
+    const proceso = clases.find(c => c.Clase === codigo)?.Proceso;
+    const desc = procesos.find(p => Number(p.Proceso) === Number(proceso))?.Descripcion;
+    // La migración de catálogos dejó 26 procesos con ese texto de relleno (ver
+    // createClasePresentacion.ts): antes de mostrar "(pendiente de definir)" en la proforma, mejor
+    // el código, que al menos identifica la línea.
+    return desc && desc !== "(pendiente de definir)" ? desc : codigo;
+  };
   const presentacionDesc = codigo => presentaciones.find(p => p.Codigo === codigo)?.Descripcion || codigo;
 
   const VALORES_PED = { pedido: p => p.CodigoPedido, descripcion: p => p.Descripcion, estatus: p => p.Estatus };
-  const VALORES_DET = { clase: d => d.Clase, talla: d => d.Talla, presentacion: d => d.Presentacion,
+  const VALORES_DET = { clase: d => productoDesc(d.Clase), talla: d => d.Talla, presentacion: d => d.Presentacion,
                         cajas: d => d.CantidadCajas, kg: d => d.KgPedido };
-  const VALORES_AV = { clase: a => a.Clase, talla: a => a.Talla, presentacion: a => a.Presentacion,
+  const VALORES_AV = { clase: a => productoDesc(a.Clase), talla: a => a.Talla, presentacion: a => a.Presentacion,
                        objetivo: a => a.Objetivo, agrupado: a => a.Declarado, bodega: a => a.EnBodega,
                        despachado: a => a.Despachado, dif: a => a.Diferencia };
 
@@ -645,7 +660,7 @@ export default function PedidosPage() {
                   <tbody className="divide-y divide-gray-100">
                     {ordenarFilas(avance, ordenAv, VALORES_AV).map(a => (
                       <tr key={a.DetalleId} className="hover:bg-gray-50 transition">
-                        <td className="px-3 py-3 font-mono text-gray-700 truncate" title={a.Clase}>{a.Clase}</td>
+                        <td className="px-3 py-3 text-gray-700 truncate" title={`${a.Clase} — ${productoDesc(a.Clase)}`}>{productoDesc(a.Clase)}</td>
                         <td className="px-3 py-3 text-gray-700 truncate" title={tallaDesc(a.Talla)}>{tallaDesc(a.Talla)}</td>
                         <td className="px-3 py-3 text-gray-700 truncate" title={presentacionDesc(a.Presentacion)}>{presentacionDesc(a.Presentacion)}</td>
                         <td className="px-3 py-3 text-right text-gray-800 font-semibold">
@@ -709,7 +724,7 @@ export default function PedidosPage() {
               <tbody className="divide-y divide-gray-100">
                 {ordenarFilas(detalles, ordenDet, VALORES_DET).map(d => (
                   <tr key={d.DetalleId} className="hover:bg-gray-50 transition">
-                    <td className="px-4 py-3 font-mono text-gray-700 truncate" title={d.Clase}>{d.Clase}</td>
+                    <td className="px-4 py-3 text-gray-700 truncate" title={`${d.Clase} — ${productoDesc(d.Clase)}`}>{productoDesc(d.Clase)}</td>
                     <td className="px-4 py-3 text-gray-700 truncate" title={tallaDesc(d.Talla)}>{tallaDesc(d.Talla)}</td>
                     <td className="px-4 py-3 text-gray-700 truncate" title={presentacionDesc(d.Presentacion)}>{presentacionDesc(d.Presentacion)}</td>
                     {/* El 1 de un pedido general es centinela, no un dato: mostrarlo invitaría a leerlo

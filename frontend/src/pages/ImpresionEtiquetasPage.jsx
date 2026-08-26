@@ -93,6 +93,73 @@ function AtascadasModal({ atascadas, onCerrar }) {
   );
 }
 
+// Con qué arte sale esta tanda, cuando el cliente tiene más de uno. REEMPLAZA a la confirmación de
+// siempre en vez de sumarse a ella —por eso repite aquí los datos de la tanda—: dos diálogos
+// seguidos para lo que es una sola decisión terminan en clic automático, y el operador está de pie
+// frente a la impresora. Con un solo diseño este modal no aparece.
+function SeleccionDisenoModal({ info, disenos, actual, onElegir, onCancelar }) {
+  const [sel, setSel] = useState(actual ?? disenos.find(d => d.EsPredeterminado)?.DisenoId ?? disenos[0]?.DisenoId);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-md flex flex-col max-h-[85vh]">
+        <div className="px-6 py-4 border-b">
+          <h2 className="text-base font-semibold text-gray-800">
+            {disenos.length > 1 ? "¿Con cuál diseño se imprime?" : "Diseño con el que se va a imprimir"}
+          </h2>
+          <p className="text-xs text-gray-500 mt-1">{info.Subcliente || info.Cliente}</p>
+        </div>
+
+        <div className="px-6 py-4 flex-1 overflow-y-auto space-y-3">
+          <div className="bg-gray-50 rounded-lg px-3 py-2 text-xs text-gray-600 space-y-0.5">
+            <div><span className="text-gray-400">Correlativos:</span> <span className="font-mono font-semibold">{info.Correlativos}</span> ({info.Etiquetas} etiqueta{info.Etiquetas === 1 ? "" : "s"})</div>
+            <div>
+              {info.Pendientes < info.Etiquetas
+                ? `Ya impresas en BarTender: ${info.Etiquetas - info.Pendientes} · pendientes: ${info.Pendientes}`
+                : "Ninguna se ha impreso todavía en BarTender."}
+            </div>
+          </div>
+
+          <div className="border border-gray-200 rounded-lg divide-y divide-gray-100">
+            {disenos.map(d => (
+              <button key={d.DisenoId} type="button" onClick={() => setSel(d.DisenoId)}
+                className={`w-full text-left px-3 py-2.5 flex items-start gap-3 transition ${sel === d.DisenoId ? "bg-blue-50" : "hover:bg-gray-50"}`}>
+                <span className={`mt-0.5 w-4 h-4 rounded-full border-2 shrink-0 ${sel === d.DisenoId ? "border-blue-600 bg-blue-600" : "border-gray-300"}`} />
+                <span className="min-w-0">
+                  <span className="block text-sm font-medium text-gray-800 truncate">
+                    {d.Nombre}{d.EsPredeterminado && <span className="ml-1 text-amber-500" title="Predeterminado">★</span>}
+                  </span>
+                  <span className="block text-xs text-gray-400 truncate">{d.Archivo}</span>
+                </span>
+              </button>
+            ))}
+          </div>
+
+          {disenos.length === 1 && (
+            <p className="text-xs text-gray-400">
+              Es el único diseño definido para este cliente. Se agregan más en Pedidos y Clientes →
+              Clientes y Subclientes.
+            </p>
+          )}
+
+          <p className="text-xs text-gray-400">
+            Si no ocurre nada al continuar, esta PC no tiene instalado el enlace con BarTender
+            (ver herramientas/bartender/instalarProtocolo.ps1).
+          </p>
+        </div>
+
+        <div className="px-6 py-4 border-t flex justify-end gap-3">
+          <button onClick={onCancelar} className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 transition">Cancelar</button>
+          <button onClick={() => onElegir(sel)} disabled={!sel}
+            className="bg-blue-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-blue-700 transition disabled:opacity-50">
+            Abrir BarTender
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function ImpresionEtiquetasPage() {
   const puedeImprimir = usePuede("etiquetado", "imprimir");
   const puedeEditar = usePuede("etiquetado", "editar");
@@ -106,6 +173,11 @@ export default function ImpresionEtiquetasPage() {
   const [atascadas, setAtascadas] = useState([]);
   const [mostrarAtascadas, setMostrarAtascadas] = useState(false);
   const [ordenEnCurso, setOrdenEnCurso] = useState(null);
+  // Mismo patrón de promesa que useAviso: el flujo de impresión ya es async y así elegir el diseño
+  // es un `await` más en medio, sin partir el handler en dos.
+  const [seleccion, setSeleccion] = useState(null);
+  const elegirDiseno = (payload) => new Promise(resolve => setSeleccion({ ...payload, resolve }));
+  const cerrarSeleccion = (valor) => { seleccion?.resolve(valor); setSeleccion(null); };
   // Arranca en hoy: lo normal es etiquetar lo que se produjo el mismo día, y sin filtro la tabla
   // trae hasta 500 capturas históricas. La zona horaria va explícita —igual que en el resto del
   // proyecto— porque toISOString() daría UTC y en Guatemala (UTC-6) eso cambia de día a las 18:00.
@@ -173,23 +245,46 @@ export default function ImpresionEtiquetasPage() {
   const abrirBartender = async (ordenId, desde = null, hasta = null) => {
     const params = desde != null && hasta != null ? `?desde=${desde}&hasta=${hasta}` : "";
     const res = await fetch(`/api/etiqueta-impresa/orden/${ordenId}/bartender${params}`, { headers: authHeader() });
-    const data = await res.json();
+    let data = await res.json();
     if (!res.ok) { await mostrarAlerta(data.error); return false; }
 
-    const nombre = data.RutaBtw.split(/[\\/]/).pop();
-    const confirmado = await pedirConfirmacion(
-      `Se abrirá BarTender con:\n\n` +
-      `Diseño: ${nombre}\n` +
-      `Cliente: ${data.Subcliente || data.Cliente}\n` +
-      `Correlativos: ${data.Correlativos} (${data.Etiquetas} etiqueta(s))\n` +
-      (data.Pendientes < data.Etiquetas
-        ? `Ya impresas en BarTender: ${data.Etiquetas - data.Pendientes} · pendientes: ${data.Pendientes}\n`
-        : `Ninguna se ha impreso todavía en BarTender.\n`) + `\n` +
-      `Si no ocurre nada, esta PC no tiene instalado el enlace con BarTender ` +
-      `(ver herramientas/bartender/instalarProtocolo.ps1).`,
-      { textoConfirmar: "Abrir BarTender" }
-    );
-    if (!confirmado) return false;
+    // Qué artes tiene este cliente. El listado se muestra SIEMPRE, aunque haya uno solo: antes de
+    // mandar papel el operador tiene que ver con cuál va a salir, y con un solo diseño le cuesta
+    // los mismos clics que el aviso de texto al que reemplaza.
+    const resDis = await fetch(`/api/etiqueta-impresa/orden/${ordenId}/disenos`, { headers: authHeader() });
+    const dataDis = await resDis.json().catch(() => ({}));
+    const opciones = Array.isArray(dataDis.Disenos) ? dataDis.Disenos : [];
+
+    if (opciones.length) {
+      const elegido = await elegirDiseno({ info: data, disenos: opciones, actual: data.DisenoId });
+      if (!elegido) return false;
+      // La primera respuesta vino con el predeterminado; si eligió otro hay que rehacerla, porque
+      // de ahí sale la URL del protocolo (y su token) con el .btw correcto.
+      if (elegido !== data.DisenoId) {
+        const res2 = await fetch(
+          `/api/etiqueta-impresa/orden/${ordenId}/bartender${params ? `${params}&` : "?"}diseno=${elegido}`,
+          { headers: authHeader() });
+        const data2 = await res2.json();
+        if (!res2.ok) { await mostrarAlerta(data2.error); return false; }
+        data = data2;
+      }
+    } else {
+      // Solo se llega aquí si la consulta de diseños falló: el .btw ya se resolvió más arriba, así
+      // que se cae al aviso de texto de siempre en vez de dejar al operador sin poder imprimir.
+      const confirmado = await pedirConfirmacion(
+        `Se abrirá BarTender con:\n\n` +
+        `Diseño: ${data.Diseno || data.RutaBtw.split(/[\\/]/).pop()}\n` +
+        `Cliente: ${data.Subcliente || data.Cliente}\n` +
+        `Correlativos: ${data.Correlativos} (${data.Etiquetas} etiqueta(s))\n` +
+        (data.Pendientes < data.Etiquetas
+          ? `Ya impresas en BarTender: ${data.Etiquetas - data.Pendientes} · pendientes: ${data.Pendientes}\n`
+          : `Ninguna se ha impreso todavía en BarTender.\n`) + `\n` +
+        `Si no ocurre nada, esta PC no tiene instalado el enlace con BarTender ` +
+        `(ver herramientas/bartender/instalarProtocolo.ps1).`,
+        { textoConfirmar: "Abrir BarTender" }
+      );
+      if (!confirmado) return false;
+    }
 
     // Deja reservada la tanda ANTES de lanzar. La plantilla de BarTender ya no filtra por rango:
     // lee lo que quedó marcado como "imprimir ahora" (SolicitadoEn), así que su consulta es una
@@ -200,7 +295,9 @@ export default function ImpresionEtiquetasPage() {
     const resReserva = await fetch(`/api/etiqueta-impresa/orden/${ordenId}/reservar`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...authHeader() },
-      body: JSON.stringify({ Desde: data.Desde, Hasta: data.Hasta }),
+      // El DisenoId viaja también aquí para que la cola guarde con qué arte salió cada etiqueta:
+      // con varios diseños por cliente, "se imprimió" ya no dice qué papel salió.
+      body: JSON.stringify({ Desde: data.Desde, Hasta: data.Hasta, DisenoId: data.DisenoId }),
     });
     const reserva = await resReserva.json();
     if (!resReserva.ok) { await mostrarAlerta("No se pudo preparar la tanda: " + reserva.error); return false; }
@@ -387,7 +484,7 @@ export default function ImpresionEtiquetasPage() {
                 <Th width={widths.fecha} onResizeStart={startResize("fecha")} className="px-4 py-3 text-left whitespace-nowrap">Fecha Producción</Th>
                 <Th width={widths.pedido} onResizeStart={startResize("pedido")} className="px-4 py-3 text-left whitespace-nowrap">Pedido</Th>
                 <Th width={widths.cliente} onResizeStart={startResize("cliente")} className="px-4 py-3 text-left whitespace-nowrap">Cliente</Th>
-                <Th width={widths.proceso} onResizeStart={startResize("proceso")} className="px-4 py-3 text-left whitespace-nowrap">Proceso · Talla</Th>
+                <Th width={widths.proceso} onResizeStart={startResize("proceso")} className="px-4 py-3 text-left whitespace-nowrap">Producto</Th>
                 <Th width={widths.lote} onResizeStart={startResize("lote")} className="px-4 py-3 text-left whitespace-nowrap">Lote</Th>
                 <Th width={widths.declarado} onResizeStart={startResize("declarado")} className="px-4 py-3 text-right whitespace-nowrap">Declarado</Th>
                 <Th width={widths.generadas} onResizeStart={startResize("generadas")} className="px-4 py-3 text-right whitespace-nowrap" title="Correlativos reservados en el sistema — todavía no dicen nada del papel">Generadas</Th>
@@ -409,7 +506,13 @@ export default function ImpresionEtiquetasPage() {
                     <td className="px-4 py-3 whitespace-nowrap text-gray-500">{String(o.FechaProduccion).slice(0, 10)}</td>
                     <td className="px-4 py-3 font-mono font-bold text-gray-700 whitespace-nowrap">{o.CodigoPedido}</td>
                     <td className="px-4 py-3 truncate" title={`${o.NombreCliente}${o.NombreSubcliente ? ` - ${o.NombreSubcliente}` : ""}`}>{o.NombreCliente}{o.NombreSubcliente ? ` - ${o.NombreSubcliente}` : ""}</td>
-                    <td className="px-4 py-3 truncate" title={`${o.DescripcionProceso} · ${o.DescripcionTalla}`}>{o.DescripcionProceso} · {o.DescripcionTalla}</td>
+                    {/* Producto completo en dos renglones: proceso · talla arriba y la presentación
+                        debajo en chico. Va en la misma celda y no en una columna nueva porque esta tabla
+                        ya se sale de la pantalla a lo ancho. */}
+                    <td className="px-4 py-3 truncate" title={`${o.DescripcionProceso} · ${o.DescripcionTalla} · ${o.DescripcionPresentacion}`}>
+                      <div className="truncate">{o.DescripcionProceso} · {o.DescripcionTalla}</div>
+                      <div className="text-xs text-gray-500 truncate">{o.DescripcionPresentacion}</div>
+                    </td>
                     <td className="px-4 py-3 font-mono text-gray-700 truncate" title={o.Lote}>{o.Lote}</td>
                     <td className="px-4 py-3 text-right whitespace-nowrap">{o.CantidadMaster}</td>
                     <td className="px-4 py-3 text-right whitespace-nowrap">{o.Impresas}</td>
@@ -510,6 +613,10 @@ export default function ImpresionEtiquetasPage() {
 
       {mostrarConsulta && <ConsultarEtiquetaModal onCerrar={() => setMostrarConsulta(false)} />}
       {mostrarAtascadas && <AtascadasModal atascadas={atascadas} onCerrar={() => setMostrarAtascadas(false)} />}
+      {seleccion && (
+        <SeleccionDisenoModal info={seleccion.info} disenos={seleccion.disenos} actual={seleccion.actual}
+          onElegir={(id) => cerrarSeleccion(id)} onCancelar={() => cerrarSeleccion(null)} />
+      )}
       {aviso && <AvisoModal {...aviso} onCerrar={() => cerrar(true)} onCancelar={() => cerrar(false)} />}
     </div>
   );

@@ -1,5 +1,7 @@
-// Qué diseño de BarTender (.btw) le toca a cada cliente/subcliente. Ver el encabezado de
-// scripts/createDisenoEtiquetaCliente.ts para por qué la llave incluye al subcliente.
+// Qué diseños de BarTender (.btw) le tocan a cada cliente/subcliente. Ver el encabezado de
+// scripts/createDisenoEtiquetaCliente.ts para por qué la llave incluye al subcliente, y el de
+// scripts/alterDisenoEtiquetaMultiple.ts para por qué desde el 26 ago 2026 son VARIOS por
+// subcliente y no uno solo.
 //
 // El navegador NO puede entregar la ruta real de un archivo: <input type="file"> la falsea como
 // "C:\fakepath\archivo.btw" por seguridad. Por eso el explorador no se abre en el cliente — el
@@ -92,18 +94,93 @@ function rutaDentroDeCarpeta(ruta: string, carpeta: string): boolean {
   return destino === raiz || destino.startsWith(raiz + path.sep);
 }
 
-/** Diseño que le toca a un pedido: primero el arte propio del subcliente, y si no tiene, el
- *  diseño por defecto del cliente (fila con CodigoSubcliente = ''). Devuelve null si no hay
- *  ninguno asignado — quien llame decide si eso es un error o solo "todavía no configurado". */
-export async function resolverRutaBtw(codigoCliente: number, codigoSubcliente?: string | null): Promise<string | null> {
+/** Nombre legible por omisión de un .btw: "C:\Etiquetas\GENERAL\master.btw" → "master". */
+export function nombreDeRuta(ruta: string): string {
+  const archivo = String(ruta).split(/[\\/]/).pop() || String(ruta);
+  return archivo.replace(/\.btw$/i, "").trim() || archivo;
+}
+
+/** Diseños que le tocan a un pedido, ya ordenados como deben ofrecerse (el predeterminado primero).
+ *
+ *  La herencia es la de siempre, solo que ahora devuelve lista: si el SUBCLIENTE tiene arte propio
+ *  se usa ESE conjunto y el del cliente no aplica; solo cuando el subcliente no tiene nada se cae a
+ *  las filas con CodigoSubcliente = ''. Mezclar los dos le ofrecería al operador artes que no son
+ *  de ese subcliente, que es justo lo que la llave con subcliente vino a evitar.
+ *
+ *  Lista vacía = todavía no configurado; quien llame decide si eso es un error. */
+export async function resolverDisenos(codigoCliente: number, codigoSubcliente?: string | null) {
   const rows: any[] = await prisma.$queryRaw`
-    SELECT RutaBtw, CodigoSubcliente FROM DisenoEtiquetaCliente
-    WHERE CodigoCliente = ${Number(codigoCliente)}
+    SELECT DisenoId, Nombre, RutaBtw, EsPredeterminado, CodigoSubcliente
+    FROM DisenoEtiquetaCliente
+    WHERE CodigoCliente = ${Number(codigoCliente)} AND Activo = 1
       AND CodigoSubcliente IN (${codigoSubcliente ?? ""}, '')
-    ORDER BY CodigoSubcliente DESC
-    LIMIT 1
+    ORDER BY EsPredeterminado DESC, Nombre ASC
   `;
-  return rows[0]?.RutaBtw ?? null;
+  const propios = rows.filter(r => String(r.CodigoSubcliente) !== "");
+  const aplican = propios.length ? propios : rows;
+  return aplican.map(r => ({
+    DisenoId: Number(r.DisenoId),
+    Nombre: r.Nombre,
+    RutaBtw: r.RutaBtw,
+    Archivo: nombreDeRuta(r.RutaBtw),
+    EsPredeterminado: Number(r.EsPredeterminado) === 1,
+    Heredado: String(r.CodigoSubcliente) === "" && String(codigoSubcliente ?? "") !== "",
+  }));
+}
+
+/** El diseño con el que se va a imprimir.
+ *
+ *  Con disenoId se exige que sea uno de los que le tocan a ese cliente/subcliente: la pantalla
+ *  manda el ID y NUNCA la ruta, porque una ruta que venga del navegador haría que BarTender abra
+ *  el archivo que quiera cualquiera con sesión. Sin disenoId se usa el predeterminado, que es el
+ *  camino de siempre cuando hay uno solo. */
+export async function resolverDiseno(
+  codigoCliente: number, codigoSubcliente: string | null | undefined, disenoId?: number | null,
+) {
+  const disenos = await resolverDisenos(codigoCliente, codigoSubcliente);
+  if (!disenos.length) return null;
+  if (disenoId) return disenos.find(d => d.DisenoId === Number(disenoId)) ?? null;
+  return disenos.find(d => d.EsPredeterminado) ?? disenos[0];
+}
+
+/** Deja UN solo predeterminado por (cliente, subcliente). MariaDB no tiene índices únicos
+ *  parciales, así que la regla no se puede exigir en el esquema: se cuida aquí, siempre dentro de
+ *  la misma transacción que la escritura que la provocó. */
+async function marcarPredeterminado(tx: any, disenoId: number, cliente: number, sub: string) {
+  await tx.$executeRaw`
+    UPDATE DisenoEtiquetaCliente SET EsPredeterminado = 0
+    WHERE CodigoCliente = ${cliente} AND CodigoSubcliente = ${sub} AND DisenoId <> ${disenoId}
+  `;
+  await tx.$executeRaw`
+    UPDATE DisenoEtiquetaCliente SET EsPredeterminado = 1 WHERE DisenoId = ${disenoId}
+  `;
+}
+
+/** Con carpeta legible se valida de verdad (que la ruta caiga dentro y que el archivo exista); sin
+ *  ella —producción, donde el servidor no alcanza el recurso de la oficina— solo se puede validar
+ *  la forma. Devuelve el mensaje de error, o null si la ruta sirve. */
+async function validarRuta(RutaBtw: string): Promise<string | null> {
+  const estado = await estadoCarpeta();
+  if (estado.Legible) {
+    if (!rutaDentroDeCarpeta(RutaBtw, estado.Carpeta!)) {
+      return "La ruta no pertenece a la carpeta de diseños configurada";
+    }
+    try {
+      await fs.access(RutaBtw);
+    } catch {
+      return "Ese archivo .btw ya no existe en la carpeta — actualiza la lista";
+    }
+    return null;
+  }
+  if (!formatoRutaValido(RutaBtw)) {
+    return "La ruta debe ser absoluta y terminar en .btw — por ejemplo \\\\servidor\\etiquetas\\arte.btw";
+  }
+  return null;
+}
+
+function esDuplicado(err: any): boolean {
+  const mensaje = String(err?.meta?.message ?? err?.message ?? "");
+  return /uq_diseno_ruta/i.test(mensaje) || /duplicate entry/i.test(mensaje);
 }
 
 // GET /api/diseno-etiqueta-cliente/archivos — .btw disponibles en la carpeta configurada
@@ -127,75 +204,174 @@ router.get("/archivos", requireAuth, requirePerm("etiquetado", "imprimir"), asyn
   }
 });
 
-// GET /api/diseno-etiqueta-cliente?cliente=10 — asignaciones de un cliente (o todas si no se pasa)
+// GET /api/diseno-etiqueta-cliente?cliente=10 — diseños de un cliente (o todos si no se pasa)
 router.get("/", requireAuth, requirePerm("etiquetado", "imprimir"), async (req: Request, res: Response) => {
   try {
     const cliente = req.query.cliente ? Number(req.query.cliente) : undefined;
     const rows: any[] = cliente
       ? await prisma.$queryRaw`
-          SELECT CodigoCliente, CodigoSubcliente, RutaBtw, ActualizadoPor, ActualizadoEn
-          FROM DisenoEtiquetaCliente WHERE CodigoCliente = ${cliente} ORDER BY CodigoSubcliente ASC`
+          SELECT DisenoId, CodigoCliente, CodigoSubcliente, Nombre, RutaBtw, EsPredeterminado, Activo,
+                 ActualizadoPor, ActualizadoEn
+          FROM DisenoEtiquetaCliente WHERE CodigoCliente = ${cliente}
+          ORDER BY CodigoSubcliente ASC, EsPredeterminado DESC, Nombre ASC`
       : await prisma.$queryRaw`
-          SELECT CodigoCliente, CodigoSubcliente, RutaBtw, ActualizadoPor, ActualizadoEn
-          FROM DisenoEtiquetaCliente ORDER BY CodigoCliente ASC, CodigoSubcliente ASC`;
-    res.json(rows.map(r => ({ ...r, CodigoCliente: Number(r.CodigoCliente) })));
+          SELECT DisenoId, CodigoCliente, CodigoSubcliente, Nombre, RutaBtw, EsPredeterminado, Activo,
+                 ActualizadoPor, ActualizadoEn
+          FROM DisenoEtiquetaCliente
+          ORDER BY CodigoCliente ASC, CodigoSubcliente ASC, EsPredeterminado DESC, Nombre ASC`;
+    res.json(rows.map(r => ({
+      ...r,
+      DisenoId: Number(r.DisenoId),
+      CodigoCliente: Number(r.CodigoCliente),
+      EsPredeterminado: Number(r.EsPredeterminado) === 1,
+      Activo: Number(r.Activo) === 1,
+      Archivo: nombreDeRuta(r.RutaBtw),
+    })));
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// PUT /api/diseno-etiqueta-cliente  { CodigoCliente, CodigoSubcliente?, RutaBtw }
-router.put("/", requireAuth, requirePerm("etiquetado", "editar"), async (req: Request, res: Response) => {
+// POST /api/diseno-etiqueta-cliente  { CodigoCliente, CodigoSubcliente?, Nombre?, RutaBtw, EsPredeterminado? }
+// Agrega un diseño más a la lista de ese cliente/subcliente.
+router.post("/", requireAuth, requirePerm("etiquetado", "editar"), async (req: Request, res: Response) => {
   try {
-    const { CodigoCliente, CodigoSubcliente, RutaBtw } = req.body;
+    const { CodigoCliente, CodigoSubcliente, Nombre, RutaBtw, EsPredeterminado } = req.body;
     if (!CodigoCliente || !RutaBtw) {
       res.status(400).json({ error: "CodigoCliente y RutaBtw son requeridos" });
       return;
     }
-    // Con carpeta legible se valida de verdad (que caiga dentro y que el archivo exista). Sin
-    // ella —producción, donde el servidor no alcanza el recurso de la oficina— solo se puede
-    // validar la forma: quien escribe la ruta es responsable de que sea la correcta.
-    const estado = await estadoCarpeta();
-    if (estado.Legible) {
-      if (!rutaDentroDeCarpeta(RutaBtw, estado.Carpeta!)) {
-        res.status(400).json({ error: "La ruta no pertenece a la carpeta de diseños configurada" });
-        return;
-      }
-      try {
-        await fs.access(RutaBtw);
-      } catch {
-        res.status(400).json({ error: "Ese archivo .btw ya no existe en la carpeta — actualiza la lista" });
-        return;
-      }
-    } else if (!formatoRutaValido(RutaBtw)) {
-      res.status(400).json({
-        error: "La ruta debe ser absoluta y terminar en .btw — por ejemplo \\\\servidor\\etiquetas\\arte.btw",
-      });
-      return;
-    }
+    const error = await validarRuta(String(RutaBtw));
+    if (error) { res.status(400).json({ error }); return; }
+
+    const cliente = Number(CodigoCliente);
     const sub = String(CodigoSubcliente ?? "");
+    const nombre = String(Nombre ?? "").trim() || nombreDeRuta(String(RutaBtw));
     const operador = getOperador(req);
-    await prisma.$executeRaw`
-      INSERT INTO DisenoEtiquetaCliente (CodigoCliente, CodigoSubcliente, RutaBtw, ActualizadoPor)
-      VALUES (${Number(CodigoCliente)}, ${sub}, ${String(RutaBtw)}, ${operador})
-      ON DUPLICATE KEY UPDATE RutaBtw = VALUES(RutaBtw), ActualizadoPor = VALUES(ActualizadoPor)
-    `;
-    res.json({ ok: true });
+
+    const disenoId = await prisma.$transaction(async tx => {
+      await tx.$executeRaw`
+        INSERT INTO DisenoEtiquetaCliente (CodigoCliente, CodigoSubcliente, Nombre, RutaBtw, ActualizadoPor)
+        VALUES (${cliente}, ${sub}, ${nombre}, ${String(RutaBtw)}, ${operador})
+      `;
+      const filas: any[] = await tx.$queryRaw`SELECT LAST_INSERT_ID() AS id`;
+      const id = Number(filas[0].id);
+
+      // El primero de su grupo queda como predeterminado lo pida o no quien lo crea: un grupo sin
+      // predeterminado dejaría a la impresión sin cuál abrir cuando hay uno solo, que es el caso
+      // de casi todos los clientes.
+      const cuantos: any[] = await tx.$queryRaw`
+        SELECT COUNT(*) AS n FROM DisenoEtiquetaCliente
+        WHERE CodigoCliente = ${cliente} AND CodigoSubcliente = ${sub}
+      `;
+      if (EsPredeterminado === true || Number(cuantos[0].n) === 1) {
+        await marcarPredeterminado(tx, id, cliente, sub);
+      }
+      return id;
+    }, { timeout: 30_000 });
+
+    res.status(201).json({ ok: true, DisenoId: disenoId });
   } catch (err: any) {
+    if (esDuplicado(err)) { res.status(400).json({ error: "Ese mismo archivo ya está asignado aquí" }); return; }
     if (err.message?.includes("foreign key")) { res.status(400).json({ error: "El cliente no existe" }); return; }
     res.status(500).json({ error: err.message });
   }
 });
 
-// DELETE /api/diseno-etiqueta-cliente/:cliente/:subcliente — quitar la asignación
-// El subcliente vacío (diseño por defecto del cliente) se borra con :subcliente = "-"
-router.delete("/:cliente/:subcliente", requireAuth, requirePerm("etiquetado", "editar"), async (req: Request, res: Response) => {
+// PUT /api/diseno-etiqueta-cliente/:id  { Nombre?, RutaBtw?, Activo? }
+router.put("/:id", requireAuth, requirePerm("etiquetado", "editar"), async (req: Request, res: Response) => {
   try {
-    const sub = req.params.subcliente === "-" ? "" : req.params.subcliente;
-    await prisma.$executeRaw`
-      DELETE FROM DisenoEtiquetaCliente
-      WHERE CodigoCliente = ${Number(req.params.cliente)} AND CodigoSubcliente = ${sub}
+    const id = Number(req.params.id);
+    const actual: any[] = await prisma.$queryRaw`
+      SELECT DisenoId, CodigoCliente, CodigoSubcliente, Nombre, RutaBtw, EsPredeterminado
+      FROM DisenoEtiquetaCliente WHERE DisenoId = ${id} LIMIT 1
     `;
+    if (!actual.length) { res.status(404).json({ error: "Diseño no encontrado" }); return; }
+
+    const ruta = req.body.RutaBtw != null ? String(req.body.RutaBtw) : String(actual[0].RutaBtw);
+    if (ruta !== actual[0].RutaBtw) {
+      const error = await validarRuta(ruta);
+      if (error) { res.status(400).json({ error }); return; }
+    }
+    const nombre = String(req.body.Nombre ?? actual[0].Nombre).trim() || nombreDeRuta(ruta);
+    const activo = req.body.Activo === false || req.body.Activo === 0 ? 0 : 1;
+    const cliente = Number(actual[0].CodigoCliente);
+    const sub = String(actual[0].CodigoSubcliente);
+
+    await prisma.$transaction(async tx => {
+      await tx.$executeRaw`
+        UPDATE DisenoEtiquetaCliente
+           SET Nombre = ${nombre}, RutaBtw = ${ruta}, Activo = ${activo}, ActualizadoPor = ${getOperador(req)}
+         WHERE DisenoId = ${id}
+      `;
+      // Retirar el predeterminado dejaría al grupo sin cuál usar: el mando pasa al primero que siga
+      // activo antes de apagarlo.
+      if (activo === 0 && Number(actual[0].EsPredeterminado) === 1) {
+        await tx.$executeRaw`UPDATE DisenoEtiquetaCliente SET EsPredeterminado = 0 WHERE DisenoId = ${id}`;
+        const otro: any[] = await tx.$queryRaw`
+          SELECT DisenoId FROM DisenoEtiquetaCliente
+          WHERE CodigoCliente = ${cliente} AND CodigoSubcliente = ${sub} AND Activo = 1 AND DisenoId <> ${id}
+          ORDER BY DisenoId ASC LIMIT 1
+        `;
+        if (otro.length) await marcarPredeterminado(tx, Number(otro[0].DisenoId), cliente, sub);
+      }
+    }, { timeout: 30_000 });
+
+    res.json({ ok: true });
+  } catch (err: any) {
+    if (esDuplicado(err)) { res.status(400).json({ error: "Ese mismo archivo ya está asignado aquí" }); return; }
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PUT /api/diseno-etiqueta-cliente/:id/predeterminado — cuál se usa sin preguntar
+router.put("/:id/predeterminado", requireAuth, requirePerm("etiquetado", "editar"), async (req: Request, res: Response) => {
+  try {
+    const id = Number(req.params.id);
+    const actual: any[] = await prisma.$queryRaw`
+      SELECT CodigoCliente, CodigoSubcliente, Activo FROM DisenoEtiquetaCliente WHERE DisenoId = ${id} LIMIT 1
+    `;
+    if (!actual.length) { res.status(404).json({ error: "Diseño no encontrado" }); return; }
+    if (Number(actual[0].Activo) !== 1) {
+      res.status(400).json({ error: "Un diseño retirado no puede ser el predeterminado" });
+      return;
+    }
+
+    await prisma.$transaction(async tx => {
+      await marcarPredeterminado(tx, id, Number(actual[0].CodigoCliente), String(actual[0].CodigoSubcliente));
+    }, { timeout: 30_000 });
+
+    res.json({ ok: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE /api/diseno-etiqueta-cliente/:id — quitar un diseño de la lista
+router.delete("/:id", requireAuth, requirePerm("etiquetado", "editar"), async (req: Request, res: Response) => {
+  try {
+    const id = Number(req.params.id);
+    const actual: any[] = await prisma.$queryRaw`
+      SELECT CodigoCliente, CodigoSubcliente, EsPredeterminado FROM DisenoEtiquetaCliente WHERE DisenoId = ${id} LIMIT 1
+    `;
+    if (!actual.length) { res.json({ ok: true }); return; }
+    const cliente = Number(actual[0].CodigoCliente);
+    const sub = String(actual[0].CodigoSubcliente);
+
+    await prisma.$transaction(async tx => {
+      await tx.$executeRaw`DELETE FROM DisenoEtiquetaCliente WHERE DisenoId = ${id}`;
+      // Si el que se fue era el predeterminado, el mando pasa al primero que quede: si no, el grupo
+      // se quedaría con varios diseños y ninguno elegido por omisión.
+      if (Number(actual[0].EsPredeterminado) === 1) {
+        const otro: any[] = await tx.$queryRaw`
+          SELECT DisenoId FROM DisenoEtiquetaCliente
+          WHERE CodigoCliente = ${cliente} AND CodigoSubcliente = ${sub} AND Activo = 1
+          ORDER BY DisenoId ASC LIMIT 1
+        `;
+        if (otro.length) await marcarPredeterminado(tx, Number(otro[0].DisenoId), cliente, sub);
+      }
+    }, { timeout: 30_000 });
+
     res.json({ ok: true });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
