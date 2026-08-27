@@ -30,11 +30,11 @@ const PORTALLA_COL_DEFAULTS = { expand: 24, productoTalla: 220, lbTotal: 100, lb
 const PORTALLA_COLS = Object.keys(PORTALLA_COL_DEFAULTS);
 // Anchos pensados para que quepa el título completo de cada columna sin encimarse ("Pelado y
 // Devenado (Lb)" es el más largo) y para que en Nombre se lea al menos hasta el primer apellido.
-const LBPERSONA_COL_DEFAULTS = { puesto: 80, id: 120, nombre: 240, descabezado: 150, pelado: 190, pinchado: 190, total: 110 };
+const LBPERSONA_COL_DEFAULTS = { puesto: 80, id: 120, nombre: 240, descabezado: 150, pelado: 190, pinchado: 190, reprocesoDescolado: 200, reprocesoCorte: 180, total: 110 };
 const LBPERSONA_COLS = Object.keys(LBPERSONA_COL_DEFAULTS);
 // Llave de columna (ancho ajustable) que le toca a cada área de destajo, en el mismo orden en que
 // AREAS_DESTAJO las lista — la tabla se arma recorriendo AREAS_DESTAJO, no columna por columna.
-const LBPERSONA_AREA_COL = { DU: "descabezado", DS: "pelado", DT: "pinchado" };
+const LBPERSONA_AREA_COL = { DU: "descabezado", DS: "pelado", DT: "pinchado", RD: "reprocesoDescolado", RC: "reprocesoCorte" };
 
 function hoy() { return new Date().toLocaleDateString("sv-SE"); }
 const fechaCorta = (f) => f ? f.split("-").reverse().join("/") : "";

@@ -17,7 +17,14 @@ const router = Router();
 // estar en ningún plan y la gente que los pesa se transfiere a DT, no a DS. Comparte Familia E con DS
 // porque es el mismo Producto pelado; lo que cambia es el área física, y por eso lleva su propia
 // columna en el reporte y su propio ranking (ver AREAS_DESTAJO en frontend/src/utils/destajo.js).
-const FAMILIA_ESPERADA_POR_AREA: Record<string, string> = { DS: "E", DU: "D", DT: "E" };
+//
+// RD (REPROCESO DESCOLADO) y RC (REPROCESO CORTE) se agregaron el 27 ago 2026, las dos con Familia E:
+// reprocesan Producto ya pelado. El caso que las destrabó es literal — ese día había dos
+// transacciones abiertas de ClaseOrigen E40 (P&D T-ON) hacia ClasePT E41 (P&D T-OFF), que es
+// exactamente "descolar", con 7 personas transferidas a RD sin poder pesar ninguna. Si algún día se
+// reprocesa un Producto de Familia D (colas) en estas áreas, el mapa lo va a rechazar: admite una
+// sola Familia por área y habría que decidir si se abre o si el reproceso de colas lleva área propia.
+const FAMILIA_ESPERADA_POR_AREA: Record<string, string> = { DS: "E", DU: "D", DT: "E", RD: "E", RC: "E" };
 
 // Las únicas áreas donde se pesa a destajo — se derivan del mapa de arriba para no tener dos listas
 // que se puedan desincronizar.

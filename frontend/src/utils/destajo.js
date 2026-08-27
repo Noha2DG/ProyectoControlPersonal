@@ -17,10 +17,17 @@ export const LB_POR_KG = 2.20462;
 // (E63/E64/E65) son Familia E igual que Pelado y Devenado, pero se trabajan en otra área con otra
 // gente, así que llevan columna y ranking propios en vez de sumarse a Pelado. El equivalente en el
 // backend es FAMILIA_ESPERADA_POR_AREA (routes/pesajeDetalle.ts), que es lo que habilita el pesaje.
+//
+// RD (REPROCESO DESCOLADO) y RC (REPROCESO CORTE) entraron el 27 ago 2026, también Familia E. Van
+// como áreas propias y no sumadas a Pelado por la misma razón que DT: es otra gente, otro ritmo y
+// —sobre todo— su rendimiento no se puede comparar contra el de la línea, porque reprocesan lo que
+// ya pasó por ella.
 export const AREAS_DESTAJO = [
   { codigo: "DU", nombre: "DESCABEZADO", etiqueta: "Descabezado", kilos: "KilosDescabezado", lb: "LbDescabezado" },
   { codigo: "DS", nombre: "PELADO Y DEVENADO", etiqueta: "Pelado y Devenado", kilos: "KilosPelado", lb: "LbPelado" },
   { codigo: "DT", nombre: "PELADO Y PINCHADO", etiqueta: "Pelado y Pinchado", kilos: "KilosPinchado", lb: "LbPinchado" },
+  { codigo: "RD", nombre: "REPROCESO DESCOLADO", etiqueta: "Reproceso Descolado", kilos: "KilosReprocesoDescolado", lb: "LbReprocesoDescolado" },
+  { codigo: "RC", nombre: "REPROCESO CORTE", etiqueta: "Reproceso Corte", kilos: "KilosReprocesoCorte", lb: "LbReprocesoCorte" },
 ];
 
 export const MINIMO_BLOQUE_MINUTOS = 15;

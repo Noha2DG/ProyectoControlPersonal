@@ -26,6 +26,10 @@ const SECCIONES_CONFIG = [
     fondo: "fondo-olas-blue", olas: ["rgba(255,255,255,0.14)", "rgba(255,255,255,0.24)", "#dbeafe"] },
   { key: "pinchado", campo: "LbPinchado", nombre: "PELADO Y PINCHADO", texto: "text-violet-700",
     fondo: "fondo-olas-violet", olas: ["rgba(255,255,255,0.14)", "rgba(255,255,255,0.24)", "#ede9fe"] },
+  { key: "reprocesoDescolado", campo: "LbReprocesoDescolado", nombre: "REPROCESO DESCOLADO", texto: "text-cyan-700",
+    fondo: "fondo-olas-cyan", olas: ["rgba(255,255,255,0.14)", "rgba(255,255,255,0.24)", "#cffafe"] },
+  { key: "reprocesoCorte", campo: "LbReprocesoCorte", nombre: "REPROCESO CORTE", texto: "text-rose-700",
+    fondo: "fondo-olas-rose", olas: ["rgba(255,255,255,0.14)", "rgba(255,255,255,0.24)", "#ffe4e6"] },
 ];
 
 // Un solo período (1200 de 2400 de ancho del viewBox) para que el bucle de translateX(-50%) en

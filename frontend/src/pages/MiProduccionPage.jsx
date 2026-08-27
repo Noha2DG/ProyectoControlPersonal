@@ -13,6 +13,8 @@ const COLOR_AREA = {
   DU: { borde: "border-l-blue-700", titulo: "text-blue-800", cifra: "text-blue-700" },
   DS: { borde: "border-l-emerald-700", titulo: "text-emerald-800", cifra: "text-emerald-700" },
   DT: { borde: "border-l-violet-700", titulo: "text-violet-800", cifra: "text-violet-700" },
+  RD: { borde: "border-l-cyan-700", titulo: "text-cyan-800", cifra: "text-cyan-700" },
+  RC: { borde: "border-l-rose-700", titulo: "text-rose-800", cifra: "text-rose-700" },
 };
 
 // La pantalla se limpia sola. El resultado dura bastante más que en el kiosco de Entrada/Salida
