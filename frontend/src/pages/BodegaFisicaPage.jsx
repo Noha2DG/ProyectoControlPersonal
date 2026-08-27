@@ -559,13 +559,30 @@ export default function BodegaFisicaPage() {
                   {estadoPosInfo === "ocupada" && (
                     <div className="space-y-1">
                       <div className="flex justify-between gap-2"><span className="text-gray-400">Pallet</span><span className="font-mono font-bold">{posInfo.PalletCodigo}</span></div>
-                      {detallePallet ? (
-                        <>
-                          <div className="flex justify-between gap-2"><span className="text-gray-400">Masters</span><span className="font-medium">{detallePallet.Masters.length}</span></div>
-                          <div className="flex justify-between gap-2"><span className="text-gray-400">Peso</span><span className="font-medium">{detallePallet.Masters.reduce((a, m) => a + m.PesoMasterKG, 0).toFixed(2)} kg</span></div>
-                          <div className="flex justify-between gap-2"><span className="text-gray-400">Producto{new Set(detallePallet.Masters.map(m => m.DescripcionProceso)).size > 1 ? "s" : ""}</span><span className="font-medium text-right">{[...new Set(detallePallet.Masters.map(m => m.DescripcionProceso))].join(", ")}</span></div>
-                        </>
-                      ) : (
+                      {detallePallet ? (() => {
+                        // GET /api/pallets/:id devuelve TODOS los masters, despachados incluidos —
+                        // el polín es también registro histórico. Este panel dice qué hay ARRIBA de
+                        // la tarima AHORA, que es contra lo que se coteja parado frente al rack, así
+                        // que los que ya salieron en una remisión no cuentan ni en el peso ni en el
+                        // producto. El conteo bueno viene ya resuelto del backend (CantidadMasters).
+                        const encima = detallePallet.Masters.filter(m => m.Estatus !== "Salido");
+                        const productos = [...new Set(encima.map(m => m.DescripcionProceso))];
+                        return (
+                          <>
+                            <div className="flex justify-between gap-2">
+                              <span className="text-gray-400">Masters</span>
+                              <span className="font-medium">
+                                {detallePallet.CantidadMasters}
+                                {detallePallet.CantidadSalidos > 0 && (
+                                  <span className="text-gray-400 font-normal"> · {detallePallet.CantidadSalidos} despachado{detallePallet.CantidadSalidos === 1 ? "" : "s"}</span>
+                                )}
+                              </span>
+                            </div>
+                            <div className="flex justify-between gap-2"><span className="text-gray-400">Peso</span><span className="font-medium">{encima.reduce((a, m) => a + m.PesoMasterKG, 0).toFixed(2)} kg</span></div>
+                            <div className="flex justify-between gap-2"><span className="text-gray-400">Producto{productos.length > 1 ? "s" : ""}</span><span className="font-medium text-right">{productos.join(", ")}</span></div>
+                          </>
+                        );
+                      })() : (
                         <p className="text-gray-300">Cargando contenido…</p>
                       )}
                       {puedeEditar && (

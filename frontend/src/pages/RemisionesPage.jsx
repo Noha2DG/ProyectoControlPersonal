@@ -3,7 +3,6 @@ import { fmtNum } from "../utils/numero.js";
 import { authHeader, usePuede } from "../context/AuthContext.jsx";
 import { useColWidths, useOrden, ordenarFilas, Th, Colgroup } from "../components/ResizableTh.jsx";
 import AvisoModal from "../components/AvisoModal.jsx";
-import ModalMotivo from "../components/ModalMotivo.jsx";
 import HojaRemisionModal from "../components/HojaRemisionModal.jsx";
 import ModalEscaneo from "../components/ModalEscaneo.jsx";
 import { useAviso } from "../hooks/useAviso.js";
@@ -296,6 +295,130 @@ const IconoMaster = (props) => (
 );
 
 // ── Panel de armado / consulta de una remisión ────────────────────────────────────────────────────
+// Anular no siempre significa lo mismo. Si fue un error de captura, la carga nunca se movió y vuelve
+// a su polín. Pero cuando el producto salió de verdad y regresó, las cajas casi nunca vuelven a la
+// misma tarima: quedan sueltas y hay que montarlas en otro polín. Preguntarlo aquí evita que el
+// inventario diga por un rato que las cajas están en un rack donde ya no están, y evita tener que
+// des-ubicar y reabrir un polín sellado solo para mover unas cuantas cajas.
+function ModalAnularRemision({ remision, onConfirmar, onCerrar }) {
+  const [motivo, setMotivo] = useState("");
+  const [destino, setDestino] = useState("mismo");   // "mismo" | "otro"
+  const [palletDestinoId, setPalletDestinoId] = useState("");
+  const [abiertos, setAbiertos] = useState(null);    // null = todavía no se consultó
+  const [enviando, setEnviando] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (destino !== "otro" || abiertos !== null) return;
+    fetch("/api/pallets?estatus=Abierto", { headers: authHeader() })
+      .then(r => (r.ok ? r.json() : []))
+      .then(d => setAbiertos(Array.isArray(d) ? d : []))
+      .catch(() => setAbiertos([]));
+  }, [destino, abiertos]);
+
+  const cuantos = remision?.CantidadMasters ?? 0;
+  // Solo se ofrecen los polines donde de verdad cabe la devolución completa: los que declararon
+  // capacidad y ya no dan para tanto se muestran deshabilitados en vez de dejar que el backend
+  // rechace la anulación después de escribir el motivo.
+  const conEspacio = (abiertos ?? []).map(p => {
+    const libre = p.CantidadMaster == null ? null : p.CantidadMaster - p.CantidadMasters;
+    return { ...p, libre, cabe: libre == null || libre >= cuantos };
+  });
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError("");
+    if (destino === "otro" && !palletDestinoId) { setError("Elige el polín al que vuelve el producto."); return; }
+    setEnviando(true);
+    try {
+      await onConfirmar(motivo.trim(), destino === "otro" ? Number(palletDestinoId) : null);
+    } catch (err) {
+      setError(err.message);
+      setEnviando(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/40 z-[55] flex items-center justify-center p-4" onClick={onCerrar}>
+      <div className="bg-white rounded-xl shadow-xl w-full max-w-md max-h-full overflow-y-auto" onClick={e => e.stopPropagation()}>
+        <div className="px-5 py-4 border-b border-gray-200">
+          <h3 className="text-lg font-bold text-gray-800">Anular remisión {remision?.Folio}</h3>
+          <p className="text-sm text-gray-500 mt-1">
+            {cuantos} master(s) vuelven a inventario y queda registrado en el kardex. La remisión no se borra.
+          </p>
+        </div>
+        <form onSubmit={handleSubmit} className="px-5 py-4 space-y-4">
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Motivo *</label>
+            <textarea required rows={3} value={motivo} onChange={e => setMotivo(e.target.value)} autoFocus
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-2">¿Dónde queda el producto?</label>
+            <div className="space-y-2">
+              <label className="flex gap-2 items-start cursor-pointer">
+                <input type="radio" name="destino" value="mismo" checked={destino === "mismo"}
+                  onChange={() => setDestino("mismo")} className="mt-1" />
+                <span className="text-sm">
+                  <span className="font-medium text-gray-800">En su mismo polín</span>
+                  <span className="block text-xs text-gray-500">La carga nunca se movió — se anuló por error de captura.</span>
+                </span>
+              </label>
+              <label className="flex gap-2 items-start cursor-pointer">
+                <input type="radio" name="destino" value="otro" checked={destino === "otro"}
+                  onChange={() => setDestino("otro")} className="mt-1" />
+                <span className="text-sm">
+                  <span className="font-medium text-gray-800">En otro polín</span>
+                  <span className="block text-xs text-gray-500">El producto volvió suelto y se monta en otra tarima.</span>
+                </span>
+              </label>
+            </div>
+          </div>
+
+          {destino === "otro" && (
+            <div>
+              {abiertos === null ? (
+                <p className="text-xs text-gray-400">Buscando polines abiertos…</p>
+              ) : conEspacio.length === 0 ? (
+                <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                  No hay ningún polín abierto. Crea uno en Bodega — Pallets y vuelve a intentarlo.
+                </p>
+              ) : (
+                <>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Polín de retorno *</label>
+                  <select value={palletDestinoId} onChange={e => setPalletDestinoId(e.target.value)}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400">
+                    <option value="">Elegir…</option>
+                    {conEspacio.map(p => (
+                      <option key={p.PalletId} value={p.PalletId} disabled={!p.cabe}>
+                        {p.Codigo} — {p.CantidadMasters}{p.CantidadMaster != null ? `/${p.CantidadMaster}` : ""} master(s)
+                        {p.DescripcionOrigen ? ` · ${p.DescripcionOrigen}` : ""}
+                        {!p.cabe ? ` · solo caben ${p.libre}` : ""}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-gray-400 mt-1">
+                    El polín de origen conserva las cajas que no salieron; solo se mueven estas {cuantos}.
+                  </p>
+                </>
+              )}
+            </div>
+          )}
+
+          {error && <p className="text-sm text-red-600">{error}</p>}
+          <div className="flex justify-end gap-2">
+            <button type="button" onClick={onCerrar} className="px-4 py-2 rounded-lg text-sm font-medium text-gray-600 hover:bg-gray-100 transition">Cancelar</button>
+            <button type="submit" disabled={enviando} className="px-4 py-2 rounded-lg text-sm font-semibold bg-red-600 text-white hover:bg-red-700 transition disabled:opacity-50">
+              {enviando ? "Anulando..." : "Anular remisión"}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 function PanelRemision({ remisionId, onClose, onCambio }) {
   const puedeEditar = usePuede("remisiones", "editar");
   const puedeImprimir = usePuede("remisiones", "imprimir");
@@ -387,17 +510,20 @@ function PanelRemision({ remisionId, onClose, onCambio }) {
     else await mostrarAlerta("Error: " + (data.error || "No se pudo confirmar"));
   };
 
-  const handleAnular = async (motivo) => {
+  const handleAnular = async (motivo, palletDestinoId) => {
     const res = await fetch(`${API}/${remisionId}/anular`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...authHeader() },
-      body: JSON.stringify({ Motivo: motivo }),
+      body: JSON.stringify({ Motivo: motivo, PalletDestinoId: palletDestinoId }),
     });
     const data = await leerJSON(res);
     if (!res.ok) throw new Error(data.error || "No se pudo anular");
     setModalAnular(false);
     await fetchDetalle();
     onCambio?.();
+    if (data.PalletDestino) {
+      await mostrarAlerta(`${data.MastersDevueltos} master(s) quedaron en el polín ${data.PalletDestino}.`, "exito");
+    }
   };
 
   // Las líneas se muestran agrupadas por polín de origen: es como llega el producto al andén, y así
@@ -564,7 +690,10 @@ function PanelRemision({ remisionId, onClose, onCambio }) {
                             <Th width={widths.cliente} onResizeStart={startResize("cliente")} className="px-3 py-2 text-left">Cliente de la etiqueta</Th>
                             <Th width={widths.lote} onResizeStart={startResize("lote")} className="px-3 py-2 text-left">Lote</Th>
                             <Th width={widths.producto} onResizeStart={startResize("producto")} className="px-3 py-2 text-left">Producto</Th>
-                            <Th width={widths.kg} onResizeStart={startResize("kg")} sortKey="kg" orden={ordenLista} onOrdenar={alternarOrdenLista} className="px-3 py-2 text-right">Kg</Th>
+                            {/* Sin ordenamiento, igual que el resto de columnas de esta tabla: acá
+                                las líneas van agrupadas por polín y en el orden en que se
+                                escanearon, que es como se cotejan contra la carga. */}
+                            <Th width={widths.kg} onResizeStart={startResize("kg")} className="px-3 py-2 text-right">Kg</Th>
                             <Th width={widths.lb} onResizeStart={startResize("lb")} className="px-3 py-2 text-right">Lb</Th>
                             {editable && <Th width={widths.acciones} onResizeStart={startResize("acciones")} className="px-3 py-2 text-center">Quitar</Th>}
                           </tr>
@@ -657,9 +786,7 @@ function PanelRemision({ remisionId, onClose, onCambio }) {
           onEscanear={escanearMaster} onCerrar={() => setEscaneando(null)} />
       )}
       {modalAnular && (
-        <ModalMotivo titulo={`Anular remisión ${remision.Folio}`}
-          descripcion="El producto vuelve a inventario y queda registrado en el kardex. La remisión no se borra."
-          textoConfirmar="Anular remisión" onConfirmar={handleAnular} onCerrar={() => setModalAnular(false)} />
+        <ModalAnularRemision remision={remision} onConfirmar={handleAnular} onCerrar={() => setModalAnular(false)} />
       )}
       {mostrarHoja && <HojaRemisionModal remisionId={remisionId} onCerrar={() => setMostrarHoja(false)} />}
       {aviso && <AvisoModal {...aviso} onCerrar={() => cerrar(true)} onCancelar={() => cerrar(false)} />}

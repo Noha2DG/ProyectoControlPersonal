@@ -827,6 +827,13 @@ router.post("/:id/anular", requireAuth, requirePerm("remisiones", "anular"), asy
     const remisionId = Number(req.params.id);
     const motivo = String(req.body.Motivo ?? "").trim();
     if (!motivo) { res.status(400).json({ error: "El motivo de la anulación es requerido" }); return; }
+    // Opcional: polín al que vuelve la carga cuando NO regresó a la tarima de la que salió.
+    const palletDestinoId = req.body.PalletDestinoId != null && req.body.PalletDestinoId !== ""
+      ? Number(req.body.PalletDestinoId) : null;
+    if (palletDestinoId != null && (!Number.isInteger(palletDestinoId) || palletDestinoId <= 0)) {
+      res.status(400).json({ error: "Polín de retorno inválido" });
+      return;
+    }
 
     const operador = getOperador(req);
     let respuesta: any = null;
@@ -852,23 +859,72 @@ router.post("/:id/anular", requireAuth, requirePerm("remisiones", "anular"), asy
         await tx.$executeRaw`UPDATE Pallets SET Estatus = 'Cerrado' WHERE PalletId = ${palletId} AND Estatus = 'Despachado'`;
       }
 
-      // Agrupado igual que confirmar. Todos vuelven a 'EnBodega': el master siempre pertenece a un
-      // polín (el suyo de origen), y ese polín está Cerrado o Abierto — en ambos casos la caja es
-      // carga normal de ese polín. (Antes había un caso 'Suelto' para polines desarmados; esa
+      // Anular tiene DOS naturalezas y hasta ago 2026 solo se contemplaba una. Si fue un error
+      // administrativo, la carga nunca se movió y vuelve a su polín de origen (destino = null, el
+      // comportamiento de siempre). Pero cuando el producto sí salió y volvió, las cajas rara vez
+      // regresan a la misma tarima: quedan sueltas y hay que montarlas en otro polín. Para ese caso
+      // se pasa un polín de retorno y el traslado ocurre acá, en la misma transacción — así el
+      // inventario nunca llega a afirmar que las cajas están en un rack donde no están, y el polín
+      // de origen no hay que des-ubicarlo ni reabrirlo para mover tres cajas.
+      let destino: any = null;
+      if (palletDestinoId != null) {
+        const dest: any[] = await tx.$queryRaw`
+          SELECT PalletId, Codigo, Estatus, CantidadMaster FROM Pallets WHERE PalletId = ${palletDestinoId} LIMIT 1 FOR UPDATE
+        `;
+        if (!dest.length) throw new ErrorNegocio(404, "El polín de retorno no existe");
+        if (dest[0].Estatus !== "Abierto") {
+          throw new ErrorNegocio(400,
+            `El polín ${dest[0].Codigo} está ${String(dest[0].Estatus).toLowerCase()} — solo un polín abierto puede recibir producto devuelto.`);
+        }
+        // Mismo tope que frena el escaneo normal: si se declaró capacidad, se respeta. El FOR UPDATE
+        // de arriba serializa contra un escaneo simultáneo al mismo polín.
+        const capacidad = dest[0].CantidadMaster == null ? null : Number(dest[0].CantidadMaster);
+        if (capacidad != null) {
+          const carga: any[] = await tx.$queryRaw`
+            SELECT COUNT(*) AS n FROM Masters WHERE PalletId = ${palletDestinoId} AND Estatus <> 'Salido'
+          `;
+          const libre = capacidad - Number(carga[0].n);
+          if (lineas.length > libre) {
+            throw new ErrorNegocio(400,
+              `En el polín ${dest[0].Codigo} caben ${libre} master(s) más y esta remisión devuelve ${lineas.length}. Elige otro polín o crea uno nuevo.`);
+          }
+        }
+        destino = dest[0];
+      }
+
+      // Todos vuelven a 'EnBodega': el master siempre pertenece a un polín — el suyo de origen, o el
+      // de retorno si se eligió uno. (Antes había un caso 'Suelto' para polines desarmados; esa
       // operación se eliminó el 8 ago 2026.)
       const masterIdsAnular = lineas.map(l => Number(l.MasterId));
       if (masterIdsAnular.length) {
+        const marcadores = masterIdsAnular.map(() => "?").join(",");
         await tx.$executeRawUnsafe(
-          `UPDATE Masters SET Estatus = 'EnBodega' WHERE MasterId IN (${masterIdsAnular.map(() => "?").join(",")})`,
-          ...masterIdsAnular
+          destino
+            ? `UPDATE Masters SET Estatus = 'EnBodega', PalletId = ? WHERE MasterId IN (${marcadores})`
+            : `UPDATE Masters SET Estatus = 'EnBodega' WHERE MasterId IN (${marcadores})`,
+          ...(destino ? [Number(destino.PalletId), ...masterIdsAnular] : masterIdsAnular)
         );
       }
       if (lineas.length) {
+        // La reversa se anota SIEMPRE contra el polín del que salió: es el que registró la SALIDA y
+        // es lo que hace que el kardex cuadre por polín.
         await tx.$executeRawUnsafe(
           `INSERT INTO MovimientosBodega (PalletId, MasterId, RemisionId, Tipo, PosicionOrigenId, PosicionDestinoId, Usuario, Motivo)
            VALUES ${lineas.map(() => "(?, ?, ?, 'REVERSA_SALIDA', NULL, NULL, ?, ?)").join(", ")}`,
           ...lineas.flatMap(l => [Number(l.PalletId), Number(l.MasterId), remisionId, operador, motivo])
         );
+        // El cambio de tarima va como TRASLADO aparte, igual que una consolidación normal: dos
+        // hechos distintos (volvió del despacho / cambió de polín) son dos renglones distintos.
+        if (destino) {
+          await tx.$executeRawUnsafe(
+            `INSERT INTO MovimientosBodega (PalletId, PalletOrigenId, MasterId, RemisionId, Tipo, PosicionOrigenId, PosicionDestinoId, Usuario, Motivo)
+             VALUES ${lineas.map(() => "(?, ?, ?, ?, 'TRASLADO', NULL, NULL, ?, ?)").join(", ")}`,
+            ...lineas.flatMap(l => [
+              Number(destino.PalletId), Number(l.PalletId), Number(l.MasterId), remisionId, operador,
+              `Retorno de la remisión ${rows[0].Folio} — no volvió a su polín`,
+            ])
+          );
+        }
       }
 
       // Vigente = NULL (no 0): así el master queda libre para una remisión nueva sin que su línea
@@ -878,7 +934,10 @@ router.post("/:id/anular", requireAuth, requirePerm("remisiones", "anular"), asy
         UPDATE Remisiones SET Estatus = 'Anulada', AnuladaPor = ${operador}, AnuladaEn = NOW(), MotivoAnulacion = ${motivo}
         WHERE RemisionId = ${remisionId}
       `;
-      respuesta = { ok: true, Folio: rows[0].Folio, MastersDevueltos: lineas.length };
+      respuesta = {
+        ok: true, Folio: rows[0].Folio, MastersDevueltos: lineas.length,
+        PalletDestino: destino ? destino.Codigo : null,
+      };
     }, { timeout: 60_000 });
 
     res.json(respuesta);

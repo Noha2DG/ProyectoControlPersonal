@@ -1,7 +1,7 @@
 import { Router, Request, Response } from "express";
 import jwt from "jsonwebtoken";
 import prisma from "../lib/prisma.ts";
-import { requireAuth, requirePerm } from "../middleware/auth.ts";
+import { requireAuth, requirePerm, tienePermiso, AuthRequest } from "../middleware/auth.ts";
 import { buscarMasterPorEtiqueta, calcularTechoLinea, MASTER_SELECT, formatearMaster } from "../lib/masters.ts";
 
 const router = Router();
@@ -187,9 +187,37 @@ router.get("/", requireAuth, requirePerm("bodega", "ver"), async (req: Request, 
 });
 
 // GET /api/pallets/:id — cabecera + sus masters (con datos derivados)
+// GET /api/pallets/codigo/:codigo — el mismo detalle, pero resolviendo por el código que trae el QR
+// de la hoja del polín ("T0010"). Existe para que la consulta de la pantalla de Bodega acepte tanto
+// un correlativo de master como un código de polín: quien está en piso lee lo que tiene enfrente y
+// no sabe (ni tiene por qué) qué tipo de código es cada uno.
+router.get("/codigo/:codigo", requireAuth, requirePerm("bodega", "ver"), async (req: Request, res: Response) => {
+  try {
+    const codigo = String(req.params.codigo ?? "").trim().toUpperCase();
+    if (!codigo) { res.status(400).json({ error: "Código de polín requerido" }); return; }
+    const rows: any[] = await prisma.$queryRaw`SELECT PalletId FROM Pallets WHERE Codigo = ${codigo} LIMIT 1`;
+    if (!rows.length) { res.status(404).json({ error: `No existe ningún polín con el código ${codigo}` }); return; }
+    res.json(await detallePallet(Number(rows[0].PalletId)));
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.get("/:id", requireAuth, requirePerm("bodega", "ver"), async (req: Request, res: Response) => {
   try {
     const palletId = Number(req.params.id);
+    const detalle = await detallePallet(palletId);
+    if (!detalle) { res.status(404).json({ error: "Pallet no encontrado" }); return; }
+    res.json(detalle);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Cabecera + masters de un polín. Compartida por las dos formas de pedirlo (por id y por código)
+// para que las dos devuelvan exactamente la misma forma.
+async function detallePallet(palletId: number) {
+  {
     const rows: any[] = await prisma.$queryRaw`
       SELECT p.*, org.Descripcion AS DescripcionOrigen, bv.Nombre AS NombreBodegaVirtual,
              po.Codigo AS PosicionCodigo
@@ -199,22 +227,27 @@ router.get("/:id", requireAuth, requirePerm("bodega", "ver"), async (req: Reques
       LEFT JOIN Posiciones po ON p.PosicionId = po.PosicionId
       WHERE p.PalletId = ${palletId} LIMIT 1
     `;
-    if (!rows.length) { res.status(404).json({ error: "Pallet no encontrado" }); return; }
+    if (!rows.length) return null;
     // Se devuelven TODOS los masters, incluidos los ya despachados: el polín es también un registro
     // histórico. Los conteos sí separan, para que la pantalla pueda mostrar qué queda de verdad.
     const masters = await obtenerMastersDePallet(palletId);
     const cantidadMaster = rows[0].CantidadMaster == null ? null : Number(rows[0].CantidadMaster);
     const salidos = masters.filter((m: any) => m.Estatus === "Salido").length;
-    res.json({
+    // Quién lo subió al rack: último 'INGRESO' del kardex (un polín puede haberse des-ubicado y
+    // vuelto a ubicar, así que vale el vigente). Mismo criterio que el mapa de la bodega física.
+    const ubic: any[] = rows[0].PosicionId == null ? [] : await prisma.$queryRaw`
+      SELECT Usuario, Fecha FROM MovimientosBodega
+      WHERE PalletId = ${palletId} AND Tipo = 'INGRESO' ORDER BY MovimientoId DESC LIMIT 1
+    `;
+    return {
       ...rows[0], PalletId: Number(rows[0].PalletId), CantidadMaster: cantidadMaster,
+      UbicadoPor: ubic[0]?.Usuario ?? null, UbicadoEn: ubic[0]?.Fecha ?? null,
       Masters: masters,
       CantidadMasters: masters.length - salidos, CantidadSalidos: salidos,
       Cuadre: calcularCuadre(cantidadMaster, masters.length),
-    });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    };
   }
-});
+}
 
 // POST /api/pallets  { Origen, CantidadMaster, AreaCodigo }
 // Crea un pallet vacío y Abierto. Sin Pedido/Cliente/línea de pedido: se arma solo con lo que se
@@ -271,13 +304,19 @@ router.post("/", requireAuth, requirePerm("bodega", "escanear"), async (req: Req
 // Ingresa un master físico a este pallet. Válido solo si: el correlativo existe, su EtiquetaImpresa
 // no está Anulada, no fue escaneado antes (candado real = UNIQUE en Masters.EtiquetaId, no solo la
 // verificación previa) y no rompe el techo de su línea de pedido.
-router.post("/:id/escanear", requireAuth, requirePerm("bodega", "escanear"), async (req: Request, res: Response) => {
+router.post("/:id/escanear", requireAuth, requirePerm("bodega", "escanear"), async (req: AuthRequest, res: Response) => {
   try {
     const palletId = Number(req.params.id);
     const etiquetaId = parseCorrelativo(req.body.Correlativo);
     if (!etiquetaId) { res.status(400).json({ error: "Correlativo inválido" }); return; }
     const operador = getOperador(req);
-    let traslado: { PalletOrigen: string } | null = null;
+    // Mover cajas desde un polín SELLADO (Cerrado, con o sin posición) es deliberado y viaja aparte:
+    // lo manda en true el botón "+ Master de otro Pallet". Sin esta bandera el escaneo normal se
+    // comporta igual que siempre y sigue exigiendo que el polín de origen esté Abierto.
+    const desdeSellado = req.body.DesdeSellado === true;
+    // `as` y no anotación a secas: se asigna DENTRO del callback de la transacción, que TypeScript no
+    // sigue, y con la anotación normal lo estrecha a null y marca error al leerlo después.
+    let traslado = null as { PalletOrigen: string; PosicionOrigen: string | null; DesdeSellado: boolean; PosicionLiberada: string | null } | null;
 
     await prisma.$transaction(async (tx) => {
       const palletRows: any[] = await tx.$queryRaw`
@@ -327,10 +366,26 @@ router.post("/:id/escanear", requireAuth, requirePerm("bodega", "escanear"), asy
         if (yaEscaneado.PalletId === palletId) {
           throw new ErrorNegocio(400, "Este master ya está en este mismo pallet");
         }
+        // Un polín Cerrado (y más si está ubicado) está sellado: su contenido es definitivo y por eso
+        // el escaneo normal no lo toca. Pero en piso la gente sí toma cajas de un polín ubicado para
+        // completar otro, y obligarlos a des-ubicar → reabrir → mover → cerrar → volver a ubicar por
+        // tres cajas hacía que el movimiento no se registrara. Con `DesdeSellado` se permite el mismo
+        // movimiento que ya hace una remisión —sacar masters de un polín sellado sin des-ubicarlo—
+        // pero como acción DELIBERADA y con permiso aparte: 'bodega:editar', el mismo que exige
+        // des-ubicar, no el de escanear que tiene cualquier operador de bodega.
         if (yaEscaneado.PalletEstatus !== "Abierto") {
           const fecha = new Date(yaEscaneado.FechaIngreso).toLocaleString("es-GT");
-          throw new ErrorNegocio(400,
-            `Este master está en el polín ${yaEscaneado.PalletCodigo} (${fecha}), que está ${String(yaEscaneado.PalletEstatus).toLowerCase()}. Para moverlo aquí, reabre primero ese polín.`);
+          if (!desdeSellado) {
+            throw new ErrorNegocio(400,
+              `Este master está en el polín ${yaEscaneado.PalletCodigo} (${fecha}), que está ${String(yaEscaneado.PalletEstatus).toLowerCase()}. Usa "+ Master de otro Pallet" para moverlo sin des-ubicarlo, o reabre ese polín.`);
+          }
+          if (!tienePermiso(req, "bodega", "editar")) {
+            throw new ErrorNegocio(403,
+              `El polín ${yaEscaneado.PalletCodigo} está ${String(yaEscaneado.PalletEstatus).toLowerCase()} — mover cajas de un polín sellado requiere permiso de edición en Bodega.`);
+          }
+          if (yaEscaneado.PalletEstatus === "Cancelado") {
+            throw new ErrorNegocio(400, `El polín ${yaEscaneado.PalletCodigo} está cancelado — sus cajas no se pueden mover.`);
+          }
         }
 
         // Traslado: se MUEVE la fila, no se inserta una nueva. El master ya está contado en el techo
@@ -339,11 +394,35 @@ router.post("/:id/escanear", requireAuth, requirePerm("bodega", "escanear"), asy
         // FechaIngreso/IngresadoPor se conservan: son su entrada original a bodega, y el traslado
         // queda registrado aparte en el kardex.
         await tx.$executeRaw`UPDATE Masters SET PalletId = ${palletId}, Estatus = 'EnBodega' WHERE MasterId = ${yaEscaneado.MasterId}`;
+        // La posición de ORIGEN sí se anota cuando el polín estaba ubicado: es lo que después
+        // permite reconstruir de qué casilla del rack salió la caja, igual que hace una remisión.
         await tx.$executeRaw`
           INSERT INTO MovimientosBodega (PalletId, PalletOrigenId, MasterId, Tipo, PosicionOrigenId, PosicionDestinoId, Usuario, Motivo)
-          VALUES (${palletId}, ${yaEscaneado.PalletId}, ${yaEscaneado.MasterId}, 'TRASLADO', NULL, NULL, ${operador}, ${`Consolidado desde el polín ${yaEscaneado.PalletCodigo}`})
+          VALUES (${palletId}, ${yaEscaneado.PalletId}, ${yaEscaneado.MasterId}, 'TRASLADO', ${yaEscaneado.PosicionId}, NULL, ${operador},
+                  ${yaEscaneado.PosicionCodigo
+                    ? `Tomado del polín ${yaEscaneado.PalletCodigo} en ${yaEscaneado.PosicionCodigo}`
+                    : `Consolidado desde el polín ${yaEscaneado.PalletCodigo}`})
         `;
-        traslado = { PalletOrigen: yaEscaneado.PalletCodigo };
+
+        // Si al origen no le quedó ni una caja, su casilla del rack se libera — misma regla que al
+        // confirmar una remisión. Una tarima vacía no puede seguir bloqueando una posición. Se
+        // evalúa con NOT EXISTS en la propia consulta para no depender de haber contado bien en JS.
+        let posicionLiberada: string | null = null;
+        if (yaEscaneado.PosicionId != null) {
+          const afectadas = Number(await tx.$executeRaw`
+            UPDATE Pallets SET PosicionId = NULL
+            WHERE PalletId = ${yaEscaneado.PalletId}
+              AND NOT EXISTS (SELECT 1 FROM Masters m WHERE m.PalletId = ${yaEscaneado.PalletId} AND m.Estatus <> 'Salido')
+          `);
+          if (afectadas) posicionLiberada = yaEscaneado.PosicionCodigo;
+        }
+
+        traslado = {
+          PalletOrigen: yaEscaneado.PalletCodigo,
+          PosicionOrigen: yaEscaneado.PosicionCodigo,
+          DesdeSellado: yaEscaneado.PalletEstatus !== "Abierto",
+          PosicionLiberada: posicionLiberada,
+        };
         return;
       }
 
@@ -373,6 +452,9 @@ router.post("/:id/escanear", requireAuth, requirePerm("bodega", "escanear"), asy
       ok: true, Master: formatearMaster(masterRows[0]), CantidadMasters: Number(cantidadRows[0].n),
       // El frontend lo usa para avisar que la caja vino de otro polín y no es un ingreso nuevo.
       Traslado: traslado != null, PalletOrigen: traslado?.PalletOrigen ?? null,
+      PosicionOrigen: traslado?.PosicionOrigen ?? null,
+      DesdeSellado: traslado?.DesdeSellado ?? false,
+      PosicionLiberada: traslado?.PosicionLiberada ?? null,
     });
   } catch (err: any) {
     if (err instanceof ErrorNegocio) { res.status(err.status).json({ error: err.message }); return; }

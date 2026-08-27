@@ -509,6 +509,20 @@ router.post("/orden/:ordenId/confirmar-impresion", requireAuth, requirePerm("eti
   }
 });
 
+// Quién y cuándo puso ESTE polín en su casilla del rack. Sale del último movimiento 'INGRESO' del
+// kardex (el mismo criterio que usa el mapa de la bodega física): un polín puede haberse des-ubicado
+// y vuelto a ubicar, y lo que importa es la ubicación vigente. Devuelve el par vacío si nunca se
+// ubicó, para que el llamador lo desparrame sin condicionales.
+async function ubicacionDePallet(palletId: number | null | undefined) {
+  if (palletId == null) return { UbicadoPor: null, UbicadoEn: null };
+  const rows: any[] = await prisma.$queryRaw`
+    SELECT Usuario, Fecha FROM MovimientosBodega
+    WHERE PalletId = ${Number(palletId)} AND Tipo = 'INGRESO'
+    ORDER BY MovimientoId DESC LIMIT 1
+  `;
+  return { UbicadoPor: rows[0]?.Usuario ?? null, UbicadoEn: rows[0]?.Fecha ?? null };
+}
+
 // GET /api/etiqueta-impresa/:id/consultar  (acepta "E47" o "47" en :id)
 // Consulta completa de un correlativo: existencia/Estatus, qué producto lleva, historial de
 // impresión (ImpresionLog), y si ya está escaneado en bodega (y dónde). Sirve en dos lugares: en
@@ -551,7 +565,10 @@ router.get("/:id/consultar", requireAuth, requireAnyPerm([["etiquetado", "imprim
         ImpresoPor: h.ImpresoPor, FechaHora: h.FechaHora,
       })),
       YaEscaneado: Boolean(master),
-      Master: master,
+      // Quién ubicó el polín en el rack se busca SOLO aquí y no dentro de buscarMasterPorEtiqueta:
+      // ese helper corre en cada escaneo (50 por minuto en una estación) y no vale cargarle dos
+      // subconsultas por un dato que únicamente interesa al consultar una caja.
+      Master: master ? { ...master, ...(await ubicacionDePallet(master.PalletId)) } : null,
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message });

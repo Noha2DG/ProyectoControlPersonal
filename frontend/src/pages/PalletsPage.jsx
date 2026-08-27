@@ -43,6 +43,17 @@ function calcularCuadre(cantidadMaster, escaneados) {
   return escaneados < cantidadMaster ? "Incompleto" : "Sobrante";
 }
 
+// La misma caja, con el signo de MÁS: es la caja que sube al polín viniendo de otro. Espeja al
+// ícono de quitar para que los dos modales de tanda se lean como par.
+const IconoTraerMaster = (props) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6} {...props}>
+    <path strokeLinecap="round" strokeLinejoin="round"
+      d="M21 7.5l-9-5.25L3 7.5m18 0l-9 5.25m9-5.25v5.25M3 7.5l9 5.25M3 7.5v9l9 5.25m0-9v9" />
+    <circle cx="17.5" cy="16.5" r="4.5" />
+    <path strokeLinecap="round" d="M15.25 16.5h4.5M17.5 14.25v4.5" />
+  </svg>
+);
+
 // La misma caja del master que se usa al cargar, con el signo de menos: es la caja que BAJA del
 // polín. La figura hace de aviso de que este modal es el destructivo, junto con el color rojo.
 const IconoQuitarMaster = (props) => (
@@ -65,9 +76,9 @@ function PanelEscaneo({ palletId, onClose, onCambio }) {
   const [loading, setLoading] = useState(true);
   const [correlativo, setCorrelativo] = useState("");
   const [mensaje, setMensaje] = useState(null); // { ok: bool, texto }
-  const [mostrarConsulta, setMostrarConsulta] = useState(false);
   const [mostrarHoja, setMostrarHoja] = useState(false);
   const [mostrarQuitar, setMostrarQuitar] = useState(false);
+  const [mostrarTraer, setMostrarTraer] = useState(false);
   const inputRef = useRef(null);
   // Candado síncrono contra doble envío — el input NUNCA se deshabilita (deshabilitar un <input>
   // enfocado le quita el foco en el navegador, y a 50 masters/min el lector no puede darse el lujo
@@ -161,6 +172,27 @@ function PanelEscaneo({ palletId, onClose, onCambio }) {
   // polín buscándolas una por una en la tabla y confirmando cada una es donde se termina quitando la
   // que no era; con el lector, la caja que se baja es la que se quita. Sin confirmación por caja a
   // propósito — la confirmación es el acto físico de bajarla y pasarle el lector.
+  // Traer una caja desde OTRO polín, incluso uno cerrado y ubicado en el rack. Es el mismo endpoint
+  // de escaneo con la bandera DesdeSellado: el backend lo trata como traslado (mueve la fila, no
+  // crea master nuevo) y deja el kardex con la posición de la que salió.
+  const traerEscaneando = async (valor) => {
+    const res = await fetch(`${API}/${palletId}/escanear`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeader() },
+      body: JSON.stringify({ Correlativo: valor, DesdeSellado: true }),
+    });
+    const data = await leerJSON(res);
+    if (!res.ok) throw new Error(data.error || "No se pudo traer el master");
+    const m = data.Master;
+    const desde = data.PalletOrigen
+      ? ` · desde ${data.PalletOrigen}${data.PosicionOrigen ? ` (${data.PosicionOrigen})` : ""}`
+      : "";
+    // Que el polín de origen se haya quedado vacío es noticia: su casilla del rack acaba de
+    // liberarse y quien está en piso tiene que saberlo para bajar la tarima.
+    const liberada = data.PosicionLiberada ? ` · quedó libre ${data.PosicionLiberada}` : "";
+    return `${m.Correlativo} — ${m.NombreCliente}${m.NombreSubcliente ? "-" + m.NombreSubcliente : ""} · ${m.DescripcionProceso} ${m.DescripcionTalla}${desde}${liberada}`;
+  };
+
   const quitarEscaneando = async (valor) => {
     const res = await fetch(`${API}/${palletId}/quitar`, {
       method: "POST",
@@ -249,11 +281,10 @@ function PanelEscaneo({ palletId, onClose, onCambio }) {
           </div>
           {/* Fila propia, con botones grandes tipo táctil — pensado para tablet/teléfono en piso de
               planta, no para links de texto chicos difíciles de presionar con el dedo. */}
+          {/* "Consultar etiqueta" vivía acá adentro, pero consultar no tiene nada que ver con el
+              polín que uno tenga abierto: se movió al encabezado de la lista, donde está siempre a
+              la mano y además acepta códigos de polín. */}
           <div className="flex flex-wrap gap-2 px-5 pb-4">
-            <button onClick={() => setMostrarConsulta(true)}
-              className="px-4 py-2.5 text-sm font-semibold text-blue-700 bg-blue-50 border border-blue-200 rounded-lg hover:bg-blue-100 active:bg-blue-200 transition">
-              Consultar etiqueta
-            </button>
             {/* También con el polín Abierto: la hoja es la forma de REVISAR en papel lo que lleva
                 cargado antes de cerrarlo (se sale a cotejarla contra las cajas físicas), no solo el
                 documento final del polín cerrado. La hoja misma se marca como preliminar. */}
@@ -261,6 +292,15 @@ function PanelEscaneo({ palletId, onClose, onCambio }) {
               <button onClick={() => setMostrarHoja(true)}
                 className="px-4 py-2.5 text-sm font-semibold text-purple-700 bg-purple-50 border border-purple-200 rounded-lg hover:bg-purple-100 active:bg-purple-200 transition">
                 Imprimir hoja
+              </button>
+            )}
+            {/* Traer cajas de OTRO polín, incluso uno cerrado y ubicado. Pide 'bodega:editar' —el
+                mismo permiso que des-ubicar— porque rompe el sello de un polín posicionado; el
+                escaneo normal (bodega:escanear) sigue sin poder hacerlo. */}
+            {abierto && puedeEditar && (
+              <button onClick={() => setMostrarTraer(true)}
+                className="px-4 py-2.5 text-sm font-semibold text-amber-700 bg-amber-50 border border-amber-200 rounded-lg hover:bg-amber-100 active:bg-amber-200 transition">
+                + Master de otro Pallet
               </button>
             )}
             {puedeQuitar && (
@@ -415,8 +455,15 @@ function PanelEscaneo({ palletId, onClose, onCambio }) {
         </div>
       </div>
     </div>
-    {mostrarConsulta && <ConsultarEtiquetaModal onCerrar={() => setMostrarConsulta(false)} />}
     {mostrarHoja && <HojaPalletModal palletId={palletId} onCerrar={() => setMostrarHoja(false)} />}
+    {mostrarTraer && (
+      <ModalEscaneo titulo="Master de otro pallet" Icono={IconoTraerMaster} tono="ambar" verbo="traído"
+        descripcion={`Apunta el lector al QR de cada caja que subas al polín ${pallet?.Codigo ?? ""}. Puede venir de un polín cerrado o ubicado: no hace falta des-ubicarlo.`}
+        placeholder="QR del master (ej. E120)"
+        onEscanear={traerEscaneando}
+        // Se recarga al cerrar: la tanda mueve cajas entre dos polines y pudo liberar una posición.
+        onCerrar={() => { setMostrarTraer(false); fetchDetalle(); onCambio?.(); }} />
+    )}
     {mostrarQuitar && (
       <ModalEscaneo titulo="Quitar masters del polín" Icono={IconoQuitarMaster} tono="rojo" verbo="quitado"
         descripcion={`Apunta el lector al QR de cada caja que bajes del polín ${pallet?.Codigo ?? ""}. Sale del polín apenas se lee.`}
@@ -507,11 +554,21 @@ export default function PalletsPage() {
   const [origenes, setOrigenes] = useState([]);
   const [bodegasVirtuales, setBodegasVirtuales] = useState([]);
   const [modalNuevo, setModalNuevo] = useState(false);
+  const [busquedaPallet, setBusquedaPallet] = useState("");
+  const [mostrarConsulta, setMostrarConsulta] = useState(false);
   const [widthsPallets, startResizePallets] = useColWidths("pallets", PALLETS_COL_DEFAULTS);
   const [ordenPallets, alternarOrdenPallets] = useOrden();
+
+  // Se busca por código de polín, que es lo que el operador tiene a mano (la hoja o el QR). El
+  // Origen y el Área entran también porque el mismo campo sirve para acotar "todo lo de BODEGA".
+  const qPallet = busquedaPallet.trim().toLowerCase();
+  const palletsFiltrados = qPallet
+    ? pallets.filter(p => `${p.Codigo} ${p.DescripcionOrigen ?? ""} ${p.NombreBodegaVirtual ?? ""}`.toLowerCase().includes(qPallet))
+    : pallets;
+
   // Masters ordena por lo que hay dentro (número), no por el texto "12 / 20"; Creado y Cerrado
   // por su fecha real y no por el "usuario · fecha" que se muestra.
-  const palletsOrdenados = ordenarFilas(pallets, ordenPallets, {
+  const palletsOrdenados = ordenarFilas(palletsFiltrados, ordenPallets, {
     pallet: p => p.Codigo, estatus: p => p.Estatus, area: p => p.NombreBodegaVirtual,
     origen: p => p.DescripcionOrigen, masters: p => p.CantidadMasters, cuadre: p => p.Cuadre,
     creado: p => p.CreadoEn, cerrado: p => p.CerradoEn,
@@ -584,7 +641,19 @@ export default function PalletsPage() {
         </select>
         <input type="date" value={filtroFecha} onChange={e => setFiltroFecha(e.target.value)}
           className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
-        <span className="text-sm text-gray-500 ml-auto">{pallets.length} pallet{pallets.length !== 1 ? "s" : ""}</span>
+        {/* Filtro local: la lista ya viene entera del backend (tope 500), así que buscar el código
+            aquí es instantáneo y no cuesta una consulta por tecla. */}
+        <input type="text" value={busquedaPallet} onChange={e => setBusquedaPallet(e.target.value)}
+          placeholder="Buscar polín (ej. T0010)"
+          className="border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono w-48 focus:outline-none focus:ring-2 focus:ring-blue-400" />
+        <button onClick={() => setMostrarConsulta(true)}
+          className="px-4 py-2 text-sm font-semibold text-blue-700 bg-blue-50 border border-blue-200 rounded-lg hover:bg-blue-100 active:bg-blue-200 transition">
+          Consultar etiqueta
+        </button>
+        <span className="text-sm text-gray-500 ml-auto">
+          {palletsFiltrados.length}
+          {palletsFiltrados.length !== pallets.length ? ` de ${pallets.length}` : ""} pallet{palletsFiltrados.length !== 1 ? "s" : ""}
+        </span>
         {puedeEscanear && (
           <button onClick={() => setModalNuevo(true)} className="bg-blue-600 text-white font-semibold px-4 py-2 rounded-lg hover:bg-blue-700 transition text-sm">
             + Nuevo pallet
@@ -661,6 +730,7 @@ export default function PalletsPage() {
       </div>
 
       {modalNuevo && <ModalNuevoPallet origenes={origenes} bodegasVirtuales={bodegasVirtuales} onCrear={handleCrear} onClose={() => setModalNuevo(false)} />}
+      {mostrarConsulta && <ConsultarEtiquetaModal onCerrar={() => setMostrarConsulta(false)} />}
 
       {panelId != null && (
         <PanelEscaneo palletId={panelId} onClose={() => { setPanelId(null); fetchPallets(); }} onCambio={fetchPallets} />

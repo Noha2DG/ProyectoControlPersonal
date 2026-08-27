@@ -12,6 +12,9 @@ import { useState, useEffect, useRef } from "react";
 const TONOS = {
   azul: { chip: "bg-blue-50 text-blue-600", input: "border-blue-300 focus:ring-blue-400", boton: "bg-blue-600 hover:bg-blue-700" },
   rojo: { chip: "bg-red-50 text-red-600", input: "border-red-300 focus:ring-red-400", boton: "bg-red-600 hover:bg-red-700" },
+  // Ámbar = movimiento entre polines (traer cajas de otro, incluso sellado): ni ingreso normal
+  // (azul) ni destructivo (rojo), pero sí algo que conviene que el operador note.
+  ambar: { chip: "bg-amber-50 text-amber-600", input: "border-amber-300 focus:ring-amber-400", boton: "bg-amber-600 hover:bg-amber-700" },
 };
 
 export default function ModalEscaneo({
@@ -64,7 +67,9 @@ export default function ModalEscaneo({
         <div className="px-5 py-4 border-b border-gray-200 flex items-start justify-between gap-3 shrink-0">
           <div className="flex items-center gap-3">
             <span className={`w-11 h-11 rounded-lg flex items-center justify-center shrink-0 ${colores.chip}`}>
-              <Icono className="w-6 h-6" />
+              {/* Opcional: sin esta guarda, un llamador que olvide el ícono revienta el render
+                  entero con "Element type is invalid" y deja la pantalla en blanco. */}
+              {Icono && <Icono className="w-6 h-6" />}
             </span>
             <div>
               <h3 className="text-lg font-bold text-gray-800">{titulo}</h3>
