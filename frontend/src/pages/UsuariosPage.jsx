@@ -27,7 +27,11 @@ const MODULOS = [
   // ── Destajo (producción)
   { key: "destajo",        label: "Destajo — Materia Prima y Pesaje", acciones: ["ver","crear","editar","eliminar"], grupo: "Operación" },
   { key: "etiquetado",     label: "Etiquetado — Orden de Trabajo",   acciones: ["ver","crear","editar","eliminar","imprimir"], grupo: "Operación" },
-  { key: "bodega",         label: "Bodega — Pallets y Escaneo",      acciones: ["ver","escanear","editar","eliminar"], grupo: "Operación" },
+  // "trasladar" es la acción fuerte de bodega: mueve cajas de un polín SELLADO (cerrado y ubicado en
+  // el rack) a otro, sin des-ubicarlo. Se separa de "editar" —que es la operación diaria de armar y
+  // quitar cajas de un polín abierto— porque romper el sello de un polín ya posicionado es de unos
+  // pocos, no de toda la cuadrilla. Mismo criterio que "anular" en remisiones.
+  { key: "bodega",         label: "Bodega — Pallets y Escaneo",      acciones: ["ver","escanear","editar","trasladar","eliminar"], grupo: "Operación" },
   // "anular" es la acción fuerte: devuelve al inventario producto ya despachado. Se separa de
   // "editar" (armar y confirmar, la operación diaria) y de "eliminar" (borrar borradores).
   { key: "remisiones",     label: "Bodega — Remisiones y Despacho",  acciones: ["ver","crear","editar","eliminar","imprimir","anular"], grupo: "Operación" },

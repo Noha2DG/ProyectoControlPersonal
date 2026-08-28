@@ -71,6 +71,8 @@ const IconoQuitarMaster = (props) => (
 function PanelEscaneo({ palletId, onClose, onCambio }) {
   const puedeEscanear = usePuede("bodega", "escanear");
   const puedeEditar = usePuede("bodega", "editar");
+  // Permiso aparte: traer cajas de un polín sellado no es la operación diaria (ver UsuariosPage).
+  const puedeTrasladar = usePuede("bodega", "trasladar");
   const { aviso, mostrarAlerta, pedirConfirmacion, cerrar } = useAviso();
   const [pallet, setPallet] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -294,10 +296,11 @@ function PanelEscaneo({ palletId, onClose, onCambio }) {
                 Imprimir hoja
               </button>
             )}
-            {/* Traer cajas de OTRO polín, incluso uno cerrado y ubicado. Pide 'bodega:editar' —el
-                mismo permiso que des-ubicar— porque rompe el sello de un polín posicionado; el
-                escaneo normal (bodega:escanear) sigue sin poder hacerlo. */}
-            {abierto && puedeEditar && (
+            {/* Traer cajas de OTRO polín, incluso uno cerrado y ubicado. Pide su propio permiso
+                'bodega:trasladar' y no 'editar': editar lo tiene toda la cuadrilla para armar y
+                corregir polines abiertos, y romper el sello de uno ya posicionado es de unos pocos.
+                El escaneo normal (bodega:escanear) sigue sin poder hacerlo. */}
+            {abierto && puedeTrasladar && (
               <button onClick={() => setMostrarTraer(true)}
                 className="px-4 py-2.5 text-sm font-semibold text-amber-700 bg-amber-50 border border-amber-200 rounded-lg hover:bg-amber-100 active:bg-amber-200 transition">
                 + Master de otro Pallet

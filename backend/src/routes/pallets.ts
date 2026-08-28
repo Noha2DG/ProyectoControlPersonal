@@ -379,9 +379,11 @@ router.post("/:id/escanear", requireAuth, requirePerm("bodega", "escanear"), asy
             throw new ErrorNegocio(400,
               `Este master está en el polín ${yaEscaneado.PalletCodigo} (${fecha}), que está ${String(yaEscaneado.PalletEstatus).toLowerCase()}. Usa "+ Master de otro Pallet" para moverlo sin des-ubicarlo, o reabre ese polín.`);
           }
-          if (!tienePermiso(req, "bodega", "editar")) {
+          // Permiso propio, no 'editar': editar lo tiene toda la cuadrilla de bodega para armar y
+          // corregir polines abiertos, y romper el sello de uno ya posicionado es de unos pocos.
+          if (!tienePermiso(req, "bodega", "trasladar")) {
             throw new ErrorNegocio(403,
-              `El polín ${yaEscaneado.PalletCodigo} está ${String(yaEscaneado.PalletEstatus).toLowerCase()} — mover cajas de un polín sellado requiere permiso de edición en Bodega.`);
+              `El polín ${yaEscaneado.PalletCodigo} está ${String(yaEscaneado.PalletEstatus).toLowerCase()} — mover cajas de un polín sellado requiere el permiso "trasladar" de Bodega.`);
           }
           if (yaEscaneado.PalletEstatus === "Cancelado") {
             throw new ErrorNegocio(400, `El polín ${yaEscaneado.PalletCodigo} está cancelado — sus cajas no se pueden mover.`);

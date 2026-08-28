@@ -18,7 +18,10 @@ export interface Permisos {
   catalogos?:      { ver?: boolean; crear?: boolean; editar?: boolean; eliminar?: boolean };
   destajo?:        { ver?: boolean; crear?: boolean; editar?: boolean; eliminar?: boolean };
   etiquetado?:     { ver?: boolean; crear?: boolean; editar?: boolean; eliminar?: boolean; imprimir?: boolean };
-  bodega?:         { ver?: boolean; escanear?: boolean; editar?: boolean; eliminar?: boolean };
+  // `trasladar` va aparte de `editar` porque mueve cajas de un polin SELLADO (cerrado y ya ubicado
+  // en el rack) a otro sin des-ubicarlo. `editar` es la operacion diaria —armar y corregir polines
+  // abiertos— y la tiene toda la cuadrilla; romper el sello de uno posicionado es de unos pocos.
+  bodega?:         { ver?: boolean; escanear?: boolean; editar?: boolean; trasladar?: boolean; eliminar?: boolean };
   // `anular` va aparte de `editar` y de `eliminar` a propósito: anular una remisión confirmada
   // devuelve al inventario producto que YA SALIÓ físicamente de la planta. Es la válvula de escape
   // del módulo (mismo criterio con que `bodega.editar` gobierna desubicar/desarmar, y no `escanear`).

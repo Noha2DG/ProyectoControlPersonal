@@ -328,7 +328,7 @@ export default function TransferenciasAdminPage() {
       {loading ? (
         <div className="flex justify-center py-16"><div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" /></div>
       ) : (
-        <div className="bg-white rounded-xl shadow overflow-hidden">
+        <div className="bg-white rounded-xl shadow overflow-x-auto">
           <table className="w-full text-sm table-fixed">
             <Colgroup columns={COLS} widths={widths} />
             <thead>
