@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { fmtNum } from "../utils/numero.js";
 import { authHeader, usePuede } from "../context/AuthContext.jsx";
-import { piscinaRequiereCiclo } from "../utils/codigoLote.js";
+import { componerCodigoLote, piscinaRequiereCiclo } from "../utils/codigoLote.js";
 import { useColWidths, Th, Colgroup } from "../components/ResizableTh.jsx";
 
 const LOTE_COL_DEFAULTS = { lote: 130, finca: 140, ciclo: 90, clase: 90, talla: 130, peso: 130, acciones: 130 };
@@ -91,29 +91,26 @@ function LoteModal({ item, fincas, clases, tallas, onSave, onClose }) {
     setForm(p => ({ ...p, CicloNumero: ultimoCiclo ? String(ultimoCiclo.Ciclo) : "" }));
   }, [ultimoCiclo?.CicloId, requiereCiclo]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const handleSubmit = e => { e.preventDefault(); onSave(form); };
-
-  // Vista previa del código de lote (se confirma en el servidor al guardar, donde se asigna el secuencial real del día)
-  const isoSemana = (fecha) => {
-    const [anio, mes, dia] = fecha.split("-").map(Number);
-    const date = new Date(Date.UTC(anio, mes - 1, dia));
-    const diaSemanaISO = date.getUTCDay() || 7;
-    const jueves = new Date(date);
-    jueves.setUTCDate(date.getUTCDate() + 4 - diaSemanaISO);
-    const inicioAnio = new Date(Date.UTC(jueves.getUTCFullYear(), 0, 1));
-    const semana = Math.ceil((((jueves.getTime() - inicioAnio.getTime()) / 86400000) + 1) / 7);
-    return { diaSemanaISO, semana };
+  // Un segundo envío (doble clic, o Enter y luego clic en Crear) manda otro POST antes de que llegue
+  // la respuesta del primero. Con el código de lote ya calculado del lado del servidor, el segundo
+  // choca contra la llave (Lote, Clase) y el operador ve un error de duplicado por un lote que en
+  // realidad sí se creó. Antes de que los sifones dejaran de llevar correlativo era peor: el segundo
+  // envío tomaba el siguiente número del día y creaba una fila duplicada en silencio.
+  const [guardando, setGuardando] = useState(false);
+  const handleSubmit = async e => {
+    e.preventDefault();
+    if (guardando) return;
+    setGuardando(true);
+    try { await onSave(form); } finally { setGuardando(false); }
   };
+
+  // Vista previa del código de lote, con la misma fórmula que usa el servidor al guardar. Una piscina
+  // sin ciclo (sifón, maquila, importación) no lleva último segmento: su código termina en la piscina,
+  // así que aquí tampoco se muestra el "?" que sí tiene sentido mientras falta capturar el ciclo.
   const previewLote = () => {
-    if (!form.Fecha || !form.PiscinaId) return null;
     const piscina = piscinas.find(p => String(p.PiscinaId) === String(form.PiscinaId));
     if (!piscina) return null;
-    const [anio] = form.Fecha.split("-").map(Number);
-    const letra = String.fromCharCode(65 + (anio - 2020));
-    const { diaSemanaISO, semana } = isoSemana(form.Fecha);
-    const segFecha = `${letra}${diaSemanaISO}${String(semana).padStart(2, "0")}`;
-    const [parte1, parte2] = piscina.Nombre.split("-");
-    return [`${segFecha}${parte1}`, parte2, form.CicloNumero || "?"].filter(Boolean).join("-");
+    return componerCodigoLote(piscina.Nombre, form.Fecha, requiereCiclo ? (form.CicloNumero || "?") : "");
   };
 
   return (
@@ -129,7 +126,7 @@ function LoteModal({ item, fincas, clases, tallas, onSave, onClose }) {
             <div className="w-full border border-gray-200 bg-gray-50 rounded-lg px-3 py-2 text-sm font-mono text-gray-600">
               {isEdit ? (previewLote() || item.Lote) : (previewLote() || "Seleccione piscina, ciclo y fecha...")}
             </div>
-            {!isEdit && <p className="text-xs text-gray-400 mt-1">Se genera automáticamente al guardar (el secuencial final lo asigna el servidor)</p>}
+            {!isEdit && <p className="text-xs text-gray-400 mt-1">Se genera automáticamente al guardar</p>}
             {isEdit && <p className="text-xs text-gray-400 mt-1">Si corriges el ciclo, el código del lote se actualiza al guardar</p>}
           </div>
           <div>
@@ -207,7 +204,10 @@ function LoteModal({ item, fincas, clases, tallas, onSave, onClose }) {
           </div>
           <div className="flex justify-end gap-3 pt-1">
             <button type="button" onClick={onClose} className="px-4 py-2 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 transition">Cancelar</button>
-            <button type="submit" className="px-5 py-2 text-sm bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 transition">{isEdit ? "Guardar" : "Crear"}</button>
+            <button type="submit" disabled={guardando}
+              className="px-5 py-2 text-sm bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 transition disabled:opacity-50 disabled:cursor-not-allowed">
+              {guardando ? "Guardando…" : isEdit ? "Guardar" : "Crear"}
+            </button>
           </div>
         </form>
       </div>
@@ -426,6 +426,11 @@ export default function MateriaPrimaPage() {
     }
   };
 
+  // Suma de la columna Procesado. Debe cuadrar con el recuadro "Procesado" del lote: ese viene del
+  // servidor sumando los pesajes del lote entero, y esta suma los de las transacciones listadas — si
+  // difieren, es que alguna transacción del lote no está a la vista.
+  const totalProcesado = transacciones.reduce((total, t) => total + Number(t.Procesado || 0), 0);
+
   const q = busqueda.toLowerCase();
   const lotesFiltrados = lotes.filter(l => !q || l.Lote.toLowerCase().includes(q) || l.NombreFinca.toLowerCase().includes(q));
 
@@ -576,6 +581,15 @@ export default function MateriaPrimaPage() {
                       <tr><td colSpan={6} className="px-4 py-8 text-center text-gray-400">Sin transacciones para este lote</td></tr>
                     )}
                   </tbody>
+                  {transacciones.length > 0 && (
+                    <tfoot>
+                      <tr className="bg-gray-50 border-t-2 border-gray-200">
+                        <td className="px-3 py-3 text-xs font-semibold uppercase tracking-wider text-gray-500 whitespace-nowrap" colSpan={3}>Total</td>
+                        <td className="px-3 py-3 text-right font-bold text-gray-800 whitespace-nowrap">{fmtNum(totalProcesado)}</td>
+                        <td className="px-3 py-3 text-xs text-gray-400 whitespace-nowrap" colSpan={2}>{loteSel.UM}</td>
+                      </tr>
+                    </tfoot>
+                  )}
                 </table>
               </div>
             )}

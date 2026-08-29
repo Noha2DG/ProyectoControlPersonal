@@ -19,17 +19,28 @@ function getOperador(req: Request): string {
 
 // Formato: <letraAño><díaSemanaISO><semanaISO><primeraParteDePiscina>-<segundaParteDePiscina>-<ciclo>
 // ej. piscina "EM07-E01", martes (2) semana 27 de 2026 (G), ciclo 5 → G227EM07-E01-5
+//
+// Un sifón (o una maquila/importación) es un lote universal del día: no lleva ciclo y lo único que lo
+// separa es la finca, que ya viene dentro del nombre de la piscina (EM-SIFON vs TM-SIFON). Por eso su
+// código termina en la piscina, sin nada más — igual que ya lo genera Etiquetado en ordenEtiquetado.ts,
+// que para el mismo sifón y día debe producir exactamente este texto.
+//
+// El correlativo del día se conserva solo para una piscina de cultivo capturada sin ciclo: ahí el
+// número sí distingue capturas que de otro modo chocarían, porque el ciclo es el que las separa.
 async function generarCodigoLote(piscinaId: number, fecha: string, cicloNumero?: number) {
-  const piscinas: any[] = await prisma.$queryRaw`SELECT Nombre FROM Piscina WHERE PiscinaId = ${piscinaId} LIMIT 1`;
+  const piscinas: any[] = await prisma.$queryRaw`SELECT Nombre, CodigoFinca FROM Piscina WHERE PiscinaId = ${piscinaId} LIMIT 1`;
   if (!piscinas.length) return null;
+  const { Nombre, CodigoFinca } = piscinas[0];
   let secuencial: string;
   if (cicloNumero) {
     secuencial = String(cicloNumero);
+  } else if (!piscinaRequiereCiclo(String(Nombre), String(CodigoFinca))) {
+    secuencial = "";
   } else {
     const countRows: any[] = await prisma.$queryRaw`SELECT COUNT(*) AS n FROM Lotes WHERE Fecha = ${fecha}`;
     secuencial = String(Number(countRows[0].n) + 1);
   }
-  return componerCodigoLote(String(piscinas[0].Nombre), fecha, secuencial);
+  return componerCodigoLote(String(Nombre), fecha, secuencial);
 }
 
 function formatear(rows: any[]) {
@@ -80,7 +91,8 @@ router.get("/", requireAuth, requirePerm("destajo", "ver"), async (req: Request,
 });
 
 // POST /api/lotes  { PiscinaId, CicloNumero?, Clase, TallaReferencia?, Fecha, PesoIngreso, UM }
-// El código de Lote se genera automáticamente: AñoLetra+DíaSemana+Semana - Piscina - secuencial del día.
+// El código de Lote se genera automáticamente: AñoLetra+DíaSemana+Semana - Piscina - ciclo
+// (sin el último segmento cuando la piscina no lleva ciclo — sifón, maquila, importación).
 // CicloNumero es el número de ciclo (ej. 6). Si no existe para esa piscina+año, se crea automáticamente.
 router.post("/", requireAuth, requirePerm("destajo", "crear"), async (req: Request, res: Response) => {
   try {
@@ -123,7 +135,7 @@ router.post("/", requireAuth, requirePerm("destajo", "crear"), async (req: Reque
     `;
     res.status(201).json({ ok: true, Lote: lote });
   } catch (err: any) {
-    if (err.message?.includes("Duplicate")) res.status(400).json({ error: "Ya existe un lote para esta piscina, ciclo, fecha y clase" });
+    if (err.message?.includes("Duplicate")) res.status(400).json({ error: "Ya existe este lote para esa clase — edítalo para ajustar el peso de ingreso" });
     else if (err.message?.includes("foreign key")) res.status(400).json({ error: "Piscina, Clase o Talla no válidos" });
     else res.status(500).json({ error: err.message });
   }
@@ -208,7 +220,7 @@ router.put("/:lote/:clase", requireAuth, requirePerm("destajo", "editar"), async
     }
     res.json({ ok: true, Lote: loteFinal });
   } catch (err: any) {
-    if (err.message?.includes("Duplicate")) res.status(400).json({ error: "Ya existe un lote para esta piscina, ciclo, fecha y clase" });
+    if (err.message?.includes("Duplicate")) res.status(400).json({ error: "Ya existe este lote para esa clase — edítalo para ajustar el peso de ingreso" });
     else res.status(500).json({ error: err.message });
   }
 });

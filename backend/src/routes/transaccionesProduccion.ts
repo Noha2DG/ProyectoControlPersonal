@@ -40,8 +40,10 @@ const SELECT_TRANS = `
 `;
 
 // GET /api/transacciones-produccion?lote=XXX&clase=YYY | ?estado=Abierta
-// El filtro por lote (vista operativa del día) solo muestra transacciones Abiertas — las Cerradas
-// ya quedaron resueltas y se consultan desde el Reporte, no aquí. `clase` es la Clase de origen de la
+// El filtro por lote devuelve TODAS las transacciones del lote, Abiertas y Cerradas: cerrar una no la
+// borra del historial del lote, y ocultarlas dejaba lotes con Procesado > 0 mostrando "sin
+// transacciones", que se lee como si el peso hubiera salido de la nada. Las Abiertas van primero para
+// que el trabajo del día no quede sepultado bajo lo ya resuelto. `clase` es la Clase de origen de la
 // Materia Prima (Lotes.Clase) — el texto de Lote puede repetirse entre Clases del mismo Piscina+Ciclo+Fecha,
 // así que hace falta para no mezclar las transacciones de dos filas de Lotes distintas.
 router.get("/", requireAuth, requirePerm("destajo", "ver"), async (req: Request, res: Response) => {
@@ -52,7 +54,7 @@ router.get("/", requireAuth, requirePerm("destajo", "ver"), async (req: Request,
     let rows: any[];
     if (lote) {
       rows = await prisma.$queryRawUnsafe(
-        `${SELECT_TRANS} WHERE tp.Lote = ? AND tp.ClaseOrigen = ? AND tp.Estado = 'Abierta' ORDER BY tp.TransaccionId DESC`,
+        `${SELECT_TRANS} WHERE tp.Lote = ? AND tp.ClaseOrigen = ? ORDER BY (tp.Estado = 'Abierta') DESC, tp.TransaccionId DESC`,
         lote, clase
       );
     } else if (estado) {
