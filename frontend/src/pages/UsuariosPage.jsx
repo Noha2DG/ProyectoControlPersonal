@@ -56,6 +56,8 @@ const MODULOS = [
 const ACCION_LABELS = {
   ver: "Ver", crear: "Crear", editar: "Editar", eliminar: "Eliminar",
   baja: "Dar de baja", escanear: "Escanear", imprimir: "Imprimir", anular: "Anular salida",
+  // Sin entrada acá se pinta la clave cruda en minúscula, que se lee como algo a medio hacer.
+  trasladar: "Trasladar cajas",
 };
 
 // Deriva la matriz de permisos de MODULOS en vez de enumerarla a mano por rol:
