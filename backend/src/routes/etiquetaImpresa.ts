@@ -7,6 +7,17 @@ import { buscarMasterPorEtiqueta, calcularTechoLinea } from "../lib/masters.ts";
 
 const router = Router();
 
+// El lote recortado a su segmento de fecha: "G135TM02-E03-9" → "G135". Hay clientes que en su
+// etiqueta no quieren el lote completo, solo el año/día/semana de producción — y esos cuatro
+// caracteres son exactamente eso (letra de año + día ISO + semana ISO), ver codigoLote.ts. Se
+// recorta por la izquierda y no por guiones porque los otros segmentos varían: "G233K020" no tiene
+// separadores y "G435EM06-E03-1" tiene dos. Si el lote no sigue el formato se guarda null en vez de
+// inventar un recorte — la plantilla imprimirá vacío y se nota, que es mejor que un dato falso.
+function loteCorto(lote: string | null | undefined): string | null {
+  const v = String(lote ?? "").trim();
+  return /^[A-Z][1-7]\d{2}/.test(v) ? v.slice(0, 4) : null;
+}
+
 // Error de negocio lanzado DENTRO de una transacción (donde no se puede responder directo al
 // cliente) — el catch de la ruta lo traduce a su status HTTP en vez de un 500 genérico.
 class ErrorNegocio extends Error {
@@ -187,14 +198,14 @@ router.post("/", requireAuth, requirePerm("etiquetado", "imprimir"), async (req:
              Cliente, CodigoCliente, Subcliente, CodigoSubcliente,
              Clase, DescripcionClase, Proceso,
              CodigoTalla, Talla, CodigoPresentacion, Presentacion,
-             Lote, Color, Origen, Congelacion, Area, FechaProduccion)
+             Lote, LoteCorto, Color, Origen, Congelacion, Area, FechaProduccion)
           VALUES (${id}, ${Number(OrdenId)}, ${"E" + id}, ${orden.CodigoPedido},
                   ${orden.NombreCliente}, ${orden.CodigoCliente},
                   ${orden.NombreSubcliente}, ${orden.CodigoSubcliente},
                   ${orden.Clase}, ${orden.DescripcionClase}, ${orden.DescripcionProceso},
                   ${orden.CodigoTalla}, ${orden.DescripcionTalla},
                   ${orden.CodigoPresentacion}, ${orden.DescripcionPresentacion},
-                  ${orden.Lote}, ${orden.Color},
+                  ${orden.Lote}, ${loteCorto(orden.Lote)}, ${orden.Color},
                   ${orden.DescripcionOrigen}, ${orden.DescripcionCongelacion}, ${orden.NombreArea},
                   ${orden.FechaProduccion})
         `;

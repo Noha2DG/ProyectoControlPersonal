@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { fmtNum } from "../utils/numero.js";
-import { authHeader, usePuede } from "../context/AuthContext.jsx";
+import { authHeader, usePuede, useAuth } from "../context/AuthContext.jsx";
 import { useColWidths, useOrden, ordenarFilas, Th, Colgroup } from "../components/ResizableTh.jsx";
 import AvisoModal from "../components/AvisoModal.jsx";
 import HojaRemisionModal from "../components/HojaRemisionModal.jsx";
@@ -423,6 +423,8 @@ function PanelRemision({ remisionId, onClose, onCambio }) {
   const puedeEditar = usePuede("remisiones", "editar");
   const puedeImprimir = usePuede("remisiones", "imprimir");
   const puedeAnular = usePuede("remisiones", "anular");
+  // El plazo para anular no aplica al administrador (ver DIAS_PARA_ANULAR en remisiones.ts).
+  const esAdmin = useAuth().user?.rol === "admin";
   const { aviso, mostrarAlerta, pedirConfirmacion, cerrar } = useAviso();
   const [remision, setRemision] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -757,7 +759,16 @@ function PanelRemision({ remisionId, onClose, onCambio }) {
                 Imprimir
               </button>
             )}
-            {remision?.Estatus === "Confirmada" && puedeAnular && (
+            {/* Pasado el plazo, anular queda solo para el administrador: el documento ya circuló y
+                devolver producto al inventario deja de ser una corrección de captura. El backend lo
+                valida igual — esto solo evita ofrecer un botón que va a rebotar. */}
+            {remision?.Estatus === "Confirmada" && puedeAnular && remision.AnulacionVencida && !esAdmin && (
+              <span className="px-3 py-2 text-xs text-gray-500 self-center">
+                Se confirmó hace {remision.DiasDesdeConfirmada} días — pasados {remision.DiasParaAnular},
+                solo un administrador puede anularla.
+              </span>
+            )}
+            {remision?.Estatus === "Confirmada" && puedeAnular && (!remision.AnulacionVencida || esAdmin) && (
               <button onClick={() => setModalAnular(true)}
                 className="px-4 py-2 rounded-lg text-sm font-semibold bg-red-600 text-white hover:bg-red-700 transition">
                 Anular

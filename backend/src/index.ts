@@ -37,6 +37,7 @@ import remisionesRouter from "./routes/remisiones.ts";
 import reportesRouter from "./routes/reportes.ts";
 import { requireAuth } from "./middleware/auth.ts";
 import { barridoCorteMedianoche } from "./lib/corteMedianoche.ts";
+import { barridoEtiquetasVencidas } from "./lib/etiquetasVencidas.ts";
 import { reintentar } from "./lib/retry.ts";
 
 const app = express();
@@ -112,4 +113,14 @@ app.listen(PORT, () => {
     );
   ejecutarBarrido();
   setInterval(ejecutarBarrido, INTERVALO_BARRIDO_MS);
+
+  // Anula las etiquetas impresas que llevan 48 h sin escanearse: dejan de poder entrar a bodega y
+  // dejan de contar como impresas, que es lo que se cuadra a diario. Mismo intervalo y mismos
+  // reintentos que el corte de medianoche — es un UPDATE idempotente, repetirlo no cuesta nada.
+  const ejecutarVencidas = () =>
+    reintentar(() => barridoEtiquetasVencidas(), 3, 2000).catch(err =>
+      console.error("Barrido de etiquetas vencidas falló:", err.message)
+    );
+  ejecutarVencidas();
+  setInterval(ejecutarVencidas, INTERVALO_BARRIDO_MS);
 });

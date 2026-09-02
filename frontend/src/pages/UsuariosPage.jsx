@@ -218,6 +218,9 @@ function UsuarioModal({ usuario, onSave, onClose }) {
 
             {/* Matriz de permisos */}
             <div className="border border-gray-200 rounded-xl overflow-hidden">
+              {/* La matriz de permisos tiene una columna por acción (hasta 6) más el nombre del
+                  módulo: en pantalla chica no cabe y las últimas casillas quedan sin poder marcarse. */}
+              <div className="overflow-x-auto">
               <table className="w-full text-xs">
                 <thead>
                   <tr className="bg-gray-50 text-gray-500 uppercase tracking-wider">
@@ -258,6 +261,7 @@ function UsuarioModal({ usuario, onSave, onClose }) {
                   }, [])}
                 </tbody>
               </table>
+              </div>
             </div>
           </div>
 
@@ -377,6 +381,10 @@ export default function UsuariosPage() {
         </div>
       ) : (
         <div className="bg-white rounded-xl shadow overflow-hidden">
+          {/* Scroll horizontal: la columna "Acceso a módulos" crece con la cantidad de módulos que
+              tenga cada usuario, y en una laptop chica la tabla se sale de la pantalla — sin esto,
+              Estado y Acciones quedan fuera de alcance y no hay forma de llegar a ellas. */}
+          <div className="overflow-x-auto">
           <table className="w-full text-sm table-fixed">
             <Colgroup columns={COLS} widths={widths} />
             <thead>
@@ -446,6 +454,7 @@ export default function UsuariosPage() {
               })}
             </tbody>
           </table>
+          </div>
         </div>
       )}
 

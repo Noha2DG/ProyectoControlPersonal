@@ -1,7 +1,7 @@
 import { Router, Request, Response } from "express";
 import jwt from "jsonwebtoken";
 import prisma from "../lib/prisma.ts";
-import { requireAuth, requirePerm } from "../middleware/auth.ts";
+import { requireAuth, requirePerm, AuthRequest } from "../middleware/auth.ts";
 import { MASTER_SELECT, formatearMaster } from "../lib/masters.ts";
 
 // Salida de bodega = Remisión (ver createRemisiones.ts para el modelo y las decisiones de diseño).
@@ -337,6 +337,11 @@ router.get("/:id", requireAuth, requirePerm("remisiones", "ver"), async (req: Re
       EsMixta: Number(remision.EsMixta) === 1,
       CodigoCliente: remision.CodigoCliente == null ? null : Number(remision.CodigoCliente),
       Fecha: remision.Fecha ? new Date(remision.Fecha).toISOString().slice(0, 10) : null,
+      // La pantalla no recalcula el plazo: lo recibe resuelto para no tener el número 4 escrito en
+      // dos lados que se puedan desincronizar.
+      DiasParaAnular: DIAS_PARA_ANULAR,
+      DiasDesdeConfirmada: diasDesdeConfirmada(remision.ConfirmadaEn),
+      AnulacionVencida: anulacionVencida(remision.ConfirmadaEn),
       Lineas: lineas,
       CantidadMasters: lineas.length,
       PesoKg: lineas.reduce((acc, l) => acc + l.PesoMasterKG, 0),
@@ -529,6 +534,24 @@ function resolverLinea(remision: { Folio: string; PideLinea: number }, valor: an
 // mismo pedido de la cabecera. Recibe los pedidos DISTINTOS que trae lo que se está agregando
 // (un master trae uno; un polín puede traer varios) y rechaza los que no correspondan.
 // Si la remisión no tiene pedido de cabecera (venta local, maquila) no hay contra qué comparar.
+// Ventana para anular sin ser administrador. Anular devuelve producto ya despachado al inventario, y
+// pasada una semana de trabajo el papel ya circuló (el cliente lo recibió, contabilidad lo tomó): a
+// esa altura la corrección deja de ser "me equivoqué al capturar" y pasa a ser una decisión que
+// alguien tiene que autorizar. Se cuenta desde ConfirmadaEn —cuándo se movió el inventario de
+// verdad— y no desde Fecha, que es la del documento y el usuario la escribe a mano.
+const DIAS_PARA_ANULAR = 4;
+
+export function diasDesdeConfirmada(confirmadaEn: Date | string | null): number | null {
+  if (!confirmadaEn) return null;
+  const ms = Date.now() - new Date(confirmadaEn).getTime();
+  return Math.floor(ms / 86_400_000);
+}
+
+export function anulacionVencida(confirmadaEn: Date | string | null): boolean {
+  const dias = diasDesdeConfirmada(confirmadaEn);
+  return dias != null && dias > DIAS_PARA_ANULAR;
+}
+
 function validarProforma(remision: { Folio: string; CodigoPedido: string | null; EsMixta: number }, pedidos: string[]) {
   if (!remision.CodigoPedido || Number(remision.EsMixta) === 1) return;
   const ajenos = [...new Set(pedidos.filter(p => p !== remision.CodigoPedido))];
@@ -822,7 +845,7 @@ router.post("/:id/confirmar", requireAuth, requirePerm("remisiones", "editar"), 
 // La posición física NO se restaura aunque el polín se despachara entero: otro polín pudo haberla
 // ocupado mientras tanto. El polín reaparece como "Cerrado sin posición", listo para reubicarse —
 // mismo criterio que ya usa la des-ubicación administrativa de bodega física.
-router.post("/:id/anular", requireAuth, requirePerm("remisiones", "anular"), async (req: Request, res: Response) => {
+router.post("/:id/anular", requireAuth, requirePerm("remisiones", "anular"), async (req: AuthRequest, res: Response) => {
   try {
     const remisionId = Number(req.params.id);
     const motivo = String(req.body.Motivo ?? "").trim();
@@ -838,10 +861,20 @@ router.post("/:id/anular", requireAuth, requirePerm("remisiones", "anular"), asy
     const operador = getOperador(req);
     let respuesta: any = null;
     await prisma.$transaction(async (tx) => {
-      const rows: any[] = await tx.$queryRaw`SELECT RemisionId, Folio, Estatus FROM Remisiones WHERE RemisionId = ${remisionId} LIMIT 1 FOR UPDATE`;
+      const rows: any[] = await tx.$queryRaw`SELECT RemisionId, Folio, Estatus, ConfirmadaEn FROM Remisiones WHERE RemisionId = ${remisionId} LIMIT 1 FOR UPDATE`;
       if (!rows.length) throw new ErrorNegocio(404, "Remisión no encontrada");
       if (rows[0].Estatus === "Borrador") throw new ErrorNegocio(400, "Esta remisión todavía es un borrador — elimínala en vez de anularla");
       if (rows[0].Estatus !== "Confirmada") throw new ErrorNegocio(400, "Esta remisión ya está anulada");
+
+      // Pasados los días de gracia solo el administrador puede anular. Se valida acá dentro, con la
+      // fila ya bloqueada, y no en un middleware: el permiso 'remisiones:anular' sigue siendo el que
+      // habilita la acción, esto es un límite de TIEMPO encima de ese permiso.
+      if (anulacionVencida(rows[0].ConfirmadaEn) && req.user?.rol !== "admin") {
+        const dias = diasDesdeConfirmada(rows[0].ConfirmadaEn);
+        throw new ErrorNegocio(403,
+          `La remisión ${rows[0].Folio} se confirmó hace ${dias} días y el plazo para anularla es de ${DIAS_PARA_ANULAR}. ` +
+          `Pasado ese plazo solo un administrador puede anularla.`);
+      }
 
       const lineas: any[] = await tx.$queryRaw`
         SELECT rd.MasterId, m.PalletId, p.Estatus AS PalletEstatus

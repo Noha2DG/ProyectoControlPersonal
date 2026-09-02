@@ -216,15 +216,18 @@ export default function EtiquetadoPage() {
           {pedidosFiltrados.map(p => (
             <button key={p.CodigoPedido} onClick={() => seleccionarPedido(p)}
               className={`w-full text-left px-3 py-2.5 border-b border-gray-100 transition ${pedidoSel?.CodigoPedido === p.CodigoPedido ? "bg-blue-50" : "hover:bg-gray-50"}`}>
-              <div className="font-mono font-bold text-sm text-gray-700">
+              {/* El nombre arriba y el número abajo: en esta pantalla el operador busca el pedido
+                  por cliente, no por código. La insignia GENERAL baja junto al código para que el
+                  nombre pueda usar todo el ancho — es el que se recorta cuando es largo. */}
+              <div className="text-sm font-semibold text-gray-800 truncate" title={p.Descripcion}>{p.Descripcion}</div>
+              <div className="font-mono text-xs text-gray-500">
                 {p.CodigoPedido}
                 {p.EsGeneral && (
-                  <span className="ml-2 inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-100 text-amber-700 align-middle">
+                  <span className="ml-2 inline-block px-1.5 py-0.5 rounded text-[10px] font-sans font-semibold bg-amber-100 text-amber-700 align-middle">
                     GENERAL
                   </span>
                 )}
               </div>
-              <div className="text-xs text-gray-500 truncate">{p.Descripcion}</div>
             </button>
           ))}
           {pedidosFiltrados.length === 0 && <div className="px-3 py-8 text-center text-gray-400 text-sm">Sin pedidos</div>}

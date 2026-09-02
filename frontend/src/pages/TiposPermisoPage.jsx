@@ -135,6 +135,9 @@ export default function TiposPermisoPage() {
         <div className="flex justify-center py-16"><div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" /></div>
       ) : (
         <div className="bg-white rounded-xl shadow overflow-hidden">
+          {/* Scroll horizontal: en pantalla chica la tabla no cabe y las últimas columnas quedan
+              fuera de alcance. Mismo envoltorio que ya usan Pallets, Pedidos y Remisiones. */}
+          <div className="overflow-x-auto">
           <table className="w-full text-sm table-fixed">
             <Colgroup columns={COLS} widths={widths} />
             <thead>
@@ -177,6 +180,7 @@ export default function TiposPermisoPage() {
               ))}
             </tbody>
           </table>
+          </div>
         </div>
       )}
 
