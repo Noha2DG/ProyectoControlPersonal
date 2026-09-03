@@ -175,6 +175,13 @@ async function validarRuta(RutaBtw: string): Promise<string | null> {
   if (!formatoRutaValido(RutaBtw)) {
     return "La ruta debe ser absoluta y terminar en .btw — por ejemplo \\\\servidor\\etiquetas\\arte.btw";
   }
+  // Aunque el servidor no ALCANCE la carpeta, si sabe cuál es exige que la ruta caiga dentro. Antes
+  // aquí solo se validaba la forma, y por ahí entró un "E:\Etiquetas\..." que ninguna estación podía
+  // abrir: el error salía recién al imprimir, con el operador esperando frente a la impresora. No
+  // poder comprobar que el archivo existe no es motivo para no comprobar el prefijo.
+  if (estado.Carpeta && !rutaDentroDeCarpeta(RutaBtw, estado.Carpeta)) {
+    return `La ruta debe estar dentro de ${estado.Carpeta} — es la única carpeta que las estaciones tienen autorizada.`;
+  }
   return null;
 }
 
