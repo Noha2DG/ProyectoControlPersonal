@@ -88,10 +88,16 @@ async function listarBtw(raiz: string, relativo = "", nivel = 0): Promise<{ Ruta
 
 // Solo se aceptan rutas que caigan DENTRO de BTW_CARPETA — evita que alguien guarde por API una
 // ruta arbitraria del servidor y BarTender termine abriendo un archivo que no le corresponde.
+// path.win32 y NO el `path` del sistema: estas rutas son SIEMPRE de Windows —las abre BarTender en
+// una PC— pero el backend corre en Linux, donde `\` no es separador. Ahi path.resolve convertia
+// "\\servidor\Etiquetas\arte.btw" en UN solo nombre de archivo colgado del directorio actual, asi que
+// NINGUNA ruta real caia dentro de la carpeta y se rechazaban todas, la valida incluida. La variante
+// win32 entiende UNC y unidades igual en los dos sistemas, y conserva el colapso de ".." que impide
+// salirse de la carpeta autorizada. En Windows `path` YA es path.win32, asi que en desarrollo no cambia nada.
 function rutaDentroDeCarpeta(ruta: string, carpeta: string): boolean {
-  const raiz = path.resolve(carpeta);
-  const destino = path.resolve(ruta);
-  return destino === raiz || destino.startsWith(raiz + path.sep);
+  const raiz = path.win32.resolve(carpeta);
+  const destino = path.win32.resolve(ruta);
+  return destino === raiz || destino.startsWith(raiz + path.win32.sep);
 }
 
 /** Nombre legible por omisión de un .btw: "C:\Etiquetas\GENERAL\master.btw" → "master". */
