@@ -119,6 +119,14 @@ function SubclienteModal({ item, codigoCliente, onSave, onClose }) {
   );
 }
 
+// El tramo de la ruta que va después de la carpeta "Etiquetas" — lo único que identifica de verdad
+// a un diseño, porque el nombre del archivo se repite entre carpetas. Devuelve null si la ruta no
+// tiene esa carpeta, para que quien llame muestre lo que pueda.
+function subrutaDeDiseno(ruta) {
+  const m = /[\\/]Etiquetas[\\/](.+)$/i.exec(String(ruta ?? ""));
+  return m ? m[1] : null;
+}
+
 // Los .btw de BarTender que le tocan a un cliente/subcliente. Son VARIOS desde el 26 ago 2026: un
 // mismo subcliente puede tener el master de 1 lb, el de 4/5 lb y el provisional, y quién elige es
 // el operador al momento de imprimir. Este modal gestiona la lista; el modal de elegir vive en
@@ -135,6 +143,9 @@ function DisenosModal({ titulo, disenos, puedeEditar, onAgregar, onPredeterminad
   // Se marcan VARIOS archivos y entran todos de una: un cliente estrena su carpeta con tres o
   // cuatro artes, y agregarlos de uno en uno significaba reabrir este formulario por cada uno.
   const [marcados, setMarcados] = useState([]);
+  // Carpetas desplegadas. Arrancan TODAS cerradas: son 56 y con todo abierto la lista son 365 filas
+  // donde no se distingue nada. Cerradas se ven los 56 nombres de un vistazo y se abre la que toca.
+  const [abiertas, setAbiertas] = useState([]);
   const [rutaManual, setRutaManual] = useState("");
   const [nombre, setNombre] = useState("");
   const [filtro, setFiltro] = useState("");
@@ -162,8 +173,45 @@ function DisenosModal({ titulo, disenos, puedeEditar, onAgregar, onPredeterminad
   // El filtro busca también en la RUTA, no solo en el nombre: pegar una ruta completa —lo natural
   // cuando se la pasaron a uno por mensaje— dejaba la lista vacía y parecía que la carpeta no
   // tenía nada.
-  const q = norm(filtro.trim());
-  const visibles = archivos.filter(a => !q || norm(`${a.Carpeta} ${a.Nombre} ${a.Ruta}`).includes(q));
+  // Pegar una ruta completa en este campo es lo que la gente hace de forma natural —se la pasan por
+  // mensaje, o la copian del explorador— y es justo donde fallaba: como la ruta pegada viene de OTRA
+  // máquina (a menudo con el recurso compartido mapeado como "E:\"), no coincidía con ninguna de las
+  // rutas del servidor y la lista quedaba vacía. Cuando el texto parece una ruta, se busca solo por
+  // el tramo que va después de la carpeta "Etiquetas" —o por el nombre del archivo—, que es lo único
+  // que las dos máquinas nombran igual.
+  const crudo = filtro.trim();
+  const pareceRuta = /[\\/]/.test(crudo) && /\.btw\s*$/i.test(crudo);
+  const colaDeRuta = (v) => {
+    const m = /[\\/]Etiquetas[\\/](.+)$/i.exec(v);
+    return norm(m ? m[1] : v.split(/[\\/]/).pop() ?? v);
+  };
+  const q = pareceRuta ? colaDeRuta(crudo) : norm(crudo);
+  const visibles = archivos.filter(a => !q || (
+    pareceRuta
+      ? norm(`${a.Carpeta === "." ? "" : a.Carpeta + "\\"}${a.Nombre}`).endsWith(q) || norm(a.Nombre) === q
+      : norm(`${a.Carpeta} ${a.Nombre} ${a.Ruta}`).includes(q)
+  ));
+
+  // Los visibles agrupados por su carpeta, en orden alfabético y con la raíz primero (es donde
+  // están los sueltos, y son pocos). Se recalcula con cada tecla del buscador, pero son 365 filas:
+  // el costo es irrelevante al lado de mantener un índice aparte que se pueda desincronizar.
+  const porCarpeta = (() => {
+    const mapa = new Map();
+    for (const a of visibles) {
+      if (!mapa.has(a.Carpeta)) mapa.set(a.Carpeta, []);
+      mapa.get(a.Carpeta).push(a);
+    }
+    return [...mapa.entries()].sort(([a], [b]) => {
+      if (a === ".") return -1;
+      if (b === ".") return 1;
+      return a.localeCompare(b, "es");
+    });
+  })();
+
+  // Con el buscador activo las carpetas se abren solas: si el usuario ya dijo qué busca, esconderle
+  // los resultados detrás de una flecha es hacerle trabajar dos veces. También cuenta como "todo
+  // expandido" para el botón, así el rótulo no miente.
+  const expandirTodo = Boolean(q) || (porCarpeta.length > 0 && abiertas.length >= porCarpeta.length);
 
   // Solo se puede validar la forma de una ruta escrita a mano: absoluta (C:\… o \\servidor\…) y
   // terminada en .btw. Mismo criterio que aplica el backend cuando no alcanza la carpeta.
@@ -197,9 +245,25 @@ function DisenosModal({ titulo, disenos, puedeEditar, onAgregar, onPredeterminad
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
       <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg mx-4 flex flex-col max-h-[85vh]">
-        <div className="px-6 py-4 border-b flex items-center justify-between">
-          <h2 className="text-base font-semibold text-gray-800">Diseños de etiqueta — {titulo}</h2>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl leading-none">&times;</button>
+        <div className="px-6 py-4 border-b flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h2 className="text-base font-semibold text-gray-800">Diseños de etiqueta — {titulo}</h2>
+            {/* La carpeta, siempre a la vista y no solo dentro del formulario de agregar: es el dato
+                que explica por qué un diseño abre o no abre, y las estaciones solo tienen autorizada
+                ESA. Verla de entrada evita asignar desde una unidad local o mapeada. */}
+            {estado && (
+              <p className="text-xs text-gray-500 mt-1 truncate" title={estado.Carpeta || ""}>
+                Carpeta:{" "}
+                {estado.Carpeta
+                  ? <span className="font-mono text-gray-700">{estado.Carpeta}</span>
+                  : <span className="text-amber-700">sin configurar en el servidor</span>}
+                {estado.Carpeta && !estado.Legible && (
+                  <span className="text-amber-700"> · el servidor no la alcanza</span>
+                )}
+              </p>
+            )}
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl leading-none shrink-0">&times;</button>
         </div>
 
         <div className="px-6 py-4 flex-1 overflow-y-auto space-y-4">
@@ -230,7 +294,13 @@ function DisenosModal({ titulo, disenos, puedeEditar, onAgregar, onPredeterminad
                         {d.Nombre}
                       </button>
                     )}
-                    <div className="text-xs text-gray-400 truncate" title={d.RutaBtw}>{d.Archivo}</div>
+                    {/* Lo que va DESPUÉS de la carpeta base ("PEDIDO GENERAL\ENTERO IQF ROJO.btw") y
+                        no solo el nombre del archivo: en el recurso compartido hay más de diez
+                        archivos llamados "etiquetasmaster.btw" en carpetas distintas, y sin la
+                        subcarpeta no hay forma de saber cuál está asignado. */}
+                    <div className="text-xs text-gray-400 truncate font-mono" title={d.RutaBtw}>
+                      {subrutaDeDiseno(d.RutaBtw) ?? d.Archivo}
+                    </div>
                   </div>
                   {puedeEditar && (
                     <button type="button" onClick={() => onQuitar(d.DisenoId)}
@@ -290,36 +360,88 @@ function DisenosModal({ titulo, disenos, puedeEditar, onAgregar, onPredeterminad
                 </>
               ) : (
                 <>
+                  {/* La carpeta ya se muestra en el encabezado del modal; acá el conteo y el
+                      desplegar/contraer de golpe, para no ir carpeta por carpeta cuando se busca
+                      algo que no se sabe dónde está. */}
                   <div className="flex items-baseline justify-between gap-2">
-                    <p className="text-xs text-gray-400 truncate" title={estado.Carpeta}>Carpeta: {estado.Carpeta}</p>
-                    <p className="text-xs text-gray-400 shrink-0">
+                    <button type="button" onClick={() => { setAbiertas(expandirTodo ? [] : porCarpeta.map(([c]) => c)); }}
+                      className="text-xs font-medium text-blue-600 hover:text-blue-800">
+                      {expandirTodo ? "Contraer todo" : "Expandir todo"}
+                    </button>
+                    <p className="text-xs text-gray-400">
                       {visibles.length} de {archivos.length} archivo{archivos.length === 1 ? "" : "s"}
+                      {porCarpeta.length > 0 && ` · ${porCarpeta.length} carpeta${porCarpeta.length === 1 ? "" : "s"}`}
                     </p>
                   </div>
-                  <input value={filtro} onChange={e => setFiltro(e.target.value)}
-                    placeholder="Buscar por nombre, carpeta o ruta…"
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
+                  {/* Rotulado como BUSCAR y con lupa: sin eso se lee como un campo de ruta y la gente
+                      pega ahí la ruta del archivo (pasó tres veces). Ahora además pegarla funciona. */}
+                  <label className="block text-xs font-medium text-gray-500">Buscar diseño</label>
+                  <div className="relative">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}
+                      className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none">
+                      <circle cx="11" cy="11" r="7" /><path strokeLinecap="round" d="M20 20l-3.5-3.5" />
+                    </svg>
+                    <input value={filtro} onChange={e => setFiltro(e.target.value)}
+                      placeholder="Nombre, carpeta… o pega la ruta completa"
+                      className="w-full border border-gray-300 rounded-lg pl-9 pr-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
+                  </div>
+                  {pareceRuta && (
+                    <p className={`text-xs ${visibles.length ? "text-blue-700" : "text-amber-700"}`}>
+                      {visibles.length
+                        ? "Pegaste una ruta: se buscó el mismo archivo dentro de la carpeta compartida."
+                        : "Pegaste una ruta y ese archivo no está en la carpeta compartida. Cópialo allá primero."}
+                    </p>
+                  )}
                   {/* Se marcan varios: la idea es dejar cargados de una vez todos los artes distintos
                       del cliente. Los que ya están asignados salen apagados para no chocar contra la
                       unicidad de (cliente, subcliente, archivo). */}
-                  <div className="border border-gray-200 rounded-lg divide-y divide-gray-100 max-h-52 overflow-y-auto bg-white">
-                    {visibles.map(a => {
-                      const yaEsta = yaAsignadas.has(norm(a.Ruta));
-                      const marcado = marcados.includes(a.Ruta);
+                  {/* Agrupado por carpeta con el encabezado pegado arriba: son 365 archivos y hay
+                      nombres que se repiten entre carpetas ("etiquetasmaster.btw" está diez veces),
+                      así que la carpeta es lo único que distingue de cuál se trata. Con el
+                      encabezado sticky se sabe dónde se está parado al ir bajando. */}
+                  <div className="border border-gray-200 rounded-lg max-h-52 overflow-y-auto bg-white">
+                    {porCarpeta.map(([carpeta, deLaCarpeta]) => {
+                      const desplegada = expandirTodo || abiertas.includes(carpeta);
+                      const marcadosAqui = deLaCarpeta.filter(a => marcados.includes(a.Ruta)).length;
                       return (
-                        <button key={a.Ruta} type="button" disabled={yaEsta}
-                          onClick={() => { alternar(a.Ruta); if (!nombre.trim() && !marcado) setNombre(String(a.Nombre).replace(/\.btw$/i, "")); }}
-                          className={`w-full text-left px-3 py-2 flex items-start gap-2 transition ${marcado ? "bg-blue-50" : "hover:bg-gray-50"} disabled:bg-gray-50 disabled:cursor-default`}>
-                          <span className={`mt-0.5 w-4 h-4 rounded border-2 shrink-0 flex items-center justify-center text-[10px] leading-none ${
-                            yaEsta ? "border-gray-200 text-gray-300" : marcado ? "border-blue-600 bg-blue-600 text-white" : "border-gray-300 text-transparent"}`}>
-                            ✓
-                          </span>
-                          <span className="min-w-0 flex-1">
-                            <span className={`block text-sm truncate ${yaEsta ? "text-gray-400" : "text-gray-800"}`} title={a.Ruta}>{a.Nombre}</span>
-                            {a.Carpeta !== "." && <span className="block text-xs text-gray-400 truncate">{a.Carpeta}</span>}
-                          </span>
-                          {yaEsta && <span className="text-[10px] text-gray-400 shrink-0 mt-1">ya agregado</span>}
+                      <div key={carpeta}>
+                        <button type="button"
+                          onClick={() => setAbiertas(prev => prev.includes(carpeta) ? prev.filter(c => c !== carpeta) : [...prev, carpeta])}
+                          className="sticky top-0 z-10 w-full bg-gray-100 hover:bg-gray-200 px-2 py-1.5 text-[11px] font-semibold text-gray-600 uppercase tracking-wide border-y border-gray-200 flex items-center gap-1.5 text-left transition"
+                          title={carpeta === "." ? "Raíz de la carpeta de diseños" : carpeta}>
+                          {/* La flecha gira en vez de cambiar de figura: es un solo elemento y deja
+                              claro que es la MISMA carpeta abriéndose, no otro control. */}
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={3}
+                            className={`w-3 h-3 shrink-0 transition-transform ${desplegada ? "rotate-90" : ""}`}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+                          </svg>
+                          <span className="truncate flex-1">{carpeta === "." ? "· raíz ·" : carpeta}</span>
+                          {marcadosAqui > 0 && (
+                            <span className="shrink-0 normal-case font-semibold text-blue-700">{marcadosAqui} marcado{marcadosAqui === 1 ? "" : "s"}</span>
+                          )}
+                          <span className="shrink-0 font-normal normal-case text-gray-400">({deLaCarpeta.length})</span>
                         </button>
+                        <div className={`divide-y divide-gray-100 ${desplegada ? "" : "hidden"}`}>
+                          {deLaCarpeta.map(a => {
+                            const yaEsta = yaAsignadas.has(norm(a.Ruta));
+                            const marcado = marcados.includes(a.Ruta);
+                            return (
+                              <button key={a.Ruta} type="button" disabled={yaEsta}
+                                onClick={() => { alternar(a.Ruta); if (!nombre.trim() && !marcado) setNombre(String(a.Nombre).replace(/\.btw$/i, "")); }}
+                                className={`w-full text-left px-3 py-2 flex items-center gap-2 transition ${marcado ? "bg-blue-50" : "hover:bg-gray-50"} disabled:bg-gray-50 disabled:cursor-default`}>
+                                <span className={`w-4 h-4 rounded border-2 shrink-0 flex items-center justify-center text-[10px] leading-none ${
+                                  yaEsta ? "border-gray-200 text-gray-300" : marcado ? "border-blue-600 bg-blue-600 text-white" : "border-gray-300 text-transparent"}`}>
+                                  ✓
+                                </span>
+                                <span className={`min-w-0 flex-1 text-sm truncate ${yaEsta ? "text-gray-400" : "text-gray-800"}`} title={a.Ruta}>
+                                  {a.Nombre}
+                                </span>
+                                {yaEsta && <span className="text-[10px] text-gray-400 shrink-0">ya agregado</span>}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
                       );
                     })}
                     {visibles.length === 0 && (

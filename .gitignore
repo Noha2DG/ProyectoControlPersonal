@@ -18,3 +18,11 @@ backend/backup_*.json
 
 # Índice local de CodeGraph — cache regenerable, no se comparte
 .codegraph/
+
+# Respaldos que dejan los editores y los scripts al reescribir un archivo (*.ps1.bak, *.ts.bak).
+# El original ya esta versionado: la copia solo agrega ruido y se sube por accidente.
+*.bak
+
+# Empaquetados de herramientas/ para repartir a las estaciones. Son una foto de archivos que git ya
+# versiona: al quedar desactualizados alguien instala una version vieja sin darse cuenta.
+*.rar
