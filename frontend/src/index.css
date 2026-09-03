@@ -47,6 +47,106 @@ table.table-fixed th {
   overflow-wrap: break-word;
 }
 
+/* Onda al PULSAR un botón (ImpresionEtiquetasPage.jsx, componente BotonOnda). Es lo contrario de
+   deslizarOlas de más arriba, y a propósito: allá el movimiento es ambiental y perpetuo porque es
+   una pantalla de pared que nadie opera; acá el operador está decidiendo si manda papel a la
+   impresora, y algo que se mueve solo compite con lo que sí tiene que saltar a la vista (la fila
+   marcada y los correlativos). Así que la onda solo existe mientras dura el clic y se apaga sola.
+   Anima transform y opacity —las dos las resuelve el compositor— para no reflowear el modal. */
+@keyframes onda {
+  from { transform: scale(0); opacity: 0.4; }
+  to   { transform: scale(1); opacity: 0; }
+}
+.onda { animation: onda 550ms ease-out forwards; }
+
+/* Botones de vidrio del pie del modal de diseño (ImpresionEtiquetasPage.jsx). El acabado "liquid
+   glass" son cuatro capas: fondo translúcido, desenfoque de lo que queda detrás, un filo claro
+   arriba (el primer inset) que simula el canto del vidrio, y un halo suave abajo.
+
+   El detalle que decide todo: sobre el pie BLANCO del modal el vidrio no tiene nada que refractar,
+   así que el desenfoque por sí solo deja un botón lavado. Por eso cada uno pone su PROPIO tinte
+   —verde el de descartar, azul el de imprimir—: el color es lo que los hace visibles y el
+   desenfoque solo aporta el acabado. Sobre un fondo con color (p. ej. la pantalla de ranking) los
+   tintes podrían bajarse mucho, porque ahí el vidrio sí tiene de dónde tomar color. */
+.btn-vidrio {
+  border-radius: 999px;
+  backdrop-filter: blur(14px) saturate(180%);
+  -webkit-backdrop-filter: blur(14px) saturate(180%);
+  transition: background-color .2s, box-shadow .2s;
+}
+.btn-vidrio-verde {
+  color: #14532d;
+  background: rgba(134, 239, 172, .45);
+  border: 1px solid rgba(255, 255, 255, .7);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .95), inset 0 -2px 5px rgba(22, 101, 52, .12),
+              0 6px 18px rgba(22, 101, 52, .14);
+}
+.btn-vidrio-verde:hover { background: rgba(134, 239, 172, .62); }
+.btn-vidrio-azul {
+  color: #17307d;
+  background: rgba(96, 165, 250, .38);
+  border: 1px solid rgba(255, 255, 255, .65);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .9), inset 0 -2px 6px rgba(30, 64, 175, .18),
+              0 6px 20px rgba(59, 130, 246, .35), 0 0 22px rgba(59, 130, 246, .28);
+}
+.btn-vidrio-azul:hover { background: rgba(96, 165, 250, .55); }
+
+/* Modal del selector de diseño (SeleccionDisenoModal en ImpresionEtiquetasPage.jsx) — tema oscuro
+   con acentos cian, deliberadamente distinto del resto de la app (clara). El operador lo abre de
+   pie frente a la impresora, a menudo bajo la luz dura de una nave de producción: un panel oscuro
+   con acentos que brillan (la opción elegida, el botón de imprimir) se distingue ahí mejor que un
+   panel claro, y separa visualmente "estoy por mandar papel" del resto de pantallas de captura. */
+.modal-oscuro {
+  border-radius: 20px;
+  background:
+    radial-gradient(120% 90% at 12% 0%, rgba(34, 211, 238, .12), transparent 55%),
+    linear-gradient(180deg, #101c31 0%, #0a1322 100%);
+  border: 1px solid rgba(148, 163, 184, .16);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, .55), inset 0 1px 0 rgba(255, 255, 255, .05);
+}
+.modal-oscuro-cab {
+  border-radius: 20px 20px 0 0;
+  border-bottom: 1px solid rgba(148, 163, 184, .12);
+}
+.modal-oscuro-pie {
+  border-radius: 0 0 20px 20px;
+  border-top: 1px solid rgba(148, 163, 184, .12);
+}
+/* Cajas interiores (datos de la tanda, lista de plantillas): un tono apenas más claro que el fondo,
+   suficiente para separarlas sin volver a meter una tarjeta blanca en medio del tema oscuro. */
+.panel-oscuro {
+  border-radius: 12px;
+  background: rgba(255, 255, 255, .035);
+  border: 1px solid rgba(148, 163, 184, .14);
+}
+/* Icono del encabezado: círculo con el mismo cian de acento del resto del modal (opción elegida,
+   botón primario), con un resplandor propio — es el primer punto de color que ve el operador al
+   abrir el modal. */
+.icono-oscuro {
+  background: linear-gradient(135deg, #22d3ee, #0284c7);
+  box-shadow: 0 0 18px rgba(34, 211, 238, .45);
+}
+/* Botón primario: mismo cian del icono y de la opción elegida, para que "Abrir BarTender" se lea
+   como la continuación natural de lo que ya se eligió arriba, no como un color nuevo. */
+.btn-oscuro-primario {
+  background: linear-gradient(135deg, #22d3ee, #0284c7);
+  box-shadow: 0 8px 24px rgba(14, 165, 233, .40), inset 0 1px 0 rgba(255, 255, 255, .25);
+}
+.btn-oscuro-primario:hover { filter: brightness(1.08); }
+.btn-oscuro-secundario {
+  background: rgba(148, 163, 184, .08);
+  border: 1px solid rgba(148, 163, 184, .20);
+}
+.btn-oscuro-secundario:hover { background: rgba(148, 163, 184, .14); }
+/* Scroll de la lista de plantillas: el scrollbar del sistema (gris claro) desentona sobre el fondo
+   oscuro del modal — fino y del mismo cian de acento. Firefox cae a scrollbar-width/color, que ya
+   alcanza para perder el gris por defecto sin necesitar los pseudo-elementos de abajo. */
+.scroll-oscuro { scrollbar-width: thin; scrollbar-color: rgba(34, 211, 238, .35) transparent; }
+.scroll-oscuro::-webkit-scrollbar { width: 8px; }
+.scroll-oscuro::-webkit-scrollbar-track { background: transparent; }
+.scroll-oscuro::-webkit-scrollbar-thumb { background: rgba(34, 211, 238, .35); border-radius: 999px; }
+.scroll-oscuro::-webkit-scrollbar-thumb:hover { background: rgba(34, 211, 238, .55); }
+
 /* Al imprimir, solo se muestra lo que se monta en #print-root (ver PlanificacionPage.jsx) —
    evita el bug de position:fixed repitiéndose en cada hoja y de contenido oculto que sigue
    contando para la paginación. */

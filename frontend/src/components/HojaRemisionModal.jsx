@@ -1,10 +1,11 @@
 import { useState, useEffect } from "react";
 import { createPortal } from "react-dom";
 import { authHeader } from "../context/AuthContext.jsx";
+import { fmtFechaHora } from "../utils/fecha.js";
 
-function fmtFecha(iso) {
-  return iso ? new Date(iso).toLocaleString("es-GT", { dateStyle: "short", timeStyle: "short" }) : "-";
-}
+// Delega en el helper compartido: los DATETIME del backend traen hora de Guatemala con una "Z"
+// mentirosa, y `new Date(iso)` les restaba 6 horas más (ver utils/fecha.js).
+const fmtFecha = fmtFechaHora;
 
 function fmtDia(iso) {
   if (!iso) return "-";

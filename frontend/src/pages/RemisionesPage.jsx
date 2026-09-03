@@ -6,6 +6,7 @@ import AvisoModal from "../components/AvisoModal.jsx";
 import HojaRemisionModal from "../components/HojaRemisionModal.jsx";
 import ModalEscaneo from "../components/ModalEscaneo.jsx";
 import { useAviso } from "../hooks/useAviso.js";
+import { fmtFechaHora } from "../utils/fecha.js";
 
 const API = "/api/remisiones";
 
@@ -36,9 +37,9 @@ const TIPO_BADGE = {
   Reproceso:    "bg-rose-100 text-rose-700",
 };
 
-function fmtFecha(iso) {
-  return iso ? new Date(iso).toLocaleString("es-GT", { dateStyle: "short", timeStyle: "short" }) : "-";
-}
+// Delega en el helper compartido: los DATETIME del backend traen hora de Guatemala con una "Z"
+// mentirosa, y `new Date(iso)` les restaba 6 horas más (ver utils/fecha.js).
+const fmtFecha = fmtFechaHora;
 
 function fmtDia(iso) {
   // Las fechas puras (YYYY-MM-DD) se parten a mano: new Date("2026-08-05") las interpreta como UTC

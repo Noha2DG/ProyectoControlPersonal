@@ -4,6 +4,7 @@ import { useColWidths, Th, Colgroup } from "../components/ResizableTh.jsx";
 import ConsultarEtiquetaModal from "../components/ConsultarEtiquetaModal.jsx";
 import AvisoModal from "../components/AvisoModal.jsx";
 import { useAviso } from "../hooks/useAviso.js";
+import { useArrastrable } from "../hooks/useArrastrable.js";
 
 // Toda la impresión física la hace BarTender leyendo ColaEtiquetaBartender por ODBC. Esta pantalla
 // ya no habla con ninguna impresora: reserva correlativos y abre BarTender con el rango recién
@@ -93,67 +94,168 @@ function AtascadasModal({ atascadas, onCerrar }) {
   );
 }
 
+// Botón con onda al pulsar. La onda sale del punto exacto del clic y se apaga sola: confirma que el
+// botón registró el toque —útil en la estación de impresión, donde se opera de pie y con guantes—
+// sin dejar nada moviéndose cuando nadie lo está tocando.
+//
+// El color se toma de `bg-current`, o sea del color de texto del propio botón: blanca sobre el azul
+// de "Abrir BarTender", gris sobre el claro de "Cancelar", sin configurar nada por botón.
+//
+// Vive en esta página y no en components/ porque hoy solo lo usan estos dos botones; si se adopta en
+// otras pantallas, se sube.
+function BotonOnda({ className = "", onClick, children, ...props }) {
+  const [ondas, setOndas] = useState([]);
+
+  const alPulsar = (e) => {
+    // Quien pidió menos movimiento en su sistema no recibe onda. Se decide acá y no con una regla
+    // @media que apague la animación: sin animación no llega onAnimationEnd, y las ondas se
+    // quedarían acumuladas en el DOM para siempre.
+    if (!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
+      const r = e.currentTarget.getBoundingClientRect();
+      // Diámetro = el lado mayor por 2, para que cubra el botón entero aunque el clic caiga en una
+      // esquina, que es el caso peor.
+      const tamano = Math.max(r.width, r.height) * 2;
+      const id = `${Date.now()}-${Math.random()}`;
+      setOndas(o => [...o, { id, x: e.clientX - r.left, y: e.clientY - r.top, tamano }]);
+    }
+    onClick?.(e);
+  };
+
+  return (
+    <button {...props} onClick={alPulsar} className={`relative overflow-hidden ${className}`}>
+      {ondas.map(o => (
+        <span key={o.id} className="onda pointer-events-none absolute rounded-full bg-current"
+          style={{ left: o.x - o.tamano / 2, top: o.y - o.tamano / 2, width: o.tamano, height: o.tamano }}
+          // Se limpia sola al terminar la animación: sin setTimeout que pueda quedar colgando si el
+          // modal se cierra a media onda.
+          onAnimationEnd={() => setOndas(prev => prev.filter(x => x.id !== o.id))} />
+      ))}
+      {/* El texto va en su propia capa posicionada para que la onda nunca lo tape. */}
+      <span className="relative">{children}</span>
+    </button>
+  );
+}
+
 // Con qué arte sale esta tanda, cuando el cliente tiene más de uno. REEMPLAZA a la confirmación de
 // siempre en vez de sumarse a ella —por eso repite aquí los datos de la tanda—: dos diálogos
 // seguidos para lo que es una sola decisión terminan en clic automático, y el operador está de pie
 // frente a la impresora. Con un solo diseño este modal no aparece.
 function SeleccionDisenoModal({ info, disenos, actual, onElegir, onCancelar }) {
   const [sel, setSel] = useState(actual ?? disenos.find(d => d.EsPredeterminado)?.DisenoId ?? disenos[0]?.DisenoId);
+  // Se arrastra por el encabezado: para elegir el arte el operador suele querer ver la fila que
+  // está imprimiendo —lote, correlativos, cuántas van— y el modal centrado le queda justo encima.
+  const { estilo, asa } = useArrastrable();
+
+  // Mismo dato que ya se explica en el texto de abajo, resumido en una píldora para verlo de un
+  // vistazo: nada impreso todavía, una parte, o completo (reimprimir algo ya confirmado es un caso
+  // real — no se asume que llegar aquí con Pendientes=0 sea un error).
+  const estadoPapel = info.Pendientes === info.Etiquetas
+    ? { texto: "En cola", clase: "bg-amber-400/15 text-amber-300 ring-1 ring-amber-400/30" }
+    : info.Pendientes > 0
+    ? { texto: "Parcial", clase: "bg-amber-400/15 text-amber-300 ring-1 ring-amber-400/30" }
+    : { texto: "Impreso", clase: "bg-emerald-400/15 text-emerald-300 ring-1 ring-emerald-400/30" };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="bg-white rounded-2xl shadow-xl w-full max-w-md flex flex-col max-h-[85vh]">
-        <div className="px-6 py-4 border-b">
-          <h2 className="text-base font-semibold text-gray-800">
-            {disenos.length > 1 ? "¿Con cuál diseño se imprime?" : "Diseño con el que se va a imprimir"}
-          </h2>
-          <p className="text-xs text-gray-500 mt-1">{info.Subcliente || info.Cliente}</p>
+    // Velo más oscuro que el resto de los modales (bg-black/35): el panel ya no es translúcido —es
+    // un tema oscuro sólido, no vidrio— así que aquí lo que separa "consultar la fila de atrás" de
+    // "quedar tapada" ya no depende de la claridad del velo sino de que el modal no cubra toda la
+    // pantalla (max-w-md) y de la fila marcada en azul, que se ve igual alrededor.
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4">
+      <div style={estilo} className="modal-oscuro w-full max-w-md flex flex-col max-h-[85vh]">
+        <div {...asa} className="modal-oscuro-cab px-6 py-4 cursor-move select-none touch-none flex items-start gap-3">
+          <span className="icono-oscuro w-9 h-9 rounded-xl flex items-center justify-center shrink-0 text-white">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4">
+              <polyline points="6 9 6 2 18 2 18 9" />
+              <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" />
+              <rect x="6" y="14" width="12" height="8" />
+            </svg>
+          </span>
+          <div className="min-w-0 flex-1">
+            <h2 className="text-base font-semibold text-white">
+              {disenos.length > 1 ? "¿Con cuál diseño se imprime?" : "Diseño con el que se va a imprimir"}
+            </h2>
+            <div className="flex items-center justify-between gap-2 mt-1">
+              <span className="text-xs font-semibold text-cyan-300 truncate">{info.Subcliente || info.Cliente}</span>
+              {/* El Lote es lo que el operador ya reconoce del resto de la pantalla — confirma que
+                  está por imprimir la captura correcta, no un dato nuevo que aprenderse. */}
+              {info.Lote && <span className="text-[11px] text-slate-400 font-mono shrink-0">{info.Lote}</span>}
+            </div>
+          </div>
         </div>
 
-        <div className="px-6 py-4 flex-1 overflow-y-auto space-y-3">
-          <div className="bg-gray-50 rounded-lg px-3 py-2 text-xs text-gray-600 space-y-0.5">
-            <div><span className="text-gray-400">Correlativos:</span> <span className="font-mono font-semibold">{info.Correlativos}</span> ({info.Etiquetas} etiqueta{info.Etiquetas === 1 ? "" : "s"})</div>
-            <div>
-              {info.Pendientes < info.Etiquetas
-                ? `Ya impresas en BarTender: ${info.Etiquetas - info.Pendientes} · pendientes: ${info.Pendientes}`
-                : "Ninguna se ha impreso todavía en BarTender."}
+        <div className="px-6 py-4 flex-1 overflow-y-auto space-y-4">
+          <div className="panel-oscuro px-3 py-2.5 text-xs text-slate-300 space-y-1.5">
+            <div className="flex items-center justify-between gap-2">
+              <span>Correlativos: <span className="font-mono font-semibold text-slate-100">{info.Correlativos}</span> ({info.Etiquetas} etiqueta{info.Etiquetas === 1 ? "" : "s"})</span>
+              <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold tracking-wide shrink-0 ${estadoPapel.clase}`}>{estadoPapel.texto}</span>
+            </div>
+            {info.Pendientes < info.Etiquetas && (
+              <div className="text-slate-400">Ya impresas en BarTender: {info.Etiquetas - info.Pendientes} · pendientes: {info.Pendientes}</div>
+            )}
+          </div>
+
+          <div>
+            <div className="text-[10px] font-semibold text-slate-500 tracking-widest uppercase mb-2">Plantillas disponibles</div>
+            {/* overflow-x-hidden para que la barra del elegido no se desborde de la esquina
+                redondeada; overflow-y-auto + max-h para 5 filas visibles (56px de fila + 1px de
+                separador × 5 = 284px) y scroll cuando el cliente tiene más de cinco plantillas —
+                sin tope el modal podía crecer más alto que la pantalla. */}
+            <div className="panel-oscuro scroll-oscuro divide-y divide-white/5 overflow-x-hidden overflow-y-auto max-h-[284px]">
+              {disenos.map(d => (
+                // El elegido se marca por tres lados a la vez —barra lateral, fondo y color del
+                // nombre— y no solo por el punto del radio: es una decisión que se toma de pie frente
+                // a la impresora, y de un vistazo el punto solo se pierde.
+                <button key={d.DisenoId} type="button" onClick={() => setSel(d.DisenoId)}
+                  className={`w-full text-left px-3 py-2.5 flex items-center gap-3 transition border-l-4 ${sel === d.DisenoId ? "border-cyan-400 bg-cyan-400/10" : "border-transparent hover:bg-white/[.03]"}`}>
+                  <span className={`w-4 h-4 rounded-full border-2 shrink-0 flex items-center justify-center ${sel === d.DisenoId ? "border-cyan-400" : "border-slate-600"}`}>
+                    {sel === d.DisenoId && <span className="w-2 h-2 rounded-full bg-cyan-400" />}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="flex items-center gap-1.5">
+                      <span className={`block text-sm font-medium truncate ${sel === d.DisenoId ? "text-cyan-200" : "text-slate-200"}`}>
+                        {d.Nombre}
+                      </span>
+                      {d.EsPredeterminado && <span className="text-amber-400 text-xs shrink-0" title="Predeterminado">★</span>}
+                    </span>
+                    <span className="block text-xs text-slate-500 truncate">{d.Archivo}</span>
+                  </span>
+                  {d.EsPredeterminado && (
+                    <span className="shrink-0 px-2 py-0.5 rounded-full text-[9px] font-bold tracking-wide bg-amber-400/15 text-amber-300 ring-1 ring-amber-400/30">
+                      PREDET
+                    </span>
+                  )}
+                </button>
+              ))}
             </div>
           </div>
 
-          <div className="border border-gray-200 rounded-lg divide-y divide-gray-100">
-            {disenos.map(d => (
-              <button key={d.DisenoId} type="button" onClick={() => setSel(d.DisenoId)}
-                className={`w-full text-left px-3 py-2.5 flex items-start gap-3 transition ${sel === d.DisenoId ? "bg-blue-50" : "hover:bg-gray-50"}`}>
-                <span className={`mt-0.5 w-4 h-4 rounded-full border-2 shrink-0 ${sel === d.DisenoId ? "border-blue-600 bg-blue-600" : "border-gray-300"}`} />
-                <span className="min-w-0">
-                  <span className="block text-sm font-medium text-gray-800 truncate">
-                    {d.Nombre}{d.EsPredeterminado && <span className="ml-1 text-amber-500" title="Predeterminado">★</span>}
-                  </span>
-                  <span className="block text-xs text-gray-400 truncate">{d.Archivo}</span>
-                </span>
-              </button>
-            ))}
-          </div>
-
           {disenos.length === 1 && (
-            <p className="text-xs text-gray-400">
+            <p className="text-xs text-slate-500">
               Es el único diseño definido para este cliente. Se agregan más en Pedidos y Clientes →
               Clientes y Subclientes.
             </p>
           )}
 
-          <p className="text-xs text-gray-400">
-            Si no ocurre nada al continuar, esta PC no tiene instalado el enlace con BarTender
-            (ver herramientas/bartender/instalarProtocolo.ps1).
+          <p className="flex items-start gap-1.5 text-xs text-slate-500">
+            <span className="text-cyan-400 shrink-0">ⓘ</span>
+            <span>
+              Si no ocurre nada al continuar, esta PC no tiene instalado el enlace con BarTender
+              (ver herramientas/bartender/instalarProtocolo.ps1).
+            </span>
           </p>
         </div>
 
-        <div className="px-6 py-4 border-t flex justify-end gap-3">
-          <button onClick={onCancelar} className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 transition">Cancelar</button>
-          <button onClick={() => onElegir(sel)} disabled={!sel}
-            className="bg-blue-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-blue-700 transition disabled:opacity-50">
+        <div className="modal-oscuro-pie px-6 py-4 flex justify-end gap-3">
+          {/* La onda al pulsar sigue viva: BotonOnda la toma de bg-current, así que sale blanca
+              sobre el cian y clara sobre el gris, sin configurar nada por botón. */}
+          <BotonOnda onClick={onCancelar}
+            className="btn-oscuro-secundario rounded-full px-5 py-2 text-sm font-medium text-slate-300">
+            Cancelar
+          </BotonOnda>
+          <BotonOnda onClick={() => onElegir(sel)} disabled={!sel}
+            className="btn-oscuro-primario rounded-full px-5 py-2 text-sm font-semibold text-white disabled:opacity-50">
             Abrir BarTender
-          </button>
+          </BotonOnda>
         </div>
       </div>
     </div>
@@ -256,7 +358,7 @@ export default function ImpresionEtiquetasPage() {
     const opciones = Array.isArray(dataDis.Disenos) ? dataDis.Disenos : [];
 
     if (opciones.length) {
-      const elegido = await elegirDiseno({ info: data, disenos: opciones, actual: data.DisenoId });
+      const elegido = await elegirDiseno({ OrdenId: ordenId, info: data, disenos: opciones, actual: data.DisenoId });
       if (!elegido) return false;
       // La primera respuesta vino con el predeterminado; si eligió otro hay que rehacerla, porque
       // de ahí sale la URL del protocolo (y su token) con el .btw correcto.
@@ -500,10 +602,17 @@ export default function ImpresionEtiquetasPage() {
                 const enPapel = o.EnPapel ?? 0;
                 const faltaPapel = o.CantidadMaster - enPapel;
                 const cuadre = cuadreLinea(o.ObjetivoLinea, o.EscaneadoLinea);
+                // Mientras el modal de diseño está abierto, ESTA es la fila de la que habla: se
+                // marca con la misma barra azul que la opción elegida dentro del modal, para que al
+                // correrlo se vea cuál se va a imprimir. Se apaga sola al cerrarse.
+                const eligiendoDiseno = seleccion?.OrdenId === o.OrdenId;
                 return (
                 <Fragment key={o.OrdenId}>
-                  <tr className="hover:bg-gray-50 transition">
-                    <td className="px-4 py-3 whitespace-nowrap text-gray-500">{String(o.FechaProduccion).slice(0, 10)}</td>
+                  <tr className={`transition ${eligiendoDiseno ? "bg-blue-50" : "hover:bg-gray-50"}`}>
+                    {/* La barra va en la primera celda y no en el <tr>: con border-collapse los
+                        bordes puestos en la fila no pintan parejo entre navegadores. El borde
+                        transparente del resto reserva los mismos 4px, así nada se corre al marcarse. */}
+                    <td className={`px-4 py-3 whitespace-nowrap text-gray-500 border-l-4 ${eligiendoDiseno ? "border-blue-600" : "border-transparent"}`}>{String(o.FechaProduccion).slice(0, 10)}</td>
                     <td className="px-4 py-3 font-mono font-bold text-gray-700 whitespace-nowrap">{o.CodigoPedido}</td>
                     <td className="px-4 py-3 truncate" title={`${o.NombreCliente}${o.NombreSubcliente ? ` - ${o.NombreSubcliente}` : ""}`}>{o.NombreCliente}{o.NombreSubcliente ? ` - ${o.NombreSubcliente}` : ""}</td>
                     {/* Producto completo en dos renglones: proceso · talla arriba y la presentación

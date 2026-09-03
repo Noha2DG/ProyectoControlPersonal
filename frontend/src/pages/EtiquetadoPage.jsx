@@ -5,7 +5,7 @@ import { useColWidths, useOrden, ordenarFilas, Th, Colgroup } from "../component
 
 const hoy = () => new Date().toLocaleDateString("sv-SE");
 
-const COL_DEFAULTS = { fecha: 100, lote: 140, area: 100, origen: 110, congelacion: 120, masters: 90, estatus: 110, impresion: 140, acciones: 130 };
+const COL_DEFAULTS = { fecha: 100, lote: 140, area: 100, origen: 110, congelacion: 120, masters: 90, impresion: 140, acciones: 130 };
 const COLS = Object.keys(COL_DEFAULTS);
 
 // Áreas de la tabla Areas relevantes para Etiquetado — el catálogo completo trae áreas de todo
@@ -47,7 +47,7 @@ export default function EtiquetadoPage() {
   const capturasOrdenadas = ordenarFilas(capturas, orden, {
     fecha: c => c.FechaProduccion, lote: c => c.Lote, area: c => c.NombreArea,
     origen: c => c.DescripcionOrigen, congelacion: c => c.DescripcionCongelacion,
-    masters: c => c.CantidadMaster, estatus: c => c.Estatus, impresion: c => c.Impresas,
+    masters: c => c.CantidadMaster, impresion: c => c.Impresas,
   });
 
   useEffect(() => {
@@ -424,7 +424,6 @@ export default function EtiquetadoPage() {
                     <Th width={widths.origen} onResizeStart={startResize("origen")} sortKey="origen" orden={orden} onOrdenar={alternarOrden} className="px-4 py-3 text-left whitespace-nowrap">Origen</Th>
                     <Th width={widths.congelacion} onResizeStart={startResize("congelacion")} sortKey="congelacion" orden={orden} onOrdenar={alternarOrden} className="px-4 py-3 text-left whitespace-nowrap">Congelación</Th>
                     <Th width={widths.masters} onResizeStart={startResize("masters")} sortKey="masters" orden={orden} onOrdenar={alternarOrden} className="px-4 py-3 text-right whitespace-nowrap">Masters</Th>
-                    <Th width={widths.estatus} onResizeStart={startResize("estatus")} sortKey="estatus" orden={orden} onOrdenar={alternarOrden} className="px-4 py-3 text-center whitespace-nowrap">Estatus</Th>
                     <Th width={widths.impresion} onResizeStart={startResize("impresion")} sortKey="impresion" orden={orden} onOrdenar={alternarOrden} className="px-4 py-3 text-center whitespace-nowrap">Impresión</Th>
                     <Th width={widths.acciones} onResizeStart={startResize("acciones")} className="px-4 py-3 text-center whitespace-nowrap">Acciones</Th>
                   </tr>
@@ -438,11 +437,6 @@ export default function EtiquetadoPage() {
                       <td className="px-4 py-3 whitespace-nowrap">{c.DescripcionOrigen}</td>
                       <td className="px-4 py-3 whitespace-nowrap">{c.DescripcionCongelacion}</td>
                       <td className="px-4 py-3 text-right whitespace-nowrap">{c.CantidadMaster}</td>
-                      <td className="px-4 py-3 text-center whitespace-nowrap">
-                        <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-semibold ${c.Estatus === "Cancelada" ? "bg-red-100 text-red-600" : "bg-yellow-100 text-yellow-700"}`}>
-                          {c.Estatus}
-                        </span>
-                      </td>
                       <td className="px-4 py-3 text-center whitespace-nowrap">
                         {c.Impresas >= c.CantidadMaster ? (
                           <span className="inline-block px-2 py-0.5 rounded-full text-xs font-semibold bg-green-100 text-green-700">
@@ -471,7 +465,7 @@ export default function EtiquetadoPage() {
                     </tr>
                   ))}
                   {capturas.length === 0 && (
-                    <tr><td colSpan={9} className="px-4 py-8 text-center text-gray-400">Sin capturas para esta línea</td></tr>
+                    <tr><td colSpan={8} className="px-4 py-8 text-center text-gray-400">Sin capturas para esta línea</td></tr>
                   )}
                 </tbody>
               </table>

@@ -334,6 +334,9 @@ router.get("/orden/:ordenId/bartender", requireAuth, requirePerm("etiquetado", "
       Pendientes: Number(conteo[0].pendientes ?? 0),
       Cliente: orden.NombreCliente,
       Subcliente: orden.NombreSubcliente,
+      // El modal de selección de diseño lo muestra como identificador de la tanda —el operador ya
+      // lo conoce del resto de la pantalla, y confirma que está por imprimir la captura correcta.
+      Lote: orden.Lote,
       Url: url,
     });
   } catch (err: any) {

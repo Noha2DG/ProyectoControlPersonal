@@ -7,6 +7,7 @@ import AvisoModal from "../components/AvisoModal.jsx";
 import HojaPalletModal from "../components/HojaPalletModal.jsx";
 import ModalEscaneo from "../components/ModalEscaneo.jsx";
 import { useAviso } from "../hooks/useAviso.js";
+import { fmtFechaHora } from "../utils/fecha.js";
 
 const API = "/api/pallets";
 
@@ -29,9 +30,9 @@ const CUADRE_BADGE = {
   Sobrante:   "bg-red-100 text-red-700",
 };
 
-function fmtFecha(iso) {
-  return iso ? new Date(iso).toLocaleString("es-GT", { dateStyle: "short", timeStyle: "short" }) : "-";
-}
+// Delega en el helper compartido: los DATETIME del backend traen hora de Guatemala con una "Z"
+// mentirosa, y `new Date(iso)` les restaba 6 horas más (ver utils/fecha.js).
+const fmtFecha = fmtFechaHora;
 
 async function leerJSON(res) {
   try { return await res.json(); } catch { return {}; }
@@ -665,11 +666,16 @@ export default function PalletsPage() {
       </div>
 
       <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-        <div className="overflow-x-auto">
+        {/* Alto tope con scroll propio: la lista crece sin límite (27 polines hoy, y solo sube) y sin
+            esto la página se estira hasta que los filtros de arriba quedan fuera de vista. El
+            encabezado va sticky para no perder de vista qué columna es cuál al bajar. */}
+        <div className="overflow-x-auto overflow-y-auto max-h-[70vh]">
           <table className="w-full text-sm table-fixed">
             <Colgroup columns={PALLETS_COLS} widths={widthsPallets} />
-            <thead className="bg-gray-50 text-gray-500 border-b border-gray-200">
-              <tr>
+            <thead className="bg-gray-50 text-gray-500 border-b border-gray-200 sticky top-0 z-10">
+              {/* El fondo se repite en el <tr>: con border-collapse (el que pone Tailwind) el fondo
+                  del <thead> no siempre se pinta al quedar pegado, y las filas se verían a través. */}
+              <tr className="bg-gray-50">
                 <Th width={widthsPallets.pallet} onResizeStart={startResizePallets("pallet")} sortKey="pallet" orden={ordenPallets} onOrdenar={alternarOrdenPallets} className="px-4 py-3 text-left">Pallet</Th>
                 <Th width={widthsPallets.estatus} onResizeStart={startResizePallets("estatus")} sortKey="estatus" orden={ordenPallets} onOrdenar={alternarOrdenPallets} className="px-4 py-3 text-center">Estatus</Th>
                 <Th width={widthsPallets.area} onResizeStart={startResizePallets("area")} sortKey="area" orden={ordenPallets} onOrdenar={alternarOrdenPallets} className="px-4 py-3 text-left">Área</Th>

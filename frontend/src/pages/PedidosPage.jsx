@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { fmtEntero, fmtNum } from "../utils/numero.js";
 import { authHeader, usePuede } from "../context/AuthContext.jsx";
 import { useColWidths, useOrden, ordenarFilas, Th, Colgroup } from "../components/ResizableTh.jsx";
+import { fechaDelBackend } from "../utils/fecha.js";
 
 const ESTATUS = ["Proceso", "Terminado"];
 
@@ -14,9 +15,11 @@ const DETALLE_COLS = Object.keys(DETALLE_COL_DEFAULTS);
 const AVANCE_COL_DEFAULTS = { clase: 140, talla: 80, presentacion: 95, objetivo: 80, agrupado: 85, bodega: 85, despachado: 90, dif: 90 };
 const AVANCE_COLS = Object.keys(AVANCE_COL_DEFAULTS);
 
+// `new Date(v)` con getters locales daba la hora 6 h antes: el backend manda hora de Guatemala
+// etiquetada como UTC (ver utils/fecha.js). El helper lee los dígitos tal cual.
 const fmtFecha = v => {
-  if (!v) return "";
-  const d = new Date(v);
+  const d = fechaDelBackend(v);
+  if (!d) return "";
   return `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}/${d.getFullYear()} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 };
 

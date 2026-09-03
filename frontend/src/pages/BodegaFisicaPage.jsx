@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { authHeader, usePuede } from "../context/AuthContext.jsx";
 import AvisoModal from "../components/AvisoModal.jsx";
 import { useAviso } from "../hooks/useAviso.js";
+import { fmtFechaHora } from "../utils/fecha.js";
 
 const API = "/api/bodega-fisica";
 
@@ -38,9 +39,9 @@ const TONO_SUELTOS = {
   rojo:    { borde: "border-red-200",     cabecera: "border-red-100 bg-red-50",       texto: "text-red-800" },
 };
 
-function fmtFecha(iso) {
-  return iso ? new Date(iso).toLocaleString("es-GT", { dateStyle: "short", timeStyle: "short" }) : "-";
-}
+// Delega en el helper compartido: los DATETIME del backend traen hora de Guatemala con una "Z"
+// mentirosa, y `new Date(iso)` les restaba 6 horas más (ver utils/fecha.js).
+const fmtFecha = fmtFechaHora;
 
 async function leerJSON(res) {
   try { return await res.json(); } catch { return {}; }

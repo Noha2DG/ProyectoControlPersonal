@@ -2,10 +2,11 @@ import { useState, useEffect, useRef, Fragment } from "react";
 import { createPortal } from "react-dom";
 import { QRCodeSVG } from "qrcode.react";
 import { authHeader } from "../context/AuthContext.jsx";
+import { fmtFechaHora } from "../utils/fecha.js";
 
-function fmtFecha(iso) {
-  return iso ? new Date(iso).toLocaleString("es-GT", { dateStyle: "short", timeStyle: "short" }) : "-";
-}
+// Delega en el helper compartido: los DATETIME del backend traen hora de Guatemala con una "Z"
+// mentirosa, y `new Date(iso)` les restaba 6 horas más (ver utils/fecha.js).
+const fmtFecha = fmtFechaHora;
 
 // Un polín trae decenas de masters idénticos (mismo producto, mismo lote, mismo pedido): listarlos
 // uno por uno daba hojas de 35+ líneas imposibles de cotejar parado frente al polín. Se agrupan por

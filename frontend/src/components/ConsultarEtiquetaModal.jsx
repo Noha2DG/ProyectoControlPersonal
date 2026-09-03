@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { authHeader } from "../context/AuthContext.jsx";
+import { fmtFechaHoraLarga } from "../utils/fecha.js";
 
 // Consulta un correlativo por completo: producto, historial de impresión y si ya está escaneado en
 // bodega (y dónde) — usable tanto desde Impresión (antes de reimprimir) como desde Bodega (para
@@ -112,7 +113,7 @@ export default function ConsultarEtiquetaModal({ onCerrar }) {
                       <p>Posición <span className="font-mono font-semibold">{pallet.PosicionCodigo}</span></p>
                       <p className="text-gray-600">
                         Ubicado por <span className="font-semibold">{pallet.UbicadoPor || "-"}</span>
-                        {pallet.UbicadoEn ? ` · ${new Date(pallet.UbicadoEn).toLocaleString("es-GT")}` : ""}
+                        {pallet.UbicadoEn ? ` · ${fmtFechaHoraLarga(pallet.UbicadoEn)}` : ""}
                       </p>
                       <p className="text-gray-600">
                         Su contenido está sellado: para reabrirlo hay que des-ubicarlo primero. Sacar cajas
@@ -125,8 +126,8 @@ export default function ConsultarEtiquetaModal({ onCerrar }) {
                 </div>
 
                 <div className="text-xs text-gray-500 space-y-0.5">
-                  <p>Creado por {pallet.CreadoPor || "-"}{pallet.CreadoEn ? ` · ${new Date(pallet.CreadoEn).toLocaleString("es-GT")}` : ""}</p>
-                  {pallet.CerradoEn && <p>Cerrado por {pallet.CerradoPor || "-"} · {new Date(pallet.CerradoEn).toLocaleString("es-GT")}</p>}
+                  <p>Creado por {pallet.CreadoPor || "-"}{pallet.CreadoEn ? ` · ${fmtFechaHoraLarga(pallet.CreadoEn)}` : ""}</p>
+                  {pallet.CerradoEn && <p>Cerrado por {pallet.CerradoPor || "-"} · {fmtFechaHoraLarga(pallet.CerradoEn)}</p>}
                 </div>
 
                 <button onClick={buscarOtra} className="text-xs text-blue-600 hover:text-blue-800 underline">Consultar otro</button>
@@ -171,11 +172,11 @@ export default function ConsultarEtiquetaModal({ onCerrar }) {
                         cuando algo no cuadra. */}
                     <p className="text-gray-600">
                       Escaneado por <span className="font-semibold">{resultado.Master.IngresadoPor || "-"}</span>
-                      {resultado.Master.FechaIngreso ? ` · ${new Date(resultado.Master.FechaIngreso).toLocaleString("es-GT")}` : ""}
+                      {resultado.Master.FechaIngreso ? ` · ${fmtFechaHoraLarga(resultado.Master.FechaIngreso)}` : ""}
                     </p>
                     <p className="text-gray-600">
                       Ubicado por <span className="font-semibold">{resultado.Master.UbicadoPor || "-"}</span>
-                      {resultado.Master.UbicadoEn ? ` · ${new Date(resultado.Master.UbicadoEn).toLocaleString("es-GT")}` : ""}
+                      {resultado.Master.UbicadoEn ? ` · ${fmtFechaHoraLarga(resultado.Master.UbicadoEn)}` : ""}
                     </p>
                     <p className="text-gray-600 mt-1">
                       Ya es parte del inventario — no se puede anular ni reimprimir. La única corrección
@@ -191,7 +192,7 @@ export default function ConsultarEtiquetaModal({ onCerrar }) {
                     </p>
                     <p className="text-gray-600">
                       Escaneado por <span className="font-semibold">{resultado.Master.IngresadoPor || "-"}</span>
-                      {resultado.Master.FechaIngreso ? ` · ${new Date(resultado.Master.FechaIngreso).toLocaleString("es-GT")}` : ""}
+                      {resultado.Master.FechaIngreso ? ` · ${fmtFechaHoraLarga(resultado.Master.FechaIngreso)}` : ""}
                     </p>
                   </>
                 ) : (
@@ -207,7 +208,7 @@ export default function ConsultarEtiquetaModal({ onCerrar }) {
                   {resultado.Historial.map(h => (
                     <div key={h.LogId} className="px-3 py-1.5 text-xs flex justify-between gap-2">
                       <span className="text-gray-600 whitespace-nowrap">
-                        {new Date(h.FechaHora).toLocaleString("es-GT")} · {h.ImpresoPor}
+                        {fmtFechaHoraLarga(h.FechaHora)} · {h.ImpresoPor}
                         {h.ReimpresionForzada ? " · forzada" : ""}
                       </span>
                       <span className="text-gray-400 italic truncate" title={h.Motivo}>{h.Motivo}</span>
