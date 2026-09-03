@@ -66,7 +66,7 @@ $BarTendExe   = "C:\Program Files\Seagull\BarTender 12.1\BarTend.exe"
 # carpeta. Asi tienes el Designer sin dialogo de impresion y sin cierre automatico.
 $MostrarDialogoImpresion = $false
 $CerrarAlTerminar        = $false
-$CarpetaBtw   = "C:\Etiquetas"          # en producción: \\servidor\etiquetas
+$CarpetaBtw   = "\\192.168.10.5\planta_proceso\Etiquetas"   # carpeta compartida de la oficina: TODAS las estaciones usan los mismos disenos
 $Bitacora     = Join-Path $env:LOCALAPPDATA "OroEtiqueta\abrirBartender.log"
 
 # Nombres de los query prompts DENTRO del .btw. Tienen que coincidir EXACTO con los que se

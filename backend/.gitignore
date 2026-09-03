@@ -1,5 +1,9 @@
 node_modules
 # Keep environment variables out of version control
 .env
+# Y CUALQUIER copia suya: .env.respaldo-*, .env.bak, .env.local. La regla ".env" a secas
+# solo casa el nombre exacto, asi que un respaldo quedaba visible para un `git add -A`
+# — el mismo camino por el que ya se colo un backup con datos sensibles al historial.
+.env.*
 
 /generated/prisma
