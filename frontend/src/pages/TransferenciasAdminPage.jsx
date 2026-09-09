@@ -220,7 +220,10 @@ export default function TransferenciasAdminPage() {
   const empleadoUnico = busqueda.trim() && codigosUnicos.length === 1 ? codigosUnicos[0] : null;
 
   useEffect(() => {
-    if (!empleadoUnico) { setPermisosEmpleado([]); return; }
+    // Sin fecha no hay "rango filtrado" del cual avisar: el <input type="date"> devuelve "" cuando le
+    // escriben un día inexistente (31/09), y preguntar con desde= vacío traería permisos que no
+    // corresponden a lo que se está viendo en la tabla.
+    if (!empleadoUnico || !fecha) { setPermisosEmpleado([]); return; }
     fetch(`/api/permisos?codigo=${empleadoUnico}&desde=${fecha}`, { headers: authHeader() })
       .then(r => r.ok ? r.json() : [])
       .then(data => setPermisosEmpleado(Array.isArray(data) ? data : []))

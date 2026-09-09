@@ -3,6 +3,7 @@ import jwt from "jsonwebtoken";
 import prisma from "../lib/prisma.ts";
 import { requireAuth, requirePerm, AuthRequest } from "../middleware/auth.ts";
 import { MASTER_SELECT, formatearMaster } from "../lib/masters.ts";
+import { normalizarCorrelativo } from "../lib/correlativo.ts";
 
 // Salida de bodega = Remisión (ver createRemisiones.ts para el modelo y las decisiones de diseño).
 //
@@ -33,13 +34,6 @@ function getOperador(req: Request): string {
   } catch {
     return "Sistema";
   }
-}
-
-// Acepta el correlativo tal como lo ve el operador ("E120") o el número pelado (120) — misma función
-// que pallets.ts usa al escanear la entrada.
-function parseCorrelativo(valor: any): number | null {
-  const n = Number(String(valor ?? "").trim().replace(/^[eE]/, ""));
-  return Number.isInteger(n) && n > 0 ? n : null;
 }
 
 function esFechaValida(valor: any): boolean {
@@ -651,8 +645,8 @@ router.post("/:id/agregar-pallet", requireAuth, requirePerm("remisiones", "edita
 router.post("/:id/agregar-master", requireAuth, requirePerm("remisiones", "editar"), async (req: Request, res: Response) => {
   try {
     const remisionId = Number(req.params.id);
-    const etiquetaId = parseCorrelativo(req.body.Correlativo);
-    if (!etiquetaId) { res.status(400).json({ error: "Correlativo inválido" }); return; }
+    const codigo = normalizarCorrelativo(req.body.Correlativo);
+    if (!codigo) { res.status(400).json({ error: "Correlativo inválido" }); return; }
 
     const operador = getOperador(req);
     let masterId = 0;
@@ -668,9 +662,9 @@ router.post("/:id/agregar-master", requireAuth, requirePerm("remisiones", "edita
         JOIN EtiquetaImpresa ei ON m.EtiquetaId = ei.EtiquetaId
         JOIN OrdenEtiquetado oe ON ei.OrdenId = oe.OrdenId
         JOIN DetallePedido dp ON oe.DetalleId = dp.DetalleId
-        WHERE m.EtiquetaId = ${etiquetaId} LIMIT 1 FOR UPDATE
+        WHERE ei.Correlativo = ${codigo} LIMIT 1 FOR UPDATE
       `;
-      if (!rows.length) throw new ErrorNegocio(404, `El correlativo E${etiquetaId} no está escaneado en bodega`);
+      if (!rows.length) throw new ErrorNegocio(404, `El correlativo ${codigo} no está escaneado en bodega`);
       const master = rows[0];
       validarProforma(remision, [master.CodigoPedido]);
       if (master.Estatus === "Salido") throw new ErrorNegocio(400, "Este master ya salió de bodega en otra remisión");

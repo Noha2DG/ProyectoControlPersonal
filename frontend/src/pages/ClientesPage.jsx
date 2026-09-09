@@ -216,6 +216,14 @@ function DisenosModal({ titulo, disenos, puedeEditar, onAgregar, onPredeterminad
   // Solo se puede validar la forma de una ruta escrita a mano: absoluta (C:\… o \\servidor\…) y
   // terminada en .btw. Mismo criterio que aplica el backend cuando no alcanza la carpeta.
   const rutaConFormato = /^([a-zA-Z]:[\\/]|\\\\[^\\/]+[\\/])/.test(rutaManual.trim()) && /\.btw$/i.test(rutaManual.trim());
+  // El ejemplo de la ruta manual usa la carpeta REAL (BTW_CARPETA) cuando el servidor la conoce —
+  // aunque no la alcance —, para que el operador teclee el prefijo que el backend va a aceptar y no
+  // uno genérico que después rebota. Solo cae al ejemplo inventado si BTW_CARPETA ni siquiera está
+  // configurada en el servidor. Se convierten las barras sin usar `norm`: esa lowercasea para
+  // comparar, y aquí mostraría el nombre real de la carpeta con la capitalización cambiada.
+  const ejemploCarpeta = estado?.Carpeta
+    ? String(estado.Carpeta).replace(/\//g, "\\").replace(/\\$/, "")
+    : "\\\\servidor\\etiquetas";
   const puedeAgregar = estado?.Legible ? marcados.length > 0 : rutaConFormato;
 
   const alternar = (ruta) =>
@@ -339,18 +347,22 @@ function DisenosModal({ titulo, disenos, puedeEditar, onAgregar, onPredeterminad
                 <div className="flex justify-center py-6"><div className="w-6 h-6 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" /></div>
               ) : !estado.Legible ? (
                 /* El servidor no alcanza la carpeta (caso de producción: backend en internet, diseños
-                   en la red de la oficina). Se escribe la ruta tal como la ve la PC de BarTender. */
+                   en la red de la oficina). Se escribe la ruta tal como la ve la PC de BarTender.
+                   El ejemplo se arma con la carpeta REAL configurada (BTW_CARPETA) y no con un
+                   "\\servidor\etiquetas" genérico — ese genérico invitaba a teclear un prefijo que
+                   el backend iba a rechazar, porque valida que la ruta caiga dentro de la carpeta
+                   configurada aunque no pueda comprobar que el archivo exista. */
                 <>
                   <div className="bg-amber-50 border border-amber-200 text-amber-800 text-xs rounded-lg px-3 py-2">
                     {estado.Motivo}
                   </div>
                   <label className="block text-xs font-medium text-gray-500">Ruta del archivo .btw</label>
                   <input value={rutaManual} onChange={e => setRutaManual(e.target.value)}
-                    placeholder="\\servidor\etiquetas\GREAT GARDEN\master.btw"
+                    placeholder={`${ejemploCarpeta}\\GREAT GARDEN\\master.btw`}
                     className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-400" />
                   {rutaManual.trim() && !rutaConFormato && (
                     <p className="text-xs text-red-500">
-                      Debe ser una ruta absoluta y terminar en .btw — por ejemplo <span className="font-mono">\\servidor\etiquetas\arte.btw</span>
+                      Debe ser una ruta absoluta y terminar en .btw — por ejemplo <span className="font-mono">{ejemploCarpeta}\arte.btw</span>
                     </p>
                   )}
                   <p className="text-xs text-gray-400">

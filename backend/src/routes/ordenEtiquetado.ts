@@ -71,7 +71,14 @@ const SELECT_ORDEN = `
          -- Impresas cuenta correlativos RESERVADOS; EnPapel, los que BarTender confirmó haber
          -- mandado a la impresora. Son dos cosas distintas y la pantalla las muestra aparte: si
          -- fallara el enlace con BarTender, la captura se veía completa sin que saliera un papel.
-         (SELECT COUNT(*) FROM ColaEtiquetaBartender cb WHERE cb.OrdenId = oe.OrdenId AND cb.ImpresoEn IS NOT NULL) AS EnPapel,
+         -- El inventario migrado no pasó nunca por la cola de BarTender: su papel lo imprimió el
+         -- sistema anterior y ya viene pegado en la caja. Contarlo como "0 en papel" lo dejaba
+         -- eternamente en la lista de "falta confirmar impresión", que es papel que nadie va a
+         -- imprimir. Para una captura migrada, en papel = lo que tiene etiqueta.
+         (CASE WHEN oe.Estatus = 'Migrada'
+               THEN (SELECT COUNT(*) FROM EtiquetaImpresa ei WHERE ei.OrdenId = oe.OrdenId AND ei.Estatus = 'Activa')
+               ELSE (SELECT COUNT(*) FROM ColaEtiquetaBartender cb WHERE cb.OrdenId = oe.OrdenId AND cb.ImpresoEn IS NOT NULL)
+          END) AS EnPapel,
          (SELECT COUNT(*) FROM EtiquetaImpresa ei WHERE ei.OrdenId = oe.OrdenId AND ei.Estatus = 'Anulada') AS Anuladas,
          (SELECT COUNT(*) FROM Masters m JOIN EtiquetaImpresa ei ON m.EtiquetaId = ei.EtiquetaId WHERE ei.OrdenId = oe.OrdenId) AS Escaneadas
   FROM OrdenEtiquetado oe
@@ -107,9 +114,15 @@ router.get("/", requireAuth, requirePerm("etiquetado", "ver"), async (req: Reque
       // recientes, que es lo que se necesita ver (ver project_pedido_general_design).
       rows = await prisma.$queryRawUnsafe(`${SELECT_ORDEN} WHERE dp.CodigoPedido = ? ORDER BY oe.OrdenId DESC LIMIT 500`, pedido);
     } else if (fecha) {
-      rows = await prisma.$queryRawUnsafe(`${SELECT_ORDEN} WHERE oe.FechaProduccion = ? ORDER BY oe.OrdenId DESC`, fecha);
+      // Igual que la rama sin filtro: el inventario migrado no es trabajo del día. Filtrando por
+      // fecha aparecería mezclado con la producción real de esa fecha, que es justo la confusión
+      // que hay que evitar. Sigue siendo consultable por pedido (INI-<cliente>) o por línea.
+      rows = await prisma.$queryRawUnsafe(`${SELECT_ORDEN} WHERE oe.FechaProduccion = ? AND oe.Estatus <> 'Migrada' ORDER BY oe.OrdenId DESC`, fecha);
     } else {
-      rows = await prisma.$queryRawUnsafe(`${SELECT_ORDEN} ORDER BY oe.OrdenId DESC LIMIT 500`);
+      // Las capturas del inventario migrado quedan fuera del listado diario: son 1,393 órdenes con
+      // los OrdenId más altos y taparían por completo lo que se está trabajando hoy. Siguen siendo
+      // consultables filtrando por pedido o por línea (ver migrarInventarioInicial.ts).
+      rows = await prisma.$queryRawUnsafe(`${SELECT_ORDEN} WHERE oe.Estatus <> 'Migrada' ORDER BY oe.OrdenId DESC LIMIT 500`);
     }
     res.json(formatear(await agregarTechoLinea(rows)));
   } catch (err: any) {
@@ -194,12 +207,20 @@ router.post("/", requireAuth, requirePerm("etiquetado", "crear"), async (req: Re
     const lote = componerCodigoLote(String(piscina.Nombre), FechaProduccion, cicloEfectivo);
 
     const pedidoRows: any[] = await prisma.$queryRaw`
-      SELECT p.Estatus FROM DetallePedido dp JOIN Pedidos p ON dp.CodigoPedido = p.CodigoPedido
+      SELECT p.Estatus, dp.EsGranel, dp.Activo
+      FROM DetallePedido dp JOIN Pedidos p ON dp.CodigoPedido = p.CodigoPedido
       WHERE dp.DetalleId = ${Number(DetalleId)} LIMIT 1
     `;
     if (!pedidoRows.length) { res.status(404).json({ error: "Línea de pedido no encontrada" }); return; }
     if (pedidoRows[0].Estatus !== "Proceso") {
       res.status(400).json({ error: "Ese pedido ya está Terminado, no se pueden agregar capturas nuevas" });
+      return;
+    }
+    // El candado de emergencia del granel corta aquí también, no solo al imprimir: si nadie puede
+    // avanzar la línea mientras está desactivada, tampoco tiene sentido dejar capturar Agrupación
+    // contra ella — solo generaría trabajo (y kg en el cuadre) que luego hay que deshacer.
+    if (Number(pedidoRows[0].EsGranel) === 1 && Number(pedidoRows[0].Activo) !== 1) {
+      res.status(403).json({ error: "Esta línea es de granel y está desactivada. Un administrador debe activarla antes de capturar Agrupación." });
       return;
     }
 
@@ -231,7 +252,11 @@ router.put("/:id", requireAuth, requirePerm("etiquetado", "editar"), async (req:
     const id = Number(req.params.id);
     const { PiscinaId, Ciclo, AreaCodigo, FechaProduccion, Color, Origen, Congelacion, CantidadMaster, Estatus } = req.body;
 
-    const actuales: any[] = await prisma.$queryRaw`SELECT DetalleId FROM OrdenEtiquetado WHERE OrdenId = ${id} LIMIT 1`;
+    const actuales: any[] = await prisma.$queryRaw`
+      SELECT oe.DetalleId, oe.CantidadMaster, dp.EsGranel, dp.Activo
+      FROM OrdenEtiquetado oe JOIN DetallePedido dp ON oe.DetalleId = dp.DetalleId
+      WHERE oe.OrdenId = ${id} LIMIT 1
+    `;
     if (!actuales.length) { res.status(404).json({ error: "Captura no encontrada" }); return; }
 
     if (!AreaCodigo) { res.status(400).json({ error: "El área es requerida" }); return; }
@@ -241,6 +266,13 @@ router.put("/:id", requireAuth, requirePerm("etiquetado", "editar"), async (req:
     const cantidad = Number(CantidadMaster);
     if (!Number.isInteger(cantidad) || cantidad <= 0) {
       res.status(400).json({ error: "La cantidad de master debe ser un entero positivo" });
+      return;
+    }
+
+    // El candado de emergencia del granel bloquea AVANZAR, no corregir: bajar la cantidad o cancelar
+    // la captura siguen permitidos aunque esté desactivada — es deshacer trabajo, no generar más.
+    if (Number(actuales[0].EsGranel) === 1 && Number(actuales[0].Activo) !== 1 && cantidad > Number(actuales[0].CantidadMaster)) {
+      res.status(403).json({ error: "Esta línea es de granel y está desactivada. Un administrador debe activarla antes de aumentar la cantidad capturada." });
       return;
     }
 

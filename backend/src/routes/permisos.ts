@@ -45,10 +45,16 @@ router.get("/", requireAuth, requirePerm("permisos", "ver"), async (req: Request
     const desde  = req.query.desde  as string | undefined;
 
     let rows: any[];
-    if (codigo && desde) {
+    // "codigo" acota por sí solo. Antes hacían falta los dos y, si "desde" llegaba vacío, la consulta
+    // se caía hasta el último else y devolvía los 200 permisos de TODA la planta — que la pantalla
+    // de Transferencias mostraba como si fueran de la persona buscada. Un <input type="date"> deja el
+    // valor en "" cuando le escriben un día que no existe (31/09), así que ese caso sí pasa.
+    if (codigo) {
+      const filtroDesde = desde ? "AND p.FechaFin >= ?" : "";
+      const params = desde ? [codigo, desde] : [codigo];
       rows = await prisma.$queryRawUnsafe(
-        `${SELECT_PERMISO} WHERE p.CodigoEmpleado = ? AND p.FechaFin >= ? ORDER BY p.Fecha ASC`,
-        codigo, desde
+        `${SELECT_PERMISO} WHERE p.CodigoEmpleado = ? ${filtroDesde} ORDER BY p.Fecha ASC`,
+        ...params
       );
     } else if (fecha && hasta) {
       rows = await prisma.$queryRawUnsafe(

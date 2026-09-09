@@ -3,6 +3,7 @@ import jwt from "jsonwebtoken";
 import prisma from "../lib/prisma.ts";
 import { requireAuth, requirePerm, requireAnyPerm, tienePermiso } from "../middleware/auth.ts";
 import { resolverDiseno, resolverDisenos } from "./disenoEtiquetaCliente.ts";
+import { normalizarCorrelativo, parseCorrelativoSecuencial } from "../lib/correlativo.ts";
 import { buscarMasterPorEtiqueta, calcularTechoLinea } from "../lib/masters.ts";
 
 const router = Router();
@@ -36,11 +37,11 @@ const TOKEN_BARTENDER_SUBJECT = "bartender-impreso";
 // otro deja de poder confirmarse sola — se vuelve a abrir desde la pantalla y se emite otro token.
 const TOKEN_BARTENDER_VIGENCIA = "12h";
 
-// Acepta el correlativo tal como lo ve el operador ("E120") o el número pelado (120).
-function parseCorrelativo(valor: any): number | null {
-  const n = Number(String(valor ?? "").trim().replace(/^[eE]/, ""));
-  return Number.isInteger(n) && n > 0 ? n : null;
-}
+// Las operaciones POR RANGO de este archivo (abrir BarTender, anular en bloque, aviso de impresión)
+// presuponen correlativos consecutivos, y eso solo lo cumplen los nuestros — un código migrado del
+// sistema anterior es numérico pero no pertenece a ninguna secuencia. Por eso acá se sigue parseando
+// a número, mientras que la consulta puntual resuelve por texto (ver lib/correlativo.ts).
+const parseCorrelativo = parseCorrelativoSecuencial;
 
 function getOperador(req: Request): string {
   try {
@@ -65,6 +66,7 @@ async function obtenerDatosOrden(ordenId: number) {
            -- código para que el cliente o la aduana la crucen contra su propio catálogo.
            dp.Clase, cl.Descripcion AS DescripcionClase,
            dp.Talla AS CodigoTalla, dp.Presentacion AS CodigoPresentacion,
+           dp.EsGranel, dp.Activo,
            cli.RazonSocial AS NombreCliente, sub.RazonSocial AS NombreSubcliente,
            ped.CodigoCliente, ped.CodigoSubcliente,
            org.Descripcion AS DescripcionOrigen, cong.Descripcion AS DescripcionCongelacion, ar.Nombre AS NombreArea
@@ -110,7 +112,7 @@ router.get("/", requireAuth, requirePerm("etiquetado", "imprimir"), async (req: 
     const ordenId = req.query.orden ? Number(req.query.orden) : undefined;
     if (!ordenId) { res.status(400).json({ error: "Parámetro 'orden' requerido" }); return; }
     const rows: any[] = await prisma.$queryRaw`
-      SELECT ei.EtiquetaId, ei.OrdenId, ei.Estatus, ei.RegistradoPor, ei.CreadoEn,
+      SELECT ei.EtiquetaId, ei.OrdenId, ei.Correlativo, ei.Estatus, ei.RegistradoPor, ei.CreadoEn,
              (SELECT COUNT(*) FROM ImpresionLog il WHERE il.EtiquetaId = ei.EtiquetaId) AS VecesImpresa
       FROM EtiquetaImpresa ei
       WHERE ei.OrdenId = ${ordenId}
@@ -118,7 +120,6 @@ router.get("/", requireAuth, requirePerm("etiquetado", "imprimir"), async (req: 
     `;
     res.json(rows.map(r => ({
       ...r, EtiquetaId: Number(r.EtiquetaId), OrdenId: Number(r.OrdenId), VecesImpresa: Number(r.VecesImpresa),
-      Correlativo: "E" + r.EtiquetaId,
     })));
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -137,6 +138,15 @@ router.post("/", requireAuth, requirePerm("etiquetado", "imprimir"), async (req:
 
     const orden = await obtenerDatosOrden(Number(OrdenId));
     if (!orden) { res.status(404).json({ error: "Orden de etiquetado no encontrada" }); return; }
+
+    // El candado de emergencia del granel: una línea de granel nace desactivada y solo un
+    // administrador la enciende (ver POST /granel y PUT /:id/activo en detallePedido.ts). Este es
+    // el punto donde de verdad "se sacan" etiquetas — se reservan correlativos y se manda la orden a
+    // la cola de BarTender — así que es aquí, no en Agrupación, donde tiene que frenar.
+    if (Number(orden.EsGranel) === 1 && Number(orden.Activo) !== 1) {
+      res.status(403).json({ error: "Esta línea es de granel y está desactivada. Un administrador debe activarla antes de imprimir etiquetas." });
+      return;
+    }
 
     // Respaldo de servidor del aviso "línea ya completa" — antes solo vivía como confirm() en el
     // frontend, sin nada que lo respaldara si alguien llamaba la API directo. Mismo criterio
@@ -182,9 +192,18 @@ router.post("/", requireAuth, requirePerm("etiquetado", "imprimir"), async (req:
       if (pendientes <= 0) throw new ErrorNegocio(400, `Ya se imprimieron las ${cantidadMaster} etiquetas declaradas para esta captura`);
 
       for (let i = 0; i < pendientes; i++) {
-        await tx.$executeRaw`INSERT INTO EtiquetaImpresa (OrdenId, RegistradoPor) VALUES (${Number(OrdenId)}, ${operador})`;
+        // Correlativo entra en el INSERT porque la columna es NOT NULL (ver
+        // alterEtiquetaImpresaCorrelativo.ts). El valor definitivo es "E"+EtiquetaId y ese id solo
+        // existe DESPUES de insertar, asi que se entra con un temporal y se reemplaza en la linea
+        // siguiente, dentro de la misma transaccion. El temporal es UUID_SHORT() —un entero de 64
+        // bits, 18 digitos— y no algo fijo como '': con un valor fijo, imprimir dos etiquetas
+        // chocaria contra el UNIQUE del correlativo.
+        await tx.$executeRaw`INSERT INTO EtiquetaImpresa (OrdenId, RegistradoPor, Correlativo) VALUES (${Number(OrdenId)}, ${operador}, UUID_SHORT())`;
         const fila: any[] = await tx.$queryRaw`SELECT LAST_INSERT_ID() AS id`;
         const id = Number(fila[0].id);
+        // El correlativo ya no se deriva al leer: se GUARDA acá mismo. Sigue siendo "E"+id para lo
+        // que emite este sistema; los masters migrados traen el suyo (ver lib/correlativo.ts).
+        await tx.$executeRaw`UPDATE EtiquetaImpresa SET Correlativo = ${"E" + id} WHERE EtiquetaId = ${id}`;
         await tx.$executeRaw`INSERT INTO ImpresionLog (EtiquetaId, Motivo, ImpresoPor) VALUES (${id}, ${"Impresión inicial"}, ${operador})`;
 
         // Cola de la etiqueta de CLIENTE (BarTender -> Epson A4). Va en la misma transacción que la
@@ -545,15 +564,16 @@ async function ubicacionDePallet(palletId: number | null | undefined) {
 // no solo etiquetado.imprimir.
 router.get("/:id/consultar", requireAuth, requireAnyPerm([["etiquetado", "imprimir"], ["bodega", "ver"]]), async (req: Request, res: Response) => {
   try {
-    const etiquetaId = parseCorrelativo(req.params.id);
-    if (!etiquetaId) { res.status(400).json({ error: "Correlativo inválido" }); return; }
+    const codigo = normalizarCorrelativo(req.params.id);
+    if (!codigo) { res.status(400).json({ error: "Correlativo inválido" }); return; }
 
     const etiquetaRows: any[] = await prisma.$queryRaw`
-      SELECT EtiquetaId, OrdenId, Estatus, RegistradoPor, CreadoEn, AnuladoPor, AnuladoEn, MotivoAnulacion
-      FROM EtiquetaImpresa WHERE EtiquetaId = ${etiquetaId} LIMIT 1
+      SELECT EtiquetaId, OrdenId, Correlativo, Estatus, RegistradoPor, CreadoEn, AnuladoPor, AnuladoEn, MotivoAnulacion
+      FROM EtiquetaImpresa WHERE Correlativo = ${codigo} LIMIT 1
     `;
-    if (!etiquetaRows.length) { res.status(404).json({ error: `No existe ninguna etiqueta con el correlativo E${etiquetaId}` }); return; }
+    if (!etiquetaRows.length) { res.status(404).json({ error: `No existe ninguna etiqueta con el correlativo ${codigo}` }); return; }
     const etiqueta = etiquetaRows[0];
+    const etiquetaId = Number(etiqueta.EtiquetaId);
 
     const [orden, historialRows, master] = await Promise.all([
       obtenerDatosOrden(Number(etiqueta.OrdenId)),
@@ -566,13 +586,13 @@ router.get("/:id/consultar", requireAuth, requireAnyPerm([["etiquetado", "imprim
 
     res.json({
       EtiquetaId: etiquetaId,
-      Correlativo: "E" + etiquetaId,
+      Correlativo: etiqueta.Correlativo,
       Estatus: etiqueta.Estatus,
       Anulacion: etiqueta.Estatus === "Anulada"
         ? { AnuladoPor: etiqueta.AnuladoPor, AnuladoEn: etiqueta.AnuladoEn, Motivo: etiqueta.MotivoAnulacion }
         : null,
       CapturaEstatus: orden?.EstatusOrden ?? null,
-      Producto: orden ? datosDesdeOrden(orden, "E" + etiquetaId) : null,
+      Producto: orden ? datosDesdeOrden(orden, etiqueta.Correlativo) : null,
       VecesImpresa: historialRows.length,
       Historial: historialRows.map(h => ({
         LogId: Number(h.LogId), Motivo: h.Motivo, ReimpresionForzada: Boolean(Number(h.ReimpresionForzada)),
@@ -693,7 +713,7 @@ router.get("/atascadas", requireAuth, requirePerm("etiquetado", "imprimir"), asy
   try {
     const horas = Number(req.query.horas) > 0 ? Number(req.query.horas) : 24;
     const rows: any[] = await prisma.$queryRawUnsafe(`
-      SELECT ei.EtiquetaId, ei.CreadoEn, ei.RegistradoPor, TIMESTAMPDIFF(HOUR, ei.CreadoEn, NOW()) AS HorasDesdeImpresion,
+      SELECT ei.EtiquetaId, ei.Correlativo, ei.CreadoEn, ei.RegistradoPor, TIMESTAMPDIFF(HOUR, ei.CreadoEn, NOW()) AS HorasDesdeImpresion,
              dp.CodigoPedido, cli.RazonSocial AS NombreCliente, sub.RazonSocial AS NombreSubcliente,
              oe.Lote, pc.Descripcion AS DescripcionProceso, ta.Descripcion AS DescripcionTalla, pr.Descripcion AS DescripcionPresentacion
       FROM EtiquetaImpresa ei
@@ -714,7 +734,6 @@ router.get("/atascadas", requireAuth, requirePerm("etiquetado", "imprimir"), asy
     res.json(rows.map(r => ({
       ...r,
       EtiquetaId: Number(r.EtiquetaId),
-      Correlativo: "E" + Number(r.EtiquetaId),
       HorasDesdeImpresion: Number(r.HorasDesdeImpresion),
     })));
   } catch (err: any) {

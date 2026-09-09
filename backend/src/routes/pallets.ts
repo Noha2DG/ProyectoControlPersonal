@@ -3,6 +3,7 @@ import jwt from "jsonwebtoken";
 import prisma from "../lib/prisma.ts";
 import { requireAuth, requirePerm, tienePermiso, AuthRequest } from "../middleware/auth.ts";
 import { buscarMasterPorEtiqueta, calcularTechoLinea, MASTER_SELECT, formatearMaster } from "../lib/masters.ts";
+import { normalizarCorrelativo, resolverEtiqueta } from "../lib/correlativo.ts";
 
 const router = Router();
 
@@ -14,12 +15,6 @@ class ErrorNegocio extends Error {
     super(mensaje);
     this.status = status;
   }
-}
-
-// Acepta el correlativo tal como lo ve el operador ("E120") o el número pelado (120).
-function parseCorrelativo(valor: any): number | null {
-  const n = Number(String(valor ?? "").trim().replace(/^[eE]/, ""));
-  return Number.isInteger(n) && n > 0 ? n : null;
 }
 
 function getOperador(req: Request): string {
@@ -123,12 +118,12 @@ export async function quitarMasterDePallet(tx: any, palletId: number, masterId: 
 // tabla. Todo el criterio vive aquí (y no en el handler) para que la ruta quede de una línea y esta
 // operación se pueda ejercitar contra la base real sin levantar el servidor.
 export async function quitarMasterEscaneado(tx: any, palletId: number, correlativo: any, operador: string) {
-  const etiquetaId = parseCorrelativo(correlativo);
-  if (!etiquetaId) throw new ErrorNegocio(400, "Correlativo inválido");
+  const etiqueta = await resolverEtiqueta(tx, correlativo);
+  if (!etiqueta) throw new ErrorNegocio(404, "QR no reconocido");
 
   await bloquearPalletAbierto(tx, palletId);
 
-  const master = await buscarMasterPorEtiqueta(tx, etiquetaId);
+  const master = await buscarMasterPorEtiqueta(tx, etiqueta.EtiquetaId);
   if (!master) throw new ErrorNegocio(404, "Este master no está escaneado en ningún polín");
   // Escanear la caja equivocada es el error que este flujo tiene que atajar: si el QR es de otro
   // polín no se toca nada, se dice dónde está y el operador la devuelve a su lugar.
@@ -139,7 +134,7 @@ export async function quitarMasterEscaneado(tx: any, palletId: number, correlati
   const resultado = await quitarMasterDePallet(tx, palletId, master.MasterId, operador);
   // Correlativo de vuelta para que la pantalla arme el renglón del historial de la tanda con lo que
   // ya tiene cargado del master — sin repetir aquí el join de 10 tablas por cada escaneo.
-  return { ...resultado, Correlativo: "E" + etiquetaId };
+  return { ...resultado, Correlativo: etiqueta.Correlativo };
 }
 
 // GET /api/pallets?estatus=Abierto&fecha=2026-07-14
@@ -307,9 +302,12 @@ router.post("/", requireAuth, requirePerm("bodega", "escanear"), async (req: Req
 router.post("/:id/escanear", requireAuth, requirePerm("bodega", "escanear"), async (req: AuthRequest, res: Response) => {
   try {
     const palletId = Number(req.params.id);
-    const etiquetaId = parseCorrelativo(req.body.Correlativo);
-    if (!etiquetaId) { res.status(400).json({ error: "Correlativo inválido" }); return; }
+    const codigo = normalizarCorrelativo(req.body.Correlativo);
+    if (!codigo) { res.status(400).json({ error: "Correlativo inválido" }); return; }
     const operador = getOperador(req);
+    // Se resuelve DENTRO de la transacción (el correlativo puede ser nuestro o migrado, ambos viven
+    // en EtiquetaImpresa.Correlativo), pero se usa después de ella para releer el master ya creado.
+    let etiquetaId = 0;
     // Mover cajas desde un polín SELLADO (Cerrado, con o sin posición) es deliberado y viaja aparte:
     // lo manda en true el botón "+ Master de otro Pallet". Sin esta bandera el escaneo normal se
     // comporta igual que siempre y sigue exigiendo que el polín de origen esté Abierto.
@@ -343,9 +341,10 @@ router.post("/:id/escanear", requireAuth, requirePerm("bodega", "escanear"), asy
       }
 
       const etiquetaRows: any[] = await tx.$queryRaw`
-        SELECT EtiquetaId, OrdenId, Estatus FROM EtiquetaImpresa WHERE EtiquetaId = ${etiquetaId} LIMIT 1
+        SELECT EtiquetaId, OrdenId, Estatus FROM EtiquetaImpresa WHERE Correlativo = ${codigo} LIMIT 1
       `;
       if (!etiquetaRows.length) throw new ErrorNegocio(404, "QR no reconocido");
+      etiquetaId = Number(etiquetaRows[0].EtiquetaId);
       if (etiquetaRows[0].Estatus !== "Activa") throw new ErrorNegocio(400, "Esta etiqueta está anulada, no se puede ingresar a bodega");
 
       // Un master ya escaneado puede ser un doble-escaneo (error) o una CONSOLIDACIÓN de sobrantes

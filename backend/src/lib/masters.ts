@@ -8,7 +8,7 @@
 // Vive aquí (y no en pallets.ts, donde nació) porque Remisiones necesita exactamente el mismo
 // detalle por master: duplicar un join de 10 tablas en dos rutas es garantía de que se desincronicen.
 export const MASTER_SELECT = `
-  SELECT m.MasterId, m.PalletId, m.EtiquetaId, m.Estatus, m.IngresadoPor, m.FechaIngreso,
+  SELECT m.MasterId, m.PalletId, m.EtiquetaId, ei.Correlativo, m.Estatus, m.IngresadoPor, m.FechaIngreso,
          pal.Codigo AS PalletCodigo, pal.Estatus AS PalletEstatus,
          oe.OrdenId, oe.Lote, oe.FechaProduccion, oe.AreaCodigo, ar.Nombre AS NombreArea,
          dp.DetalleId, dp.CodigoPedido, dp.Clase, pc.Descripcion AS DescripcionProceso,
@@ -32,8 +32,9 @@ export const MASTER_SELECT = `
   LEFT JOIN Areas ar ON oe.AreaCodigo = ar.Codigo
 `;
 
-// Normaliza una fila de MASTER_SELECT: los BigInt/Decimal de Prisma a number y el correlativo
-// derivado ("E" + EtiquetaId — no se guarda como columna, se deriva).
+// Normaliza una fila de MASTER_SELECT: los BigInt/Decimal de Prisma a number. El correlativo YA NO
+// se deriva de EtiquetaId — se lee de EtiquetaImpresa.Correlativo, porque los masters migrados del
+// sistema anterior traen su propio código impreso en la caja (ver alterEtiquetaImpresaCorrelativo.ts).
 export function formatearMaster(r: any) {
   return {
     ...r,
@@ -41,7 +42,7 @@ export function formatearMaster(r: any) {
     OrdenId: Number(r.OrdenId), DetalleId: Number(r.DetalleId), Talla: Number(r.Talla),
     CodigoCliente: Number(r.CodigoCliente),
     PesoMasterKG: Number(r.PesoMasterKG), PesoMasterLb: Number(r.PesoMasterLb),
-    Correlativo: "E" + Number(r.EtiquetaId),
+    Correlativo: String(r.Correlativo),
     FechaProduccion: r.FechaProduccion ? new Date(r.FechaProduccion).toISOString().slice(0, 10) : null,
   };
 }
@@ -139,6 +140,21 @@ export interface TechoLinea {
   Escaneado: number;
 }
 
+// Techo en master de una linea de pedido, o null cuando no existe contra que comparar. Dos casos
+// distintos dan null:
+//   - EsGeneral: el pedido es de almacenaje, nunca hubo cantidad planificada.
+//   - EsGranel: la linea nacio en planta porque se acabo el material de empaque, asi que no esta en
+//     la proforma. Su techo no es de la linea sino del par (Proceso, Talla) medido en kg — ver el
+//     cuadre en detallePedido.ts.
+// En los dos CantidadCajas vale 1 de centinela y CEILING(1 / CajasXMaster) da 1 siempre, asi que
+// leerlo como techo toparia la linea en un solo master.
+export function objetivoDeLinea(
+  row: { EsGeneral: any; EsGranel: any; CantidadCajas: any; CajasXMaster: any },
+): number | null {
+  if (Number(row.EsGeneral) === 1 || Number(row.EsGranel) === 1) return null;
+  return Math.ceil(Number(row.CantidadCajas) / Number(row.CajasXMaster));
+}
+
 // Objetivo = CEILING(CantidadCajas / CajasXMaster) de la línea de pedido. Escaneado = masters YA
 // confirmados en bodega de esa línea, en cualquier pallet, sumando TODAS las capturas de Etiquetado
 // que compartan ese DetalleId — es el "segundo techo" real (contra lo confirmado en bodega, no
@@ -147,16 +163,14 @@ export interface TechoLinea {
 // candado de concurrencia lo pone el caller con FOR UPDATE antes de invocar esta función.
 export async function calcularTechoLinea(client: any, detalleId: number): Promise<TechoLinea | null> {
   const detalle: any[] = await client.$queryRaw`
-    SELECT dp.CantidadCajas, pr.CajasXMaster, ped.EsGeneral
+    SELECT dp.CantidadCajas, dp.EsGranel, pr.CajasXMaster, ped.EsGeneral
     FROM DetallePedido dp
     JOIN Presentacion pr ON dp.Presentacion = pr.Codigo
     JOIN Pedidos ped ON dp.CodigoPedido = ped.CodigoPedido
     WHERE dp.DetalleId = ${detalleId} LIMIT 1
   `;
   if (!detalle.length) return null;
-  const objetivo = Number(detalle[0].EsGeneral) === 1
-    ? null
-    : Math.ceil(Number(detalle[0].CantidadCajas) / Number(detalle[0].CajasXMaster));
+  const objetivo = objetivoDeLinea(detalle[0]);
   const escaneadoRows: any[] = await client.$queryRaw`
     SELECT COUNT(*) AS n FROM Masters m
     JOIN EtiquetaImpresa ei ON m.EtiquetaId = ei.EtiquetaId
@@ -176,7 +190,7 @@ export async function calcularTechoLineaBatch(client: any, detalleIds: number[])
   const placeholders = ids.map(() => "?").join(",");
 
   const detalles: any[] = await client.$queryRawUnsafe(`
-    SELECT dp.DetalleId, dp.CantidadCajas, pr.CajasXMaster, ped.EsGeneral
+    SELECT dp.DetalleId, dp.CantidadCajas, dp.EsGranel, pr.CajasXMaster, ped.EsGeneral
     FROM DetallePedido dp
     JOIN Presentacion pr ON dp.Presentacion = pr.Codigo
     JOIN Pedidos ped ON dp.CodigoPedido = ped.CodigoPedido
@@ -195,9 +209,7 @@ export async function calcularTechoLineaBatch(client: any, detalleIds: number[])
 
   for (const d of detalles) {
     const detalleId = Number(d.DetalleId);
-    const objetivo = Number(d.EsGeneral) === 1
-      ? null
-      : Math.ceil(Number(d.CantidadCajas) / Number(d.CajasXMaster));
+    const objetivo = objetivoDeLinea(d);
     mapa.set(detalleId, { Objetivo: objetivo, Escaneado: escaneadoPorDetalle.get(detalleId) ?? 0 });
   }
   return mapa;
