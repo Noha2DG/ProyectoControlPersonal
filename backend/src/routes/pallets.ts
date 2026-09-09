@@ -244,7 +244,7 @@ async function detallePallet(palletId: number) {
   }
 }
 
-// POST /api/pallets  { Origen, CantidadMaster, AreaCodigo }
+// POST /api/pallets  { Origen, CantidadMaster, AreaCodigo, Motivo }
 // Crea un pallet vacío y Abierto. Sin Pedido/Cliente/línea de pedido: se arma solo con lo que se
 // escanee después — pero SÍ requiere Origen (informativo, no filtra qué se puede escanear ahí),
 // CantidadMaster (meta de referencia, no bloquea el escaneo) y AreaCodigo — el área REAL donde se
@@ -252,11 +252,16 @@ async function detallePallet(palletId: number) {
 // resuelve solo la bodega virtual correspondiente (BodegaVirtual.AreaCodigo) y su letra de código
 // (ej. "T0001" para Túnel) — el pallet queda en esa bodega virtual antes de pasar a la bodega
 // física real (asignación de posición + hoja física impresa — todavía no existe ese siguiente paso).
+//
+// Motivo solo se exige cuando Origen = DEVOLUCION (ver project_devoluciones_design): un pallet de
+// devolución es un caso de negocio que necesita quedar explicado, el resto de orígenes no.
 router.post("/", requireAuth, requirePerm("bodega", "escanear"), async (req: Request, res: Response) => {
   try {
     const { Origen, CantidadMaster, AreaCodigo } = req.body;
+    const motivo = String(req.body.Motivo ?? "").trim();
     if (!Origen) { res.status(400).json({ error: "El origen es requerido" }); return; }
     if (!AreaCodigo) { res.status(400).json({ error: "El área es requerida" }); return; }
+    if (Origen === "DEVOLUCION" && !motivo) { res.status(400).json({ error: "El motivo de la devolución es requerido" }); return; }
     const cantidad = Number(CantidadMaster);
     if (!Number.isInteger(cantidad) || cantidad <= 0) {
       res.status(400).json({ error: "La cantidad de masters del pallet debe ser un entero positivo" });
@@ -280,8 +285,8 @@ router.post("/", requireAuth, requirePerm("bodega", "escanear"), async (req: Req
       codigo = String(bvRows[0].Letra) + String(Number(secRows[0].UltimoSecuencial)).padStart(4, "0");
 
       await tx.$executeRaw`
-        INSERT INTO Pallets (Codigo, Origen, CantidadMaster, BodegaVirtualCodigo, CreadoPor)
-        VALUES (${codigo}, ${Origen}, ${cantidad}, ${bodegaVirtualCodigo}, ${operador})
+        INSERT INTO Pallets (Codigo, Origen, Motivo, CantidadMaster, BodegaVirtualCodigo, CreadoPor)
+        VALUES (${codigo}, ${Origen}, ${motivo || null}, ${cantidad}, ${bodegaVirtualCodigo}, ${operador})
       `;
       const fila: any[] = await tx.$queryRaw`SELECT LAST_INSERT_ID() AS id`;
       nuevoPalletId = Number(fila[0].id);

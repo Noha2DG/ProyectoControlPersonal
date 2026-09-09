@@ -143,6 +143,12 @@ function PanelEscaneo({ palletId, onClose, onCambio }) {
         // No se llama onCambio() aquí: eso dispara el GET de la lista completa de pallets en el
         // padre, y a 50 escaneos/minuto sería una consulta extra por cada uno sin necesidad — la
         // lista ya se refresca al cerrar este panel (onClose) y al cerrar/reabrir el pallet.
+      } else if (pallet?.Origen === "DEVOLUCION" && data.error?.includes("ya salió de bodega")) {
+        // El candado de /escanear es correcto y no se rompe: un master Salido de verdad no debe
+        // reaparecer como si nada. En un polín de devolución, ese rechazo específico es la señal de
+        // que la caja SÍ tiene una remisión detrás — se resuelve con devolver-master, que desmarca
+        // solo esa línea (no el documento completo) y mueve el master en la misma transacción.
+        await intentarDevolverMaster(valor);
       } else {
         setMensaje({ ok: false, texto: `${valor}: ${data.error || "No se pudo escanear"}` });
       }
@@ -152,6 +158,25 @@ function PanelEscaneo({ palletId, onClose, onCambio }) {
       // cambie de referencia, pero el input nunca se deshabilita ahora así que no hay blur que
       // revertir — este focus() es el que realmente importa entre escaneo y escaneo.
       inputRef.current?.focus();
+    }
+  };
+
+  // Reversa de UNA línea de una remisión Confirmada — no del documento completo (eso es
+  // /:id/anular, que revertiría también las cajas que sí siguen embarcadas de verdad). El motivo
+  // de la devolución ya se capturó al crear este pallet (Origen=DEVOLUCION lo exige) y se reusa
+  // aquí para no pedirlo caja por caja.
+  const intentarDevolverMaster = async (valor) => {
+    const res = await fetch("/api/remisiones/devolver-master", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeader() },
+      body: JSON.stringify({ Correlativo: valor, PalletDestinoId: palletId, Motivo: pallet?.Motivo || "" }),
+    });
+    const data = await leerJSON(res);
+    if (res.ok) {
+      setMensaje({ ok: true, texto: `${data.Correlativo} — devuelto de la remisión ${data.RemisionFolio}` });
+      await fetchDetalle();
+    } else {
+      setMensaje({ ok: false, texto: `${valor}: ${data.error || "No se pudo devolver"}` });
     }
   };
 
@@ -282,6 +307,11 @@ function PanelEscaneo({ palletId, onClose, onCambio }) {
             </div>
             <button onClick={onClose} className="text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-lg p-2 text-xl leading-none transition">&times;</button>
           </div>
+          {pallet?.Motivo && (
+            <p className="text-xs text-amber-700 bg-amber-50 border-t border-amber-200 px-5 py-1.5">
+              Motivo: {pallet.Motivo}
+            </p>
+          )}
           {/* Fila propia, con botones grandes tipo táctil — pensado para tablet/teléfono en piso de
               planta, no para links de texto chicos difíciles de presionar con el dedo. */}
           {/* "Consultar etiqueta" vivía acá adentro, pero consultar no tiene nada que ver con el
@@ -489,15 +519,17 @@ function ModalNuevoPallet({ origenes, bodegasVirtuales, onCrear, onClose }) {
   const [origen, setOrigen] = useState("");
   const [areaCodigo, setAreaCodigo] = useState("");
   const [cantidad, setCantidad] = useState("");
+  const [motivo, setMotivo] = useState("");
   const [error, setError] = useState("");
   const [creando, setCreando] = useState(false);
+  const esDevolucion = origen === "DEVOLUCION";
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError("");
     setCreando(true);
     try {
-      await onCrear({ Origen: origen, CantidadMaster: cantidad, AreaCodigo: areaCodigo });
+      await onCrear({ Origen: origen, CantidadMaster: cantidad, AreaCodigo: areaCodigo, Motivo: esDevolucion ? motivo : "" });
     } catch (err) {
       setError(err.message);
     } finally {
@@ -528,6 +560,13 @@ function ModalNuevoPallet({ origenes, bodegasVirtuales, onCrear, onClose }) {
               {origenes.map(o => <option key={o.Codigo} value={o.Codigo}>{o.Descripcion}</option>)}
             </select>
           </div>
+          {esDevolucion && (
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">Motivo de la devolución *</label>
+              <textarea required rows={2} value={motivo} onChange={e => setMotivo(e.target.value)}
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
+            </div>
+          )}
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1">Cantidad de masters que llevará el pallet *</label>
             <input required type="number" min="1" step="1" value={cantidad} onChange={e => setCantidad(e.target.value)}
@@ -600,11 +639,11 @@ export default function PalletsPage() {
 
   useEffect(() => { fetchPallets(); }, [fetchPallets]);
 
-  const handleCrear = async ({ Origen, CantidadMaster, AreaCodigo }) => {
+  const handleCrear = async ({ Origen, CantidadMaster, AreaCodigo, Motivo }) => {
     const res = await fetch(API, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...authHeader() },
-      body: JSON.stringify({ Origen, CantidadMaster, AreaCodigo }),
+      body: JSON.stringify({ Origen, CantidadMaster, AreaCodigo, Motivo }),
     });
     const data = await leerJSON(res);
     if (!res.ok) throw new Error(data.error || "No se pudo crear el pallet");

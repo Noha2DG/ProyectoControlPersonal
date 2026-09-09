@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from "react";
 import { fmtEntero, fmtNum } from "../utils/numero.js";
 import { authHeader } from "../context/AuthContext.jsx";
 import { useColWidths, useOrden, ordenarFilas, Th, Colgroup } from "../components/ResizableTh.jsx";
+import { exportarExistenciaBodega } from "../utils/exportExcel.js";
 
 const API = "/api/bodega-fisica/existencias";
 
@@ -36,7 +37,69 @@ function fmtFecha(iso) {
   return iso ? iso.split("-").reverse().join("/") : "-";
 }
 
-const FILTRO_INICIAL = { Cliente: "", Clase: "", Talla: "", Ubicacion: "", Buscar: "" };
+// Lista propia en vez de <input list>+<datalist>: el datalist nativo del navegador no siempre
+// dispara el evento que React escucha al hacer clic en una sugerencia (varía según navegador), así
+// que la selección se veía en la caja pero el filtro no se aplicaba hasta que algo más —como el
+// botón Actualizar— forzaba un re-render. Con una lista propia (mismo patrón que
+// EmpleadoAutocomplete.jsx) la selección es un onMouseDown normal de React: siempre actualiza el
+// estado al instante.
+function FiltroBusqueda({ valor, onChange, opciones, placeholder, anchoClase = "w-36" }) {
+  const [abierto, setAbierto] = useState(false);
+  const [resaltado, setResaltado] = useState(-1);
+  const q = valor.trim().toLowerCase();
+  const sugerencias = q ? opciones.filter(o => o.toLowerCase().includes(q)).slice(0, 12) : opciones.slice(0, 12);
+
+  const seleccionar = (v) => { onChange(v); setAbierto(false); setResaltado(-1); };
+
+  // Tab NO se cancela (preventDefault): el foco tiene que seguir avanzando al siguiente campo,
+  // igual que un Tab normal — solo se aprovecha la tecla para completar con lo resaltado (o la
+  // primera sugerencia si el usuario no navegó con flechas) antes de que el campo pierda el foco.
+  const handleKeyDown = (e) => {
+    if (!abierto || !sugerencias.length) return;
+    if (e.key === "ArrowDown") { e.preventDefault(); setResaltado(i => Math.min(i + 1, sugerencias.length - 1)); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setResaltado(i => Math.max(i - 1, 0)); }
+    else if (e.key === "Tab" || e.key === "Enter") {
+      const elegido = sugerencias[resaltado >= 0 ? resaltado : 0];
+      if (e.key === "Enter") e.preventDefault();
+      seleccionar(elegido);
+    } else if (e.key === "Escape") { setAbierto(false); setResaltado(-1); }
+  };
+
+  return (
+    <div className={`relative ${anchoClase}`}>
+      <input value={valor} onChange={e => { onChange(e.target.value); setResaltado(-1); }}
+        onKeyDown={handleKeyDown}
+        onFocus={() => setAbierto(true)} onBlur={() => setTimeout(() => setAbierto(false), 150)}
+        placeholder={placeholder} title={valor} autoComplete="off"
+        className="w-full border border-gray-300 rounded-lg pl-2.5 pr-6 py-1.5 text-sm truncate focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white" />
+      {valor && (
+        <button type="button" onMouseDown={e => { e.preventDefault(); onChange(""); }}
+          className="absolute right-1.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 text-sm leading-none">
+          &times;
+        </button>
+      )}
+      {abierto && sugerencias.length > 0 && (
+        <ul className="absolute z-10 w-max min-w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-56 overflow-y-auto">
+          {sugerencias.map((o, i) => (
+            <li key={o} onMouseDown={() => seleccionar(o)} onMouseEnter={() => setResaltado(i)}
+              className={`px-3 py-1.5 text-sm cursor-pointer whitespace-nowrap ${i === resaltado ? "bg-blue-50" : "hover:bg-blue-50"}`}>
+              {o}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+const FILTRO_INICIAL = { Cliente: "", Clase: "", Talla: "", Presentacion: "", Ubicacion: "", Buscar: "" };
+
+// Coincidencia parcial, sin distinguir mayúsculas — lo que espera un filtro donde SE ESCRIBE (a
+// diferencia de un <select>, donde solo cabe la igualdad exacta contra una opción de la lista).
+function contiene(valor, filtro) {
+  const f = filtro.trim().toLowerCase();
+  return !f || (valor ?? "").toLowerCase().includes(f);
+}
 
 export default function ExistenciaBodegaPage() {
   const [filas, setFilas] = useState([]);
@@ -60,15 +123,17 @@ export default function ExistenciaBodegaPage() {
     Cliente: opcionesDe(filas, "Cliente"),
     Clase: opcionesDe(filas, "Clase"),
     Talla: opcionesDe(filas, "Talla"),
+    Presentacion: opcionesDe(filas, "Presentacion"),
   }), [filas]);
 
   const filtradas = useMemo(() => {
     const buscar = filtros.Buscar.trim().toLowerCase();
     return filas.filter(f =>
-      (!filtros.Cliente || f.Cliente === filtros.Cliente) &&
-      (!filtros.Clase || f.Clase === filtros.Clase) &&
-      (!filtros.Talla || f.Talla === filtros.Talla) &&
-      (!filtros.Ubicacion || ubicacionDe(f) === filtros.Ubicacion) &&
+      contiene(f.Cliente, filtros.Cliente) &&
+      contiene(f.Clase, filtros.Clase) &&
+      contiene(f.Talla, filtros.Talla) &&
+      contiene(f.Presentacion, filtros.Presentacion) &&
+      contiene(ubicacionDe(f), filtros.Ubicacion) &&
       (!buscar ||
         f.Lote?.toLowerCase().includes(buscar) ||
         f.Polin?.toLowerCase().includes(buscar) ||
@@ -94,21 +159,19 @@ export default function ExistenciaBodegaPage() {
   const hayFiltros = Object.values(filtros).some(Boolean);
   const limpiarFiltros = () => setFiltros(FILTRO_INICIAL);
 
-  const selectFiltro = (campo, label, valores) => (
-    <select value={filtros[campo]} onChange={e => setFiltros(p => ({ ...p, [campo]: e.target.value }))}
-      className="border border-gray-300 rounded-lg px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white">
-      <option value="">{label}</option>
-      {valores.map(v => <option key={v} value={v}>{v}</option>)}
-    </select>
+  const inputFiltro = (campo, label, valores, anchoClase = "w-36") => (
+    <FiltroBusqueda valor={filtros[campo]} onChange={v => setFiltros(p => ({ ...p, [campo]: v }))}
+      opciones={valores} placeholder={label} anchoClase={anchoClase} />
   );
 
   return (
     <div>
       <div className="flex flex-wrap gap-2 items-center mb-4">
-        {selectFiltro("Ubicacion", "Bodega y áreas", UBICACIONES)}
-        {selectFiltro("Cliente", "Todos los clientes", opciones.Cliente)}
-        {selectFiltro("Clase", "Todas las clases", opciones.Clase)}
-        {selectFiltro("Talla", "Todas las tallas", opciones.Talla)}
+        {inputFiltro("Ubicacion", "Bodega y áreas", UBICACIONES, "w-36")}
+        {inputFiltro("Cliente", "Todos los clientes", opciones.Cliente, "w-40")}
+        {inputFiltro("Clase", "Todas las clases", opciones.Clase, "w-36")}
+        {inputFiltro("Talla", "Todas las tallas", opciones.Talla, "w-28")}
+        {inputFiltro("Presentacion", "Todas las presentaciones", opciones.Presentacion, "w-40")}
         <input type="text" placeholder="Buscar Pedido, Polín, Lote o Posición..." value={filtros.Buscar}
           onChange={e => setFiltros(p => ({ ...p, Buscar: e.target.value }))}
           className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm w-64 focus:outline-none focus:ring-2 focus:ring-blue-400" />
@@ -120,19 +183,32 @@ export default function ExistenciaBodegaPage() {
         <button onClick={fetchDatos} className="text-blue-600 hover:text-blue-800 text-sm font-medium px-3 py-1.5 rounded-lg hover:bg-blue-50 border border-blue-200 transition">
           Actualizar
         </button>
-        <span className="text-sm text-gray-500 ml-auto">
-          {filtradas.length} pol{filtradas.length !== 1 ? "ines" : "ín"}
-        </span>
+        <button onClick={() => exportarExistenciaBodega(ordenadas, ubicacionDe)}
+          disabled={!filtradas.length}
+          className="flex items-center gap-1.5 bg-green-600 text-white text-sm font-semibold px-3 py-1.5 rounded-lg hover:bg-green-700 transition disabled:opacity-50 disabled:hover:bg-green-600">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
+            <path fillRule="evenodd" d="M10 3a.75.75 0 01.75.75v6.19l2.22-2.22a.75.75 0 111.06 1.06l-3.5 3.5a.75.75 0 01-1.06 0l-3.5-3.5a.75.75 0 111.06-1.06l2.22 2.22V3.75A.75.75 0 0110 3z" clipRule="evenodd" />
+            <path d="M3.5 12.75a.75.75 0 01.75.75v2.5c0 .414.336.75.75.75h10a.75.75 0 00.75-.75v-2.5a.75.75 0 011.5 0v2.5A2.25 2.25 0 0115 18.5H5a2.25 2.25 0 01-2.25-2.25v-2.5a.75.75 0 01.75-.75z" />
+          </svg>
+          Exportar a Excel
+        </button>
+        <div className="text-sm text-gray-500 ml-auto text-right leading-tight">
+          <p>{filtradas.length} pol{filtradas.length !== 1 ? "ines" : "ín"}</p>
+          <p className="font-semibold text-gray-700">{fmtNum(totales.Libras)} Lb</p>
+        </div>
       </div>
 
       {loading ? (
         <div className="flex justify-center py-16"><div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" /></div>
       ) : (
         <div className="bg-white rounded-xl shadow overflow-hidden">
-          <div className="overflow-x-auto">
+          {/* Alto fijo con su propio scroll — 1500+ polines sin esto hacían crecer la página entera
+              y perdían de vista los filtros y el total de arriba. El encabezado va `sticky` para
+              seguir viéndose mientras se navega la tabla. */}
+          <div className="overflow-auto max-h-[640px]">
             <table className="w-full text-sm table-fixed">
               <Colgroup columns={COLS} widths={widths} />
-              <thead>
+              <thead className="sticky top-0 z-10">
                 <tr className="bg-gray-100 text-gray-600 uppercase text-xs tracking-wider">
                   <Th width={widths.pedido} onResizeStart={startResize("pedido")} sortKey="pedido" orden={orden} onOrdenar={alternarOrden} className="px-4 py-3 text-left">Pedido</Th>
                   <Th width={widths.cliente} onResizeStart={startResize("cliente")} sortKey="cliente" orden={orden} onOrdenar={alternarOrden} className="px-4 py-3 text-left">Cliente</Th>
@@ -184,7 +260,7 @@ export default function ExistenciaBodegaPage() {
                 })}
               </tbody>
               {filtradas.length > 0 && (
-                <tfoot>
+                <tfoot className="sticky bottom-0 z-10">
                   <tr className="bg-gray-50 border-t-2 border-gray-200 font-bold text-gray-700">
                     <td colSpan={11} className="px-4 py-2.5 text-right text-xs uppercase tracking-wide text-gray-500">Total</td>
                     <td className="px-4 py-2.5 text-right tabular-nums">{fmtEntero(totales.Master)}</td>

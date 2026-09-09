@@ -149,9 +149,22 @@ function ContenidoHoja({ remision }) {
         <p className="text-base mt-5"><span className="text-gray-400">Observaciones:</span> {remision.Observaciones}</p>
       )}
 
+      {/* El nombre va ARRIBA de la línea y no como valor de "Entregado por": es la firma física la
+          que confirma, el nombre solo dice quién debe firmar ahí — mismo criterio que un vale de
+          salida en papel. "Entregado por" siempre es el operador de este sistema (quien confirmó,
+          o quien armó el documento si sigue en borrador). "Recibido por" solo se conoce de
+          antemano en un traslado interno (Destino=Area, ver project_remisiones_design en
+          memoria) — a un cliente lo recibe alguien externo, así que esa línea sigue en blanco
+          para que firme a mano. */}
       <div className="grid grid-cols-2 gap-16 mt-16">
-        <div className="border-t border-gray-800 pt-2 text-center text-sm text-gray-600">Entregado por</div>
-        <div className="border-t border-gray-800 pt-2 text-center text-sm text-gray-600">Recibido por</div>
+        <div className="text-center">
+          <p className="text-sm font-medium text-gray-800 h-5">{remision.ConfirmadaPor || remision.CreadoPor || ""}</p>
+          <div className="border-t border-gray-800 pt-2 text-sm text-gray-600">Entregado por</div>
+        </div>
+        <div className="text-center">
+          <p className="text-sm font-medium text-gray-800 h-5">{interno ? (remision.NombreRecibidoPor || "") : ""}</p>
+          <div className="border-t border-gray-800 pt-2 text-sm text-gray-600">Recibido por</div>
+        </div>
       </div>
 
       <p className="text-sm text-gray-400 mt-6">

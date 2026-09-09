@@ -5,6 +5,7 @@ import { useColWidths, useOrden, ordenarFilas, Th, Colgroup } from "../component
 import AvisoModal from "../components/AvisoModal.jsx";
 import HojaRemisionModal from "../components/HojaRemisionModal.jsx";
 import ModalEscaneo from "../components/ModalEscaneo.jsx";
+import EmpleadoAutocomplete from "../components/EmpleadoAutocomplete.jsx";
 import { useAviso } from "../hooks/useAviso.js";
 import { fmtFechaHora } from "../utils/fecha.js";
 
@@ -54,19 +55,23 @@ async function leerJSON(res) {
 }
 
 function destinoDe(r) {
-  if (r.AreaDestino) return r.NombreAreaDestino || r.AreaDestino;
+  if (r.AreaDestino) {
+    const area = r.NombreAreaDestino || r.AreaDestino;
+    return r.NombreRecibidoPor ? `${area} — recibe ${r.NombreRecibidoPor}` : area;
+  }
   if (!r.NombreCliente) return "-";
   return r.NombreCliente + (r.NombreSubcliente ? ` — ${r.NombreSubcliente}` : "");
 }
 
 // ── Formulario de cabecera (crear y editar) ───────────────────────────────────────────────────────
-function ModalRemision({ remision, series, clientes, areas, onGuardar, onClose }) {
+function ModalRemision({ remision, series, clientes, areas, empleados, onGuardar, onClose }) {
   const editando = !!remision;
   const [tipo, setTipo] = useState(remision?.Tipo ?? "");
   const [fecha, setFecha] = useState(remision?.Fecha ?? new Date().toISOString().slice(0, 10));
   const [codigoCliente, setCodigoCliente] = useState(remision?.CodigoCliente != null ? String(remision.CodigoCliente) : "");
   const [codigoSubcliente, setCodigoSubcliente] = useState(remision?.CodigoSubcliente ?? "");
   const [areaDestino, setAreaDestino] = useState(remision?.AreaDestino ?? "");
+  const [recibidoPor, setRecibidoPor] = useState(remision?.RecibidoPor ?? "");
   const [codigoPedido, setCodigoPedido] = useState(remision?.CodigoPedido ?? "");
   const [esMixta, setEsMixta] = useState(remision?.EsMixta ?? false);
   const [pedidos, setPedidos] = useState([]);
@@ -126,6 +131,7 @@ function ModalRemision({ remision, series, clientes, areas, onGuardar, onClose }
         CodigoCliente: aCliente ? Number(codigoCliente) : null,
         CodigoSubcliente: aCliente ? codigoSubcliente : null,
         AreaDestino: aCliente ? null : areaDestino,
+        RecibidoPor: aCliente ? null : recibidoPor,
         CodigoPedido: pidePedido ? codigoPedido : null,
         EsMixta: pidePedido ? esMixta : false,
         Contenedor: contenedor, Sello: sello, Observaciones: observaciones,
@@ -242,6 +248,11 @@ function ModalRemision({ remision, series, clientes, areas, onGuardar, onClose }
                 {areas.map(a => <option key={a.Codigo} value={a.Codigo}>{a.Nombre}</option>)}
               </select>
               <p className="text-xs text-gray-400 mt-1">El producto no sale de la planta: se traslada a esta área y vuelve a ingresar como producto nuevo, con etiqueta nueva.</p>
+              <div className="mt-4">
+                <label className="block text-xs font-medium text-gray-500 mb-1">Recibido por *</label>
+                <EmpleadoAutocomplete empleados={empleados} value={recibidoPor} onSelect={setRecibidoPor} />
+                <p className="text-xs text-gray-400 mt-1">Quién recibe el producto en esa área.</p>
+              </div>
             </div>
           ))}
 
@@ -820,6 +831,7 @@ export default function RemisionesPage() {
   const [series, setSeries] = useState([]);
   const [clientes, setClientes] = useState([]);
   const [areas, setAreas] = useState([]);
+  const [empleados, setEmpleados] = useState([]);
   const [modal, setModal] = useState(null); // { remision } — null = cerrado
   const [panelId, setPanelId] = useState(null);
   const [widths, startResize] = useColWidths("remisiones", COL_DEFAULTS);
@@ -838,6 +850,8 @@ export default function RemisionesPage() {
       .then(data => { if (Array.isArray(data)) setClientes(data.filter(c => c.Activo)); });
     fetch("/api/areas", { headers: authHeader() }).then(r => r.json())
       .then(data => { if (Array.isArray(data)) setAreas(data.filter(a => a.Activa)); });
+    fetch("/api/empleados", { headers: authHeader() }).then(r => r.json())
+      .then(data => { if (Array.isArray(data)) setEmpleados(data.filter(e => e.Estado === "Activo")); });
   }, []);
 
   const fetchRemisiones = useCallback(async () => {
@@ -963,7 +977,7 @@ export default function RemisionesPage() {
       </div>
 
       {modal && (
-        <ModalRemision remision={modal.remision} series={series} clientes={clientes} areas={areas}
+        <ModalRemision remision={modal.remision} series={series} clientes={clientes} areas={areas} empleados={empleados}
           onGuardar={handleGuardar} onClose={() => setModal(null)} />
       )}
       {panelId != null && (

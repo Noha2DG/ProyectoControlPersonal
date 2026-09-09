@@ -311,6 +311,39 @@ export function exportarPermisos(registros, fecha, hasta) {
   XLSX.writeFile(wb, hasta ? `Permisos_${fecha}_a_${hasta}.xlsx` : `Permisos_desde_${fecha}.xlsx`);
 }
 
+// Mismas columnas que se ven en pantalla (Bodega — Existencias), en el mismo orden, con lo que
+// quedó filtrado/ordenado — igual criterio que exportarEmpleados: el archivo refleja lo que el
+// usuario armó con los filtros, no el listado completo sin filtrar.
+export function exportarExistenciaBodega(filas, ubicacionDe) {
+  const datos = filas.map(f => ({
+    "Pedido":       f.Pedido,
+    "Cliente":      f.Cliente,
+    "Subcliente":   f.Subcliente ?? "",
+    "Lote":         f.Lote,
+    "Polín":        f.Polin,
+    "Ubicación":    ubicacionDe(f),
+    "Posición":     f.PosicionCodigo ?? "",
+    "Área (origen)": f.NombreArea ?? "",
+    "Clase":        f.Clase,
+    "Talla":        f.Talla,
+    "Presentación": f.Presentacion,
+    // dd/mm/aaaa como se ve en pantalla — Excel interpreta el ISO (aaaa-mm-dd) como texto suelto
+    // y a veces lo autoconvierte a su propio formato de fecha regional, que no es este.
+    "Fecha":        f.Fecha ? f.Fecha.split("-").reverse().join("/") : "",
+    "Master":       f.Master,
+    "Cajas":        f.Cajas,
+    "Kilos":        +f.KilosBrutos.toFixed(2),
+    "Libras":       +f.Libras.toFixed(2),
+  }));
+
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.json_to_sheet(datos);
+  autoWidth(ws, datos);
+  XLSX.utils.book_append_sheet(wb, ws, "Existencias");
+  const hoy = new Date().toLocaleDateString("sv-SE", { timeZone: "America/Guatemala" });
+  XLSX.writeFile(wb, `ExistenciaBodega_${hoy}.xlsx`);
+}
+
 function autoWidth(ws, data) {
   if (!data.length) return;
   const cols = Object.keys(data[0]).map(key => ({

@@ -3,7 +3,7 @@ import jwt from "jsonwebtoken";
 import prisma from "../lib/prisma.ts";
 import { requireAuth, requirePerm, AuthRequest } from "../middleware/auth.ts";
 import { MASTER_SELECT, formatearMaster } from "../lib/masters.ts";
-import { normalizarCorrelativo } from "../lib/correlativo.ts";
+import { normalizarCorrelativo, resolverEtiqueta } from "../lib/correlativo.ts";
 
 // Salida de bodega = Remisión (ver createRemisiones.ts para el modelo y las decisiones de diseño).
 //
@@ -47,6 +47,7 @@ function mensajeLlaveForanea(mensaje: string): string {
   if (mensaje.includes("fk_remision_subcliente")) return "Ese subcliente no pertenece al cliente seleccionado";
   if (mensaje.includes("fk_remision_cliente")) return "El cliente indicado no existe";
   if (mensaje.includes("fk_remision_area")) return "El área de destino indicada no existe";
+  if (mensaje.includes("fk_remision_recibidopor")) return "El empleado que recibe no existe";
   return "Uno de los datos indicados no existe en su catálogo";
 }
 
@@ -78,11 +79,20 @@ function resolverEmbarque(serie: Serie, body: any) {
 // En el caso 2 el cliente igual se GUARDA en la remisión en vez de leerse siempre del pedido: es una
 // foto del momento. Si mañana alguien corrige el cliente del pedido, un documento ya impreso y
 // entregado no puede cambiar de destinatario retroactivamente.
-async function resolverDestino(client: any, serie: Serie, body: any) {
+export async function resolverDestino(client: any, serie: Serie, body: any) {
   if (serie.Destino === "Area") {
     const area = String(body.AreaDestino ?? "").trim();
     if (!area) throw new ErrorNegocio(400, `El área de destino es requerida para una remisión de ${serie.Nombre.toLowerCase()}`);
-    return { CodigoCliente: null, CodigoSubcliente: null, AreaDestino: area, CodigoPedido: null };
+
+    // Quién recibe el producto en esa área — mismo dato que ya captura Transferencias al entrar a
+    // un área, y la misma búsqueda de esa pantalla (ver EmpleadoAutocomplete). Solo aplica a un
+    // traslado interno: una remisión a Cliente no tiene "quién recibe en planta".
+    const recibidoPor = String(body.RecibidoPor ?? "").trim();
+    if (!recibidoPor) throw new ErrorNegocio(400, `Quién recibe en el área es requerido para una remisión de ${serie.Nombre.toLowerCase()}`);
+    const empleado: any[] = await client.$queryRaw`SELECT Codigo FROM Empleados WHERE Codigo = ${recibidoPor} AND Estado = 'Activo' LIMIT 1`;
+    if (!empleado.length) throw new ErrorNegocio(400, `El empleado ${recibidoPor} no existe o no está activo`);
+
+    return { CodigoCliente: null, CodigoSubcliente: null, AreaDestino: area, CodigoPedido: null, RecibidoPor: recibidoPor };
   }
 
   if (Number(serie.PidePedido) === 1) {
@@ -97,6 +107,7 @@ async function resolverDestino(client: any, serie: Serie, body: any) {
       CodigoSubcliente: rows[0].CodigoSubcliente ?? null,
       AreaDestino: null,
       CodigoPedido: rows[0].CodigoPedido,
+      RecibidoPor: null,
     };
   }
 
@@ -105,7 +116,7 @@ async function resolverDestino(client: any, serie: Serie, body: any) {
     throw new ErrorNegocio(400, `El cliente es requerido para una remisión de ${serie.Nombre.toLowerCase()}`);
   }
   const sub = String(body.CodigoSubcliente ?? "").trim();
-  return { CodigoCliente: codigoCliente, CodigoSubcliente: sub || null, AreaDestino: null, CodigoPedido: null };
+  return { CodigoCliente: codigoCliente, CodigoSubcliente: sub || null, AreaDestino: null, CodigoPedido: null, RecibidoPor: null };
 }
 
 // Que la pantalla filtre el desplegable no basta: el filtro es una comodidad, esto es el candado.
@@ -166,13 +177,14 @@ router.get("/", requireAuth, requirePerm("remisiones", "ver"), async (req: Reque
 
     const rows: any[] = await prisma.$queryRawUnsafe(`
       SELECT r.RemisionId, r.Folio, r.Tipo, r.Estatus, r.Fecha,
-             r.CodigoCliente, r.CodigoSubcliente, r.AreaDestino, r.CodigoPedido, r.EsMixta,
+             r.CodigoCliente, r.CodigoSubcliente, r.AreaDestino, r.RecibidoPor, r.CodigoPedido, r.EsMixta,
              r.Contenedor, r.Sello, r.Observaciones,
              r.CreadoPor, r.CreadoEn, r.ConfirmadaPor, r.ConfirmadaEn,
              r.AnuladaPor, r.AnuladaEn, r.MotivoAnulacion,
              se.Nombre AS NombreTipo, se.Destino,
              cli.RazonSocial AS NombreCliente, sub.RazonSocial AS NombreSubcliente,
              ar.Nombre AS NombreAreaDestino,
+             CONCAT_WS(' ', emp.PrimerNombre, emp.SegundoNombre, emp.PrimerApellido, emp.SegundoApellido) AS NombreRecibidoPor,
              COUNT(rd.DetalleId) AS CantidadMasters,
              COALESCE(SUM(pr.PesoKG * pr.CajasXMaster), 0) AS PesoKg,
              COALESCE(SUM(pr.PesoLb * pr.CajasXMaster), 0) AS PesoLb
@@ -181,6 +193,7 @@ router.get("/", requireAuth, requirePerm("remisiones", "ver"), async (req: Reque
       LEFT JOIN Clientes cli ON r.CodigoCliente = cli.Codigo
       LEFT JOIN Subcliente sub ON r.CodigoCliente = sub.CodigoCliente AND r.CodigoSubcliente = sub.CodigoSubcliente
       LEFT JOIN Areas ar ON r.AreaDestino = ar.Codigo
+      LEFT JOIN Empleados emp ON r.RecibidoPor = emp.Codigo
       LEFT JOIN RemisionDetalle rd ON rd.RemisionId = r.RemisionId AND rd.Vigente = 1
       LEFT JOIN Masters m ON rd.MasterId = m.MasterId
       LEFT JOIN EtiquetaImpresa ei ON m.EtiquetaId = ei.EtiquetaId
@@ -288,13 +301,15 @@ router.get("/:id", requireAuth, requirePerm("remisiones", "ver"), async (req: Re
     const rows: any[] = await prisma.$queryRaw`
       SELECT r.*, se.Nombre AS NombreTipo, se.Destino, se.PideEmbarque, se.PidePedido, se.PideLinea,
              cli.RazonSocial AS NombreCliente, sub.RazonSocial AS NombreSubcliente,
-             ar.Nombre AS NombreAreaDestino, ped.Descripcion AS DescripcionPedido
+             ar.Nombre AS NombreAreaDestino, ped.Descripcion AS DescripcionPedido,
+             CONCAT_WS(' ', emp.PrimerNombre, emp.SegundoNombre, emp.PrimerApellido, emp.SegundoApellido) AS NombreRecibidoPor
       FROM Remisiones r
       JOIN SerieRemision se ON r.Tipo = se.Tipo
       LEFT JOIN Clientes cli ON r.CodigoCliente = cli.Codigo
       LEFT JOIN Subcliente sub ON r.CodigoCliente = sub.CodigoCliente AND r.CodigoSubcliente = sub.CodigoSubcliente
       LEFT JOIN Areas ar ON r.AreaDestino = ar.Codigo
       LEFT JOIN Pedidos ped ON r.CodigoPedido = ped.CodigoPedido
+      LEFT JOIN Empleados emp ON r.RecibidoPor = emp.Codigo
       WHERE r.RemisionId = ${remisionId} LIMIT 1
     `;
     if (!rows.length) { res.status(404).json({ error: "Remisión no encontrada" }); return; }
@@ -383,10 +398,10 @@ router.post("/", requireAuth, requirePerm("remisiones", "crear"), async (req: Re
       const folio = `${serieRows[0].Prefijo}-${String(Number(secRows[0].UltimoSecuencial)).padStart(4, "0")}`;
 
       await tx.$executeRaw`
-        INSERT INTO Remisiones (Folio, Tipo, Fecha, CodigoCliente, CodigoSubcliente, AreaDestino, CodigoPedido,
+        INSERT INTO Remisiones (Folio, Tipo, Fecha, CodigoCliente, CodigoSubcliente, AreaDestino, RecibidoPor, CodigoPedido,
                                 EsMixta, Contenedor, Sello, Observaciones, CreadoPor)
         VALUES (${folio}, ${tipo}, ${fecha}, ${destino.CodigoCliente}, ${destino.CodigoSubcliente},
-                ${destino.AreaDestino}, ${destino.CodigoPedido},
+                ${destino.AreaDestino}, ${destino.RecibidoPor}, ${destino.CodigoPedido},
                 ${Number(serieRows[0].PidePedido) === 1 && !!req.body.EsMixta ? 1 : 0},
                 ${embarque.Contenedor}, ${embarque.Sello},
                 ${String(req.body.Observaciones ?? "").trim() || null}, ${operador})
@@ -454,6 +469,7 @@ router.put("/:id", requireAuth, requirePerm("remisiones", "editar"), async (req:
         CodigoCliente = ${destino.CodigoCliente},
         CodigoSubcliente = ${destino.CodigoSubcliente},
         AreaDestino = ${destino.AreaDestino},
+        RecibidoPor = ${destino.RecibidoPor},
         CodigoPedido = ${destino.CodigoPedido},
         EsMixta = ${esMixta ? 1 : 0},
         Contenedor = ${embarque.Contenedor},
@@ -967,6 +983,114 @@ router.post("/:id/anular", requireAuth, requirePerm("remisiones", "anular"), asy
       };
     }, { timeout: 60_000 });
 
+    res.json(respuesta);
+  } catch (err: any) {
+    if (err instanceof ErrorNegocio) { res.status(err.status).json({ error: err.message }); return; }
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/remisiones/devolver-master  { Correlativo, PalletDestinoId, Motivo }
+//
+// El equivalente de /anular pero para UN master suelto, no el documento completo — ver
+// project_devoluciones_design en memoria. /anular revierte TODAS las líneas de la remisión, así
+// que no sirve cuando solo vuelve una caja de un embarque de 40: haría que las otras 39, que sí
+// siguen embarcadas de verdad, aparecieran otra vez como inventario.
+//
+// Tampoco se resuelve escaneando esa caja en el polín de devolución con el flujo normal
+// (POST /api/pallets/:id/escanear): ese candado rechaza a propósito cualquier master 'Salido' —
+// si se rompiera ahí, el master volvería a EnBodega mientras su RemisionDetalle lo sigue contando
+// como vigente, y quedarían dos versiones de la verdad (la remisión diciendo que salió, el master
+// diciendo que está en bodega). Por eso esta ruta hace las DOS cosas en la misma transacción:
+// desmarca SOLO esa línea (Vigente = NULL, igual que anular) y mueve el master — nunca una sin la
+// otra.
+//
+// La remisión NO cambia de Estatus: sigue Confirmada, con el resto de sus líneas intactas.
+// Mismo permiso y mismo plazo de gracia que anular (DIAS_PARA_ANULAR) — es la misma clase de
+// acción fuerte, reversar un embarque confirmado, solo que acotada a una caja.
+//
+// La lógica real vive en devolverMaster() (exportada, no la ruta) para poder ejercitarla contra la
+// base real desde un script de prueba que revierte su transacción — no hay base de desarrollo, ver
+// scripts/probarDevolverMaster.ts y feedback_probar_con_transaccion_revertida en memoria.
+export async function devolverMaster(
+  tx: any,
+  params: { correlativo: any; palletDestinoId: number; motivo: string; operador: string; esAdmin: boolean },
+) {
+  const codigo = normalizarCorrelativo(params.correlativo);
+  if (!codigo) throw new ErrorNegocio(400, "Correlativo inválido");
+  const motivo = String(params.motivo ?? "").trim();
+  if (!motivo) throw new ErrorNegocio(400, "El motivo de la devolución es requerido");
+  const palletDestinoId = Number(params.palletDestinoId);
+  if (!Number.isInteger(palletDestinoId) || palletDestinoId <= 0) throw new ErrorNegocio(400, "El polín de destino es requerido");
+
+  const etiqueta = await resolverEtiqueta(tx, codigo);
+  if (!etiqueta) throw new ErrorNegocio(404, "QR no reconocido");
+
+  const masterRows: any[] = await tx.$queryRaw`
+    SELECT MasterId, PalletId, Estatus FROM Masters WHERE EtiquetaId = ${etiqueta.EtiquetaId} LIMIT 1 FOR UPDATE
+  `;
+  if (!masterRows.length) throw new ErrorNegocio(404, "Este correlativo no está registrado en bodega");
+  const masterId = Number(masterRows[0].MasterId);
+  if (masterRows[0].Estatus !== "Salido") {
+    throw new ErrorNegocio(400,
+      "Este master no está Salido — no hay remisión de la que devolverlo. Si sigue en bodega, escánealo directo en el polín de devolución.");
+  }
+
+  const rdRows: any[] = await tx.$queryRaw`
+    SELECT rd.RemisionId, r.Folio, r.Estatus, r.ConfirmadaEn
+    FROM RemisionDetalle rd JOIN Remisiones r ON rd.RemisionId = r.RemisionId
+    WHERE rd.MasterId = ${masterId} AND rd.Vigente = 1 LIMIT 1 FOR UPDATE
+  `;
+  if (!rdRows.length) throw new ErrorNegocio(400, "Este master está Salido pero no tiene una remisión vigente que lo explique — repórtalo antes de forzar nada");
+  if (rdRows[0].Estatus !== "Confirmada") throw new ErrorNegocio(400, "La remisión de este master no está Confirmada");
+  const remisionId = Number(rdRows[0].RemisionId);
+
+  // Mismo límite de tiempo que anular, con el mismo criterio: pasado el plazo, es una decisión
+  // que alguien tiene que autorizar, no algo que se corrige solo.
+  if (anulacionVencida(rdRows[0].ConfirmadaEn) && !params.esAdmin) {
+    const dias = diasDesdeConfirmada(rdRows[0].ConfirmadaEn);
+    throw new ErrorNegocio(403,
+      `La remisión ${rdRows[0].Folio} se confirmó hace ${dias} días y el plazo para devolver producto de ahí es de ${DIAS_PARA_ANULAR}. ` +
+      `Pasado ese plazo solo un administrador puede hacerlo.`);
+  }
+
+  const dest: any[] = await tx.$queryRaw`
+    SELECT PalletId, Codigo, Estatus, CantidadMaster FROM Pallets WHERE PalletId = ${palletDestinoId} LIMIT 1 FOR UPDATE
+  `;
+  if (!dest.length) throw new ErrorNegocio(404, "El polín de destino no existe");
+  if (dest[0].Estatus !== "Abierto") {
+    throw new ErrorNegocio(400, `El polín ${dest[0].Codigo} está ${String(dest[0].Estatus).toLowerCase()} — solo un polín abierto puede recibir producto devuelto.`);
+  }
+  const capacidad = dest[0].CantidadMaster == null ? null : Number(dest[0].CantidadMaster);
+  if (capacidad != null) {
+    const carga: any[] = await tx.$queryRaw`SELECT COUNT(*) AS n FROM Masters WHERE PalletId = ${palletDestinoId} AND Estatus <> 'Salido'`;
+    if (Number(carga[0].n) >= capacidad) {
+      throw new ErrorNegocio(400, `El polín ${dest[0].Codigo} ya llegó a su capacidad de ${capacidad} master(s).`);
+    }
+  }
+
+  const origenPalletId = Number(masterRows[0].PalletId);
+
+  await tx.$executeRaw`UPDATE RemisionDetalle SET Vigente = NULL WHERE RemisionId = ${remisionId} AND MasterId = ${masterId}`;
+  await tx.$executeRaw`UPDATE Masters SET Estatus = 'EnBodega', PalletId = ${palletDestinoId} WHERE MasterId = ${masterId}`;
+  await tx.$executeRaw`
+    INSERT INTO MovimientosBodega (PalletId, PalletOrigenId, MasterId, RemisionId, Tipo, PosicionOrigenId, PosicionDestinoId, Usuario, Motivo)
+    VALUES (${palletDestinoId}, ${origenPalletId}, ${masterId}, ${remisionId}, 'DEVOLUCION', NULL, NULL, ${params.operador}, ${`Devolución de la remisión ${rdRows[0].Folio}: ${motivo}`.slice(0, 200)})
+  `;
+
+  return { ok: true, Correlativo: etiqueta.Correlativo, RemisionFolio: rdRows[0].Folio, PalletDestino: dest[0].Codigo };
+}
+
+router.post("/devolver-master", requireAuth, requirePerm("remisiones", "anular"), async (req: AuthRequest, res: Response) => {
+  try {
+    const operador = getOperador(req);
+    const respuesta = await prisma.$transaction(
+      (tx) => devolverMaster(tx, {
+        correlativo: req.body.Correlativo, palletDestinoId: Number(req.body.PalletDestinoId),
+        motivo: req.body.Motivo, operador, esAdmin: req.user?.rol === "admin",
+      }),
+      { timeout: 30_000 },
+    );
     res.json(respuesta);
   } catch (err: any) {
     if (err instanceof ErrorNegocio) { res.status(err.status).json({ error: err.message }); return; }

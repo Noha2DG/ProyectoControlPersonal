@@ -96,6 +96,7 @@ export default function PesajePage() {
 
   const [peso, setPeso] = useState("");
   const [codigoInput, setCodigoInput] = useState("");
+  const [empleados, setEmpleados] = useState([]);
   const [ultimoEmpleado, setUltimoEmpleado] = useState(null);
   const [errorMsg, setErrorMsg] = useState("");
   const [areaActualError, setAreaActualError] = useState(undefined);
@@ -114,6 +115,12 @@ export default function PesajePage() {
   }, []);
 
   useEffect(() => { fetchTransaccionesAbiertas(); }, [fetchTransaccionesAbiertas]);
+
+  useEffect(() => {
+    fetch("/api/empleados", { headers: authHeader() })
+      .then(res => res.json())
+      .then(data => { if (Array.isArray(data)) setEmpleados(data); });
+  }, []);
 
   // Hasta 10 pantallas distintas pueden estar abriendo/cerrando transacciones al mismo tiempo —
   // refrescar la lista sola para que todas vean los cambios de las demás sin recargar.
@@ -252,6 +259,9 @@ export default function PesajePage() {
     }
   };
 
+  const codigoEscaneado = codigoInput.trim().toUpperCase();
+  const empleadoEscaneado = codigoEscaneado ? empleados.find(e => e.Codigo === codigoEscaneado) : null;
+
   const termoActual = termos.find(t => t.NumeroTermo === numeroTermo);
   const rendimiento = lote && lote.PesoIngreso > 0 ? (lote.Procesado / lote.PesoIngreso * 100) : 0;
 
@@ -339,6 +349,11 @@ export default function PesajePage() {
             <input ref={codigoRef} value={codigoInput} onChange={e => setCodigoInput(e.target.value.toUpperCase())}
               onKeyDown={handleCodigoKey} disabled={guardando || !numeroTermo || !puedeCrear} placeholder="Escanear o escribir..." autoComplete="off"
               className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono uppercase text-center focus:outline-none focus:ring-2 focus:ring-blue-400 disabled:opacity-50" />
+            {codigoEscaneado && (
+              <p className={`text-[15px] mt-1 text-center rounded-lg px-2 py-1 ${empleadoEscaneado ? "bg-green-200 text-green-900 font-semibold" : "bg-red-200 text-red-900"}`}>
+                {empleadoEscaneado ? empleadoEscaneado.NombreCompleto : "Código no encontrado"}
+              </p>
+            )}
           </div>
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1">Peso *</label>
