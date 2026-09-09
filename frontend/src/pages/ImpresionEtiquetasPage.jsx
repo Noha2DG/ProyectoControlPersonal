@@ -571,11 +571,11 @@ export default function ImpresionEtiquetasPage() {
         )}
         <span className="text-sm text-gray-500">{capturas.length} captura{capturas.length !== 1 ? "s" : ""} ({sinImprimir} sin imprimir en BarTender)</span>
         <button onClick={() => setMostrarConsulta(true)}
-          className="text-sm text-blue-600 border border-blue-200 rounded-lg px-3 py-2 hover:bg-blue-50 transition">
+          className="text-sm text-blue-700 bg-blue-50 border border-blue-200 rounded-lg px-3 py-2 hover:bg-blue-100 transition font-medium">
           Consultar etiqueta
         </button>
         <button onClick={() => setMostrarReporte(true)} disabled={!capturas.length}
-          className="text-sm text-purple-700 border border-purple-200 rounded-lg px-3 py-2 hover:bg-purple-50 transition disabled:opacity-50 disabled:hover:bg-transparent">
+          className="text-sm text-purple-700 bg-purple-50 border border-purple-200 rounded-lg px-3 py-2 hover:bg-purple-100 transition font-medium disabled:opacity-50 disabled:hover:bg-purple-50">
           Reporte diario (PDF)
         </button>
         {atascadas.length > 0 && (

@@ -38,7 +38,7 @@ function ContenidoReporte({ filas, etiqueta }) {
             <th className="py-1.5 pr-2">Cliente</th>
             <th className="py-1.5 pr-2">Producto</th>
             <th className="py-1.5 pr-2">Lote</th>
-            <th className="py-1.5 pr-2 text-right">Declarado</th>
+            <th className="py-1.5 pr-2 text-right">Solicitado</th>
             <th className="py-1.5 pr-2 text-right">Impresas</th>
             <th className="py-1.5 pr-2 text-right">Escaneadas</th>
             <th className="py-1.5 pr-2 text-right">No escaneadas</th>

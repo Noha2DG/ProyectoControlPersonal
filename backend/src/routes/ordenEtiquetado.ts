@@ -138,11 +138,22 @@ router.get("/", requireAuth, requirePerm("etiquetado", "ver"), async (req: Reque
       const siguiente = new Date(`${fechaImpresion}T00:00:00`);
       siguiente.setDate(siguiente.getDate() + 1);
       const fechaSiguiente = siguiente.toISOString().slice(0, 10);
+      // OJO — bug real encontrado el 9 sep 2026: filtrar SOLO por "se imprimió ese día" dejaba
+      // invisible cualquier captura que TODAVÍA no se ha impreso ni una vez (una segunda solicitud
+      // del mismo lote porque no alcanzaron las cajas, por ejemplo) — nunca tiene ImpresoEn, así que
+      // no calzaba con NINGÚN día y desaparecía de la pantalla sin que nadie la pudiera encontrar.
+      // Por eso el OR: entra lo impreso ESE día, más TODO lo que sigue pendiente de imprimir por
+      // completo (sin importar la fecha elegida) — es trabajo que igual hay que ver hoy.
       rows = await prisma.$queryRawUnsafe(`
         ${SELECT_ORDEN}
-        WHERE oe.Estatus <> 'Migrada' AND EXISTS (
-          SELECT 1 FROM ColaEtiquetaBartender cb
-          WHERE cb.OrdenId = oe.OrdenId AND cb.ImpresoEn >= ? AND cb.ImpresoEn < ?
+        WHERE oe.Estatus <> 'Migrada' AND (
+          EXISTS (
+            SELECT 1 FROM ColaEtiquetaBartender cb
+            WHERE cb.OrdenId = oe.OrdenId AND cb.ImpresoEn >= ? AND cb.ImpresoEn < ?
+          )
+          OR NOT EXISTS (
+            SELECT 1 FROM ColaEtiquetaBartender cb WHERE cb.OrdenId = oe.OrdenId AND cb.ImpresoEn IS NOT NULL
+          )
         )
         ORDER BY oe.OrdenId DESC
       `, fechaImpresion, fechaSiguiente);
