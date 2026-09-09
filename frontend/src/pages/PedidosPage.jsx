@@ -474,6 +474,9 @@ export default function PedidosPage() {
   const [modalPedido, setModalPedido] = useState({ open: false, item: null });
   const [modalDetalle, setModalDetalle] = useState({ open: false, item: null });
   const [busqueda, setBusqueda] = useState("");
+  // Por defecto solo los que siguen en proceso: con 36+ pedidos (muchos ya Terminados, incluido
+  // todo el inventario migrado INI-) la lista sin filtrar tapaba lo que de verdad hay que trabajar.
+  const [filtroEstatusPed, setFiltroEstatusPed] = useState("Proceso");
   const [widthsPedidos, startResizePedidos] = useColWidths("pedidos", PEDIDOS_COL_DEFAULTS);
   const [widthsDetalle, startResizeDetalle] = useColWidths("pedidos_detalle", DETALLE_COL_DEFAULTS);
   const [widthsAvance, startResizeAvance] = useColWidths("pedidos_avance", AVANCE_COL_DEFAULTS);
@@ -635,7 +638,8 @@ export default function PedidosPage() {
 
   const q = busqueda.toLowerCase();
   const pedidosFiltrados = pedidos.filter(p =>
-    !q || p.CodigoPedido.toLowerCase().includes(q) || p.Descripcion.toLowerCase().includes(q)
+    (filtroEstatusPed === "Todos" || p.Estatus === filtroEstatusPed) &&
+    (!q || p.CodigoPedido.toLowerCase().includes(q) || p.Descripcion.toLowerCase().includes(q))
   );
 
   return (
@@ -645,6 +649,14 @@ export default function PedidosPage() {
         <div className="flex flex-wrap gap-3 items-center mb-4">
           <input type="text" placeholder="Buscar pedido..." value={busqueda} onChange={e => setBusqueda(e.target.value)}
             className="border border-gray-300 rounded-lg px-3 py-2 text-sm w-52 focus:outline-none focus:ring-2 focus:ring-blue-400" />
+          <div className="flex gap-1 bg-gray-200 rounded-lg p-1">
+            {[["Proceso", "Activos"], ["Terminado", "Terminados"], ["Todos", "Todos"]].map(([valor, etiqueta]) => (
+              <button key={valor} onClick={() => setFiltroEstatusPed(valor)}
+                className={`px-3 py-1 rounded-md text-sm font-medium transition ${filtroEstatusPed === valor ? "bg-white shadow text-blue-700" : "text-gray-600 hover:text-gray-800"}`}>
+                {etiqueta}
+              </button>
+            ))}
+          </div>
           <span className="text-sm text-gray-500 ml-auto">{pedidosFiltrados.length} pedido{pedidosFiltrados.length !== 1 ? "s" : ""}</span>
           {puedeCrear && (
             <button onClick={() => setModalPedido({ open: true, item: null })}

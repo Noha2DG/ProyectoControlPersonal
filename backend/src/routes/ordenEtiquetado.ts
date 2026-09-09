@@ -80,7 +80,13 @@ const SELECT_ORDEN = `
                ELSE (SELECT COUNT(*) FROM ColaEtiquetaBartender cb WHERE cb.OrdenId = oe.OrdenId AND cb.ImpresoEn IS NOT NULL)
           END) AS EnPapel,
          (SELECT COUNT(*) FROM EtiquetaImpresa ei WHERE ei.OrdenId = oe.OrdenId AND ei.Estatus = 'Anulada') AS Anuladas,
-         (SELECT COUNT(*) FROM Masters m JOIN EtiquetaImpresa ei ON m.EtiquetaId = ei.EtiquetaId WHERE ei.OrdenId = oe.OrdenId) AS Escaneadas
+         (SELECT COUNT(*) FROM Masters m JOIN EtiquetaImpresa ei ON m.EtiquetaId = ei.EtiquetaId WHERE ei.OrdenId = oe.OrdenId) AS Escaneadas,
+         -- Quién imprimió: el mismo dato que ya guarda ColaEtiquetaBartender.Impresora al confirmar
+         -- ("Confirmado por X" a mano, o el nombre real de la impresora si avisó BarTender solo). Se
+         -- listan los distintos que haya (normalmente uno) porque una captura puede reimprimirse en
+         -- otra estación. Vacío para lo migrado, que nunca pasó por esta cola.
+         (SELECT GROUP_CONCAT(DISTINCT cb.Impresora SEPARATOR ', ') FROM ColaEtiquetaBartender cb
+          WHERE cb.OrdenId = oe.OrdenId AND cb.ImpresoEn IS NOT NULL) AS ImpresoPor
   FROM OrdenEtiquetado oe
   JOIN DetallePedido dp ON oe.DetalleId = dp.DetalleId
   JOIN Clase cl ON dp.Clase = cl.Clase
@@ -99,12 +105,19 @@ const SELECT_ORDEN = `
   LEFT JOIN Subcliente sub ON ped.CodigoCliente = sub.CodigoCliente AND ped.CodigoSubcliente = sub.CodigoSubcliente
 `;
 
-// GET /api/orden-etiquetado?pedido=001-2026 | ?detalle=123 | ?fecha=2026-07-08
+// GET /api/orden-etiquetado?pedido=001-2026 | ?detalle=123 | ?fecha=2026-07-08 | ?fechaImpresion=2026-07-08
+//
+// `fecha` filtra por FechaProduccion (cuándo se produjo lo que dice la etiqueta) — el dato de
+// siempre. `fechaImpresion` filtra por cuándo se IMPRIMIÓ de verdad (ColaEtiquetaBartender.ImpresoEn),
+// que puede ser días después: una captura de producción vieja puede imprimirse hoy, y agrupar por
+// FechaProduccion la deja invisible en el trabajo del día. Son excluyentes — no tiene sentido pedir
+// las dos a la vez, y el frontend nunca las manda juntas.
 router.get("/", requireAuth, requirePerm("etiquetado", "ver"), async (req: Request, res: Response) => {
   try {
     const pedido = req.query.pedido as string | undefined;
     const detalle = req.query.detalle ? Number(req.query.detalle) : undefined;
     const fecha = req.query.fecha as string | undefined;
+    const fechaImpresion = req.query.fechaImpresion as string | undefined;
     let rows: any[];
     if (detalle) {
       rows = await prisma.$queryRawUnsafe(`${SELECT_ORDEN} WHERE oe.DetalleId = ? ORDER BY oe.OrdenId DESC`, detalle);
@@ -118,6 +131,21 @@ router.get("/", requireAuth, requirePerm("etiquetado", "ver"), async (req: Reque
       // fecha aparecería mezclado con la producción real de esa fecha, que es justo la confusión
       // que hay que evitar. Sigue siendo consultable por pedido (INI-<cliente>) o por línea.
       rows = await prisma.$queryRawUnsafe(`${SELECT_ORDEN} WHERE oe.FechaProduccion = ? AND oe.Estatus <> 'Migrada' ORDER BY oe.OrdenId DESC`, fecha);
+    } else if (fechaImpresion) {
+      // Rango en vez de DATE(cb.ImpresoEn) = ? — envolver la columna en una función le impide a
+      // MySQL usar cualquier índice sobre ella y fuerza un escaneo completo (ver
+      // project_rendimiento_consultas_destajo). Un día = [00:00 del día, 00:00 del día siguiente).
+      const siguiente = new Date(`${fechaImpresion}T00:00:00`);
+      siguiente.setDate(siguiente.getDate() + 1);
+      const fechaSiguiente = siguiente.toISOString().slice(0, 10);
+      rows = await prisma.$queryRawUnsafe(`
+        ${SELECT_ORDEN}
+        WHERE oe.Estatus <> 'Migrada' AND EXISTS (
+          SELECT 1 FROM ColaEtiquetaBartender cb
+          WHERE cb.OrdenId = oe.OrdenId AND cb.ImpresoEn >= ? AND cb.ImpresoEn < ?
+        )
+        ORDER BY oe.OrdenId DESC
+      `, fechaImpresion, fechaSiguiente);
     } else {
       // Las capturas del inventario migrado quedan fuera del listado diario: son 1,393 órdenes con
       // los OrdenId más altos y taparían por completo lo que se está trabajando hoy. Siguen siendo

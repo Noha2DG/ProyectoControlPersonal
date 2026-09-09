@@ -2,9 +2,11 @@ import { useState, useEffect, useCallback, Fragment } from "react";
 import { authHeader, usePuede } from "../context/AuthContext.jsx";
 import { useColWidths, Th, Colgroup } from "../components/ResizableTh.jsx";
 import ConsultarEtiquetaModal from "../components/ConsultarEtiquetaModal.jsx";
+import ReporteEtiquetasModal from "../components/ReporteEtiquetasModal.jsx";
 import AvisoModal from "../components/AvisoModal.jsx";
 import { useAviso } from "../hooks/useAviso.js";
 import { useArrastrable } from "../hooks/useArrastrable.js";
+import { fmtDia } from "../utils/fecha.js";
 
 // Toda la impresión física la hace BarTender leyendo ColaEtiquetaBartender por ODBC. Esta pantalla
 // ya no habla con ninguna impresora: reserva correlativos y abre BarTender con el rango recién
@@ -272,6 +274,7 @@ export default function ImpresionEtiquetasPage() {
   const [expandidoId, setExpandidoId] = useState(null);
   const [etiquetas, setEtiquetas] = useState([]);
   const [mostrarConsulta, setMostrarConsulta] = useState(false);
+  const [mostrarReporte, setMostrarReporte] = useState(false);
   const [atascadas, setAtascadas] = useState([]);
   const [mostrarAtascadas, setMostrarAtascadas] = useState(false);
   const [ordenEnCurso, setOrdenEnCurso] = useState(null);
@@ -291,7 +294,10 @@ export default function ImpresionEtiquetasPage() {
   const fetchOrdenes = useCallback(async (fechaFiltro) => {
     setLoading(true);
     try {
-      const url = fechaFiltro ? `/api/orden-etiquetado?fecha=${fechaFiltro}` : "/api/orden-etiquetado";
+      // Filtra por cuándo se imprimió DE VERDAD (ColaEtiquetaBartender.ImpresoEn), no por la fecha
+      // de producción que dice la etiqueta — hay capturas de producción de días atrás que se
+      // imprimen hasta hoy, y filtrando por producción quedaban invisibles en el trabajo del día.
+      const url = fechaFiltro ? `/api/orden-etiquetado?fechaImpresion=${fechaFiltro}` : "/api/orden-etiquetado";
       const res = await fetch(url, { headers: authHeader() });
       const data = await res.json();
       if (Array.isArray(data)) setOrdenes(data);
@@ -557,6 +563,7 @@ export default function ImpresionEtiquetasPage() {
       <div className="flex flex-wrap gap-3 items-center mb-4">
         <input type="text" placeholder="Buscar por pedido, cliente o lote..." value={busqueda} onChange={e => setBusqueda(e.target.value)}
           className="border border-gray-300 rounded-lg px-3 py-2 text-sm w-72 focus:outline-none focus:ring-2 focus:ring-blue-400" />
+        {/* Filtra por fecha de IMPRESIÓN, no de producción — ver fetchOrdenes. */}
         <input type="date" value={fecha} onChange={e => setFecha(e.target.value)}
           className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
         {fecha && (
@@ -566,6 +573,10 @@ export default function ImpresionEtiquetasPage() {
         <button onClick={() => setMostrarConsulta(true)}
           className="text-sm text-blue-600 border border-blue-200 rounded-lg px-3 py-2 hover:bg-blue-50 transition">
           Consultar etiqueta
+        </button>
+        <button onClick={() => setMostrarReporte(true)} disabled={!capturas.length}
+          className="text-sm text-purple-700 border border-purple-200 rounded-lg px-3 py-2 hover:bg-purple-50 transition disabled:opacity-50 disabled:hover:bg-transparent">
+          Reporte diario (PDF)
         </button>
         {atascadas.length > 0 && (
           <button onClick={() => setMostrarAtascadas(true)}
@@ -588,11 +599,11 @@ export default function ImpresionEtiquetasPage() {
                 <Th width={widths.cliente} onResizeStart={startResize("cliente")} className="px-4 py-3 text-left whitespace-nowrap">Cliente</Th>
                 <Th width={widths.proceso} onResizeStart={startResize("proceso")} className="px-4 py-3 text-left whitespace-nowrap">Producto</Th>
                 <Th width={widths.lote} onResizeStart={startResize("lote")} className="px-4 py-3 text-left whitespace-nowrap">Lote</Th>
-                <Th width={widths.declarado} onResizeStart={startResize("declarado")} className="px-4 py-3 text-right whitespace-nowrap">Declarado</Th>
-                <Th width={widths.generadas} onResizeStart={startResize("generadas")} className="px-4 py-3 text-right whitespace-nowrap" title="Correlativos reservados en el sistema — todavía no dicen nada del papel">Generadas</Th>
+                <Th width={widths.declarado} onResizeStart={startResize("declarado")} className="px-4 py-3 text-right whitespace-nowrap">Solicitado</Th>
+                <Th width={widths.generadas} onResizeStart={startResize("generadas")} className="px-4 py-3 text-right whitespace-nowrap" title="Correlativos ya reservados en el sistema (con QR asignado) — todavía no dice si salieron en papel">Reservadas</Th>
                 <Th width={widths.enPapel} onResizeStart={startResize("enPapel")} className="px-4 py-3 text-right whitespace-nowrap" title="Confirmadas por BarTender al mandarlas a la impresora">En papel</Th>
-                <Th width={widths.escaneadas} onResizeStart={startResize("escaneadas")} className="px-4 py-3 text-right whitespace-nowrap">Escaneadas</Th>
-                <Th width={widths.linea} onResizeStart={startResize("linea")} className="px-4 py-3 text-center whitespace-nowrap">Pedido</Th>
+                <Th width={widths.escaneadas} onResizeStart={startResize("escaneadas")} className="px-4 py-3 text-right whitespace-nowrap" title="Masters ya escaneados en Bodega">Escaneadas</Th>
+                <Th width={widths.linea} onResizeStart={startResize("linea")} className="px-4 py-3 text-center whitespace-nowrap" title="Escaneado/Objetivo de TODA la línea de pedido en bodega (no solo esta captura) — verde=completa, naranja=falta, rojo=sobró">Avance línea</Th>
                 <Th width={widths.acciones} onResizeStart={startResize("acciones")} className="px-4 py-3 text-center whitespace-nowrap">Acciones</Th>
               </tr>
             </thead>
@@ -721,6 +732,11 @@ export default function ImpresionEtiquetasPage() {
       )}
 
       {mostrarConsulta && <ConsultarEtiquetaModal onCerrar={() => setMostrarConsulta(false)} />}
+      {mostrarReporte && (
+        <ReporteEtiquetasModal filas={capturas}
+          etiqueta={`${fecha ? fmtDia(fecha) : "Todas las fechas"} · fecha de impresión${busqueda ? ` · "${busqueda}"` : ""}`}
+          onCerrar={() => setMostrarReporte(false)} />
+      )}
       {mostrarAtascadas && <AtascadasModal atascadas={atascadas} onCerrar={() => setMostrarAtascadas(false)} />}
       {seleccion && (
         <SeleccionDisenoModal info={seleccion.info} disenos={seleccion.disenos} actual={seleccion.actual}
