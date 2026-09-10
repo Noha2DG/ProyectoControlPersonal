@@ -51,7 +51,7 @@ router.get("/produccion", requireAuth, requirePerm("destajo", "ver"), async (req
     `, desde, hasta, ...argsFinca);
 
     const pTermo = prisma.$queryRawUnsafe(`
-      SELECT t.TermoId, t.NumeroTermo, tp.Lote, tp.Talla, ta.Descripcion AS DescripcionTalla,
+      SELECT t.TermoId, t.NumeroTermo, tp.Lote, tp.ClaseOrigen, tp.Talla, ta.Descripcion AS DescripcionTalla,
              tp.Proceso, pr.Descripcion AS DescripcionProceso, tp.FechaProduccion,
              COALESCE(SUM(pd.Peso), 0) AS Procesado
       FROM Termos t
@@ -115,7 +115,7 @@ router.get("/produccion", requireAuth, requirePerm("destajo", "ver"), async (req
                 AND tr.FechaHora <= pd.FechaHora
                 AND (tr.FechaSalida IS NULL OR tr.FechaSalida >= pd.FechaHora)
               ORDER BY tr.FechaHora DESC LIMIT 1) AS EntradaArea,
-             tp.Lote, pd.FechaHora, tp.ClasePT, cl.Descripcion AS Producto, tp.Talla, ta.Descripcion AS DescripcionTalla,
+             tp.Lote, tp.ClaseOrigen, pd.FechaHora, tp.ClasePT, cl.Descripcion AS Producto, tp.Talla, ta.Descripcion AS DescripcionTalla,
              pd.Peso AS Kilos
       FROM PesajeDetalle pd
       JOIN Empleados e ON pd.Codigo = e.Codigo

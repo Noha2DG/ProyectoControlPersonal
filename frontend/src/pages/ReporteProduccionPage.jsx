@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, Fragment } from "react";
 import { createPortal } from "react-dom";
-import { authHeader } from "../context/AuthContext.jsx";
+import { authHeader, useAuth } from "../context/AuthContext.jsx";
 import { exportarReporteGeneral, exportarReporteTermos, exportarEficiencias, exportarLbHora, exportarLbHoraPorTalla, exportarLbPorPersona } from "../utils/exportExcel.js";
 import { useColWidths, useOrden, ordenarFilas, FiltroColumna, Th, Colgroup } from "../components/ResizableTh.jsx";
 import { fmtNum } from "../utils/numero.js";
@@ -375,10 +375,14 @@ function FilaProductoTalla({ g, abierta, onToggle }) {
 }
 
 export default function ReporteProduccionPage() {
+  const { user } = useAuth();
   const [desde, setDesde] = useState(hoy());
   const [hasta, setHasta] = useState(hoy());
   const [fincas, setFincas] = useState([]);
   const [finca, setFinca] = useState("");
+  // Valor = `${Lote}|${Clase}` (compuesto: ver project_destajo_lote_clase_en_codigo) — el mismo
+  // texto de Lote puede repetirse entre Clases del mismo Piscina+Ciclo+Fecha.
+  const [loteFiltro, setLoteFiltro] = useState("");
   const [areaLbHora, setAreaLbHora] = useState("");
   const [reporte, setReporte] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -430,15 +434,63 @@ export default function ReporteProduccionPage() {
 
   useEffect(() => { buscar(); }, [buscar]);
 
+  // Lotes "en proceso" para el filtro de Lote: el mismo rango/Finca que ya se trajo, sin volver a
+  // pedirle nada al backend — se filtra en el cliente sobre reporte.porLote (Pendiente > 0 = todavía
+  // le falta procesar algo, es un lote que se está trabajando ahora mismo, no uno ya cerrado).
+  const lotesEnProceso = (reporte?.porLote ?? []).filter(l => l.Pendiente > 0.01);
+  // Si el rango/Finca cambia y el Lote elegido ya no sigue en proceso (se cerró o quedó fuera del
+  // rango nuevo), se limpia el filtro en vez de dejarlo apuntando a un Lote que ya no aparece.
+  useEffect(() => {
+    if (loteFiltro && !lotesEnProceso.some(l => `${l.Lote}|${l.Clase}` === loteFiltro)) setLoteFiltro("");
+  }, [reporte]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Solo actúa en las pestañas donde se VE el selector (General y Termos). En Lb/Hora, Por Talla,
+  // Eficiencias y Lb/Persona quedaba activo pero oculto, y además distorsiona: los bloques de tiempo
+  // se miden entre pesadas consecutivas de la persona, y casi siempre alterna lotes en el día — al
+  // quitarle las del otro lote, ese tiempo se le cargaba al lote elegido.
+  const loteFiltroObj = loteFiltro && !SUB_TABS_SIN_FINCA.includes(subTab)
+    ? { Lote: loteFiltro.split("|")[0], Clase: loteFiltro.split("|")[1] } : null;
+
+  // Reporte visible: si hay un Lote elegido en el filtro, se recorta reporte a solo ese Lote+Clase
+  // antes de que el resto del componente lo use. El mismo texto de Lote puede repetirse con otra
+  // Clase (C20/D30/E41 del mismo Piscina+Ciclo+Fecha, ver project_destajo_lote_clase_en_codigo) —
+  // filtrar solo por Lote mezclaba ahí Termos y pesadas de una etapa de proceso distinta que nunca
+  // se trabajó con el Lote+Clase elegido, por eso porTermo y porPersona también cortan por ClaseOrigen.
+  const datos = (() => {
+    if (!reporte || !loteFiltroObj) return reporte;
+    const porLote = reporte.porLote.filter(l => l.Lote === loteFiltroObj.Lote && l.Clase === loteFiltroObj.Clase);
+    const porLoteTalla = reporte.porLoteTalla.filter(d => d.Lote === loteFiltroObj.Lote && d.ClaseOrigen === loteFiltroObj.Clase);
+    const porTermo = reporte.porTermo.filter(t => t.Lote === loteFiltroObj.Lote && t.ClaseOrigen === loteFiltroObj.Clase);
+    const porPersona = reporte.porPersona.filter(p => p.Lote === loteFiltroObj.Lote && p.ClaseOrigen === loteFiltroObj.Clase);
+    const porTalla = (() => {
+      const mapa = new Map();
+      for (const d of porLoteTalla) {
+        if (!mapa.has(d.Talla)) mapa.set(d.Talla, { Talla: d.Talla, DescripcionTalla: d.DescripcionTalla, Procesado: 0, NumPesajes: 0 });
+        const acc = mapa.get(d.Talla);
+        acc.Procesado += d.Procesado;
+        acc.NumPesajes += d.NumPesajes;
+      }
+      return [...mapa.values()].sort((a, b) => b.Procesado - a.Procesado);
+    })();
+    const totales = porLote.reduce((acc, l) => ({
+      PesoIngreso: acc.PesoIngreso + l.PesoIngreso,
+      Procesado: acc.Procesado + l.Procesado,
+    }), { PesoIngreso: 0, Procesado: 0 });
+    return {
+      ...reporte, porLote, porLoteTalla, porTermo, porPersona, porTalla,
+      totales: { ...totales, Pendiente: totales.PesoIngreso - totales.Procesado, Rendimiento: totales.PesoIngreso > 0 ? (totales.Procesado / totales.PesoIngreso * 100) : 0 },
+    };
+  })();
+
   // Lote (texto) puede repetirse entre Clases del mismo Piscina+Ciclo+Fecha (ver
   // project_destajo_lote_clase_en_codigo) — hace falta también la Clase para no mezclar el detalle de
   // dos filas de Materia Prima distintas.
-  const detalleDeLote = (lote, clase) => (reporte?.porLoteTalla ?? []).filter(d => d.Lote === lote && d.ClaseOrigen === clase);
+  const detalleDeLote = (lote, clase) => (datos?.porLoteTalla ?? []).filter(d => d.Lote === lote && d.ClaseOrigen === clase);
 
   // Si hay un lote abierto (tocado en la tabla de la izquierda), la tabla de Talla se
   // filtra a solo lo procesado de ese lote; si no, muestra el total del rango de fechas.
   const tallasMostradas = (() => {
-    if (!loteAbierto) return reporte?.porTalla ?? [];
+    if (!loteAbierto) return datos?.porTalla ?? [];
     const mapa = new Map();
     for (const d of detalleDeLote(loteAbierto.Lote, loteAbierto.Clase)) {
       if (!mapa.has(d.Talla)) mapa.set(d.Talla, { Talla: d.Talla, DescripcionTalla: d.DescripcionTalla, Procesado: 0, NumPesajes: 0 });
@@ -449,14 +501,14 @@ export default function ReporteProduccionPage() {
     return [...mapa.values()].sort((a, b) => b.Procesado - a.Procesado);
   })();
   const totalProcesadoTalla = tallasMostradas.reduce((s, t) => s + t.Procesado, 0);
-  const totalProcesadoTermo = (reporte?.porTermo ?? []).reduce((s, t) => s + t.Procesado, 0);
+  const totalProcesadoTermo = (datos?.porTermo ?? []).reduce((s, t) => s + t.Procesado, 0);
 
-  const areasLbHora = [...new Set((reporte?.porPersona ?? []).map(p => p.Area).filter(Boolean))].sort();
+  const areasLbHora = [...new Set((datos?.porPersona ?? []).map(p => p.Area).filter(Boolean))].sort();
   // El filtro de Área se aplica ANTES de calcular los bloques (no después) para que, si un
   // Producto+Talla llegara a venir de dos áreas distintas, quede acotado a una sola al elegirla.
-  const porPersonaLbHora = (reporte?.porPersona ?? []).filter(p => !areaLbHora || p.Area === areaLbHora);
+  const porPersonaLbHora = (datos?.porPersona ?? []).filter(p => !areaLbHora || p.Area === areaLbHora);
 
-  const pausasNoPaga = reporte?.pausasNoPaga ?? [];
+  const pausasNoPaga = datos?.pausasNoPaga ?? [];
   const filasLbHora = calcularLbHora(porPersonaLbHora, agruparPorArea, pausasNoPaga).sort((a, b) => b.Lb - a.Lb);
   const filasPorTalla = calcularLbHora(porPersonaLbHora, agruparPorProductoTalla, pausasNoPaga);
   // Uno por pestaña, no uno compartido: Por Talla descarta además los bloques con cambio de grupo de
@@ -476,7 +528,7 @@ export default function ReporteProduccionPage() {
     ...totalLbHora(filasPorTalla),
     NumPersonas: new Set(filasPorTalla.map(f => f.IdEmpleado)).size,
   };
-  const filasLbPersona = calcularLbPorPersona(reporte?.porPersona ?? []);
+  const filasLbPersona = calcularLbPorPersona(datos?.porPersona ?? []);
   // Acá sí cuadra sumar columna por columna: calcularLbPorPersona define LbTotal como la suma de
   // las áreas de destajo, y cada persona aparece en una sola fila (agrupada por IdEmpleado), así
   // que el total de la columna Total es también la suma de los tres totales de área.
@@ -509,7 +561,7 @@ export default function ReporteProduccionPage() {
 
   // Eficiencias: una fila por pesada, así que la misma persona aparece decenas de veces. El filtro
   // de la columna Nombre es para poder aislar a una sola sin exportar y filtrar en Excel.
-  const pesajes = reporte?.porPersona ?? [];
+  const pesajes = datos?.porPersona ?? [];
   const personasEfic = Object.values(pesajes.reduce((acc, p) => {
     (acc[p.IdEmpleado] ??= { valor: p.IdEmpleado, etiqueta: `${p.Nombre} (${p.IdEmpleado})`, cuenta: 0 }).cuenta++;
     return acc;
@@ -542,7 +594,7 @@ export default function ReporteProduccionPage() {
 
   const gruposPorFinca = () => {
     const mapa = new Map();
-    for (const l of reporte?.porLote ?? []) {
+    for (const l of datos?.porLote ?? []) {
       if (!mapa.has(l.NombreFinca)) mapa.set(l.NombreFinca, []);
       mapa.get(l.NombreFinca).push(l);
     }
@@ -557,7 +609,7 @@ export default function ReporteProduccionPage() {
 
   const gruposPorTermo = () => {
     const mapa = new Map();
-    for (const t of reporte?.porTermo ?? []) {
+    for (const t of datos?.porTermo ?? []) {
       if (!mapa.has(t.NumeroTermo)) mapa.set(t.NumeroTermo, []);
       mapa.get(t.NumeroTermo).push(t);
     }
@@ -566,8 +618,8 @@ export default function ReporteProduccionPage() {
 
   const exportar = () => {
     if (!reporte) return;
-    if (subTab === "general") exportarReporteGeneral(reporte.porLote, reporte.porTalla, desde, hasta);
-    else if (subTab === "termos") exportarReporteTermos(reporte.porTermo, desde, hasta);
+    if (subTab === "general") exportarReporteGeneral(datos.porLote, datos.porTalla, desde, hasta);
+    else if (subTab === "termos") exportarReporteTermos(datos.porTermo, desde, hasta);
     else if (subTab === "lbhora") exportarLbHora(filasLbHora, desde, hasta);
     else if (subTab === "portalla") exportarLbHoraPorTalla(filasPorTalla, desde, hasta);
     else if (subTab === "lbpersona") exportarLbPorPersona(filasLbPersona, desde, hasta);
@@ -598,6 +650,20 @@ export default function ReporteProduccionPage() {
               className="border border-gray-300 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400">
               <option value="">Todas</option>
               {fincas.map(f => <option key={f.Codigo} value={f.Codigo}>{f.Codigo} — {f.Descripcion}</option>)}
+            </select>
+          </div>
+        )}
+        {!SUB_TABS_SIN_FINCA.includes(subTab) && (
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-0.5">Lote (en proceso)</label>
+            <select value={loteFiltro} onChange={e => setLoteFiltro(e.target.value)}
+              className="border border-gray-300 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400">
+              <option value="">Todos</option>
+              {lotesEnProceso.map(l => (
+                <option key={`${l.Lote}-${l.Clase}`} value={`${l.Lote}|${l.Clase}`}>
+                  {l.Lote} — {l.Clase} (pendiente {fmtNum(l.Pendiente)} kg)
+                </option>
+              ))}
             </select>
           </div>
         )}
@@ -657,19 +723,19 @@ export default function ReporteProduccionPage() {
             <div className="grid grid-cols-4 gap-2 mb-3">
               <div className="bg-white rounded-lg shadow px-3 py-2 text-center">
                 <p className="text-xs text-gray-400">Materia Prima Recibida</p>
-                <p className="text-base font-bold text-gray-800">{fmtNum(reporte.totales.PesoIngreso)} kg</p>
+                <p className="text-base font-bold text-gray-800">{fmtNum(datos.totales.PesoIngreso)} kg</p>
               </div>
               <div className="bg-white rounded-lg shadow px-3 py-2 text-center">
                 <p className="text-xs text-gray-400">Procesado</p>
-                <p className="text-base font-bold text-blue-700">{fmtNum(reporte.totales.Procesado)} kg</p>
+                <p className="text-base font-bold text-blue-700">{fmtNum(datos.totales.Procesado)} kg</p>
               </div>
               <div className="bg-white rounded-lg shadow px-3 py-2 text-center">
                 <p className="text-xs text-gray-400">Pendiente</p>
-                <p className="text-base font-bold text-amber-600">{fmtNum(reporte.totales.Pendiente)} kg</p>
+                <p className="text-base font-bold text-amber-600">{fmtNum(datos.totales.Pendiente)} kg</p>
               </div>
               <div className="bg-white rounded-lg shadow px-3 py-2 text-center">
                 <p className="text-xs text-gray-400">Rendimiento</p>
-                <p className="text-base font-bold text-gray-700">{fmtNum(reporte.totales.Rendimiento, 1)}%</p>
+                <p className="text-base font-bold text-gray-700">{fmtNum(datos.totales.Rendimiento, 1)}%</p>
               </div>
             </div>
           )}
@@ -719,18 +785,18 @@ export default function ReporteProduccionPage() {
                           </Fragment>
                         );
                       })}
-                      {reporte.porLote.length === 0 && (
+                      {datos.porLote.length === 0 && (
                         <tr><td colSpan={10} className="px-4 py-8 text-center text-gray-400">Sin lotes en este rango de fechas</td></tr>
                       )}
                     </tbody>
-                    {reporte.porLote.length > 0 && (
+                    {datos.porLote.length > 0 && (
                       <tfoot>
                         <tr className="bg-gray-200 font-bold border-t-2 border-gray-300">
                           <td className="px-3 py-2.5" colSpan={5}>Total General</td>
-                          <td className="px-3 py-2.5 text-right text-gray-900">{fmtNum(reporte.totales.PesoIngreso)}</td>
-                          <td className="px-3 py-2.5 text-right text-blue-800">{fmtNum(reporte.totales.Procesado)}</td>
-                          <td className="px-3 py-2.5 text-right text-amber-700">{fmtNum(reporte.totales.Pendiente)}</td>
-                          <td className="px-3 py-2.5 text-right text-gray-800">{fmtNum(reporte.totales.Rendimiento, 1)}%</td>
+                          <td className="px-3 py-2.5 text-right text-gray-900">{fmtNum(datos.totales.PesoIngreso)}</td>
+                          <td className="px-3 py-2.5 text-right text-blue-800">{fmtNum(datos.totales.Procesado)}</td>
+                          <td className="px-3 py-2.5 text-right text-amber-700">{fmtNum(datos.totales.Pendiente)}</td>
+                          <td className="px-3 py-2.5 text-right text-gray-800">{fmtNum(datos.totales.Rendimiento, 1)}%</td>
                           <td className="px-3 py-2.5"></td>
                         </tr>
                       </tfoot>
@@ -813,11 +879,11 @@ export default function ReporteProduccionPage() {
                         abierta={termoAbierto === numeroTermo}
                         onToggle={() => setTermoAbierto(termoAbierto === numeroTermo ? null : numeroTermo)} />
                     ))}
-                    {(reporte.porTermo ?? []).length === 0 && (
+                    {(datos.porTermo ?? []).length === 0 && (
                       <tr><td colSpan={4} className="px-3 py-6 text-center text-gray-400">Sin datos en este rango de fechas</td></tr>
                     )}
                   </tbody>
-                  {(reporte.porTermo ?? []).length > 0 && (
+                  {(datos.porTermo ?? []).length > 0 && (
                     <tfoot>
                       <tr className="bg-gray-200 font-bold border-t-2 border-gray-300">
                         <td className="px-2 py-1.5" colSpan={3}>Total General</td>
@@ -1087,11 +1153,15 @@ export default function ReporteProduccionPage() {
               <p className="text-[10px] text-gray-500 mt-0.5">
                 {rangoFechasTexto}
                 {finca && <> · Finca <span className="font-mono font-bold text-blue-700">{finca}</span>{nombreFincaSeleccionada && <> — {nombreFincaSeleccionada}</>}</>}
+                {loteFiltroObj && <> · Lote <span className="font-mono font-bold text-blue-700">{loteFiltroObj.Lote} — {loteFiltroObj.Clase}</span></>}
                 {areaLbHora && SUB_TABS_CON_AREA.includes(subTab) && <> · Área <span className="font-mono font-bold text-blue-700">{areaLbHora}</span></>}
               </p>
             </div>
           </div>
-          <p className="text-[10px] text-gray-400 font-mono mt-0.5">impreso {impresoEn}</p>
+          <div className="text-right">
+            <p className="text-[10px] text-gray-400 font-mono mt-0.5">impreso {impresoEn}</p>
+            {user?.nombre && <p className="text-[10px] text-gray-500 mt-0.5">Generado por <span className="font-semibold text-slate-700">{user.nombre}</span></p>}
+          </div>
         </div>
 
         {subTab === "general" && (
@@ -1110,7 +1180,7 @@ export default function ReporteProduccionPage() {
                 </tr>
               </thead>
               <tbody>
-                {(reporte.porLote ?? []).map(l => (
+                {(datos.porLote ?? []).map(l => (
                   <tr key={`${l.Lote}-${l.Clase}`} className="border-b border-gray-100">
                     <td className="py-0.5 px-1 font-mono font-bold text-blue-700">{l.Lote}</td>
                     <td className="py-0.5 px-1">{l.NombreFinca}</td>
@@ -1126,10 +1196,10 @@ export default function ReporteProduccionPage() {
               <tfoot>
                 <tr className="font-bold border-t-2 border-slate-900">
                   <td className="py-1 px-1" colSpan={4}>Total General</td>
-                  <td className="py-1 px-1 text-right tabular-nums">{fmtNum(reporte.totales.PesoIngreso)}</td>
-                  <td className="py-1 px-1 text-right tabular-nums">{fmtNum(reporte.totales.Procesado)}</td>
-                  <td className="py-1 px-1 text-right tabular-nums">{fmtNum(reporte.totales.Pendiente)}</td>
-                  <td className="py-1 px-1 text-right tabular-nums">{fmtNum(reporte.totales.Rendimiento, 1)}%</td>
+                  <td className="py-1 px-1 text-right tabular-nums">{fmtNum(datos.totales.PesoIngreso)}</td>
+                  <td className="py-1 px-1 text-right tabular-nums">{fmtNum(datos.totales.Procesado)}</td>
+                  <td className="py-1 px-1 text-right tabular-nums">{fmtNum(datos.totales.Pendiente)}</td>
+                  <td className="py-1 px-1 text-right tabular-nums">{fmtNum(datos.totales.Rendimiento, 1)}%</td>
                 </tr>
               </tfoot>
             </table>
@@ -1202,7 +1272,7 @@ export default function ReporteProduccionPage() {
               </tr>
             </thead>
             <tbody>
-              {(reporte.porPersona ?? []).map((p, i) => (
+              {(datos.porPersona ?? []).map((p, i) => (
                 <tr key={i} className="border-b border-gray-100">
                   <td className="py-0.5 px-1 font-mono">{p.IdEmpleado}</td>
                   <td className="py-0.5 px-1">{p.Nombre}</td>
