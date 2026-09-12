@@ -79,7 +79,7 @@ function FiltroBusqueda({ valor, onChange, opciones, placeholder, anchoClase = "
         </button>
       )}
       {abierto && sugerencias.length > 0 && (
-        <ul className="absolute z-10 w-max min-w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-56 overflow-y-auto">
+        <ul className="absolute z-20 w-max min-w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-56 overflow-y-auto">
           {sugerencias.map((o, i) => (
             <li key={o} onMouseDown={() => seleccionar(o)} onMouseEnter={() => setResaltado(i)}
               className={`px-3 py-1.5 text-sm cursor-pointer whitespace-nowrap ${i === resaltado ? "bg-blue-50" : "hover:bg-blue-50"}`}>
