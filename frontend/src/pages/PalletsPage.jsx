@@ -30,6 +30,17 @@ const CUADRE_BADGE = {
   Sobrante:   "bg-red-100 text-red-700",
 };
 
+// Mismos tonos que el kardex de Bodega — Ubicaciones (BodegaFisicaPage), más los tipos que solo
+// se generan desde Remisiones/Devoluciones y ahí no aparecían.
+const TIPO_MOV_BADGE = {
+  INGRESO:        "bg-green-100 text-green-700",
+  DESUBICACION:   "bg-orange-100 text-orange-700",
+  SALIDA:         "bg-blue-100 text-blue-700",
+  TRASLADO:       "bg-purple-100 text-purple-700",
+  DEVOLUCION:     "bg-amber-100 text-amber-700",
+  REVERSA_SALIDA: "bg-slate-200 text-slate-600",
+};
+
 // Delega en el helper compartido: los DATETIME del backend traen hora de Guatemala con una "Z"
 // mentirosa, y `new Date(iso)` les restaba 6 horas más (ver utils/fecha.js).
 const fmtFecha = fmtFechaHora;
@@ -82,6 +93,11 @@ function PanelEscaneo({ palletId, onClose, onCambio }) {
   const [mostrarHoja, setMostrarHoja] = useState(false);
   const [mostrarQuitar, setMostrarQuitar] = useState(false);
   const [mostrarTraer, setMostrarTraer] = useState(false);
+  // Trazabilidad se carga solo al abrirla (no en cada fetchDetalle): es historia, no cambia
+  // mientras el panel está abierto, y no vale la pena pedirla si nadie la revisa.
+  const [mostrarTraza, setMostrarTraza] = useState(false);
+  const [movimientos, setMovimientos] = useState(null);
+  const [cargandoTraza, setCargandoTraza] = useState(false);
   const inputRef = useRef(null);
   // Candado síncrono contra doble envío — el input NUNCA se deshabilita (deshabilitar un <input>
   // enfocado le quita el foco en el navegador, y a 50 masters/min el lector no puede darse el lujo
@@ -97,6 +113,21 @@ function PanelEscaneo({ palletId, onClose, onCambio }) {
 
   useEffect(() => { fetchDetalle(); }, [fetchDetalle]);
   useEffect(() => { if (pallet?.Estatus === "Abierto") inputRef.current?.focus(); }, [pallet?.Estatus, mensaje]);
+
+  const toggleTrazabilidad = async () => {
+    const abrir = !mostrarTraza;
+    setMostrarTraza(abrir);
+    if (abrir && movimientos === null) {
+      setCargandoTraza(true);
+      try {
+        const res = await fetch(`${API}/${palletId}/movimientos`, { headers: authHeader() });
+        const data = await leerJSON(res);
+        setMovimientos(Array.isArray(data) ? data : []);
+      } finally {
+        setCargandoTraza(false);
+      }
+    }
+  };
 
   const abierto = pallet?.Estatus === "Abierto";
   const puedeQuitar = abierto && puedeEditar;
@@ -460,6 +491,55 @@ function PanelEscaneo({ palletId, onClose, onCambio }) {
                     )}
                   </tbody>
                 </table>
+              </div>
+
+              {/* Trazabilidad = TODO el kardex (MovimientosBodega) de este pallet, del más viejo al
+                  más nuevo: creado, cada traslado/devolución que le movió cajas, ubicado,
+                  des-ubicado, despachado. Colapsada por defecto — es para auditar, no para el
+                  escaneo diario. */}
+              <div className="mt-4">
+                <button type="button" onClick={toggleTrazabilidad}
+                  className="text-sm font-semibold text-gray-600 hover:text-gray-900 flex items-center gap-1.5">
+                  <span className={`inline-block transition-transform ${mostrarTraza ? "rotate-90" : ""}`}>▸</span>
+                  Trazabilidad{movimientos ? ` (${movimientos.length})` : ""}
+                </button>
+                {mostrarTraza && (
+                  <div className="mt-2 overflow-x-auto border border-gray-200 rounded-lg">
+                    <table className="w-full text-xs">
+                      <thead className="bg-gray-50 text-gray-400">
+                        <tr>
+                          <th className="px-3 py-2 text-left font-semibold">Fecha</th>
+                          <th className="px-3 py-2 text-left font-semibold">Tipo</th>
+                          <th className="px-3 py-2 text-left font-semibold">Caja</th>
+                          <th className="px-3 py-2 text-left font-semibold">De</th>
+                          <th className="px-3 py-2 text-left font-semibold">A</th>
+                          <th className="px-3 py-2 text-left font-semibold">Usuario</th>
+                          <th className="px-3 py-2 text-left font-semibold">Motivo</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {cargandoTraza ? (
+                          <tr><td colSpan={7} className="px-3 py-4 text-center text-gray-400">Cargando…</td></tr>
+                        ) : movimientos?.length ? movimientos.map(m => (
+                          <tr key={m.MovimientoId} className="border-t border-gray-100">
+                            <td className="px-3 py-2 whitespace-nowrap text-gray-500">{fmtFecha(m.Fecha)}</td>
+                            <td className="px-3 py-2">
+                              <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${TIPO_MOV_BADGE[m.Tipo] || "bg-gray-100 text-gray-600"}`}>{m.Tipo}</span>
+                            </td>
+                            <td className="px-3 py-2 font-mono">{m.Correlativo || "-"}</td>
+                            {/* "De": posición de la que salió, o el otro pallet si vino por traslado/devolución. */}
+                            <td className="px-3 py-2 font-mono whitespace-nowrap">{m.PosicionOrigen || (m.PalletOrigenCodigo ? `Pallet ${m.PalletOrigenCodigo}` : "-")}</td>
+                            <td className="px-3 py-2 font-mono whitespace-nowrap">{m.PosicionDestino || (m.RemisionFolio ? `Remisión ${m.RemisionFolio}` : "-")}</td>
+                            <td className="px-3 py-2 whitespace-nowrap">{m.Usuario || "-"}</td>
+                            <td className="px-3 py-2 text-gray-500">{m.Motivo || "-"}</td>
+                          </tr>
+                        )) : (
+                          <tr><td colSpan={7} className="px-3 py-4 text-center text-gray-400">Sin movimientos registrados en el kardex</td></tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
             </>
           )}

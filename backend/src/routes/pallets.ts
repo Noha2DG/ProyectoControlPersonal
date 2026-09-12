@@ -209,6 +209,33 @@ router.get("/:id", requireAuth, requirePerm("bodega", "ver"), async (req: Reques
   }
 });
 
+// GET /api/pallets/:id/movimientos — trazabilidad completa del polín: TODO lo que el kardex
+// (MovimientosBodega) registró para él, del más viejo al más nuevo. A diferencia de
+// /bodega-fisica/movimientos (reciente y global, para el panel de la bodega física), esto es
+// histórico completo y acotado a un solo pallet — pensado para el panel "Ver" de Pallets.
+router.get("/:id/movimientos", requireAuth, requirePerm("bodega", "ver"), async (req: Request, res: Response) => {
+  try {
+    const palletId = Number(req.params.id);
+    const rows: any[] = await prisma.$queryRaw`
+      SELECT mb.MovimientoId, mb.Tipo, mb.Fecha, mb.Usuario, mb.Motivo,
+             poO.Codigo AS PosicionOrigen, poD.Codigo AS PosicionDestino,
+             po2.Codigo AS PalletOrigenCodigo, r.Folio AS RemisionFolio,
+             CONCAT('E', m.EtiquetaId) AS Correlativo
+      FROM MovimientosBodega mb
+      LEFT JOIN Masters m ON mb.MasterId = m.MasterId
+      LEFT JOIN Remisiones r ON mb.RemisionId = r.RemisionId
+      LEFT JOIN Posiciones poO ON mb.PosicionOrigenId = poO.PosicionId
+      LEFT JOIN Posiciones poD ON mb.PosicionDestinoId = poD.PosicionId
+      LEFT JOIN Pallets po2 ON mb.PalletOrigenId = po2.PalletId
+      WHERE mb.PalletId = ${palletId}
+      ORDER BY mb.MovimientoId ASC
+    `;
+    res.json(rows.map(r => ({ ...r, MovimientoId: Number(r.MovimientoId) })));
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Cabecera + masters de un polín. Compartida por las dos formas de pedirlo (por id y por código)
 // para que las dos devuelvan exactamente la misma forma.
 async function detallePallet(palletId: number) {
