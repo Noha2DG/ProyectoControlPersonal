@@ -13,7 +13,7 @@ const path = require("path");
 
 module.exports = {
   apps: [{
-    name: "planta-backend",
+    name: "plantaproceso",
     cwd: path.join(__dirname, "backend"),
     // tsx directamente y no `npm start`: así pm2 supervisa el proceso de node de verdad. Con npm
     // de por medio, pm2 vigila el envoltorio y las señales de reinicio no siempre llegan al hijo.

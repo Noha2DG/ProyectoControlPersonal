@@ -41,4 +41,4 @@ pm2 reload ecosystem.config.cjs --update-env
 # esto, el servidor arranca tras un reinicio con la configuración vieja (o con ninguna).
 pm2 save
 
-echo "✓ Listo. Revisa: pm2 list  ·  pm2 logs planta-backend --lines 50"
+echo "✓ Listo. Revisa: pm2 list  ·  pm2 logs plantaproceso --lines 50"
