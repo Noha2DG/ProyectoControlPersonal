@@ -3,6 +3,7 @@ import express from "express";
 import cors from "cors";
 import compression from "compression";
 import path from "path";
+import { existsSync } from "fs";
 import { fileURLToPath } from "url";
 import authRouter from "./routes/auth.ts";
 import empleadosRouter from "./routes/empleados.ts";
@@ -46,6 +47,22 @@ import { reintentar } from "./lib/retry.ts";
 // `pm2 resurrect` — o un arranque desde otra carpeta — el cwd deja de ser backend/ y el proceso
 // queda vivo pero sin encontrar frontend/dist: la API sigue de pie y toda la app responde 404.
 const RAIZ_BACKEND = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+// Una excepción que escapa de todos los try/catch mata el proceso sin dejar rastro: pm2 lo reinicia,
+// pero en los logs no queda ni qué pasó ni cuándo. Estos dos manejadores existen para que ese
+// momento quede escrito antes de caer.
+//
+// uncaughtException sí termina el proceso (seguir vivo después de una excepción no atrapada deja el
+// estado a medias, y con pm2 detrás el reinicio limpio tarda un par de segundos). unhandledRejection
+// no: una promesa sin .catch() casi siempre es una petición suelta, no el servidor entero, y en una
+// planta que está capturando producción vale más quedarse de pie y dejar constancia.
+process.on("uncaughtException", (err) => {
+  console.error(`[${new Date().toISOString()}] EXCEPCIÓN NO ATRAPADA — el proceso va a reiniciar:`, err);
+  process.exit(1);
+});
+process.on("unhandledRejection", (motivo) => {
+  console.error(`[${new Date().toISOString()}] PROMESA RECHAZADA SIN CATCH (el servidor sigue de pie):`, motivo);
+});
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -99,6 +116,12 @@ app.use("/api/reportes", reportesRouter);
 // solo servicio, sin un servidor web aparte para los archivos estáticos.
 // Si esa carpeta no existe (ej. en desarrollo local con `vite`), simplemente no hace nada.
 const frontendDist = path.join(RAIZ_BACKEND, "..", "frontend", "dist");
+// frontend/dist está en .gitignore: no viaja con `git pull`, hay que compilarlo en el servidor
+// (herramientas/desplegar.sh lo hace). Si falta, antes esto fallaba callado — la API respondía bien
+// y la app entera daba 404, con pm2 reportando "online". Ahora queda dicho al arrancar.
+if (!existsSync(path.join(frontendDist, "index.html"))) {
+  console.error(`ATENCIÓN: no existe ${path.join(frontendDist, "index.html")} — la API responde, pero la aplicación web va a dar 404. Compila el frontend (npm run build) antes de servir.`);
+}
 app.use(express.static(frontendDist));
 app.use((req, res, next) => {
   if (req.method !== "GET" || req.path.startsWith("/api") || req.path.startsWith("/uploads")) { next(); return; }
