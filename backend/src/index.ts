@@ -123,8 +123,25 @@ if (!existsSync(path.join(frontendDist, "index.html"))) {
   console.error(`ATENCIÓN: no existe ${path.join(frontendDist, "index.html")} — la API responde, pero la aplicación web va a dar 404. Compila el frontend (npm run build) antes de servir.`);
 }
 app.use(express.static(frontendDist));
+
+// Una ruta que termina en extensión (.js, .css, .png…) es un archivo, no una pantalla de la app.
+// Si express.static no lo encontró, es que no existe: casi siempre un asset de una compilación
+// anterior que un navegador con la página vieja en caché sigue pidiendo (Vite les pone un hash en
+// el nombre y cada `npm run build` borra los del build anterior).
+const PARECE_ARCHIVO = /\.[a-z0-9]+$/i;
+
 app.use((req, res, next) => {
   if (req.method !== "GET" || req.path.startsWith("/api") || req.path.startsWith("/uploads")) { next(); return; }
+
+  // Devolver index.html para esos archivos es lo que rompía la aplicación entera: el navegador pedía
+  // /assets/index-<hash viejo>.js, recibía 200 con el HTML dentro, intentaba leer HTML como
+  // JavaScript y se quedaba en blanco. Peor aún, al responder 200 el fallo no aparecía como error en
+  // ningún log. Un 404 de verdad hace que el navegador recargue y que el problema sea visible.
+  if (PARECE_ARCHIVO.test(req.path)) { next(); return; }
+
+  // index.html nunca se cachea: es el que dice qué assets pedir, y servir una copia vieja es
+  // exactamente lo que deja al navegador pidiendo archivos que ya no existen.
+  res.set("Cache-Control", "no-cache");
   res.sendFile(path.join(frontendDist, "index.html"), (err) => { if (err) next(); });
 });
 
