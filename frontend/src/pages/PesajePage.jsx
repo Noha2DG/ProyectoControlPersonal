@@ -306,7 +306,7 @@ export default function PesajePage() {
         <div className="bg-white border border-gray-300 rounded-xl shadow-sm p-4">
           <span className="text-xs font-semibold text-gray-500 uppercase">Termo</span>
           <input ref={termoRef} type="text" inputMode="numeric" pattern="[0-9]*" value={numeroTermo}
-            onChange={e => { setNumeroTermo(e.target.value); setEditandoCapacidad(false); setCapacidadInput(""); }}
+            onChange={e => setNumeroTermo(e.target.value)}
             onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); codigoRef.current?.focus(); } }}
             disabled={!transSel} placeholder="Número de termo"
             className="w-full mt-2 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 disabled:bg-gray-100" />

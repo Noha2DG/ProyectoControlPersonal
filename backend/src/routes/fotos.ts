@@ -1,11 +1,13 @@
 import { Router, Request, Response } from "express";
 import multer from "multer";
 import path from "path";
+import { fileURLToPath } from "url";
 import { requireAuth, requireAdmin } from "../middleware/auth.ts";
 
 const router = Router();
 
-const FOTOS_DIR = path.join(process.cwd(), "uploads", "fotos");
+// Anclado a este archivo (backend/src/routes) y no al cwd — ver RAIZ_BACKEND en index.ts.
+const FOTOS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "uploads", "fotos");
 
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, FOTOS_DIR),

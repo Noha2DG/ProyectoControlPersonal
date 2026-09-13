@@ -3,6 +3,7 @@ import express from "express";
 import cors from "cors";
 import compression from "compression";
 import path from "path";
+import { fileURLToPath } from "url";
 import authRouter from "./routes/auth.ts";
 import empleadosRouter from "./routes/empleados.ts";
 import usuariosRouter from "./routes/usuarios.ts";
@@ -40,13 +41,19 @@ import { barridoCorteMedianoche } from "./lib/corteMedianoche.ts";
 import { barridoEtiquetasVencidas } from "./lib/etiquetasVencidas.ts";
 import { reintentar } from "./lib/retry.ts";
 
+// Las rutas de disco se anclan a la ubicacion de este archivo (backend/src), no a process.cwd():
+// pm2 conserva el directorio desde el que se hizo `pm2 start`, asi que tras un reboot con
+// `pm2 resurrect` — o un arranque desde otra carpeta — el cwd deja de ser backend/ y el proceso
+// queda vivo pero sin encontrar frontend/dist: la API sigue de pie y toda la app responde 404.
+const RAIZ_BACKEND = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
+
 const app = express();
 const PORT = process.env.PORT || 3001;
 
 app.use(cors());
 app.use(compression());
 app.use(express.json());
-app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
+app.use("/uploads", express.static(path.join(RAIZ_BACKEND, "uploads")));
 
 app.use("/api/auth", authRouter);
 app.use("/api/empleados", requireAuth, empleadosRouter);
@@ -91,7 +98,7 @@ app.use("/api/reportes", reportesRouter);
 // Sirve el frontend ya compilado (frontend/dist) desde este mismo proceso: así el despliegue es un
 // solo servicio, sin un servidor web aparte para los archivos estáticos.
 // Si esa carpeta no existe (ej. en desarrollo local con `vite`), simplemente no hace nada.
-const frontendDist = path.join(process.cwd(), "..", "frontend", "dist");
+const frontendDist = path.join(RAIZ_BACKEND, "..", "frontend", "dist");
 app.use(express.static(frontendDist));
 app.use((req, res, next) => {
   if (req.method !== "GET" || req.path.startsWith("/api") || req.path.startsWith("/uploads")) { next(); return; }
