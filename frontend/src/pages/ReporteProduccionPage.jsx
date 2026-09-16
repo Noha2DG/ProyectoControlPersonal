@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, Fragment } from "react";
 import { createPortal } from "react-dom";
-import { authHeader, useAuth } from "../context/AuthContext.jsx";
-import { exportarReporteGeneral, exportarReporteTermos, exportarEficiencias, exportarLbHora, exportarLbHoraPorTalla, exportarLbPorPersona } from "../utils/exportExcel.js";
+import { authHeader, useAuth, usePuede } from "../context/AuthContext.jsx";
+import { exportarReporteGeneral, exportarReporteTermos, exportarHojaLote, exportarEficiencias, exportarLbHora, exportarLbHoraPorTalla, exportarLbPorPersona } from "../utils/exportExcel.js";
 import { useColWidths, useOrden, ordenarFilas, FiltroColumna, Th, Colgroup } from "../components/ResizableTh.jsx";
 import { fmtNum } from "../utils/numero.js";
 import {
@@ -24,7 +24,7 @@ const TERMOS_COL_DEFAULTS = { expand: 24, termo: 110, detalle: 220, kg: 110 };
 const TERMOS_COLS = Object.keys(TERMOS_COL_DEFAULTS);
 const EFICIENCIAS_COL_DEFAULTS = { id: 100, nombre: 150, area: 110, fecha: 100, hora: 80, lote: 120, producto: 130, talla: 150, kilos: 100 };
 const EFICIENCIAS_COLS = Object.keys(EFICIENCIAS_COL_DEFAULTS);
-const LBHORA_COL_DEFAULTS = { id: 100, nombre: 150, area: 110, lb: 90, horas: 90, lbhora: 90, pesadas: 90 };
+const LBHORA_COL_DEFAULTS = { id: 100, nombre: 150, area: 110, fecha: 130, clase: 160, talla: 190, lb: 90, horas: 90, lbhora: 90, pesadas: 90 };
 const LBHORA_COLS = Object.keys(LBHORA_COL_DEFAULTS);
 const PORTALLA_COL_DEFAULTS = { expand: 24, productoTalla: 220, lbTotal: 100, lbHoraProm: 110, numPersonas: 100 };
 const PORTALLA_COLS = Object.keys(PORTALLA_COL_DEFAULTS);
@@ -39,11 +39,16 @@ const LBPERSONA_AREA_COL = { DU: "descabezado", DS: "pelado", DT: "pinchado", RD
 function hoy() { return new Date().toLocaleDateString("sv-SE"); }
 const fechaCorta = (f) => f ? f.split("-").reverse().join("/") : "";
 
+// Debe coincidir con MAX_NOTAS en backend/src/routes/lotes.ts, que es quien rechaza de verdad.
+// El límite es de espacio: más que esto no cabe en el recuadro de la hoja impresa.
+const MAX_NOTAS = 500;
+
 // estado es solo para el color del botón (ver render): "listo" = gris, "progreso" = ámbar mientras
 // se sigue ajustando Lb/Hora y Por Talla.
 const SUB_TABS = [
   { key: "general",     label: "Reporte General", estado: "listo" },
   { key: "termos",      label: "Reporte Termos",  estado: "listo" },
+  { key: "hojalote",    label: "Hoja de Lote",    estado: "listo" },
   { key: "eficiencias", label: "Eficiencias",     estado: "listo" },
   { key: "lbhora",      label: "Lb/Hora",         estado: "progreso" },
   { key: "portalla",    label: "Por Talla",       estado: "progreso" },
@@ -51,8 +56,9 @@ const SUB_TABS = [
 ];
 
 // Eficiencias, Lb/Hora, Por Talla y Lb/Persona son vistas por persona, no por lote de Materia Prima —
-// no tiene sentido mostrarles el resumen de Ingreso/Procesado/Pendiente/Rendimiento.
-const SUB_TABS_SIN_TOTALES = ["eficiencias", "lbhora", "portalla", "lbpersona"];
+// no tiene sentido mostrarles el resumen de Ingreso/Procesado/Pendiente/Rendimiento. Hoja de Lote
+// tampoco: ya trae su propia comparación Ingreso vs. Pelado dentro de la hoja.
+const SUB_TABS_SIN_TOTALES = ["eficiencias", "lbhora", "portalla", "lbpersona", "hojalote"];
 // Ninguna de estas cuatro usa Finca (son vistas por persona, no por lote/origen). Eficiencias
 // estaba fuera de la lista por descuido: mostraba el selector aunque la vista es por persona.
 const SUB_TABS_SIN_FINCA = ["eficiencias", "lbhora", "portalla", "lbpersona"];
@@ -376,6 +382,9 @@ function FilaProductoTalla({ g, abierta, onToggle }) {
 
 export default function ReporteProduccionPage() {
   const { user } = useAuth();
+  // El backend es quien bloquea de verdad; esto solo evita que alguien sin permiso escriba una nota
+  // para descubrir al salir del campo que no se guardó.
+  const puedeEditarNotas = usePuede("destajo", "editar");
   const [desde, setDesde] = useState(hoy());
   const [hasta, setHasta] = useState(hoy());
   const [fincas, setFincas] = useState([]);
@@ -384,6 +393,8 @@ export default function ReporteProduccionPage() {
   // texto de Lote puede repetirse entre Clases del mismo Piscina+Ciclo+Fecha.
   const [loteFiltro, setLoteFiltro] = useState("");
   const [areaLbHora, setAreaLbHora] = useState("");
+  const [notasHoja, setNotasHoja] = useState("");
+  const [guardandoNotas, setGuardandoNotas] = useState(false);
   const [reporte, setReporte] = useState(null);
   const [loading, setLoading] = useState(false);
   const [subTab, setSubTab] = useState("general");
@@ -438,11 +449,14 @@ export default function ReporteProduccionPage() {
   // pedirle nada al backend — se filtra en el cliente sobre reporte.porLote (Pendiente > 0 = todavía
   // le falta procesar algo, es un lote que se está trabajando ahora mismo, no uno ya cerrado).
   const lotesEnProceso = (reporte?.porLote ?? []).filter(l => l.Pendiente > 0.01);
-  // Si el rango/Finca cambia y el Lote elegido ya no sigue en proceso (se cerró o quedó fuera del
-  // rango nuevo), se limpia el filtro en vez de dejarlo apuntando a un Lote que ya no aparece.
+  // Hoja de Lote es distinta: casi siempre se imprime cuando el lote YA terminó (Pendiente en 0), así
+  // que ahí el selector no se recorta a "en proceso" — se ofrecen todos los lotes del rango/Finca.
+  const lotesSelector = subTab === "hojalote" ? (reporte?.porLote ?? []) : lotesEnProceso;
+  // Si el rango/Finca/pestaña cambia y el Lote elegido ya no aparece en la lista que le toca a esta
+  // pestaña, se limpia el filtro en vez de dejarlo apuntando a un Lote que ya no aparece.
   useEffect(() => {
-    if (loteFiltro && !lotesEnProceso.some(l => `${l.Lote}|${l.Clase}` === loteFiltro)) setLoteFiltro("");
-  }, [reporte]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (loteFiltro && !lotesSelector.some(l => `${l.Lote}|${l.Clase}` === loteFiltro)) setLoteFiltro("");
+  }, [reporte, subTab]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Solo actúa en las pestañas donde se VE el selector (General y Termos). En Lb/Hora, Por Talla,
   // Eficiencias y Lb/Persona quedaba activo pero oculto, y además distorsiona: los bloques de tiempo
@@ -503,6 +517,52 @@ export default function ReporteProduccionPage() {
   const totalProcesadoTalla = tallasMostradas.reduce((s, t) => s + t.Procesado, 0);
   const totalProcesadoTermo = (datos?.porTermo ?? []).reduce((s, t) => s + t.Procesado, 0);
 
+  // Hoja de Lote: datos ya viene recortado al Lote+Clase elegidos (ver loteFiltroObj/datos arriba),
+  // así que loteHoja es esa única fila de porLote y termosHoja son solo los Termos de ese Lote.
+  const loteHoja = loteFiltroObj ? (datos?.porLote?.[0] ?? null) : null;
+  const termosHoja = datos?.porTermo ?? [];
+  const totalPeladoHoja = termosHoja.reduce((s, t) => s + t.Procesado, 0);
+
+  // Para el PDF: TODOS los lotes con producción en el rango Desde/Hasta, sin importar el Lote elegido
+  // en el selector (ese selector es solo para la vista/edición de notas en pantalla, ver más abajo).
+  // Se arma sobre `reporte` (sin recortar por loteFiltroObj) para que el botón imprima el lote
+  // elegido y también todos los demás.
+  const lotesParaImprimir = (reporte?.porLote ?? []).filter(l => l.Procesado > 0);
+  const termosDeLote = (lote, clase) => (reporte?.porTermo ?? []).filter(t => t.Lote === lote && t.ClaseOrigen === clase);
+
+  // El textarea de Notas es local mientras se escribe (se guarda al salir del campo, no en cada
+  // tecla) — se resincroniza con lo que trae el Lote cada vez que cambia el Lote elegido, para no
+  // arrastrar la nota de un Lote hacia otro.
+  useEffect(() => { setNotasHoja(loteHoja?.Notas ?? ""); }, [loteHoja?.Lote, loteHoja?.Clase]);
+
+  const guardarNotasHoja = async () => {
+    if (!loteHoja || notasHoja === (loteHoja.Notas ?? "")) return;
+    setGuardandoNotas(true);
+    try {
+      const res = await fetch(`/api/lotes/${encodeURIComponent(loteHoja.Lote)}/${encodeURIComponent(loteHoja.Clase)}/notas`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", ...authHeader() },
+        body: JSON.stringify({ Notas: notasHoja }),
+      });
+      // Si el servidor rechaza (sin permiso, nota muy larga), se devuelve el texto al valor guardado:
+      // dejarlo escrito en pantalla haría creer que quedó grabado cuando no fue así.
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        alert("No se pudo guardar la nota: " + (data.error || res.status));
+        setNotasHoja(loteHoja.Notas ?? "");
+        return;
+      }
+      // Refleja el guardado en `reporte` para que loteHoja.Notas quede al día sin recargar el
+      // reporte completo (evita que useEffect de arriba dispare otra vuelta al comparar contra sí mismo).
+      setReporte(r => r && {
+        ...r,
+        porLote: r.porLote.map(l => l.Lote === loteHoja.Lote && l.Clase === loteHoja.Clase ? { ...l, Notas: notasHoja } : l),
+      });
+    } finally {
+      setGuardandoNotas(false);
+    }
+  };
+
   const areasLbHora = [...new Set((datos?.porPersona ?? []).map(p => p.Area).filter(Boolean))].sort();
   // El filtro de Área se aplica ANTES de calcular los bloques (no después) para que, si un
   // Producto+Talla llegara a venir de dos áreas distintas, quede acotado a una sola al elegirla.
@@ -545,6 +605,7 @@ export default function ReporteProduccionPage() {
   });
   const lbHoraOrdenadas = ordenarFilas(filasLbHora, ordenLbHora, {
     id: f => f.IdEmpleado, nombre: f => f.Nombre, area: f => f.Area,
+    fecha: f => f.Fecha ?? "", clase: f => f.Producto ?? "", talla: f => f.Talla ?? "",
     lb: f => f.Lb, horas: f => f.Horas, lbhora: f => f.LbPorHora, pesadas: f => f.NumPesadas,
   });
   const portallaOrdenadas = ordenarFilas(gruposPorTalla, ordenPortalla, {
@@ -620,6 +681,7 @@ export default function ReporteProduccionPage() {
     if (!reporte) return;
     if (subTab === "general") exportarReporteGeneral(datos.porLote, datos.porTalla, desde, hasta);
     else if (subTab === "termos") exportarReporteTermos(datos.porTermo, desde, hasta);
+    else if (subTab === "hojalote") { if (loteHoja) exportarHojaLote(termosHoja, loteHoja, user?.nombre); }
     else if (subTab === "lbhora") exportarLbHora(filasLbHora, desde, hasta);
     else if (subTab === "portalla") exportarLbHoraPorTalla(filasPorTalla, desde, hasta);
     else if (subTab === "lbpersona") exportarLbPorPersona(filasLbPersona, desde, hasta);
@@ -655,13 +717,15 @@ export default function ReporteProduccionPage() {
         )}
         {!SUB_TABS_SIN_FINCA.includes(subTab) && (
           <div>
-            <label className="block text-xs font-medium text-gray-500 mb-0.5">Lote (en proceso)</label>
+            <label className="block text-xs font-medium text-gray-500 mb-0.5">{subTab === "hojalote" ? "Lote" : "Lote (en proceso)"}</label>
             <select value={loteFiltro} onChange={e => setLoteFiltro(e.target.value)}
               className="border border-gray-300 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400">
-              <option value="">Todos</option>
-              {lotesEnProceso.map(l => (
+              <option value="">{subTab === "hojalote" ? "Seleccione..." : "Todos"}</option>
+              {lotesSelector.map(l => (
                 <option key={`${l.Lote}-${l.Clase}`} value={`${l.Lote}|${l.Clase}`}>
-                  {l.Lote} — {l.Clase} (pendiente {fmtNum(l.Pendiente)} kg)
+                  {subTab === "hojalote"
+                    ? `${l.Lote} — ${l.Clase} (rendimiento ${fmtNum(l.Rendimiento, 1)}%)`
+                    : `${l.Lote} — ${l.Clase} (pendiente ${fmtNum(l.Pendiente)} kg)`}
                 </option>
               ))}
             </select>
@@ -896,6 +960,116 @@ export default function ReporteProduccionPage() {
             </div>
           )}
 
+          {/* ── Hoja de Lote ── */}
+          {subTab === "hojalote" && (
+            <>
+            <p className="text-xs text-gray-400 mb-2 text-center">
+              El selector de Lote de arriba es solo para ver/editar la nota de uno a la vez en pantalla —
+              {" "}"Descargar PDF" imprime una hoja por cada Lote con producción en el rango Desde/Hasta ({lotesParaImprimir.length} lote{lotesParaImprimir.length !== 1 ? "s" : ""}).
+            </p>
+            {!loteFiltroObj ? (
+              <div className="bg-white rounded-xl shadow px-4 py-8 text-center text-gray-400 text-sm">Elige un Lote arriba para ver/editar su nota</div>
+            ) : !loteHoja ? (
+              <div className="bg-white rounded-xl shadow px-4 py-8 text-center text-gray-400 text-sm">Ese Lote no aparece en el rango de fechas elegido</div>
+            ) : (
+              <div className="bg-white rounded-xl shadow p-5 max-w-2xl mx-auto">
+                <h3 className="text-center text-base font-bold uppercase tracking-wide text-gray-800 border-2 border-gray-800 rounded py-1.5 mb-4">
+                  Camarón Pelado
+                </h3>
+                <table className="w-full text-sm mb-4">
+                  <tbody>
+                    <tr className="border-b border-gray-200">
+                      <td className="py-1.5 pr-3 font-semibold text-gray-500 w-28">Fecha</td>
+                      <td className="py-1.5 text-center font-semibold text-gray-800">{fechaCorta(loteHoja.Fecha?.slice(0, 10))}</td>
+                    </tr>
+                    <tr className="border-b border-gray-200">
+                      <td className="py-1.5 pr-3 font-semibold text-gray-500">Nombre</td>
+                      <td className="py-1.5 text-center font-semibold text-gray-800">{user?.nombre || "—"}</td>
+                    </tr>
+                    <tr className="border-b border-gray-200">
+                      <td className="py-1.5 pr-3 font-semibold text-gray-500">Lote</td>
+                      <td className="py-1.5 text-center font-mono font-bold text-gray-800">{loteHoja.Lote}</td>
+                    </tr>
+                    <tr className="border-b border-gray-200">
+                      <td className="py-1.5 pr-3 font-semibold text-gray-500">Clase de Materia Prima</td>
+                      <td className="py-1.5 text-center font-semibold text-gray-800">{loteHoja.Clase} — {loteHoja.DescripcionClase}</td>
+                    </tr>
+                  </tbody>
+                </table>
+
+                <table className="w-full text-sm border border-gray-300 mb-4">
+                  <thead>
+                    <tr className="bg-gray-100 text-gray-600 uppercase text-xs">
+                      <th className="border border-gray-300 py-1.5 px-2 text-left">Termo</th>
+                      <th className="border border-gray-300 py-1.5 px-2 text-left">Talla</th>
+                      <th className="border border-gray-300 py-1.5 px-2 text-left">Producto</th>
+                      <th className="border border-gray-300 py-1.5 px-2 text-right">Kilos</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {termosHoja.map(t => (
+                      <tr key={t.TermoId}>
+                        <td className="border border-gray-300 py-1 px-2 font-mono">{t.NumeroTermo}</td>
+                        <td className="border border-gray-300 py-1 px-2">{t.DescripcionTalla}</td>
+                        <td className="border border-gray-300 py-1 px-2">{t.DescripcionProceso}</td>
+                        <td className="border border-gray-300 py-1 px-2 text-right tabular-nums">{fmtNum(t.Procesado)}</td>
+                      </tr>
+                    ))}
+                    {termosHoja.length === 0 && (
+                      <tr><td colSpan={4} className="border border-gray-300 py-4 text-center text-gray-400">Sin termos registrados para este Lote</td></tr>
+                    )}
+                  </tbody>
+                  <tfoot>
+                    <tr className="font-bold">
+                      <td className="border border-gray-300 py-1.5 px-2" colSpan={3}></td>
+                      <td className="border border-gray-300 py-1.5 px-2 text-right">{fmtNum(totalPeladoHoja)}</td>
+                    </tr>
+                  </tfoot>
+                </table>
+
+                {/* Comparación contra la Materia Prima Ingresada del lote (loteHoja.PesoIngreso ya
+                    viene del mismo endpoint que Materia Prima, así que siempre cuadra con esa pantalla). */}
+                <div className="grid grid-cols-3 gap-3 mb-4">
+                  <div className="border-2 border-gray-800 rounded px-3 py-2 text-center">
+                    <p className="text-xs text-gray-500">Materia Prima Ingresada</p>
+                    <p className="text-lg font-bold text-gray-800">{fmtNum(loteHoja.PesoIngreso)}</p>
+                  </div>
+                  <div className="border-2 border-gray-800 rounded px-3 py-2 text-center">
+                    <p className="text-xs text-gray-500">Total Pelado</p>
+                    <p className="text-lg font-bold text-blue-700">{fmtNum(totalPeladoHoja)}</p>
+                  </div>
+                  <div className="border-2 border-gray-800 rounded px-3 py-2 text-center">
+                    <p className="text-xs text-gray-500">Rendimiento</p>
+                    <p className="text-lg font-bold text-gray-800">{fmtNum(loteHoja.Rendimiento, 0)}%</p>
+                  </div>
+                </div>
+                {Math.abs(totalPeladoHoja - loteHoja.Procesado) > 0.5 && (
+                  <p className="text-xs text-amber-600 mb-4">
+                    ● El Total Pelado de la hoja ({fmtNum(totalPeladoHoja)}) no cuadra con el Procesado del Lote ({fmtNum(loteHoja.Procesado)}):
+                    hay {fmtNum(Math.abs(totalPeladoHoja - loteHoja.Procesado))} kg pesados sin Termo asignado.
+                  </p>
+                )}
+
+                <div className="border border-gray-400 rounded">
+                  <p className="text-xs font-semibold text-gray-500 px-2 pt-1.5">Notas</p>
+                  <textarea value={notasHoja} onChange={e => setNotasHoja(e.target.value)}
+                    onBlur={guardarNotasHoja}
+                    maxLength={MAX_NOTAS}
+                    disabled={!puedeEditarNotas}
+                    placeholder={puedeEditarNotas ? "Observaciones..." : "Sin permiso para editar la nota"}
+                    className="w-full h-20 px-2 py-1 text-sm text-gray-700 resize-none focus:outline-none disabled:bg-gray-50 disabled:text-gray-500" />
+                  <p className="text-[10px] text-gray-400 px-2 pb-1 flex justify-between">
+                    <span>{guardandoNotas ? "Guardando…" : puedeEditarNotas ? "Se guarda al salir del campo" : ""}</span>
+                    <span className={notasHoja.length >= MAX_NOTAS ? "text-amber-600 font-semibold" : ""}>
+                      {notasHoja.length}/{MAX_NOTAS}
+                    </span>
+                  </p>
+                </div>
+              </div>
+            )}
+            </>
+          )}
+
           {/* ── Eficiencias ── */}
           {subTab === "eficiencias" && (
             <div>
@@ -956,6 +1130,7 @@ export default function ReporteProduccionPage() {
               <p className="text-xs text-gray-400 mb-2">
                 Horas: el primer bloque del día va desde que la persona entra al área hasta su primera pesada (se descarta si dura menos de {MINIMO_BLOQUE_MINUTOS} min, dato poco confiable); los siguientes son pesada a pesada, sin límite de duración. Con una sola pesada válida la tasa queda indefinida.
                 {" "}<span className="text-amber-600">●</span> = menos de {CONFIANZA_MIN_PESADAS} pesadas o menos de {CONFIANZA_MIN_HORAS} h válidas — dato real, pero de baja confianza.
+                {" "}Cada fila es Persona+Área+Día+Talla+Clase: un cambio de talla o de producto entre dos pesadas consecutivas exige el mismo mínimo de {MINIMO_BLOQUE_MINUTOS} min que un cambio de Área.
               </p>
               <div className="bg-white rounded-lg shadow overflow-hidden overflow-x-auto max-h-[600px] overflow-y-auto">
                 <table className="w-full text-xs table-fixed">
@@ -965,6 +1140,9 @@ export default function ReporteProduccionPage() {
                       <Th width={widthsLbHora.id} onResizeStart={startResizeLbHora("id")} sortKey="id" orden={ordenLbHora} onOrdenar={alternarOrdenLbHora} className="px-2 py-1.5 text-left whitespace-nowrap">Id Empleado</Th>
                       <Th width={widthsLbHora.nombre} onResizeStart={startResizeLbHora("nombre")} sortKey="nombre" orden={ordenLbHora} onOrdenar={alternarOrdenLbHora} className="px-2 py-1.5 text-left">Nombre</Th>
                       <Th width={widthsLbHora.area} onResizeStart={startResizeLbHora("area")} sortKey="area" orden={ordenLbHora} onOrdenar={alternarOrdenLbHora} className="px-2 py-1.5 text-left whitespace-nowrap">Área</Th>
+                      <Th width={widthsLbHora.fecha} onResizeStart={startResizeLbHora("fecha")} sortKey="fecha" orden={ordenLbHora} onOrdenar={alternarOrdenLbHora} className="px-2 py-1.5 text-left whitespace-nowrap">Fecha</Th>
+                      <Th width={widthsLbHora.clase} onResizeStart={startResizeLbHora("clase")} sortKey="clase" orden={ordenLbHora} onOrdenar={alternarOrdenLbHora} className="px-2 py-1.5 text-left whitespace-nowrap">Clase</Th>
+                      <Th width={widthsLbHora.talla} onResizeStart={startResizeLbHora("talla")} sortKey="talla" orden={ordenLbHora} onOrdenar={alternarOrdenLbHora} className="px-2 py-1.5 text-left whitespace-nowrap">Talla</Th>
                       <Th width={widthsLbHora.lb} onResizeStart={startResizeLbHora("lb")} sortKey="lb" orden={ordenLbHora} onOrdenar={alternarOrdenLbHora} className="px-2 py-1.5 text-right whitespace-nowrap">Lb</Th>
                       <Th width={widthsLbHora.horas} onResizeStart={startResizeLbHora("horas")} sortKey="horas" orden={ordenLbHora} onOrdenar={alternarOrdenLbHora} className="px-2 py-1.5 text-right whitespace-nowrap">Horas</Th>
                       <Th width={widthsLbHora.lbhora} onResizeStart={startResizeLbHora("lbhora")} sortKey="lbhora" orden={ordenLbHora} onOrdenar={alternarOrdenLbHora} className="px-2 py-1.5 text-right whitespace-nowrap">Lb/Hora</Th>
@@ -973,10 +1151,13 @@ export default function ReporteProduccionPage() {
                   </thead>
                   <tbody className="divide-y divide-gray-100">
                     {lbHoraOrdenadas.map(f => (
-                      <tr key={`${f.IdEmpleado}-${f.Area}`} className="hover:bg-gray-50 transition">
+                      <tr key={`${f.IdEmpleado}-${f.Area}-${f.Fecha}-${f.Talla}-${f.Producto}`} className="hover:bg-gray-50 transition">
                         <td className="px-2 py-1.5 font-mono text-gray-700 whitespace-nowrap">{f.IdEmpleado}</td>
                         <td className="px-2 py-1.5 text-gray-700"><div className="max-w-[9rem] truncate" title={f.Nombre}>{f.Nombre}</div></td>
                         <td className="px-2 py-1.5 text-gray-700 whitespace-nowrap">{f.Area || <span className="text-gray-300">—</span>}</td>
+                        <td className="px-2 py-1.5 text-gray-600 whitespace-nowrap">{fechaCorta(f.Fecha)}</td>
+                        <td className="px-2 py-1.5 text-gray-600"><div className="max-w-[10rem] truncate" title={f.Producto}>{f.Producto}</div></td>
+                        <td className="px-2 py-1.5 text-gray-600 whitespace-nowrap">{f.DescripcionTalla}</td>
                         <td className="px-2 py-1.5 text-right text-gray-700 whitespace-nowrap">{fmtNum(f.Lb)}</td>
                         <td className="px-2 py-1.5 text-right text-gray-500 whitespace-nowrap">{fmtNum(f.Horas)}</td>
                         <td className="px-2 py-1.5 text-right font-semibold text-blue-700 whitespace-nowrap">
@@ -986,7 +1167,7 @@ export default function ReporteProduccionPage() {
                       </tr>
                     ))}
                     {filasLbHora.length === 0 && (
-                      <tr><td colSpan={7} className="px-3 py-6 text-center text-gray-400">Sin datos en este rango de fechas</td></tr>
+                      <tr><td colSpan={10} className="px-3 py-6 text-center text-gray-400">Sin datos en este rango de fechas</td></tr>
                     )}
                   </tbody>
                   {filasLbHora.length > 0 && (() => {
@@ -994,7 +1175,7 @@ export default function ReporteProduccionPage() {
                     return (
                       <tfoot>
                         <tr className="bg-gray-200 font-bold border-t-2 border-gray-300">
-                          <td className="px-2 py-1.5" colSpan={3}>Total General</td>
+                          <td className="px-2 py-1.5" colSpan={6}>Total General</td>
                           <td className="px-2 py-1.5 text-right text-gray-900">{fmtNum(total.TotalLb)}</td>
                           <td className="px-2 py-1.5"></td>
                           <td className="px-2 py-1.5 text-right text-blue-800">
@@ -1149,13 +1330,19 @@ export default function ReporteProduccionPage() {
             <img src="/favicon.png" alt="" className="w-8 h-8 shrink-0" />
             <div>
               <p className="text-lg font-extrabold italic text-blue-700 tracking-tight">ORO BI</p>
-              <h1 className="text-xl font-extrabold uppercase text-slate-900 tracking-tight">Destajo — {tituloSubTab}</h1>
-              <p className="text-[10px] text-gray-500 mt-0.5">
-                {rangoFechasTexto}
-                {finca && <> · Finca <span className="font-mono font-bold text-blue-700">{finca}</span>{nombreFincaSeleccionada && <> — {nombreFincaSeleccionada}</>}</>}
-                {loteFiltroObj && <> · Lote <span className="font-mono font-bold text-blue-700">{loteFiltroObj.Lote} — {loteFiltroObj.Clase}</span></>}
-                {areaLbHora && SUB_TABS_CON_AREA.includes(subTab) && <> · Área <span className="font-mono font-bold text-blue-700">{areaLbHora}</span></>}
-              </p>
+              {/* Hoja de Lote ya lleva su propio título ("Camarón Pelado") y su propio Lote/Fecha
+                  dentro de cada hoja — este título+subtítulo genérico sobraba repetido arriba. */}
+              {subTab !== "hojalote" && (
+                <>
+                  <h1 className="text-xl font-extrabold uppercase text-slate-900 tracking-tight">Destajo — {tituloSubTab}</h1>
+                  <p className="text-[10px] text-gray-500 mt-0.5">
+                    {rangoFechasTexto}
+                    {finca && <> · Finca <span className="font-mono font-bold text-blue-700">{finca}</span>{nombreFincaSeleccionada && <> — {nombreFincaSeleccionada}</>}</>}
+                    {loteFiltroObj && <> · Lote <span className="font-mono font-bold text-blue-700">{loteFiltroObj.Lote} — {loteFiltroObj.Clase}</span></>}
+                    {areaLbHora && SUB_TABS_CON_AREA.includes(subTab) && <> · Área <span className="font-mono font-bold text-blue-700">{areaLbHora}</span></>}
+                  </p>
+                </>
+              )}
             </div>
           </div>
           <div className="text-right">
@@ -1256,6 +1443,94 @@ export default function ReporteProduccionPage() {
           </table>
         )}
 
+        {/* Hoja de Lote se imprime SIEMPRE para todos los lotes con producción del rango
+            Desde/Hasta (lotesParaImprimir), no solo el que está elegido en el selector de arriba —
+            ese selector es nada más para previsualizar/editar la nota de uno a la vez en pantalla.
+            Cada lote lleva su propia página (breakAfter: "page" en todas menos la última). */}
+        {subTab === "hojalote" && (
+          lotesParaImprimir.length === 0 ? (
+            <p className="text-center text-sm text-gray-400">Sin lotes con producción en este rango de fechas</p>
+          ) : lotesParaImprimir.map((l, i) => {
+            const termos = termosDeLote(l.Lote, l.Clase);
+            const totalPelado = termos.reduce((s, t) => s + t.Procesado, 0);
+            return (
+              <div key={`${l.Lote}-${l.Clase}`} className="max-w-xl mx-auto"
+                style={i < lotesParaImprimir.length - 1 ? { breakAfter: "page" } : undefined}>
+                <h2 className="text-center text-base font-bold uppercase tracking-wide text-slate-900 border-2 border-slate-900 rounded py-1.5 mb-3">
+                  Camarón Pelado
+                </h2>
+                <table className="w-full text-[11px] mb-3">
+                  <tbody>
+                    <tr className="border-b border-gray-300">
+                      <td className="py-1 pr-2 font-bold text-gray-500 w-24">Fecha</td>
+                      <td className="py-1 text-center font-bold">{fechaCorta(l.Fecha?.slice(0, 10))}</td>
+                    </tr>
+                    <tr className="border-b border-gray-300">
+                      <td className="py-1 pr-2 font-bold text-gray-500">Nombre</td>
+                      <td className="py-1 text-center font-bold">{user?.nombre || "—"}</td>
+                    </tr>
+                    <tr className="border-b border-gray-300">
+                      <td className="py-1 pr-2 font-bold text-gray-500">Lote</td>
+                      <td className="py-1 text-center font-mono font-bold">{l.Lote}</td>
+                    </tr>
+                    <tr className="border-b border-gray-300">
+                      <td className="py-1 pr-2 font-bold text-gray-500">Clase de Materia Prima</td>
+                      <td className="py-1 text-center font-bold">{l.Clase} — {l.DescripcionClase}</td>
+                    </tr>
+                  </tbody>
+                </table>
+
+                <table className="print-table w-full border-collapse text-[11px] leading-tight mb-3">
+                  <thead>
+                    <tr>
+                      <th className="text-left font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Termo</th>
+                      <th className="text-left font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Talla</th>
+                      <th className="text-left font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Producto</th>
+                      <th className="text-right font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Kilos</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {termos.map(t => (
+                      <tr key={t.TermoId} className="border-b border-gray-100">
+                        <td className="py-0.5 px-1 font-mono">{t.NumeroTermo}</td>
+                        <td className="py-0.5 px-1">{t.DescripcionTalla}</td>
+                        <td className="py-0.5 px-1">{t.DescripcionProceso}</td>
+                        <td className="py-0.5 px-1 text-right tabular-nums">{fmtNum(t.Procesado)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot>
+                    <tr className="font-bold border-t-2 border-slate-900">
+                      <td className="py-1 px-1" colSpan={3}></td>
+                      <td className="py-1 px-1 text-right tabular-nums">{fmtNum(totalPelado)}</td>
+                    </tr>
+                  </tfoot>
+                </table>
+
+                <div className="grid grid-cols-3 gap-2 mb-3">
+                  <div className="border-2 border-slate-900 rounded px-2 py-1.5 text-center">
+                    <p className="text-[9px] text-gray-500">Materia Prima Ingresada</p>
+                    <p className="text-sm font-bold">{fmtNum(l.PesoIngreso)}</p>
+                  </div>
+                  <div className="border-2 border-slate-900 rounded px-2 py-1.5 text-center">
+                    <p className="text-[9px] text-gray-500">Total Pelado</p>
+                    <p className="text-sm font-bold">{fmtNum(totalPelado)}</p>
+                  </div>
+                  <div className="border-2 border-slate-900 rounded px-2 py-1.5 text-center">
+                    <p className="text-[9px] text-gray-500">Rendimiento</p>
+                    <p className="text-sm font-bold">{fmtNum(l.Rendimiento, 0)}%</p>
+                  </div>
+                </div>
+
+                <div className="border border-slate-400 rounded">
+                  <p className="text-[9px] font-bold text-gray-500 px-2 pt-1">Notas</p>
+                  <p className="px-2 py-1.5 text-[11px] whitespace-pre-wrap min-h-[3rem]">{l.Notas || " "}</p>
+                </div>
+              </div>
+            );
+          })
+        )}
+
         {subTab === "eficiencias" && (
           <table className="print-table w-full border-collapse text-[10px] leading-tight">
             <thead>
@@ -1298,6 +1573,9 @@ export default function ReporteProduccionPage() {
                   <th className="text-left font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Id</th>
                   <th className="text-left font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Nombre</th>
                   <th className="text-left font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Área</th>
+                  <th className="text-left font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Fecha</th>
+                  <th className="text-left font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Clase</th>
+                  <th className="text-left font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Talla</th>
                   <th className="text-right font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Lb</th>
                   <th className="text-right font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Horas</th>
                   <th className="text-right font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Lb/Hora</th>
@@ -1306,10 +1584,13 @@ export default function ReporteProduccionPage() {
               </thead>
               <tbody>
                 {filasLbHora.map(f => (
-                  <tr key={`${f.IdEmpleado}-${f.Area}`} className="border-b border-gray-100">
+                  <tr key={`${f.IdEmpleado}-${f.Area}-${f.Fecha}-${f.Talla}-${f.Producto}`} className="border-b border-gray-100">
                     <td className="py-0.5 px-1 font-mono">{f.IdEmpleado}</td>
                     <td className="py-0.5 px-1">{f.Nombre}</td>
                     <td className="py-0.5 px-1">{f.Area || "—"}</td>
+                    <td className="py-0.5 px-1">{fechaCorta(f.Fecha)}</td>
+                    <td className="py-0.5 px-1">{f.Producto}</td>
+                    <td className="py-0.5 px-1">{f.DescripcionTalla}</td>
                     <td className="py-0.5 px-1 text-right tabular-nums">{fmtNum(f.Lb)}</td>
                     <td className="py-0.5 px-1 text-right tabular-nums">{fmtNum(f.Horas)}</td>
                     <td className="py-0.5 px-1 text-right font-semibold tabular-nums">{f.LbPorHora != null ? fmtNum(f.LbPorHora, 1) : "—"}</td>
@@ -1319,7 +1600,7 @@ export default function ReporteProduccionPage() {
               </tbody>
               <tfoot>
                 <tr className="font-bold border-t-2 border-slate-900">
-                  <td className="py-1 px-1" colSpan={3}>Total General</td>
+                  <td className="py-1 px-1" colSpan={6}>Total General</td>
                   <td className="py-1 px-1 text-right tabular-nums">{fmtNum(total.TotalLb)}</td>
                   <td className="py-1 px-1"></td>
                   <td className="py-1 px-1 text-right tabular-nums">{total.PromedioLbHora != null ? fmtNum(total.PromedioLbHora, 1) : "—"}</td>

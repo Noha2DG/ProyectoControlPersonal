@@ -152,6 +152,34 @@ export function exportarReporteTermos(porTermo, desde, hasta) {
   XLSX.writeFile(wb, `ReporteTermos_${desde}_a_${hasta}.xlsx`);
 }
 
+export function exportarHojaLote(termos, lote, nombre) {
+  const filas = termos.map(t => ({
+    "Termo":   t.NumeroTermo,
+    "Talla":   t.DescripcionTalla,
+    "Producto": t.DescripcionProceso,
+    "Kilos":   +t.Procesado.toFixed(2),
+  }));
+  const totalPelado = termos.reduce((s, t) => s + t.Procesado, 0);
+  filas.push({ "Termo": "", "Talla": "", "Producto": "Total Pelado", "Kilos": +totalPelado.toFixed(2) });
+  filas.push({ "Termo": "", "Talla": "", "Producto": "Materia Prima Ingresada", "Kilos": +lote.PesoIngreso.toFixed(2) });
+  filas.push({ "Termo": "", "Talla": "", "Producto": "Rendimiento", "Kilos": `${lote.Rendimiento.toFixed(0)}%` });
+
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet([
+    ["Fecha", lote.Fecha?.slice(0, 10) ?? ""],
+    ["Nombre", nombre ?? ""],
+    ["Lote", lote.Lote],
+    ["Clase de Materia Prima", `${lote.Clase} — ${lote.DescripcionClase}`],
+    [],
+  ]);
+  XLSX.utils.sheet_add_json(ws, filas, { origin: -1 });
+  if (lote.Notas) XLSX.utils.sheet_add_aoa(ws, [[], ["Notas", lote.Notas]], { origin: -1 });
+  autoWidth(ws, filas);
+  XLSX.utils.book_append_sheet(wb, ws, "Camaron Pelado");
+
+  XLSX.writeFile(wb, `HojaLote_${lote.Lote}.xlsx`);
+}
+
 export function exportarEficiencias(porPersona, desde, hasta) {
   const personas = porPersona.map(p => ({
     "Id Empleado":  p.IdEmpleado,
@@ -179,6 +207,9 @@ export function exportarLbHora(filas, desde, hasta) {
     "Id Empleado":  f.IdEmpleado,
     "Nombre":       f.Nombre,
     "Área":         f.Area ?? "",
+    "Fecha":        f.Fecha ? f.Fecha.split("-").reverse().join("/") : "",
+    "Clase":        f.Producto ?? "",
+    "Talla":        f.DescripcionTalla ?? "",
     "Lb":           +f.Lb.toFixed(2),
     "Horas":        +f.Horas.toFixed(2),
     "Lb/Hora":      f.LbPorHora != null ? +f.LbPorHora.toFixed(1) : "",

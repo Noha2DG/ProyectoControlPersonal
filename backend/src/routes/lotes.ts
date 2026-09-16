@@ -56,7 +56,7 @@ function formatear(rows: any[]) {
 const SELECT_LOTES = `
   SELECT l.Lote, l.CicloId, l.PiscinaId, l.Clase, c.Descripcion AS DescripcionClase,
          l.TallaReferencia, t.Descripcion AS DescripcionTallaReferencia,
-         l.Fecha, l.PesoIngreso, l.UM, l.AlmacenCodigo, l.Activo, l.RegistradoPor,
+         l.Fecha, l.PesoIngreso, l.UM, l.AlmacenCodigo, l.Activo, l.RegistradoPor, l.Notas,
          f.Codigo AS CodigoFinca, f.Descripcion AS NombreFinca, p.Nombre AS NombrePiscina,
          ci.Anio, ci.Ciclo,
          COALESCE((SELECT SUM(pd.Peso) FROM PesajeDetalle pd
@@ -222,6 +222,38 @@ router.put("/:lote/:clase", requireAuth, requirePerm("destajo", "editar"), async
   } catch (err: any) {
     if (err.message?.includes("Duplicate")) res.status(400).json({ error: "Ya existe este lote para esa clase — edítalo para ajustar el peso de ingreso" });
     else res.status(500).json({ error: err.message });
+  }
+});
+
+// La nota se imprime dentro de un recuadro de la Hoja de Lote: más allá de esto no cabe en la hoja.
+// El textarea de la Hoja de Lote usa el mismo número, así que llegar aquí pasado del límite solo
+// ocurre llamando la API por fuera.
+export const MAX_NOTAS = 500;
+
+// PATCH /api/lotes/:lote/:clase/notas  { Notas }
+// Separado del PUT general porque ese exige mandar PesoIngreso/Fecha completos y validarlos contra
+// lo ya procesado; esto solo toca el texto de la observación.
+//
+// Pide "editar" y no "ver": escribir en la tabla es escribir, aunque el campo sea una observación.
+// Si hace falta que alguien pueda anotar sin poder tocar peso/fecha/ciclo de Materia Prima, eso es
+// un permiso propio del módulo, no reutilizar el de lectura.
+router.patch("/:lote/:clase/notas", requireAuth, requirePerm("destajo", "editar"), async (req: Request, res: Response) => {
+  try {
+    const { Notas } = req.body;
+    if (Notas != null && typeof Notas !== "string") {
+      res.status(400).json({ error: "Notas debe ser texto" });
+      return;
+    }
+    if (Notas && Notas.length > MAX_NOTAS) {
+      res.status(400).json({ error: `La nota no puede pasar de ${MAX_NOTAS} caracteres (tiene ${Notas.length})` });
+      return;
+    }
+    const lote = req.params.lote;
+    const clase = req.params.clase;
+    await prisma.$executeRaw`UPDATE Lotes SET Notas = ${Notas || null} WHERE Lote = ${lote} AND Clase = ${clase}`;
+    res.json({ ok: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
   }
 });
 

@@ -37,7 +37,7 @@ router.get("/produccion", requireAuth, requirePerm("destajo", "ver"), async (req
     // volvería a serializarlas sin que se note en el código.
     const pLote = prisma.$queryRawUnsafe(`
       SELECT l.Lote, f.Codigo AS CodigoFinca, f.Descripcion AS NombreFinca, l.Clase, c.Descripcion AS DescripcionClase,
-             l.Fecha, l.PesoIngreso, l.UM,
+             l.Fecha, l.PesoIngreso, l.UM, l.Notas,
              COALESCE((SELECT SUM(pd.Peso) FROM PesajeDetalle pd
                        JOIN TransaccionesProduccion tp ON pd.TransaccionId = tp.TransaccionId
                        WHERE tp.Lote = l.Lote AND tp.ClaseOrigen = l.Clase), 0) AS Procesado,

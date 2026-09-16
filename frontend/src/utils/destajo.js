@@ -129,10 +129,16 @@ export function calcularLbHora(porPersona, obtenerGrupo, pausas = []) {
         buckets.set(bucketKey, {
           IdEmpleado: idEmpleado, Nombre, ...campos,
           Kilos: 0, Horas: 0, NumPesadas: 0, KilosSinTiempo: 0, PesadasSinTiempo: 0,
+          Fechas: new Set(), Productos: new Set(), Tallas: new Set(),
         });
       }
       const b = buckets.get(bucketKey);
       b.NumPesadas += 1;
+      // Informativo, no entra en el cálculo de Lb/Horas: de qué días, productos y tallas viene el
+      // total de esta fila (persona+área puede acumular varios en un rango de más de un día).
+      b.Fechas.add(diaActual);
+      if (p.Producto) b.Productos.add(p.Producto);
+      if (p.Talla != null) b.Tallas.add(`${p.Talla} — ${p.DescripcionTalla}`);
       if (valido) {
         b.Kilos += p.Kilos;
         b.Horas += minutosBloque / 60;
@@ -146,13 +152,31 @@ export function calcularLbHora(porPersona, obtenerGrupo, pausas = []) {
     });
   }
 
-  return [...buckets.values()].map(({ Kilos, KilosSinTiempo, ...b }) => {
+  return [...buckets.values()].map(({ Kilos, KilosSinTiempo, Fechas, Productos, Tallas, ...b }) => {
     const lb = Kilos * LB_POR_KG;
-    return { ...b, Lb: lb, LbSinTiempo: KilosSinTiempo * LB_POR_KG, LbPorHora: b.Horas > 0 ? lb / b.Horas : null };
+    return {
+      ...b, Lb: lb, LbSinTiempo: KilosSinTiempo * LB_POR_KG, LbPorHora: b.Horas > 0 ? lb / b.Horas : null,
+      Fechas: [...Fechas].sort(),
+      Productos: [...Productos].sort((a, c) => a.localeCompare(c, "es")),
+      Tallas: [...Tallas].sort(),
+    };
   });
 }
 
-export const agruparPorArea = p => ({ key: p.Area ?? "", campos: { Area: p.Area ?? null } });
+// Agrupa por Área + día + Talla + Producto (no solo Área): así "Lb/Hora" saca una fila por cada
+// combinación que de verdad trabajó, en vez de acumular un rango de varios días (o varias tallas o
+// productos del mismo día) en una sola fila con columnas llenas de valores separados por coma. Efecto
+// en Horas: igual que en "Por Talla", un cambio de Talla o de Producto entre dos pesadas consecutivas
+// de la misma persona ahora exige el mínimo de 15 min como si fuera cambio de grupo — antes,
+// agrupando solo por Área, ese cambio no cortaba el bloque y una pesada podía quedar con un tiempo
+// que en realidad era de otra talla u otro producto.
+export const agruparPorArea = p => ({
+  key: `${p.Area ?? ""}|${diaLocal(p.FechaHora)}|${p.Talla}|${p.Producto}`,
+  campos: {
+    Area: p.Area ?? null, Fecha: diaLocal(p.FechaHora),
+    Talla: p.Talla, DescripcionTalla: p.DescripcionTalla, Producto: p.Producto,
+  },
+});
 export const agruparPorProductoTalla = p => ({
   key: `${p.Producto}|${p.Talla}`,
   campos: { Producto: p.Producto, Talla: p.Talla, DescripcionTalla: p.DescripcionTalla },
