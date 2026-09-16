@@ -1,0 +1,71 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Prueba del protocolo oroetiqueta://</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 46rem; margin: 2rem auto; padding: 0 1rem; line-height: 1.6; color: #1a2027; }
+  h1 { font-size: 1.3rem; }
+  .caso { border: 1px solid #d8dee3; border-radius: 8px; padding: 1rem; margin: 1rem 0; }
+  .caso h2 { font-size: 1rem; margin: 0 0 .5rem; }
+  button, a.boton { display: inline-block; background: #0e5c6b; color: #fff; border: 0; padding: .55rem 1rem;
+                    border-radius: 6px; font-size: .9rem; cursor: pointer; text-decoration: none; }
+  code { background: #eef1f3; padding: .1rem .3rem; border-radius: 3px; font-size: .85em; }
+  .nota { color: #5b666f; font-size: .9rem; }
+</style>
+
+<h1>Prueba del protocolo <code>oroetiqueta://</code></h1>
+
+<p class="nota">
+  Esta página no depende de la aplicación. Sirve para separar dos cosas: si el navegador es capaz de
+  lanzar el protocolo, o si el problema está en el código de la pantalla de etiquetas.
+  Después de probar cada botón, revisa la bitácora en
+  <code>%LOCALAPPDATA%\OroEtiqueta\abrirBartender.log</code>.
+</p>
+
+<div class="caso">
+  <h2>1. Enlace normal</h2>
+  <p class="nota">Un <code>&lt;a href&gt;</code> corriente, sin JavaScript de por medio. Es la forma que menos restricciones tiene.</p>
+  <a class="boton" href="oroetiqueta://imprimir?btw=C%3A%5CEtiquetas%5CGENERAL%5Cetiquetasmaster.btw&orden=49&desde=28&hasta=37">Abrir con enlace</a>
+</div>
+
+<div class="caso">
+  <h2>2. Clic sintético sobre un enlace</h2>
+  <p class="nota">Es el método que usa hoy la pantalla de etiquetas.</p>
+  <button onclick="porEnlace()">Abrir con clic sintético</button>
+</div>
+
+<div class="caso">
+  <h2>3. window.location.href</h2>
+  <p class="nota">El método anterior, que se cambió por el 2.</p>
+  <button onclick="porLocation()">Abrir con location.href</button>
+</div>
+
+<div class="caso">
+  <h2>4. Tras una espera</h2>
+  <p class="nota">
+    Simula lo que pasa en la aplicación real: el usuario confirma en un diálogo y recién después se
+    lanza el protocolo. Si este falla y el 2 funciona, el problema es que el navegador pierde el
+    "gesto de usuario" mientras se espera.
+  </p>
+  <button onclick="conEspera()">Abrir después de 2 segundos</button>
+</div>
+
+<script>
+  const URL_PRUEBA = "oroetiqueta://imprimir?btw=C%3A%5CEtiquetas%5CGENERAL%5Cetiquetasmaster.btw&orden=49&desde=28&hasta=37";
+
+  function porEnlace() {
+    const a = document.createElement("a");
+    a.href = URL_PRUEBA;
+    a.style.display = "none";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+
+  function porLocation() {
+    window.location.href = URL_PRUEBA;
+  }
+
+  function conEspera() {
+    setTimeout(porEnlace, 2000);
+  }
+</script>
