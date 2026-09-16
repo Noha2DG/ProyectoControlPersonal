@@ -125,7 +125,12 @@ function ContenidoHoja({ pallet, totalKg, totalLb }) {
         </tbody>
       </table>
 
-      <p className="text-sm text-gray-400 mt-6">Impreso {fmtFecha(new Date().toISOString())}</p>
+      {/* "Ahora mismo" en el navegador es un caso aparte de fmtFecha (ese helper espera un string
+          del BACKEND, hora de Guatemala ya escrita tal cual — ver utils/fecha.js). Pasarle un
+          toISOString() en UTC hacía que el parser leyera esos dígitos como si ya fueran hora
+          local, y el resultado salía 6 horas adelantado. new Date() sin vueltas ya es la hora
+          real del navegador. */}
+      <p className="text-sm text-gray-400 mt-6">Impreso {new Date().toLocaleString("es-GT", { dateStyle: "short", timeStyle: "short" })}</p>
     </>
   );
 }

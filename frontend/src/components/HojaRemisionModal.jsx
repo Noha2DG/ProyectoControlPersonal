@@ -168,7 +168,12 @@ function ContenidoHoja({ remision }) {
       </div>
 
       <p className="text-sm text-gray-400 mt-6">
-        Impreso {fmtFecha(new Date().toISOString())}
+        {/* "Ahora mismo" en el navegador es un caso aparte de fmtFecha: ese helper espera un
+            string del BACKEND (hora de Guatemala ya escrita tal cual, ver utils/fecha.js) y aquí
+            se le estaba pasando un toISOString() en UTC — el parser lo leía como si esos dígitos
+            ya fueran hora local y el resultado salía 6 horas adelantado. new Date() sin vueltas
+            ya es la hora real del navegador, así que se formatea directo. */}
+        Impreso {new Date().toLocaleString("es-GT", { dateStyle: "short", timeStyle: "short" })}
         {remision.ConfirmadaEn ? ` · Confirmada por ${remision.ConfirmadaPor} el ${fmtFecha(remision.ConfirmadaEn)}` : ""}
       </p>
     </>
