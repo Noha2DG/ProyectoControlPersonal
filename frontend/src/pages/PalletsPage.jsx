@@ -7,13 +7,13 @@ import AvisoModal from "../components/AvisoModal.jsx";
 import HojaPalletModal from "../components/HojaPalletModal.jsx";
 import ModalEscaneo from "../components/ModalEscaneo.jsx";
 import { useAviso } from "../hooks/useAviso.js";
-import { fmtFechaHora } from "../utils/fecha.js";
+import { fmtFechaHora, fmtDia } from "../utils/fecha.js";
 
 const API = "/api/pallets";
 
 const MASTERS_COL_DEFAULTS = { correlativo: 100, pedido: 100, cliente: 150, lote: 110, procesoTallaPres: 170, kg: 80, lb: 80, hora: 130, acciones: 90 };
 const MASTERS_COLS_BASE = ["correlativo", "pedido", "cliente", "lote", "procesoTallaPres", "kg", "lb", "hora"];
-const PALLETS_COL_DEFAULTS = { pallet: 110, estatus: 100, area: 130, origen: 130, masters: 110, cuadre: 110, ubicacion: 120, creado: 215, cerrado: 215, acciones: 130 };
+const PALLETS_COL_DEFAULTS = { pallet: 110, produccion: 130, estatus: 100, area: 130, origen: 130, masters: 110, cuadre: 110, ubicacion: 120, creado: 215, cerrado: 215, acciones: 130 };
 const PALLETS_COLS = Object.keys(PALLETS_COL_DEFAULTS);
 
 const ESTATUS_BADGE = {
@@ -44,6 +44,16 @@ const TIPO_MOV_BADGE = {
 // Delega en el helper compartido: los DATETIME del backend traen hora de Guatemala con una "Z"
 // mentirosa, y `new Date(iso)` les restaba 6 horas más (ver utils/fecha.js).
 const fmtFecha = fmtFechaHora;
+
+// Hoy en Guatemala, en el formato del <input type="date">.
+const hoyGT = () => new Date().toLocaleDateString("sv-SE", { timeZone: "America/Guatemala" });
+
+// Un polín puede mezclar masters de varios días de producción: un día solo si coinciden, rango si no.
+function fmtProduccion(min, max) {
+  if (!min) return "-";
+  const a = fmtDia(min), b = fmtDia(max);
+  return a === b ? a : `${a} – ${b}`;
+}
 
 async function leerJSON(res) {
   try { return await res.json(); } catch { return {}; }
@@ -672,7 +682,7 @@ export default function PalletsPage() {
   const [pallets, setPallets] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filtroEstatus, setFiltroEstatus] = useState("");
-  const [filtroFecha, setFiltroFecha] = useState("");
+  const [filtroFecha, setFiltroFecha] = useState(hoyGT);
   const [panelId, setPanelId] = useState(null);
   const [origenes, setOrigenes] = useState([]);
   const [bodegasVirtuales, setBodegasVirtuales] = useState([]);
@@ -692,7 +702,7 @@ export default function PalletsPage() {
   // Masters ordena por lo que hay dentro (número), no por el texto "12 / 20"; Creado y Cerrado
   // por su fecha real y no por el "usuario · fecha" que se muestra.
   const palletsOrdenados = ordenarFilas(palletsFiltrados, ordenPallets, {
-    pallet: p => p.Codigo, estatus: p => p.Estatus, area: p => p.NombreBodegaVirtual,
+    pallet: p => p.Codigo, produccion: p => p.FechaProduccionMin, estatus: p => p.Estatus, area: p => p.NombreBodegaVirtual,
     origen: p => p.DescripcionOrigen, masters: p => p.CantidadMasters, cuadre: p => p.Cuadre,
     ubicacion: p => p.PosicionCodigo, creado: p => p.CreadoEn, cerrado: p => p.CerradoEn,
   });
@@ -796,6 +806,7 @@ export default function PalletsPage() {
                   del <thead> no siempre se pinta al quedar pegado, y las filas se verían a través. */}
               <tr className="bg-gray-50">
                 <Th width={widthsPallets.pallet} onResizeStart={startResizePallets("pallet")} sortKey="pallet" orden={ordenPallets} onOrdenar={alternarOrdenPallets} className="px-4 py-3 text-left">Pallet</Th>
+                <Th width={widthsPallets.produccion} onResizeStart={startResizePallets("produccion")} sortKey="produccion" orden={ordenPallets} onOrdenar={alternarOrdenPallets} className="px-4 py-3 text-left">F. producción</Th>
                 <Th width={widthsPallets.estatus} onResizeStart={startResizePallets("estatus")} sortKey="estatus" orden={ordenPallets} onOrdenar={alternarOrdenPallets} className="px-4 py-3 text-center">Estatus</Th>
                 <Th width={widthsPallets.area} onResizeStart={startResizePallets("area")} sortKey="area" orden={ordenPallets} onOrdenar={alternarOrdenPallets} className="px-4 py-3 text-left">Área</Th>
                 <Th width={widthsPallets.origen} onResizeStart={startResizePallets("origen")} sortKey="origen" orden={ordenPallets} onOrdenar={alternarOrdenPallets} className="px-4 py-3 text-left">Origen</Th>
@@ -809,12 +820,13 @@ export default function PalletsPage() {
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan={10} className="px-4 py-8 text-center text-gray-400">Cargando…</td></tr>
+                <tr><td colSpan={11} className="px-4 py-8 text-center text-gray-400">Cargando…</td></tr>
               ) : pallets.length === 0 ? (
-                <tr><td colSpan={10} className="px-4 py-8 text-center text-gray-400">Sin pallets para este filtro</td></tr>
+                <tr><td colSpan={11} className="px-4 py-8 text-center text-gray-400">Sin pallets para este filtro</td></tr>
               ) : palletsOrdenados.map(p => (
                 <tr key={p.PalletId} className="border-t border-gray-100 hover:bg-gray-50">
                   <td className="px-4 py-3 font-mono font-semibold">{p.Codigo || `#${p.PalletId}`}</td>
+                  <td className="px-4 py-3 truncate" title={fmtProduccion(p.FechaProduccionMin, p.FechaProduccionMax)}>{fmtProduccion(p.FechaProduccionMin, p.FechaProduccionMax)}</td>
                   <td className="px-4 py-3 text-center">
                     <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${ESTATUS_BADGE[p.Estatus] || "bg-gray-100 text-gray-600"}`}>
                       {p.Estatus}

@@ -145,7 +145,8 @@ router.get("/", requireAuth, requirePerm("bodega", "ver"), async (req: Request, 
     const condiciones: string[] = [];
     const params: any[] = [];
     if (estatus) { condiciones.push("p.Estatus = ?"); params.push(estatus); }
-    if (fecha) { condiciones.push("DATE(p.CreadoEn) = ?"); params.push(fecha); }
+    // Rango y no DATE(p.CreadoEn): la función sobre la columna impide usar un índice si se agrega.
+    if (fecha) { condiciones.push("p.CreadoEn >= ? AND p.CreadoEn < ? + INTERVAL 1 DAY"); params.push(fecha, fecha); }
     const where = condiciones.length ? `WHERE ${condiciones.join(" AND ")}` : "";
     const rows: any[] = await prisma.$queryRawUnsafe(`
       SELECT p.PalletId, p.Codigo, p.Estatus, p.Origen, org.Descripcion AS DescripcionOrigen, p.CantidadMaster,
@@ -156,7 +157,13 @@ router.get("/", requireAuth, requirePerm("bodega", "ver"), async (req: Request, 
              -- que un polín al que una remisión le sacó la mitad seguía mostrándose lleno y no había
              -- cómo detectar los que quedaron a medias ocupando una posición entera.
              (SELECT COUNT(*) FROM Masters m WHERE m.PalletId = p.PalletId AND m.Estatus <> 'Salido') AS CantidadMasters,
-             (SELECT COUNT(*) FROM Masters m WHERE m.PalletId = p.PalletId AND m.Estatus = 'Salido') AS CantidadSalidos
+             (SELECT COUNT(*) FROM Masters m WHERE m.PalletId = p.PalletId AND m.Estatus = 'Salido') AS CantidadSalidos,
+             -- Un polín puede juntar masters de varios días de producción: se manda el rango y la
+             -- pantalla muestra un solo día cuando coinciden.
+             (SELECT MIN(oe.FechaProduccion) FROM Masters m JOIN EtiquetaImpresa ei ON m.EtiquetaId = ei.EtiquetaId
+                JOIN OrdenEtiquetado oe ON ei.OrdenId = oe.OrdenId WHERE m.PalletId = p.PalletId) AS FechaProduccionMin,
+             (SELECT MAX(oe.FechaProduccion) FROM Masters m JOIN EtiquetaImpresa ei ON m.EtiquetaId = ei.EtiquetaId
+                JOIN OrdenEtiquetado oe ON ei.OrdenId = oe.OrdenId WHERE m.PalletId = p.PalletId) AS FechaProduccionMax
       FROM Pallets p
       LEFT JOIN Origen org ON p.Origen = org.Codigo
       LEFT JOIN BodegaVirtual bv ON p.BodegaVirtualCodigo = bv.Codigo
