@@ -245,13 +245,14 @@ export function exportarLbHoraPorTalla(filas, desde, hasta) {
   XLSX.writeFile(wb, `LbHoraPorTalla_${desde}_a_${hasta}.xlsx`);
 }
 
-export function exportarLbPorPersona(filas, desde, hasta) {
+// areas: las columnas que se ven en pantalla (solo las áreas con libras en el rango).
+export function exportarLbPorPersona(filas, desde, hasta, areas = AREAS_DESTAJO) {
   const datos = filas.map(f => ({
     "Puesto":                     f.Puesto,
     "Id Empleado":                f.IdEmpleado,
     "Nombre":                     f.Nombre,
     // Una columna por área de destajo, en el mismo orden que la tabla de la pantalla.
-    ...Object.fromEntries(AREAS_DESTAJO.map(a => [`${a.etiqueta} (Lb)`, +f[a.lb].toFixed(2)])),
+    ...Object.fromEntries(areas.map(a => [`${a.etiqueta} (Lb)`, +f[a.lb].toFixed(2)])),
     "Total (Lb)":                 +f.LbTotal.toFixed(2),
   }));
 

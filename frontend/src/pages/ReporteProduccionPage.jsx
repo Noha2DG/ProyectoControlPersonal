@@ -43,16 +43,14 @@ const fechaCorta = (f) => f ? f.split("-").reverse().join("/") : "";
 // El límite es de espacio: más que esto no cabe en el recuadro de la hoja impresa.
 const MAX_NOTAS = 500;
 
-// estado es solo para el color del botón (ver render): "listo" = gris, "progreso" = ámbar mientras
-// se sigue ajustando Lb/Hora y Por Talla.
 const SUB_TABS = [
-  { key: "general",     label: "Reporte General", estado: "listo" },
-  { key: "termos",      label: "Reporte Termos",  estado: "listo" },
-  { key: "hojalote",    label: "Hoja de Lote",    estado: "listo" },
-  { key: "eficiencias", label: "Eficiencias",     estado: "listo" },
-  { key: "lbhora",      label: "Lb/Hora",         estado: "progreso" },
-  { key: "portalla",    label: "Por Talla",       estado: "progreso" },
-  { key: "lbpersona",   label: "Lb/Persona",      estado: "listo" },
+  { key: "general",     label: "Reporte General" },
+  { key: "termos",      label: "Reporte Termos" },
+  { key: "hojalote",    label: "Reporte x Lote" },
+  { key: "eficiencias", label: "Eficiencias" },
+  { key: "lbhora",      label: "Lb/Hora" },
+  { key: "portalla",    label: "Por Talla" },
+  { key: "lbpersona",   label: "Lb/Persona" },
 ];
 
 // Eficiencias, Lb/Hora, Por Talla y Lb/Persona son vistas por persona, no por lote de Materia Prima —
@@ -387,7 +385,6 @@ export default function ReporteProduccionPage() {
   const puedeEditarNotas = usePuede("destajo", "editar");
   const [desde, setDesde] = useState(hoy());
   const [hasta, setHasta] = useState(hoy());
-  const [fincas, setFincas] = useState([]);
   const [finca, setFinca] = useState("");
   // Valor = `${Lote}|${Clase}` (compuesto: ver project_destajo_lote_clase_en_codigo) — el mismo
   // texto de Lote puede repetirse entre Clases del mismo Piscina+Ciclo+Fecha.
@@ -420,12 +417,6 @@ export default function ReporteProduccionPage() {
   // borde a borde con huecos enormes. Se limita el bloque a la suma real de los anchos (que el
   // usuario puede cambiar arrastrando) y se centra; si la pantalla es más angosta, encoge sola.
   // +16 px por la barra de scroll vertical de la lista, para que no le robe ancho a las columnas.
-  const anchoLbPersona = 16 + LBPERSONA_COLS.reduce((s, k) => s + (widthsLbPersona[k] ?? LBPERSONA_COL_DEFAULTS[k] ?? 0), 0);
-
-  useEffect(() => {
-    fetch("/api/finca", { headers: authHeader() }).then(r => r.json())
-      .then(d => { if (Array.isArray(d)) setFincas(d.filter(f => f.Activo)); });
-  }, []);
 
   const buscar = useCallback(async () => {
     setLoading(true);
@@ -597,6 +588,12 @@ export default function ReporteProduccionPage() {
     LbTotal: filasLbPersona.reduce((t, f) => t + f.LbTotal, 0),
     Personas: filasLbPersona.length,
   };
+  // Solo las áreas que tuvieron libras en el rango: una columna entera de "—" solo estorba. Sin datos
+  // se dejan todas, para que la tabla vacía conserve su encabezado.
+  const areasLbPersona = filasLbPersona.length ? AREAS_DESTAJO.filter(a => totalLbPersona[a.lb] > 0) : AREAS_DESTAJO;
+  const colsLbPersona = LBPERSONA_COLS.filter(k =>
+    !Object.values(LBPERSONA_AREA_COL).includes(k) || areasLbPersona.some(a => LBPERSONA_AREA_COL[a.codigo] === k));
+  const anchoLbPersona = 16 + colsLbPersona.reduce((s, k) => s + (widthsLbPersona[k] ?? LBPERSONA_COL_DEFAULTS[k] ?? 0), 0);
 
 
   // El % de Talla se ordena por Procesado: es proporcional, y así no depende del redondeo.
@@ -649,6 +646,12 @@ export default function ReporteProduccionPage() {
     if (SUB_TABS_SIN_FINCA.includes(subTab) && finca) setFinca("");
   }, [subTab, finca]);
 
+  // Solo las fincas que tuvieron lotes en el rango. La elegida se conserva aunque no esté (ej. se
+  // cambió el rango y ya no trabajó), para que el select no muestre un valor que no existe.
+  const fincasConLotes = reporte?.fincasConLotes ?? [];
+  const fincas = finca && !fincasConLotes.some(f => f.Codigo === finca)
+    ? [...fincasConLotes, { Codigo: finca, Descripcion: "sin lotes en el rango" }]
+    : fincasConLotes;
   const nombreFincaSeleccionada = fincas.find(f => f.Codigo === finca)?.Descripcion;
   const rangoFechasTexto = desde === hasta ? fechaCorta(desde) : `${fechaCorta(desde)} — ${fechaCorta(hasta)}`;
   const impresoEn = new Date().toLocaleString("sv-SE", { timeZone: "America/Guatemala", hour12: false }).slice(0, 16);
@@ -684,7 +687,7 @@ export default function ReporteProduccionPage() {
     else if (subTab === "hojalote") { if (loteHoja) exportarHojaLote(termosHoja, loteHoja, user?.nombre); }
     else if (subTab === "lbhora") exportarLbHora(filasLbHora, desde, hasta);
     else if (subTab === "portalla") exportarLbHoraPorTalla(filasPorTalla, desde, hasta);
-    else if (subTab === "lbpersona") exportarLbPorPersona(filasLbPersona, desde, hasta);
+    else if (subTab === "lbpersona") exportarLbPorPersona(filasLbPersona, desde, hasta, areasLbPersona);
     // pesajesVisibles y no reporte.porPersona: el Excel debe traer lo que se está viendo, con el
     // filtro de persona y el orden ya aplicados.
     else exportarEficiencias(pesajesVisibles, desde, hasta);
@@ -746,15 +749,13 @@ export default function ReporteProduccionPage() {
           Buscar
         </button>
 
-        <div className="flex gap-1 bg-gray-200 rounded-lg p-1 ml-4">
+        <div className="flex gap-1 bg-blue-800 rounded-lg p-1 ml-4">
           {SUB_TABS.map(t => (
             <button key={t.key} onClick={() => setSubTab(t.key)}
               className={`px-3 py-1.5 rounded-md text-xs font-semibold whitespace-nowrap transition ${
                 subTab === t.key
-                  ? "bg-white shadow text-blue-700"
-                  : t.estado === "progreso"
-                    ? "text-amber-600 hover:text-amber-700"
-                    : "text-gray-600 hover:text-gray-800"
+                  ? "bg-white shadow text-blue-800"
+                  : "text-white hover:bg-blue-700"
               }`}>
               {t.label}
             </button>
@@ -1253,7 +1254,7 @@ export default function ReporteProduccionPage() {
           {subTab === "lbpersona" && (
             <div className="mx-auto w-full" style={{ maxWidth: anchoLbPersona }}>
               <h3 className="text-xs font-semibold text-gray-700 mb-1">
-                Libras por Persona — {AREAS_DESTAJO.map(a => a.etiqueta).join(", ")}
+                Libras por Persona — {areasLbPersona.map(a => a.etiqueta).join(", ")}
               </h3>
               <p className="text-xs text-gray-400 mb-2">
                 Libras acumuladas por persona en cada área (sin tasa ni horas), ordenado de mayor a menor por el total de todas.
@@ -1263,13 +1264,13 @@ export default function ReporteProduccionPage() {
               </p>
               <div className="bg-white rounded-lg shadow overflow-hidden overflow-x-auto max-h-[600px] overflow-y-auto">
                 <table className="w-full text-xs table-fixed">
-                  <Colgroup columns={LBPERSONA_COLS} widths={widthsLbPersona} />
+                  <Colgroup columns={colsLbPersona} widths={widthsLbPersona} />
                   <thead>
                     <tr className="bg-gray-100 text-gray-600 uppercase text-[10px] tracking-wider">
                       <Th width={widthsLbPersona.puesto} onResizeStart={startResizeLbPersona("puesto")} sortKey="puesto" orden={ordenLbPersona} onOrdenar={alternarOrdenLbPersona} className="px-2 py-1.5 text-center whitespace-nowrap">Puesto</Th>
                       <Th width={widthsLbPersona.id} onResizeStart={startResizeLbPersona("id")} sortKey="id" orden={ordenLbPersona} onOrdenar={alternarOrdenLbPersona} className="px-2 py-1.5 text-left whitespace-nowrap">Id Empleado</Th>
                       <Th width={widthsLbPersona.nombre} onResizeStart={startResizeLbPersona("nombre")} sortKey="nombre" orden={ordenLbPersona} onOrdenar={alternarOrdenLbPersona} className="px-2 py-1.5 text-left">Nombre</Th>
-                      {AREAS_DESTAJO.map(a => (
+                      {areasLbPersona.map(a => (
                         <Th key={a.codigo} width={widthsLbPersona[LBPERSONA_AREA_COL[a.codigo]]}
                           onResizeStart={startResizeLbPersona(LBPERSONA_AREA_COL[a.codigo])}
                           sortKey={LBPERSONA_AREA_COL[a.codigo]} orden={ordenLbPersona} onOrdenar={alternarOrdenLbPersona}
@@ -1285,7 +1286,7 @@ export default function ReporteProduccionPage() {
                         <td className="px-2 py-1.5 font-mono text-gray-700 whitespace-nowrap">{f.IdEmpleado}</td>
                         {/* sin max-w fijo: que el corte lo mande el ancho de la columna (ajustable) */}
                         <td className="px-2 py-1.5 text-gray-700"><div className="truncate" title={f.Nombre}>{f.Nombre}</div></td>
-                        {AREAS_DESTAJO.map(a => (
+                        {areasLbPersona.map(a => (
                           <td key={a.codigo} className="px-2 py-1.5 text-right text-gray-700 whitespace-nowrap">
                             {f[a.lb] > 0 ? fmtNum(f[a.lb]) : <span className="text-gray-300">—</span>}
                           </td>
@@ -1294,7 +1295,7 @@ export default function ReporteProduccionPage() {
                       </tr>
                     ))}
                     {filasLbPersona.length === 0 && (
-                      <tr><td colSpan={LBPERSONA_COLS.length} className="px-3 py-6 text-center text-gray-400">Sin datos en este rango de fechas</td></tr>
+                      <tr><td colSpan={colsLbPersona.length} className="px-3 py-6 text-center text-gray-400">Sin datos en este rango de fechas</td></tr>
                     )}
                   </tbody>
                   {filasLbPersona.length > 0 && (
@@ -1303,7 +1304,7 @@ export default function ReporteProduccionPage() {
                         <td className="px-2 py-1.5 whitespace-nowrap" colSpan={3}>
                           Total General <span className="font-normal text-gray-500">· {totalLbPersona.Personas} persona{totalLbPersona.Personas !== 1 ? "s" : ""}</span>
                         </td>
-                        {AREAS_DESTAJO.map(a => (
+                        {areasLbPersona.map(a => (
                           <td key={a.codigo} className="px-2 py-1.5 text-right whitespace-nowrap text-gray-900">
                             {totalLbPersona[a.lb] > 0 ? fmtNum(totalLbPersona[a.lb]) : <span className="text-gray-400">—</span>}
                           </td>
@@ -1641,7 +1642,7 @@ export default function ReporteProduccionPage() {
                 <th className="text-center font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Puesto</th>
                 <th className="text-left font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Id</th>
                 <th className="text-left font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Nombre</th>
-                {AREAS_DESTAJO.map(a => (
+                {areasLbPersona.map(a => (
                   <th key={a.codigo} className="text-right font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">{a.etiqueta} (Lb)</th>
                 ))}
                 <th className="text-right font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Total (Lb)</th>
@@ -1654,7 +1655,7 @@ export default function ReporteProduccionPage() {
                   <td className="py-0.5 px-1 text-center tabular-nums">{f.Puesto}</td>
                   <td className="py-0.5 px-1 font-mono">{f.IdEmpleado}</td>
                   <td className="py-0.5 px-1">{f.Nombre}</td>
-                  {AREAS_DESTAJO.map(a => (
+                  {areasLbPersona.map(a => (
                     <td key={a.codigo} className="py-0.5 px-1 text-right tabular-nums">{f[a.lb] > 0 ? fmtNum(f[a.lb]) : "—"}</td>
                   ))}
                   <td className="py-0.5 px-1 text-right font-semibold tabular-nums">{fmtNum(f.LbTotal)}</td>

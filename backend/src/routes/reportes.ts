@@ -143,8 +143,19 @@ router.get("/produccion", requireAuth, requirePerm("destajo", "ver"), async (req
         AND (tr.FechaSalida IS NULL OR tr.FechaSalida >= ?)
     `, hasta, desde);
 
-    const [porLote, porTermo, porLoteTalla, porTalla, porPersona, pausasNoPaga] =
-      await Promise.all([pLote, pTermo, pLoteTalla, pTalla, pPersona, pPausas]) as any[][];
+    // Fincas con lotes en el rango para el selector de Finca. Va SIN el filtro de finca a propósito:
+    // si se filtrara, al elegir una finca el selector se quedaría solo con esa.
+    const pFincas = prisma.$queryRawUnsafe(`
+      SELECT DISTINCT f.Codigo, f.Descripcion
+      FROM Lotes l
+      JOIN Piscina p ON l.PiscinaId = p.PiscinaId
+      JOIN Finca f ON p.CodigoFinca = f.Codigo
+      WHERE l.Fecha BETWEEN ? AND ?
+      ORDER BY f.Codigo
+    `, desde, hasta);
+
+    const [porLote, porTermo, porLoteTalla, porTalla, porPersona, pausasNoPaga, fincasConLotes] =
+      await Promise.all([pLote, pTermo, pLoteTalla, pTalla, pPersona, pPausas, pFincas]) as any[][];
 
     const lotesFmt = numerizar(porLote, ["PesoIngreso", "Procesado", "NumTransacciones"])
       .map(l => ({ ...l, Pendiente: l.PesoIngreso - l.Procesado, Rendimiento: l.PesoIngreso > 0 ? (l.Procesado / l.PesoIngreso * 100) : 0 }));
@@ -166,6 +177,7 @@ router.get("/produccion", requireAuth, requirePerm("destajo", "ver"), async (req
       porTermo: termoFmt,
       porPersona: personaFmt,
       pausasNoPaga,
+      fincasConLotes,
       totales: { ...totales, Pendiente: totales.PesoIngreso - totales.Procesado, Rendimiento: totales.PesoIngreso > 0 ? (totales.Procesado / totales.PesoIngreso * 100) : 0 },
     });
   } catch (err: any) {
