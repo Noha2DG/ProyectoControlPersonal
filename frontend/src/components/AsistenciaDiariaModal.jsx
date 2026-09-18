@@ -1,6 +1,6 @@
 // Reporte visual de asistencia diaria — pensado para descargarse como imagen
 // y enviarse por WhatsApp, no para imprimir.
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { toPng } from "html-to-image";
 
 // La clasificación se define por LO QUE NO ES DIRECTO, al revés que antes: la lista larga de 35
@@ -116,7 +116,7 @@ function TablaAreas({ titulo, filas, total, colorClass }) {
       <table className="w-full text-[13px]">
         <thead>
           <tr className="text-[10px] uppercase tracking-wider text-gray-400">
-            <th className="text-left font-semibold px-4 pt-2.5 pb-1">Grupo</th>
+            <th className="text-left font-semibold px-4 pt-2.5 pb-1">Grupo / Área</th>
             <th className="text-right font-semibold px-4 pt-2.5 pb-1 w-16">Esc.</th>
           </tr>
         </thead>
@@ -125,10 +125,18 @@ function TablaAreas({ titulo, filas, total, colorClass }) {
             <tr><td colSpan={2} className="px-4 py-4 text-center text-gray-400 text-xs">Sin registros</td></tr>
           )}
           {filas.map(f => (
-            <tr key={f.nombre} className="border-t border-gray-100">
-              <td className="px-4 py-1 text-slate-700">{f.nombre}</td>
-              <td className="px-4 py-1 text-right font-semibold text-slate-800 tabular-nums">{f.valor}</td>
-            </tr>
+            <Fragment key={f.nombre}>
+              <tr className="border-t border-gray-100">
+                <td className="px-4 pt-1.5 pb-1 font-semibold text-slate-800">{f.nombre}</td>
+                <td className="px-4 pt-1.5 pb-1 text-right font-bold text-slate-900 tabular-nums">{f.valor}</td>
+              </tr>
+              {f.areas.map(a => (
+                <tr key={a.nombre}>
+                  <td className="pl-8 pr-4 py-0.5 text-[12px] text-slate-500">{a.nombre}</td>
+                  <td className="px-4 py-0.5 text-right text-[12px] text-slate-500 tabular-nums">{a.valor}</td>
+                </tr>
+              ))}
+            </Fragment>
           ))}
         </tbody>
         <tfoot>
@@ -172,13 +180,22 @@ export default function AsistenciaDiariaModal({ areas, fecha, onClose }) {
 
   // Suma por etiqueta: las 5 áreas de Clasificado Cola se leen como una línea, que es el punto de
   // haber agrupado. Dentro de cada bloque, no entre bloques.
+  //
+  // Cada fila de grupo lleva sus áreas debajo (`areas`), para que el total del grupo se pueda leer
+  // sin perder de vista quién lo compone. Las filas que ya son un área suelta (grupo mixto o sin
+  // grupo) no llevan desglose: repetirían su propio nombre.
   const porGrupo = (lista) => {
     const acum = new Map();
     for (const a of lista) {
       const nombre = etiqueta(a);
-      acum.set(nombre, (acum.get(nombre) ?? 0) + a.ocupacion);
+      if (!acum.has(nombre)) acum.set(nombre, { nombre, valor: 0, areas: [] });
+      const fila = acum.get(nombre);
+      fila.valor += a.ocupacion;
+      if (a.Grupo && !esMixto(a.Grupo)) fila.areas.push({ nombre: aTitulo(a.Nombre), valor: a.ocupacion });
     }
-    return [...acum].map(([nombre, valor]) => ({ nombre, valor })).sort((x, y) => y.valor - x.valor);
+    return [...acum.values()]
+      .map(f => ({ ...f, areas: f.areas.sort((x, y) => y.valor - x.valor || x.nombre.localeCompare(y.nombre)) }))
+      .sort((x, y) => y.valor - x.valor);
   };
 
   const filasDirecto   = porGrupo(directas);
