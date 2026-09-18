@@ -41,6 +41,15 @@ router.get("/produccion", requireAuth, requirePerm("destajo", "ver"), async (req
              COALESCE((SELECT SUM(pd.Peso) FROM PesajeDetalle pd
                        JOIN TransaccionesProduccion tp ON pd.TransaccionId = tp.TransaccionId
                        WHERE tp.Lote = l.Lote AND tp.ClaseOrigen = l.Clase), 0) AS Procesado,
+             -- Quién pesó el lote, para la Hoja de Lote: antes imprimía el nombre de quien tenía la
+             -- sesión abierta, que casi nunca es quien trabajó. Sale del pesaje y no de la
+             -- transacción porque el 14% de las pesadas las registra alguien distinto del que abrió
+             -- la transacción; por eso también van todos los nombres y no uno solo: en 70 de 271
+             -- lotes del último bimestre pesó más de una persona.
+             (SELECT GROUP_CONCAT(DISTINCT pd.RegistradoPor ORDER BY pd.RegistradoPor SEPARATOR ', ')
+                FROM PesajeDetalle pd
+                JOIN TransaccionesProduccion tp ON pd.TransaccionId = tp.TransaccionId
+               WHERE tp.Lote = l.Lote AND tp.ClaseOrigen = l.Clase) AS RegistradoPor,
              (SELECT COUNT(*) FROM TransaccionesProduccion tp WHERE tp.Lote = l.Lote AND tp.ClaseOrigen = l.Clase) AS NumTransacciones
       FROM Lotes l
       JOIN Clase c ON l.Clase = c.Clase

@@ -152,7 +152,7 @@ export function exportarReporteTermos(porTermo, desde, hasta) {
   XLSX.writeFile(wb, `ReporteTermos_${desde}_a_${hasta}.xlsx`);
 }
 
-export function exportarHojaLote(termos, lote, nombre) {
+export function exportarHojaLote(termos, lote) {
   const filas = termos.map(t => ({
     "Termo":   t.NumeroTermo,
     "Talla":   t.DescripcionTalla,
@@ -167,7 +167,7 @@ export function exportarHojaLote(termos, lote, nombre) {
   const wb = XLSX.utils.book_new();
   const ws = XLSX.utils.aoa_to_sheet([
     ["Fecha", lote.Fecha?.slice(0, 10) ?? ""],
-    ["Nombre", nombre ?? ""],
+    ["Nombre", lote.RegistradoPor ?? ""],
     ["Lote", lote.Lote],
     ["Clase de Materia Prima", `${lote.Clase} — ${lote.DescripcionClase}`],
     [],

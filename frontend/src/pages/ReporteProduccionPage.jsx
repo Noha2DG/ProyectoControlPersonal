@@ -684,7 +684,7 @@ export default function ReporteProduccionPage() {
     if (!reporte) return;
     if (subTab === "general") exportarReporteGeneral(datos.porLote, datos.porTalla, desde, hasta);
     else if (subTab === "termos") exportarReporteTermos(datos.porTermo, desde, hasta);
-    else if (subTab === "hojalote") { if (loteHoja) exportarHojaLote(termosHoja, loteHoja, user?.nombre); }
+    else if (subTab === "hojalote") { if (loteHoja) exportarHojaLote(termosHoja, loteHoja); }
     else if (subTab === "lbhora") exportarLbHora(filasLbHora, desde, hasta);
     else if (subTab === "portalla") exportarLbHoraPorTalla(filasPorTalla, desde, hasta);
     else if (subTab === "lbpersona") exportarLbPorPersona(filasLbPersona, desde, hasta, areasLbPersona);
@@ -985,7 +985,7 @@ export default function ReporteProduccionPage() {
                     </tr>
                     <tr className="border-b border-gray-200">
                       <td className="py-1.5 pr-3 font-semibold text-gray-500">Nombre</td>
-                      <td className="py-1.5 text-center font-semibold text-gray-800">{user?.nombre || "—"}</td>
+                      <td className="py-1.5 text-center font-semibold text-gray-800">{loteHoja.RegistradoPor || "—"}</td>
                     </tr>
                     <tr className="border-b border-gray-200">
                       <td className="py-1.5 pr-3 font-semibold text-gray-500">Lote</td>
@@ -1468,7 +1468,7 @@ export default function ReporteProduccionPage() {
                     </tr>
                     <tr className="border-b border-gray-300">
                       <td className="py-1 pr-2 font-bold text-gray-500">Nombre</td>
-                      <td className="py-1 text-center font-bold">{user?.nombre || "—"}</td>
+                      <td className="py-1 text-center font-bold">{l.RegistradoPor || "—"}</td>
                     </tr>
                     <tr className="border-b border-gray-300">
                       <td className="py-1 pr-2 font-bold text-gray-500">Lote</td>
