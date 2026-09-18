@@ -40,6 +40,9 @@ function formatear(rows: any[]) {
     Anuladas: Number(r.Anuladas),
     Escaneadas: Number(r.Escaneadas),
     EsGeneral: Number(r.EsGeneral) === 1,
+    // Solo viene en el filtro por fecha de impresión; en las demás ramas no hay un día contra el
+    // cual contar, y null lo dice mejor que un 0 que parecería "no se imprimió".
+    EnPapelEnFecha: r.EnPapelEnFecha == null ? null : Number(r.EnPapelEnFecha),
   }));
 }
 
@@ -54,7 +57,7 @@ async function agregarTechoLinea(rows: any[]) {
   });
 }
 
-const SELECT_ORDEN = `
+const COLS_ORDEN = `
   SELECT oe.OrdenId, oe.Lote, oe.PiscinaId, oe.Ciclo, oe.DetalleId, oe.AreaCodigo,
          ar.Nombre AS NombreArea, oe.FechaProduccion, oe.Color,
          oe.Origen, org.Descripcion AS DescripcionOrigen,
@@ -86,7 +89,15 @@ const SELECT_ORDEN = `
          -- listan los distintos que haya (normalmente uno) porque una captura puede reimprimirse en
          -- otra estación. Vacío para lo migrado, que nunca pasó por esta cola.
          (SELECT GROUP_CONCAT(DISTINCT cb.Impresora SEPARATOR ', ') FROM ColaEtiquetaBartender cb
-          WHERE cb.OrdenId = oe.OrdenId AND cb.ImpresoEn IS NOT NULL) AS ImpresoPor
+          WHERE cb.OrdenId = oe.OrdenId AND cb.ImpresoEn IS NOT NULL) AS ImpresoPor,
+         -- Cuándo salió el papel por última vez. Va aparte de FechaProduccion a propósito: lo
+         -- producido el 11 puede imprimirse el 17, y sin esta columna el reporte del día se lee como
+         -- si sus filas fueran de días atrás.
+         (SELECT MAX(cb.ImpresoEn) FROM ColaEtiquetaBartender cb
+          WHERE cb.OrdenId = oe.OrdenId AND cb.ImpresoEn IS NOT NULL) AS UltimaImpresion
+`;
+
+const FROM_ORDEN = `
   FROM OrdenEtiquetado oe
   JOIN DetallePedido dp ON oe.DetalleId = dp.DetalleId
   JOIN Clase cl ON dp.Clase = cl.Clase
@@ -104,6 +115,8 @@ const SELECT_ORDEN = `
   JOIN Clientes cli ON ped.CodigoCliente = cli.Codigo
   LEFT JOIN Subcliente sub ON ped.CodigoCliente = sub.CodigoCliente AND ped.CodigoSubcliente = sub.CodigoSubcliente
 `;
+
+const SELECT_ORDEN = `${COLS_ORDEN} ${FROM_ORDEN}`;
 
 // GET /api/orden-etiquetado?pedido=001-2026 | ?detalle=123 | ?fecha=2026-07-08 | ?fechaImpresion=2026-07-08
 //
@@ -144,8 +157,16 @@ router.get("/", requireAuth, requirePerm("etiquetado", "ver"), async (req: Reque
       // no calzaba con NINGÚN día y desaparecía de la pantalla sin que nadie la pudiera encontrar.
       // Por eso el OR: entra lo impreso ESE día, más TODO lo que sigue pendiente de imprimir por
       // completo (sin importar la fecha elegida) — es trabajo que igual hay que ver hoy.
+      // EnPapelEnFecha separa las dos mitades del OR de abajo: cuenta SOLO el papel de ESE día, así
+      // que vale 0 exactamente en las capturas que entran por estar pendientes. El reporte diario
+      // usa esa columna para dejarlas fuera del PDF sin sacarlas de la pantalla (ver
+      // ImpresionEtiquetasPage) — en pantalla son trabajo por hacer; en el reporte del día eran
+      // filas de agosto mezcladas con las de hoy y sumando a los totales.
       rows = await prisma.$queryRawUnsafe(`
-        ${SELECT_ORDEN}
+        ${COLS_ORDEN},
+               (SELECT COUNT(*) FROM ColaEtiquetaBartender cb
+                 WHERE cb.OrdenId = oe.OrdenId AND cb.ImpresoEn >= ? AND cb.ImpresoEn < ?) AS EnPapelEnFecha
+        ${FROM_ORDEN}
         WHERE oe.Estatus <> 'Migrada' AND (
           EXISTS (
             SELECT 1 FROM ColaEtiquetaBartender cb
@@ -156,7 +177,7 @@ router.get("/", requireAuth, requirePerm("etiquetado", "ver"), async (req: Reque
           )
         )
         ORDER BY oe.OrdenId DESC
-      `, fechaImpresion, fechaSiguiente);
+      `, fechaImpresion, fechaSiguiente, fechaImpresion, fechaSiguiente);
     } else {
       // Las capturas del inventario migrado quedan fuera del listado diario: son 1,393 órdenes con
       // los OrdenId más altos y taparían por completo lo que se está trabajando hoy. Siguen siendo

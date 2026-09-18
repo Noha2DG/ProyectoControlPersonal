@@ -3,24 +3,40 @@
 import { useState } from "react";
 import { toPng } from "html-to-image";
 
-// Cafetería, Área General, Salida Temporal, Baño, Consultas Enfermería, Gestiones RRHH
-const AREAS_TEMPORALES = ["TC", "TT", "TM", "TB", "AS", "TR"];
+// La clasificación se define por LO QUE NO ES DIRECTO, al revés que antes: la lista larga de 35
+// códigos "directos" había que ampliarla cada vez que nacía un área, y el área nueva caía callada
+// en indirecto hasta que alguien lo notara. Ahora lo que se enumera son las excepciones —que son
+// pocas y estables— y todo lo demás es producción (regla del usuario, sep 2026).
+//
+// Se mezclan dos niveles a propósito porque así es la realidad: Administración y Mantenimiento son
+// grupos COMPLETOS de apoyo (RRHH, jefaturas, mantto., sanitización, planta de hielo), mientras que
+// Lavandería, Seguridad y Almacén de Empaque son tres áreas sueltas que viven dentro del grupo
+// GENERAL junto a cosas que no son apoyo.
+const GRUPOS_INDIRECTOS = ["ADMINISTRACION", "MANTENIMIENTO"];
+const AREAS_INDIRECTAS = ["BS", "AU", "BL"]; // Lavandería, Seguridad Planta, Almacén Material Empaque
 
-// Áreas que son trabajo directo de línea de producción. Todo lo que no esté
-// aquí (y no sea actividad temporal) se cuenta como indirecto/apoyo. Lista fija,
-// ajustar aquí si cambia la clasificación de alguna área.
-const AREAS_DIRECTAS = [
-  "AW", "AY", "DM", "DL", "HA", "BF", "DU", "DE", "FF", "EM", "EQ", "EP",
-  "CF", "FL", "ES", "MV", "DS", "PS", "DW", "DT", "FS", "FG", "FM", "EY",
-  "RE", "RC", "RD", "SC", "EB", "SD", "SE", "DY", "BY", "HB", "EF",
-];
+// No es trabajo: la persona está marcada pero fuera de su área. Enfermería, Capacitación, Baño,
+// Cafetería, Salida Temporal, Permiso Asunto Personal, Gestiones RRHH y Área General.
+//
+// TT (ÁREA GENERAL) va aquí y no en directo aunque la regla sea "directo es el resto": es donde cae
+// quien no está asignado a ningún área —la única exenta de planificación— así que contarla como
+// producción infla el directo con gente que no está produciendo.
+const AREAS_TEMPORALES = ["AS", "CA", "TB", "TC", "TM", "TP", "TR", "TT"];
+
+const DIRECTO = "directo", INDIRECTO = "indirecto", TEMPORAL = "temporal";
+
+function clasificar(area) {
+  if (AREAS_TEMPORALES.includes(area.CodigoArea)) return TEMPORAL;
+  if (AREAS_INDIRECTAS.includes(area.CodigoArea) || GRUPOS_INDIRECTOS.includes(area.Grupo)) return INDIRECTO;
+  return DIRECTO;
+}
 
 const COLOR_DIRECTO   = "#2563eb";
 const COLOR_INDIRECTO = "#f97316";
 const COLOR_TEMPORAL  = "#16a34a";
 
 const CONECTORES = new Set(["y", "de", "del", "la", "el", "en", "a"]);
-function tituloArea(nombre) {
+function aTitulo(nombre) {
   return (nombre || "").toLowerCase().split(" ").map((w, i) =>
     i > 0 && CONECTORES.has(w) ? w : w.charAt(0).toUpperCase() + w.slice(1)
   ).join(" ");
@@ -100,7 +116,7 @@ function TablaAreas({ titulo, filas, total, colorClass }) {
       <table className="w-full text-[13px]">
         <thead>
           <tr className="text-[10px] uppercase tracking-wider text-gray-400">
-            <th className="text-left font-semibold px-4 pt-2.5 pb-1">Área</th>
+            <th className="text-left font-semibold px-4 pt-2.5 pb-1">Grupo</th>
             <th className="text-right font-semibold px-4 pt-2.5 pb-1 w-16">Esc.</th>
           </tr>
         </thead>
@@ -128,9 +144,9 @@ function TablaAreas({ titulo, filas, total, colorClass }) {
 
 export default function AsistenciaDiariaModal({ areas, fecha, onClose }) {
   const conEscaneo = areas.filter(a => (a.ocupacion ?? 0) > 0);
-  const temporales = conEscaneo.filter(a => AREAS_TEMPORALES.includes(a.CodigoArea));
-  const directas   = conEscaneo.filter(a => AREAS_DIRECTAS.includes(a.CodigoArea));
-  const indirectas = conEscaneo.filter(a => !AREAS_TEMPORALES.includes(a.CodigoArea) && !AREAS_DIRECTAS.includes(a.CodigoArea));
+  const temporales = conEscaneo.filter(a => clasificar(a) === TEMPORAL);
+  const indirectas = conEscaneo.filter(a => clasificar(a) === INDIRECTO);
+  const directas   = conEscaneo.filter(a => clasificar(a) === DIRECTO);
 
   const sumaOcup = list => list.reduce((s, a) => s + a.ocupacion, 0);
   const totalDirecto   = sumaOcup(directas);
@@ -139,15 +155,37 @@ export default function AsistenciaDiariaModal({ areas, fecha, onClose }) {
   const totalGeneral   = totalDirecto + totalIndirecto + totalTemporal;
   const pct = n => totalGeneral === 0 ? "0.0" : ((n / totalGeneral) * 100).toFixed(1);
 
-  const aFila = a => ({ nombre: tituloArea(a.Nombre), valor: a.ocupacion });
-  const filasDirecto   = [...directas].sort((x, y) => y.ocupacion - x.ocupacion).map(aFila);
-  const filasIndirecto = [...indirectas].sort((x, y) => y.ocupacion - x.ocupacion).map(aFila);
-  const filasTemporal  = [...temporales].sort((x, y) => y.ocupacion - x.ocupacion).map(aFila);
+  // Un grupo "mixto" es el que no cae entero en un solo bloque — hoy solo GENERAL, que reparte sus
+  // áreas entre los tres. Sus áreas se listan una por una: poner "General" en las tres tablas con
+  // tres cifras distintas no dice nada, mientras que "Lavandería" y "Baño" sí.
+  //
+  // Se calcula sobre TODAS las áreas, no sobre las escaneadas del día: si dependiera del día, un
+  // lunes en que solo marcó Lavandería el grupo se vería puro y saldría rotulado "General".
+  const bloquesPorGrupo = new Map();
+  for (const a of areas) {
+    if (!a.Grupo) continue;
+    if (!bloquesPorGrupo.has(a.Grupo)) bloquesPorGrupo.set(a.Grupo, new Set());
+    bloquesPorGrupo.get(a.Grupo).add(clasificar(a));
+  }
+  const esMixto = grupo => (bloquesPorGrupo.get(grupo)?.size ?? 0) > 1;
+  const etiqueta = a => aTitulo(!a.Grupo || esMixto(a.Grupo) ? a.Nombre : a.Grupo);
 
-  const topAreas = [...conEscaneo]
-    .sort((x, y) => y.ocupacion - x.ocupacion)
-    .slice(0, 8)
-    .map(aFila);
+  // Suma por etiqueta: las 5 áreas de Clasificado Cola se leen como una línea, que es el punto de
+  // haber agrupado. Dentro de cada bloque, no entre bloques.
+  const porGrupo = (lista) => {
+    const acum = new Map();
+    for (const a of lista) {
+      const nombre = etiqueta(a);
+      acum.set(nombre, (acum.get(nombre) ?? 0) + a.ocupacion);
+    }
+    return [...acum].map(([nombre, valor]) => ({ nombre, valor })).sort((x, y) => y.valor - x.valor);
+  };
+
+  const filasDirecto   = porGrupo(directas);
+  const filasIndirecto = porGrupo(indirectas);
+  const filasTemporal  = porGrupo(temporales);
+
+  const topAreas = porGrupo(conEscaneo).slice(0, 8);
 
   const fechaLarga = new Date(`${fecha}T00:00:00`).toLocaleDateString("es-GT", { day: "2-digit", month: "2-digit", year: "numeric" });
   const [generadoEn] = useState(() =>
@@ -239,7 +277,7 @@ export default function AsistenciaDiariaModal({ areas, fecha, onClose }) {
                   </div>
                 </div>
                 <div>
-                  <h3 className="text-sm font-bold text-slate-800 mb-2">Áreas con mayor escaneado</h3>
+                  <h3 className="text-sm font-bold text-slate-800 mb-2">Grupos con mayor escaneado</h3>
                   {topAreas.length === 0
                     ? <p className="text-xs text-gray-400 text-center py-8">Sin escaneados hoy</p>
                     : <BarChart items={topAreas} />}

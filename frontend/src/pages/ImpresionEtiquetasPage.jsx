@@ -558,6 +558,14 @@ export default function ImpresionEtiquetasPage() {
   // hacía que una captura se viera completa con la impresora sin tocar.
   const sinImprimir = capturas.filter(o => (o.EnPapel ?? 0) < o.CantidadMaster).length;
 
+  // El reporte diario es del DÍA, la tabla no. Con fecha puesta, la tabla trae a propósito todo lo
+  // que sigue pendiente de imprimir sin importar su fecha (ver el OR en GET /api/orden-etiquetado):
+  // en pantalla eso es trabajo por hacer, pero en el PDF eran capturas de agosto mezcladas con las
+  // de hoy y sumando a los totales. EnPapelEnFecha cuenta solo el papel de ese día, así que filtrar
+  // por > 0 deja justo lo que se imprimió. Sin fecha ("Todas las fechas") no hay día que respetar y
+  // el reporte muestra todo lo que está en pantalla.
+  const filasReporte = fecha ? capturas.filter(o => (o.EnPapelEnFecha ?? 0) > 0) : capturas;
+
   return (
     <div>
       <div className="flex flex-wrap gap-3 items-center mb-4">
@@ -574,7 +582,7 @@ export default function ImpresionEtiquetasPage() {
           className="text-sm text-blue-700 bg-blue-50 border border-blue-200 rounded-lg px-3 py-2 hover:bg-blue-100 transition font-medium">
           Consultar etiqueta
         </button>
-        <button onClick={() => setMostrarReporte(true)} disabled={!capturas.length}
+        <button onClick={() => setMostrarReporte(true)} disabled={!filasReporte.length}
           className="text-sm text-purple-700 bg-purple-50 border border-purple-200 rounded-lg px-3 py-2 hover:bg-purple-100 transition font-medium disabled:opacity-50 disabled:hover:bg-purple-50">
           Reporte diario (PDF)
         </button>
@@ -733,8 +741,8 @@ export default function ImpresionEtiquetasPage() {
 
       {mostrarConsulta && <ConsultarEtiquetaModal onCerrar={() => setMostrarConsulta(false)} />}
       {mostrarReporte && (
-        <ReporteEtiquetasModal filas={capturas}
-          etiqueta={`${fecha ? fmtDia(fecha) : "Todas las fechas"} · fecha de impresión${busqueda ? ` · "${busqueda}"` : ""}`}
+        <ReporteEtiquetasModal filas={filasReporte}
+          etiqueta={`${fecha ? `Impreso el ${fmtDia(fecha)}` : "Todas las fechas"}${busqueda ? ` · "${busqueda}"` : ""}`}
           onCerrar={() => setMostrarReporte(false)} />
       )}
       {mostrarAtascadas && <AtascadasModal atascadas={atascadas} onCerrar={() => setMostrarAtascadas(false)} />}

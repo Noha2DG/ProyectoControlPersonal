@@ -33,7 +33,8 @@ function ContenidoReporte({ filas, etiqueta }) {
       <table className="w-full text-xs border-collapse">
         <thead>
           <tr className="border-b-2 border-gray-800 text-left text-gray-600 uppercase tracking-wide">
-            <th className="py-1.5 pr-2">Fecha</th>
+            <th className="py-1.5 pr-2">Producción</th>
+            <th className="py-1.5 pr-2">Impreso</th>
             <th className="py-1.5 pr-2">Pedido</th>
             <th className="py-1.5 pr-2">Cliente</th>
             <th className="py-1.5 pr-2">Producto</th>
@@ -51,7 +52,10 @@ function ContenidoReporte({ filas, etiqueta }) {
             const noEscaneadas = Math.max(0, f.EnPapel - f.Escaneadas);
             return (
               <tr key={f.OrdenId} className="border-b border-gray-200">
+                {/* Dos fechas, no una: lo producido el 11 se puede imprimir el 17, y con una sola
+                    columna el reporte del día parecía lleno de filas viejas. */}
                 <td className="py-1.5 pr-2 whitespace-nowrap">{fmtDia(f.FechaProduccion)}</td>
+                <td className="py-1.5 pr-2 whitespace-nowrap">{f.UltimaImpresion ? fmtDia(f.UltimaImpresion) : "-"}</td>
                 <td className="py-1.5 pr-2 font-mono">{f.CodigoPedido}</td>
                 <td className="py-1.5 pr-2">{f.NombreCliente}{f.NombreSubcliente ? ` — ${f.NombreSubcliente}` : ""}</td>
                 <td className="py-1.5 pr-2">{f.DescripcionProceso} {f.DescripcionTalla} {f.DescripcionPresentacion}</td>
@@ -66,13 +70,13 @@ function ContenidoReporte({ filas, etiqueta }) {
             );
           })}
           {filas.length === 0 && (
-            <tr><td colSpan={11} className="py-6 text-center text-gray-400">Sin capturas para este filtro</td></tr>
+            <tr><td colSpan={12} className="py-6 text-center text-gray-400">Sin capturas para este filtro</td></tr>
           )}
         </tbody>
         {filas.length > 0 && (
           <tfoot>
             <tr className="border-t-2 border-gray-800 font-bold">
-              <td colSpan={5} className="py-2 pr-2 text-right text-gray-500 uppercase text-[10px] tracking-wide">Total</td>
+              <td colSpan={6} className="py-2 pr-2 text-right text-gray-500 uppercase text-[10px] tracking-wide">Total</td>
               <td className="py-2 pr-2 text-right tabular-nums">{totales.Declarado}</td>
               <td className="py-2 pr-2 text-right tabular-nums">{totales.Impresas}</td>
               <td className="py-2 pr-2 text-right tabular-nums">{totales.Escaneadas}</td>
@@ -86,8 +90,10 @@ function ContenidoReporte({ filas, etiqueta }) {
   );
 }
 
-// filas = las mismas `capturas` que ya están cargadas y filtradas en pantalla (por fecha/búsqueda) —
-// el reporte muestra exactamente lo que el operador ya armó con esos filtros, sin pedir nada aparte.
+// filas = las capturas que YA se imprimieron en el día elegido, filtradas en la página (ver
+// filasReporte en ImpresionEtiquetasPage). No son todas las de la tabla: con una fecha puesta la
+// tabla muestra además lo pendiente de imprimir de cualquier día, que es trabajo por hacer y no
+// trabajo del día — en el PDF solo ensuciaba las filas y los totales.
 export default function ReporteEtiquetasModal({ filas, etiqueta, onCerrar }) {
   return (
     <>

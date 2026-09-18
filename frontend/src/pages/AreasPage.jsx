@@ -5,14 +5,14 @@ import { useColWidths, Th, Colgroup } from "../components/ResizableTh.jsx";
 const API = "/api/areas";
 const FORMAS_PAGO = ["Paga por Tiempo", "Paga por Obra", "No Genera Paga"];
 
-const COL_DEFAULTS = { codigo: 100, nombre: 220, forma: 170, estado: 110, acciones: 150 };
+const COL_DEFAULTS = { codigo: 100, nombre: 220, grupo: 180, forma: 170, estado: 110, acciones: 150 };
 const COLS = Object.keys(COL_DEFAULTS);
 
-const EMPTY = { Codigo: "", Nombre: "", FormaPago: "" };
+const EMPTY = { Codigo: "", Nombre: "", Grupo: "", FormaPago: "" };
 
-function AreaModal({ area, onSave, onClose }) {
+function AreaModal({ area, grupos, onSave, onClose }) {
   const isEdit = !!area;
-  const [form, setForm] = useState(isEdit ? { ...area, FormaPago: area.FormaPago || "" } : EMPTY);
+  const [form, setForm] = useState(isEdit ? { ...area, Grupo: area.Grupo || "", FormaPago: area.FormaPago || "" } : EMPTY);
   const set = f => e => setForm(p => ({ ...p, [f]: e.target.value }));
 
   const handleSubmit = e => { e.preventDefault(); onSave(form); };
@@ -46,6 +46,24 @@ function AreaModal({ area, onSave, onClose }) {
               className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
               placeholder="Nombre del área"
             />
+          </div>
+          {/* Grupo NO es un select cerrado: no hay catálogo de grupos, y con un select no se podría
+              abrir uno nuevo sin pasar por la base. El datalist ofrece los que ya existen —que es lo
+              que se elige el 99% de las veces— sin cerrar la puerta a escribir uno nuevo. El backend
+              normaliza a mayúsculas, así que "tunel" y "TUNEL" caen en el mismo grupo. */}
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Grupo</label>
+            <input
+              list="grupos-area"
+              value={form.Grupo}
+              onChange={set("Grupo")}
+              maxLength={40}
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm uppercase focus:outline-none focus:ring-2 focus:ring-blue-400"
+              placeholder="Ej: CLASIFICADO COLA"
+            />
+            <datalist id="grupos-area">
+              {grupos.map(g => <option key={g} value={g} />)}
+            </datalist>
           </div>
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1">Forma de Pago</label>
@@ -128,6 +146,10 @@ export default function AreasPage() {
     filtro === "Todas" || (filtro === "Activa" ? a.Activa : !a.Activa)
   );
 
+  // Los grupos que ya existen, sacados de las áreas mismas y no de una lista fija: así el día que se
+  // abra un grupo nuevo aparece solo en el datalist, sin tocar código.
+  const grupos = [...new Set(areas.map(a => a.Grupo).filter(Boolean))].sort();
+
   return (
     <div>
       <div className="flex flex-wrap gap-3 items-center mb-4">
@@ -163,6 +185,7 @@ export default function AreasPage() {
               <tr className="bg-gray-100 text-gray-600 uppercase text-xs tracking-wider">
                 <Th width={widths.codigo} onResizeStart={startResize("codigo")} className="px-4 py-3 text-left">Código</Th>
                 <Th width={widths.nombre} onResizeStart={startResize("nombre")} className="px-4 py-3 text-left">Nombre</Th>
+                <Th width={widths.grupo} onResizeStart={startResize("grupo")} className="px-4 py-3 text-left">Grupo</Th>
                 <Th width={widths.forma} onResizeStart={startResize("forma")} className="px-4 py-3 text-left">Forma de Pago</Th>
                 <Th width={widths.estado} onResizeStart={startResize("estado")} className="px-4 py-3 text-center">Estado</Th>
                 <Th width={widths.acciones} onResizeStart={startResize("acciones")} className="px-4 py-3 text-center">Acciones</Th>
@@ -172,7 +195,12 @@ export default function AreasPage() {
               {areasFiltradas.map(area => (
                 <tr key={area.Codigo} className={`hover:bg-gray-50 transition ${!area.Activa ? "opacity-50" : ""}`}>
                   <td className="px-4 py-3 font-mono font-bold text-gray-700">{area.Codigo}</td>
-                  <td className="px-4 py-3 text-gray-900">{area.Nombre}</td>
+                  <td className="px-4 py-3 text-gray-900 truncate" title={area.Nombre}>{area.Nombre}</td>
+                  <td className="px-4 py-3 truncate" title={area.Grupo || ""}>
+                    {area.Grupo
+                      ? <span className="text-gray-600">{area.Grupo}</span>
+                      : <span className="text-gray-400">—</span>}
+                  </td>
                   <td className="px-4 py-3">
                     {area.FormaPago ? (
                       <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-semibold ${FORMA_BADGE[area.FormaPago] || "bg-gray-100 text-gray-500"}`}>
@@ -210,7 +238,7 @@ export default function AreasPage() {
       )}
 
       {modal.open && (
-        <AreaModal area={modal.area} onSave={handleSave} onClose={() => setModal({ open: false, area: null })} />
+        <AreaModal area={modal.area} grupos={grupos} onSave={handleSave} onClose={() => setModal({ open: false, area: null })} />
       )}
     </div>
   );

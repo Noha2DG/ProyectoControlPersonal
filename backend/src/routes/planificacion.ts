@@ -60,6 +60,7 @@ router.get("/", requireAuth, requirePerm("planificacion", "ver"), async (req: Re
       SELECT
         a.Codigo        AS CodigoArea,
         a.Nombre,
+        a.Grupo,
         a.FormaPago,
         a.Activa,
         COALESCE(p.Cantidad, 0) AS Cantidad,
@@ -72,12 +73,15 @@ router.get("/", requireAuth, requirePerm("planificacion", "ver"), async (req: Re
             AND DATE(t.FechaHora) = ${fecha}
             AND t.FechaSalida IS NULL
       WHERE a.Activa = 1
-      GROUP BY a.Codigo, a.Nombre, a.FormaPago, a.Activa, p.Cantidad
+      GROUP BY a.Codigo, a.Nombre, a.Grupo, a.FormaPago, a.Activa, p.Cantidad
       ORDER BY a.Nombre ASC
     `;
     res.json(rows.map(r => ({
       CodigoArea: r.CodigoArea,
       Nombre:     r.Nombre,
+      // Grupo viaja para el reporte de asistencia diaria, que resume por grupo en vez de listar las
+      // 72 áreas una por una. La pantalla de planificación sigue trabajando área por área.
+      Grupo:      r.Grupo,
       FormaPago:  r.FormaPago,
       Activa:     Number(r.Activa) === 1,
       Cantidad:   Number(r.Cantidad),

@@ -4,11 +4,19 @@ import { requireAuth, requirePerm } from "../middleware/auth.ts";
 
 const router = Router();
 
+// Grupo es texto libre (no hay catálogo de grupos), así que la normalización es lo único que impide
+// que "TUNEL", " Tunel" y "TÚNEL " terminen siendo tres grupos distintos en un GROUP BY. Se guarda
+// en MAYÚSCULAS y con espacios colapsados; vacío se guarda como NULL, no como "".
+function normalizarGrupo(valor: unknown): string | null {
+  const v = String(valor ?? "").trim().replace(/\s+/g, " ").toUpperCase();
+  return v || null;
+}
+
 // GET /api/areas  (público — kiosco lo necesita sin auth)
 router.get("/", async (_req: Request, res: Response) => {
   try {
     const rows: any[] = await prisma.$queryRaw`
-      SELECT Codigo, Nombre, FormaPago, Activa FROM Areas ORDER BY Nombre ASC
+      SELECT Codigo, Nombre, Grupo, FormaPago, Activa FROM Areas ORDER BY Nombre ASC
     `;
     res.json(rows.map(r => ({ ...r, Activa: Number(r.Activa) === 1 })));
   } catch (err: any) {
@@ -19,10 +27,11 @@ router.get("/", async (_req: Request, res: Response) => {
 // POST /api/areas
 router.post("/", requireAuth, requirePerm("areas", "crear"), async (req: Request, res: Response) => {
   try {
-    const { Codigo, Nombre, FormaPago } = req.body;
+    const { Codigo, Nombre, Grupo, FormaPago } = req.body;
     if (!Codigo || !Nombre) { res.status(400).json({ error: "Código y Nombre son requeridos" }); return; }
     await prisma.$executeRaw`
-      INSERT INTO Areas (Codigo, Nombre, FormaPago) VALUES (${Codigo.toUpperCase()}, ${Nombre}, ${FormaPago || null})
+      INSERT INTO Areas (Codigo, Nombre, Grupo, FormaPago)
+      VALUES (${Codigo.toUpperCase()}, ${Nombre}, ${normalizarGrupo(Grupo)}, ${FormaPago || null})
     `;
     res.status(201).json({ ok: true });
   } catch (err: any) {
@@ -34,10 +43,11 @@ router.post("/", requireAuth, requirePerm("areas", "crear"), async (req: Request
 router.put("/:codigo", requireAuth, requirePerm("areas", "editar"), async (req: Request, res: Response) => {
   try {
     const codigo = req.params.codigo;
-    const { Nombre, FormaPago, Activa } = req.body;
+    const { Nombre, Grupo, FormaPago, Activa } = req.body;
     const activa = Activa === false || Activa === 0 ? 0 : 1;
     await prisma.$executeRaw`
-      UPDATE Areas SET Nombre = ${Nombre}, FormaPago = ${FormaPago || null}, Activa = ${activa}
+      UPDATE Areas SET Nombre = ${Nombre}, Grupo = ${normalizarGrupo(Grupo)},
+                       FormaPago = ${FormaPago || null}, Activa = ${activa}
       WHERE Codigo = ${codigo}
     `;
     res.json({ ok: true });
