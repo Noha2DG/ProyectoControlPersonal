@@ -2,11 +2,20 @@ import { useState, useEffect, useRef, Fragment } from "react";
 import { createPortal } from "react-dom";
 import { QRCodeSVG } from "qrcode.react";
 import { authHeader } from "../context/AuthContext.jsx";
-import { fmtFechaHora } from "../utils/fecha.js";
+import { fmtFechaHora, fechaDelBackend } from "../utils/fecha.js";
 
 // Delega en el helper compartido: los DATETIME del backend traen hora de Guatemala con una "Z"
 // mentirosa, y `new Date(iso)` les restaba 6 horas más (ver utils/fecha.js).
 const fmtFecha = fmtFechaHora;
+
+// Días de producción de lo que va encima del polín, en el mismo formato corto de la línea
+// "Cerrado" ("18/09/26"). Un polín puede juntar masters de varios días: se listan todos en vez de
+// dar un rango, porque "11/09/26 al 17/09/26" haría creer que hay producción de cada día intermedio.
+function fechasProduccion(masters) {
+  const enPolin = masters.filter(m => m.Estatus !== "Salido");
+  const dias = [...new Set((enPolin.length ? enPolin : masters).map(m => m.FechaProduccion).filter(Boolean))].sort();
+  return dias.map(d => fechaDelBackend(d).toLocaleDateString("es-GT", { dateStyle: "short" })).join(", ");
+}
 
 // Un polín trae decenas de masters idénticos (mismo producto, mismo lote, mismo pedido): listarlos
 // uno por uno daba hojas de 35+ líneas imposibles de cotejar parado frente al polín. Se agrupan por
@@ -55,6 +64,7 @@ function ContenidoHoja({ pallet, totalKg, totalLb }) {
   // siguen listados abajo como historia, pero sumarlos daría un total que el polín ya no tiene.
   const enPolin = pallet.Masters.filter(m => m.Estatus !== "Salido").length;
   const grupos = agruparPorCliente(pallet.Masters);
+  const produccion = fechasProduccion(pallet.Masters);
   return (
     <>
       <div className="flex items-start justify-between mb-6">
@@ -71,6 +81,7 @@ function ContenidoHoja({ pallet, totalKg, totalLb }) {
               PRELIMINAR — el polín sigue {String(pallet.Estatus).toLowerCase()}, su contenido puede cambiar
             </p>
           )}
+          {produccion && <p className="text-base text-gray-500">Producción: {produccion}</p>}
         </div>
         <div className="flex flex-col items-center shrink-0">
           <QRCodeSVG value={pallet.Codigo} size={140} />
