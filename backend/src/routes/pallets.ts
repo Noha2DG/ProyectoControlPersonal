@@ -54,8 +54,8 @@ export async function bloquearPalletAbierto(tx: any, palletId: number) {
 }
 
 // Saca un master del pallet. Hay DOS casos distintos según cómo llegó aquí:
-//   - Escaneado directo (ingreso normal): se BORRA la fila de Masters. "Nunca entró a bodega", y el
-//     correlativo queda libre para re-escanearse.
+//   - Escaneado directo (ingreso normal): se BORRA la fila de Masters, queda un RETIRO en el kardex y
+//     el correlativo queda libre para re-escanearse.
 //   - Llegado por TRASLADO (consolidación de sobrantes): NO se puede borrar — ese master sí existe
 //     en bodega desde antes, borrarlo lo haría desaparecer del inventario. Se DESHACE el traslado:
 //     vuelve a su polín de origen, que es de donde salió.
@@ -98,6 +98,17 @@ export async function quitarMasterDePallet(tx: any, palletId: number, masterId: 
   `;
 
   if (!trasladoRows.length || trasladoRows[0].PalletOrigenId == null) {
+    // El borrado no dejaba rastro: no había cómo saber quién bajó una caja ni de qué polín. Va sin
+    // MasterId (se borra en la línea siguiente) y por eso el correlativo viaja en el Motivo.
+    const etqRows: any[] = await tx.$queryRaw`
+      SELECT ei.Correlativo FROM Masters m JOIN EtiquetaImpresa ei ON m.EtiquetaId = ei.EtiquetaId
+      WHERE m.MasterId = ${masterId} LIMIT 1
+    `;
+    await tx.$executeRaw`
+      INSERT INTO MovimientosBodega (PalletId, PalletOrigenId, MasterId, Tipo, PosicionOrigenId, PosicionDestinoId, Usuario, Motivo)
+      VALUES (${palletId}, NULL, NULL, 'RETIRO', NULL, NULL, ${operador},
+              ${`Caja ${etqRows[0].Correlativo} bajada del polín`})
+    `;
     await tx.$executeRaw`DELETE FROM Masters WHERE MasterId = ${masterId} AND PalletId = ${palletId}`;
     return { ok: true, Accion: "Eliminado", MasterId: masterId, PalletOrigen: null as string | null };
   }
@@ -484,6 +495,12 @@ router.post("/:id/escanear", requireAuth, requirePerm("bodega", "escanear"), asy
       }
 
       await tx.$executeRaw`INSERT INTO Masters (PalletId, EtiquetaId, IngresadoPor) VALUES (${palletId}, ${etiquetaId}, ${operador})`;
+      // Solo la primera vez: es lo que le dice al barrido de vencidas que esta caja ya estuvo en
+      // bodega, aunque después la bajen del polín y el master desaparezca.
+      await tx.$executeRaw`
+        UPDATE EtiquetaImpresa SET PrimerIngresoBodega = NOW()
+        WHERE EtiquetaId = ${etiquetaId} AND PrimerIngresoBodega IS NULL
+      `;
     }, { timeout: 30_000 });
 
     const masterRows: any[] = await prisma.$queryRawUnsafe(`${MASTER_SELECT} WHERE m.PalletId = ? AND m.EtiquetaId = ? LIMIT 1`, palletId, etiquetaId);

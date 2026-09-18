@@ -39,6 +39,7 @@ const TIPO_MOV_BADGE = {
   TRASLADO:       "bg-purple-100 text-purple-700",
   DEVOLUCION:     "bg-amber-100 text-amber-700",
   REVERSA_SALIDA: "bg-slate-200 text-slate-600",
+  RETIRO:         "bg-red-100 text-red-700",
 };
 
 // Delega en el helper compartido: los DATETIME del backend traen hora de Guatemala con una "Z"

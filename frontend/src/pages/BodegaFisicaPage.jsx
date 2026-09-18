@@ -23,6 +23,7 @@ const TIPO_MOV_BADGE = {
   INGRESO:      "bg-green-100 text-green-700",
   DESUBICACION: "bg-orange-100 text-orange-700",
   SALIDA:       "bg-blue-100 text-blue-700",
+  RETIRO:       "bg-red-100 text-red-700",
 };
 
 // Tailwind purga las clases que no aparezcan literales en el código, así que los tonos van como

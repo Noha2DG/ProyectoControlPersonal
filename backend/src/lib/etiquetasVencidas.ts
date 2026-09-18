@@ -22,10 +22,14 @@ export const MOTIVO_VENCIMIENTO =
  * Anula las etiquetas que llevan más de HORAS_VIGENCIA_ETIQUETA impresas sin master en bodega.
  * Devuelve cuántas anuló.
  *
- * Los tres filtros importan:
+ * Los cuatro filtros importan:
  *   - Estatus 'Activa'        → no re-anula lo ya anulado (y no pisa el motivo de una anulación manual).
  *   - sin master              → si ya entró a bodega, la etiqueta cumplió su propósito y no se toca,
  *                               sin importar la antigüedad.
+ *   - nunca entró a bodega    → "Quitar masters" borra el master, y sin este filtro una caja bajada
+ *                               del polín se veía igual que una nunca escaneada: con más de 48 h de
+ *                               impresa, bajarla equivalía a anularla en el siguiente barrido. Así se
+ *                               perdieron 24 cajas migradas reales en sep 2026.
  *   - captura no Cancelada    → esas ya están fuera de todo conteo; anularlas solo sería ruido.
  */
 export async function anularEtiquetasVencidas(): Promise<number> {
@@ -39,6 +43,7 @@ export async function anularEtiquetasVencidas(): Promise<number> {
            ei.MotivoAnulacion = ${MOTIVO_VENCIMIENTO}
      WHERE ei.Estatus = 'Activa'
        AND m.MasterId IS NULL
+       AND ei.PrimerIngresoBodega IS NULL
        AND oe.Estatus <> 'Cancelada'
        AND ei.CreadoEn < (NOW() - INTERVAL ${HORAS_VIGENCIA_ETIQUETA} HOUR)
   `;
