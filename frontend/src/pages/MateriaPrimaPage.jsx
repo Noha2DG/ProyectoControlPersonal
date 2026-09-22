@@ -56,9 +56,13 @@ function LoteModal({ item, fincas, clases, tallas, onSave, onClose }) {
     CicloNumero: item?.Ciclo ? String(item.Ciclo) : "",
     Clase: item?.Clase || "",
     TallaReferencia: item?.TallaReferencia ? String(item.TallaReferencia) : "",
+    // Dos fechas distintas: Fecha es el día en que el área recibe la materia prima (siempre hoy, no
+    // se edita) y FechaProduccion es el día en que se produjo — la que arma el código del lote.
+    // Lo normal es que sean el mismo día; cuando lo que entra hoy se produjo ayer, solo cambia la
+    // de producción.
     Fecha: item?.Fecha?.slice(0, 10) || hoy(),
+    FechaProduccion: item?.FechaProduccion?.slice(0, 10) || item?.Fecha?.slice(0, 10) || hoy(),
     PesoIngreso: item?.PesoIngreso ?? "",
-    UM: "KG",
   });
   const [piscinas, setPiscinas] = useState([]);
   const [ultimoCiclo, setUltimoCiclo] = useState(null);
@@ -110,7 +114,7 @@ function LoteModal({ item, fincas, clases, tallas, onSave, onClose }) {
   const previewLote = () => {
     const piscina = piscinas.find(p => String(p.PiscinaId) === String(form.PiscinaId));
     if (!piscina) return null;
-    return componerCodigoLote(piscina.Nombre, form.Fecha, requiereCiclo ? (form.CicloNumero || "?") : "");
+    return componerCodigoLote(piscina.Nombre, form.FechaProduccion, requiereCiclo ? (form.CicloNumero || "?") : "");
   };
 
   return (
@@ -127,7 +131,7 @@ function LoteModal({ item, fincas, clases, tallas, onSave, onClose }) {
               {isEdit ? (previewLote() || item.Lote) : (previewLote() || "Seleccione piscina, ciclo y fecha...")}
             </div>
             {!isEdit && <p className="text-xs text-gray-400 mt-1">Se genera automáticamente al guardar</p>}
-            {isEdit && <p className="text-xs text-gray-400 mt-1">Si corriges el ciclo, el código del lote se actualiza al guardar</p>}
+            {isEdit && <p className="text-xs text-gray-400 mt-1">Si corriges el ciclo o la fecha de producción, el código del lote se actualiza al guardar</p>}
           </div>
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1">Finca *</label>
@@ -138,21 +142,29 @@ function LoteModal({ item, fincas, clases, tallas, onSave, onClose }) {
               {fincas.map(f => <option key={f.Codigo} value={f.Codigo}>{f.Codigo} — {f.Descripcion}</option>)}
             </select>
           </div>
-          <div>
-            <label className="block text-xs font-medium text-gray-500 mb-1">Piscina *</label>
-            <select required disabled={isEdit || !form.CodigoFinca} value={form.PiscinaId}
-              onChange={e => setForm(p => ({ ...p, PiscinaId: e.target.value, CicloNumero: "" }))}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 disabled:bg-gray-100">
-              <option value="">Seleccione...</option>
-              {piscinas.map(p => <option key={p.PiscinaId} value={p.PiscinaId}>{p.Nombre}</option>)}
-            </select>
-          </div>
-          {form.PiscinaId && (
+          {/* Piscina y Ciclo van en la misma fila: el Ciclo es un número de un dígito y solo depende
+              de la piscina, así que ponerlo debajo alargaba el modal sin necesidad. La celda del
+              Ciclo se dibuja siempre (aunque todavía no haya piscina elegida) para que la fila no
+              cambie de alto ni la Piscina se quede a media anchura. */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">Piscina *</label>
+              <select required disabled={isEdit || !form.CodigoFinca} value={form.PiscinaId}
+                onChange={e => setForm(p => ({ ...p, PiscinaId: e.target.value, CicloNumero: "" }))}
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 disabled:bg-gray-100">
+                <option value="">Seleccione...</option>
+                {piscinas.map(p => <option key={p.PiscinaId} value={p.PiscinaId}>{p.Nombre}</option>)}
+              </select>
+            </div>
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1">Ciclo</label>
-              {!requiereCiclo ? (
-                <div className="w-full border border-gray-200 bg-gray-50 rounded-lg px-3 py-2 text-sm text-gray-400">
-                  Esta piscina no maneja ciclo
+              {!form.PiscinaId ? (
+                <div className="w-full border border-gray-200 bg-gray-50 rounded-lg px-3 py-2 text-sm text-gray-400 truncate">
+                  Elija la piscina
+                </div>
+              ) : !requiereCiclo ? (
+                <div className="w-full border border-gray-200 bg-gray-50 rounded-lg px-3 py-2 text-sm text-gray-400 truncate">
+                  No maneja ciclo
                 </div>
               ) : (
                 <input
@@ -164,10 +176,10 @@ function LoteModal({ item, fincas, clases, tallas, onSave, onClose }) {
                   className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
                 />
               )}
-              {isEdit && requiereCiclo && (
-                <p className="text-xs text-gray-400 mt-1">Solo se puede corregir si el lote aún no tiene transacciones registradas</p>
-              )}
             </div>
+          </div>
+          {isEdit && form.PiscinaId && requiereCiclo && (
+            <p className="text-xs text-gray-400 -mt-2">El ciclo solo se puede corregir si el lote aún no tiene transacciones registradas</p>
           )}
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1">Clase — Materia Prima *</label>
@@ -185,16 +197,17 @@ function LoteModal({ item, fincas, clases, tallas, onSave, onClose }) {
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">Fecha de Producción *</label>
+              <input required type="date" max={form.Fecha} value={form.FechaProduccion} onChange={set("FechaProduccion")}
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
+              <p className="text-xs text-gray-400 mt-1">Es la que va en el código del lote</p>
+            </div>
+            <div>
               <label className="block text-xs font-medium text-gray-500 mb-1">Fecha de Ingreso</label>
               <div className="w-full border border-gray-200 bg-gray-50 rounded-lg px-3 py-2 text-sm text-gray-600">
                 {form.Fecha}
               </div>
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-gray-500 mb-1">UM</label>
-              <div className="w-full border border-gray-200 bg-gray-50 rounded-lg px-3 py-2 text-sm text-gray-600">
-                KG
-              </div>
+              <p className="text-xs text-gray-400 mt-1">Día en que entra al área</p>
             </div>
           </div>
           <div>
@@ -308,6 +321,7 @@ export default function MateriaPrimaPage() {
   const [tallas, setTallas] = useState([]);
   const [almacenes, setAlmacenes] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [errorLotes, setErrorLotes] = useState("");
   const [loteSel, setLoteSel] = useState(null);
   const [transacciones, setTransacciones] = useState([]);
   const [loadingTrans, setLoadingTrans] = useState(false);
@@ -317,12 +331,20 @@ export default function MateriaPrimaPage() {
   const [widthsLote, startResizeLote] = useColWidths("materiaprima_lotes", LOTE_COL_DEFAULTS);
   const [widthsTrans, startResizeTrans] = useColWidths("materiaprima_trans", TRANS_COL_DEFAULTS);
 
+  // Un fallo del servidor NO puede verse igual que un día sin lotes. Cuando la consulta reventaba,
+  // la respuesta no era un arreglo, el `if` la descartaba callado y la tabla decía "Sin lotes
+  // registrados" con los lotes del día intactos en la base — que es exactamente lo que pasó al
+  // desplegar el código de FechaProduccion antes de crear la columna.
   const fetchLotes = useCallback(async () => {
     setLoading(true);
     try {
       const res = await fetch(`/api/lotes?fecha=${hoy()}`, { headers: authHeader() });
       const data = await res.json();
-      if (Array.isArray(data)) setLotes(data);
+      if (Array.isArray(data)) { setLotes(data); setErrorLotes(""); }
+      else { setLotes([]); setErrorLotes(data?.error || "No se pudo leer la lista de lotes"); }
+    } catch (err) {
+      setLotes([]);
+      setErrorLotes(err.message || "No se pudo conectar con el servidor");
     } finally { setLoading(false); }
   }, []);
 
@@ -452,6 +474,13 @@ export default function MateriaPrimaPage() {
 
         {loading ? (
           <div className="flex justify-center py-10"><div className="w-6 h-6 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" /></div>
+        ) : errorLotes ? (
+          <div className="bg-white rounded-xl shadow px-4 py-8 text-center">
+            <p className="text-sm font-semibold text-red-600">No se pudieron cargar los lotes del día</p>
+            <p className="text-xs text-gray-500 mt-1">{errorLotes}</p>
+            <p className="text-xs text-gray-400 mt-2">Los lotes siguen registrados — esto es una falla al consultarlos, no datos perdidos.</p>
+            <button onClick={fetchLotes} className="mt-3 text-xs font-semibold text-blue-600 hover:text-blue-800 px-3 py-1.5 rounded hover:bg-blue-50 transition">Reintentar</button>
+          </div>
         ) : (
           <div className="bg-white rounded-xl shadow overflow-x-auto max-h-[600px] overflow-y-auto">
             <table className="w-full text-sm table-fixed">
