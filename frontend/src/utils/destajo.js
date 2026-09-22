@@ -6,6 +6,8 @@
 // dando dos números distintos para el mismo pesaje, y la que ve el operario en la pantalla de
 // planta tiene que ser la misma que la que ve administración en el reporte.
 
+import { diaDelBackend } from "./fecha.js";
+
 export const LB_POR_KG = 2.20462;
 
 // Las áreas donde se pesa a destajo, en el orden en que se presentan en pantalla. `nombre` es
@@ -32,7 +34,16 @@ export const AREAS_DESTAJO = [
 
 export const MINIMO_BLOQUE_MINUTOS = 15;
 
-export const diaLocal = (fechaHora) => new Date(fechaHora).toLocaleDateString("sv-SE");
+// El día al que pertenece una marca de tiempo del backend, leído de los dígitos tal cual vienen.
+//
+// Antes esto era `new Date(fechaHora).toLocaleDateString("sv-SE")`, que le restaba 6 horas: los
+// DATETIME guardan hora de pared de Guatemala pero Prisma los emite con una "Z" mentirosa (ver
+// utils/fecha.js). El daño no estaba en las pesadas — ninguna cae antes de las 6 a. m. — sino en
+// EntradaArea, que sí: 4,115 transferencias se marcan a las 05:00. Esas quedaban fechadas el día
+// anterior, el ancla del primer bloque se descartaba por "no es del mismo día" y la producción de
+// esa persona salía del total de libra válida. Medido contra la BD el 22 sep 2026: 1,057 pesadas y
+// 7,454 kg desde el 1 de agosto (5.8% de los kilos) se estaban cayendo del reporte por esto.
+export const diaLocal = diaDelBackend;
 
 // Recorre la secuencia cronológica COMPLETA de cada persona (todas sus tareas, no una tarea aislada)
 // para calcular su tiempo por bloque: el primer bloque de CADA día (no solo el primero del rango

@@ -9,7 +9,9 @@ const LOTE_COLS = Object.keys(LOTE_COL_DEFAULTS);
 const TRANS_COL_DEFAULTS = { proceso: 130, talla: 130, fecha: 110, procesado: 100, estado: 100, acciones: 110 };
 const TRANS_COLS = Object.keys(TRANS_COL_DEFAULTS);
 
-function hoy() { return new Date().toLocaleDateString("sv-SE"); }
+// Zona explícita: este "hoy" es la Fecha con que nace el lote y el que arma su código, así que
+// tiene que ser el día de la planta y no el del navegador.
+function hoy() { return new Date().toLocaleDateString("sv-SE", { timeZone: "America/Guatemala" }); }
 
 // Combo de texto con búsqueda — igual al patrón usado en Pedidos para catálogos largos (Clase)
 function ComboBuscable({ options, value, onChange, placeholder, required, disabled }) {

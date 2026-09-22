@@ -3,7 +3,9 @@ import { authHeader, usePuede } from "../context/AuthContext.jsx";
 import { componerCodigoLote, piscinaRequiereCiclo } from "../utils/codigoLote.js";
 import { useColWidths, useOrden, ordenarFilas, Th, Colgroup } from "../components/ResizableTh.jsx";
 
-const hoy = () => new Date().toLocaleDateString("sv-SE");
+// Zona explícita, igual que el resto de la app: el día que se propone para la orden es el de la
+// planta, no el del navegador.
+const hoy = () => new Date().toLocaleDateString("sv-SE", { timeZone: "America/Guatemala" });
 
 const COL_DEFAULTS = { fecha: 100, lote: 140, area: 100, origen: 110, congelacion: 120, masters: 90, impresion: 140, acciones: 130 };
 const COLS = Object.keys(COL_DEFAULTS);

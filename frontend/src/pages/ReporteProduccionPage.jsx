@@ -36,7 +36,9 @@ const LBPERSONA_COLS = Object.keys(LBPERSONA_COL_DEFAULTS);
 // AREAS_DESTAJO las lista — la tabla se arma recorriendo AREAS_DESTAJO, no columna por columna.
 const LBPERSONA_AREA_COL = { DU: "descabezado", DS: "pelado", DT: "pinchado", RD: "reprocesoDescolado", RC: "reprocesoCorte" };
 
-function hoy() { return new Date().toLocaleDateString("sv-SE"); }
+// Con zona explícita, igual que el resto de la app: sin ella el rango del reporte arranca en el
+// "hoy" del navegador, que no es el de la planta si alguien lo abre desde fuera de Guatemala.
+function hoy() { return new Date().toLocaleDateString("sv-SE", { timeZone: "America/Guatemala" }); }
 const fechaCorta = (f) => f ? f.split("-").reverse().join("/") : "";
 
 // Debe coincidir con MAX_NOTAS en backend/src/routes/lotes.ts, que es quien rechaza de verdad.

@@ -26,6 +26,20 @@ export function fechaDelBackend(valor) {
   return new Date(Number(a), Number(mes) - 1, Number(dia), Number(hh), Number(mi), Number(ss));
 }
 
+/**
+ * "2026-09-02" — solo el día, tomado de los dígitos que llegan y sin dejar que el navegador
+ * reinterprete nada. Es lo que hay que usar para AGRUPAR o COMPARAR por día.
+ *
+ * `new Date(valor).toLocaleDateString(...)` acá está mal aunque parezca dar lo mismo: le resta 6
+ * horas al valor (ver la nota de arriba), así que todo lo que pasó entre las 00:00 y las 05:59 de
+ * Guatemala queda fechado el día ANTERIOR. Es justo la franja en que el turno de la madrugada marca
+ * su entrada al área.
+ */
+export function diaDelBackend(valor) {
+  const m = RE.exec(String(valor ?? ""));
+  return m ? `${m[1]}-${m[2]}-${m[3]}` : null;
+}
+
 /** "2/09/26, 9:00 a. m." — fecha y hora corta, el formato que usa toda la app. */
 export function fmtFechaHora(valor) {
   const f = fechaDelBackend(valor);

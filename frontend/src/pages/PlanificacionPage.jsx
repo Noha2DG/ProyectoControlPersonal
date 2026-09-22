@@ -45,9 +45,13 @@ export default function PlanificacionPage() {
   };
 
   const copiarAyer = async () => {
-    const ayer = new Date(fecha);
-    ayer.setDate(ayer.getDate() - 1);
-    const fechaAyer = ayer.toLocaleDateString("sv-SE", { timeZone: "America/Guatemala" });
+    // Se resta el día sobre los dígitos, en UTC, sin pasar por la zona del navegador. Mezclar las
+    // dos cosas traía el día equivocado: `new Date("2026-09-22")` se interpreta como medianoche UTC
+    // (= 21 sep 18:00 en Guatemala), getDate/setDate trabajan en local y el toLocaleDateString de
+    // vuelta restaba otras 6 horas — "copiar ayer" sobre el 22 terminaba trayendo el 20.
+    const [a, m, d] = fecha.split("-").map(Number);
+    const ayer = new Date(Date.UTC(a, m - 1, d - 1));
+    const fechaAyer = ayer.toISOString().slice(0, 10);
     try {
       const res = await fetch(`${API}?fecha=${fechaAyer}`, { headers: authHeader() });
       const data = await res.json();
