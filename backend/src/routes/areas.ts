@@ -13,12 +13,25 @@ function normalizarGrupo(valor: unknown): string | null {
 }
 
 // GET /api/areas  (público — kiosco lo necesita sin auth)
+//
+// Viaja también la bodega a la que pertenece el área. Sin eso, el selector de destino de una
+// remisión ofrece las 74 áreas —  incluidas Baño, Cafetería y RRHH—  y bodega puede despachar
+// producto a un lugar donde no hay dónde ponerlo. Quien tiene bodega es un destino real; quien no,
+// es un lugar donde la gente marca pero el camarón no pasa.
 router.get("/", async (_req: Request, res: Response) => {
   try {
     const rows: any[] = await prisma.$queryRaw`
-      SELECT Codigo, Nombre, Grupo, FormaPago, Activa FROM Areas ORDER BY Nombre ASC
+      SELECT a.Codigo, a.Nombre, a.Grupo, a.FormaPago, a.Activa,
+             a.BodegaVirtualCodigo, b.Nombre AS NombreBodega, b.Orden AS OrdenBodega, b.LlevaPiso
+      FROM Areas a
+      LEFT JOIN BodegaVirtual b ON b.Codigo = a.BodegaVirtualCodigo
+      ORDER BY a.Nombre ASC
     `;
-    res.json(rows.map(r => ({ ...r, Activa: Number(r.Activa) === 1 })));
+    res.json(rows.map(r => ({
+      ...r, Activa: Number(r.Activa) === 1,
+      LlevaPiso: r.LlevaPiso == null ? null : Number(r.LlevaPiso) === 1,
+      OrdenBodega: r.OrdenBodega == null ? null : Number(r.OrdenBodega),
+    })));
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -27,11 +40,12 @@ router.get("/", async (_req: Request, res: Response) => {
 // POST /api/areas
 router.post("/", requireAuth, requirePerm("areas", "crear"), async (req: Request, res: Response) => {
   try {
-    const { Codigo, Nombre, Grupo, FormaPago } = req.body;
+    const { Codigo, Nombre, Grupo, FormaPago, BodegaVirtualCodigo } = req.body;
     if (!Codigo || !Nombre) { res.status(400).json({ error: "Código y Nombre son requeridos" }); return; }
     await prisma.$executeRaw`
-      INSERT INTO Areas (Codigo, Nombre, Grupo, FormaPago)
-      VALUES (${Codigo.toUpperCase()}, ${Nombre}, ${normalizarGrupo(Grupo)}, ${FormaPago || null})
+      INSERT INTO Areas (Codigo, Nombre, Grupo, FormaPago, BodegaVirtualCodigo)
+      VALUES (${Codigo.toUpperCase()}, ${Nombre}, ${normalizarGrupo(Grupo)}, ${FormaPago || null},
+              ${BodegaVirtualCodigo || null})
     `;
     res.status(201).json({ ok: true });
   } catch (err: any) {
@@ -43,11 +57,12 @@ router.post("/", requireAuth, requirePerm("areas", "crear"), async (req: Request
 router.put("/:codigo", requireAuth, requirePerm("areas", "editar"), async (req: Request, res: Response) => {
   try {
     const codigo = req.params.codigo;
-    const { Nombre, Grupo, FormaPago, Activa } = req.body;
+    const { Nombre, Grupo, FormaPago, Activa, BodegaVirtualCodigo } = req.body;
     const activa = Activa === false || Activa === 0 ? 0 : 1;
     await prisma.$executeRaw`
       UPDATE Areas SET Nombre = ${Nombre}, Grupo = ${normalizarGrupo(Grupo)},
-                       FormaPago = ${FormaPago || null}, Activa = ${activa}
+                       FormaPago = ${FormaPago || null}, Activa = ${activa},
+                       BodegaVirtualCodigo = ${BodegaVirtualCodigo || null}
       WHERE Codigo = ${codigo}
     `;
     res.json({ ok: true });

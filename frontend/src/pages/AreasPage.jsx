@@ -5,14 +5,16 @@ import { useColWidths, Th, Colgroup } from "../components/ResizableTh.jsx";
 const API = "/api/areas";
 const FORMAS_PAGO = ["Paga por Tiempo", "Paga por Obra", "No Genera Paga"];
 
-const COL_DEFAULTS = { codigo: 100, nombre: 220, grupo: 180, forma: 170, estado: 110, acciones: 150 };
+const COL_DEFAULTS = { codigo: 100, nombre: 220, grupo: 180, bodega: 180, forma: 170, estado: 110, acciones: 150 };
 const COLS = Object.keys(COL_DEFAULTS);
 
-const EMPTY = { Codigo: "", Nombre: "", Grupo: "", FormaPago: "" };
+const EMPTY = { Codigo: "", Nombre: "", Grupo: "", FormaPago: "", BodegaVirtualCodigo: "" };
 
-function AreaModal({ area, grupos, onSave, onClose }) {
+function AreaModal({ area, grupos, bodegas, onSave, onClose }) {
   const isEdit = !!area;
-  const [form, setForm] = useState(isEdit ? { ...area, Grupo: area.Grupo || "", FormaPago: area.FormaPago || "" } : EMPTY);
+  const [form, setForm] = useState(isEdit
+    ? { ...area, Grupo: area.Grupo || "", FormaPago: area.FormaPago || "", BodegaVirtualCodigo: area.BodegaVirtualCodigo || "" }
+    : EMPTY);
   const set = f => e => setForm(p => ({ ...p, [f]: e.target.value }));
 
   const handleSubmit = e => { e.preventDefault(); onSave(form); };
@@ -65,6 +67,23 @@ function AreaModal({ area, grupos, onSave, onClose }) {
               {grupos.map(g => <option key={g} value={g} />)}
             </datalist>
           </div>
+          {/* La bodega es lo que decide si esta área puede recibir producto: sin ella no aparece
+              como destino de una remisión y su inventario al piso nunca se abre. Varias áreas
+              comparten bodega a propósito — Pelado/Descabezado son siete que son el mismo piso. */}
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Bodega</label>
+            <select
+              value={form.BodegaVirtualCodigo}
+              onChange={set("BodegaVirtualCodigo")}
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+            >
+              <option value="">Ninguna (no recibe producto)</option>
+              {bodegas.map(b => <option key={b.Codigo} value={b.Codigo}>{b.Nombre}</option>)}
+            </select>
+            <p className="text-xs text-gray-400 mt-1">
+              Dónde se para el producto. Sin bodega, el área no aparece como destino de una remisión.
+            </p>
+          </div>
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1">Forma de Pago</label>
             <select
@@ -101,6 +120,7 @@ export default function AreasPage() {
   const puedeEditar = usePuede("areas", "editar");
   const puedeEliminar = usePuede("areas", "eliminar");
   const [areas, setAreas] = useState([]);
+  const [bodegas, setBodegas] = useState([]);
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState({ open: false, area: null });
   const [filtro, setFiltro] = useState("Activa");
@@ -115,7 +135,11 @@ export default function AreasPage() {
     } finally { setLoading(false); }
   };
 
-  useEffect(() => { fetchAreas(); }, []);
+  useEffect(() => {
+    fetchAreas();
+    fetch("/api/bodegas", { headers: authHeader() }).then(r => r.json())
+      .then(data => { if (Array.isArray(data)) setBodegas(data.filter(b => b.Activo)); });
+  }, []);
 
   const handleSave = async (form) => {
     const isEdit = !!form.Codigo && areas.some(a => a.Codigo === form.Codigo);
@@ -186,6 +210,7 @@ export default function AreasPage() {
                 <Th width={widths.codigo} onResizeStart={startResize("codigo")} className="px-4 py-3 text-left">Código</Th>
                 <Th width={widths.nombre} onResizeStart={startResize("nombre")} className="px-4 py-3 text-left">Nombre</Th>
                 <Th width={widths.grupo} onResizeStart={startResize("grupo")} className="px-4 py-3 text-left">Grupo</Th>
+                <Th width={widths.bodega} onResizeStart={startResize("bodega")} className="px-4 py-3 text-left">Bodega</Th>
                 <Th width={widths.forma} onResizeStart={startResize("forma")} className="px-4 py-3 text-left">Forma de Pago</Th>
                 <Th width={widths.estado} onResizeStart={startResize("estado")} className="px-4 py-3 text-center">Estado</Th>
                 <Th width={widths.acciones} onResizeStart={startResize("acciones")} className="px-4 py-3 text-center">Acciones</Th>
@@ -199,6 +224,11 @@ export default function AreasPage() {
                   <td className="px-4 py-3 truncate" title={area.Grupo || ""}>
                     {area.Grupo
                       ? <span className="text-gray-600">{area.Grupo}</span>
+                      : <span className="text-gray-400">—</span>}
+                  </td>
+                  <td className="px-4 py-3 truncate" title={area.NombreBodega || ""}>
+                    {area.NombreBodega
+                      ? <span className="text-gray-600">{area.NombreBodega}</span>
                       : <span className="text-gray-400">—</span>}
                   </td>
                   <td className="px-4 py-3">
@@ -238,7 +268,7 @@ export default function AreasPage() {
       )}
 
       {modal.open && (
-        <AreaModal area={modal.area} grupos={grupos} onSave={handleSave} onClose={() => setModal({ open: false, area: null })} />
+        <AreaModal area={modal.area} grupos={grupos} bodegas={bodegas} onSave={handleSave} onClose={() => setModal({ open: false, area: null })} />
       )}
     </div>
   );

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { fmtNum } from "../utils/numero.js";
 import { authHeader, usePuede, useAuth } from "../context/AuthContext.jsx";
 import { useColWidths, useOrden, ordenarFilas, Th, Colgroup } from "../components/ResizableTh.jsx";
@@ -81,6 +81,21 @@ function ModalRemision({ remision, series, clientes, areas, empleados, onGuardar
   const [subclientes, setSubclientes] = useState([]);
   const [error, setError] = useState("");
   const [guardando, setGuardando] = useState(false);
+
+  // Las áreas que pueden recibir producto, agrupadas por su bodega y en el orden del flujo de
+  // planta (Recepción, Descongelado, Pelado/Descabezado...), no alfabético: así el operador busca
+  // el destino por dónde va el camarón y no por la letra con que empieza.
+  const areasPorBodega = useMemo(() => {
+    const porBodega = new Map();
+    for (const a of areas) {
+      if (!a.BodegaVirtualCodigo) continue;   // baño, cafetería, RRHH: el producto no pasa por ahí
+      if (!porBodega.has(a.NombreBodega)) porBodega.set(a.NombreBodega, { orden: a.OrdenBodega ?? 99, lista: [] });
+      porBodega.get(a.NombreBodega).lista.push(a);
+    }
+    return [...porBodega.entries()]
+      .sort((x, y) => x[1].orden - y[1].orden)
+      .map(([nombre, v]) => [nombre, v.lista]);
+  }, [areas]);
 
   const serie = series.find(s => s.Tipo === tipo);
   const aCliente = serie?.Destino === "Cliente";
@@ -242,10 +257,19 @@ function ModalRemision({ remision, series, clientes, areas, empleados, onGuardar
           ) : (
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1">Área de destino *</label>
+              {/* Agrupado por bodega, y solo las áreas que tienen una: sin este filtro la lista trae
+                  las 74 — Baño, Cafetería, RRHH — y se puede despachar producto a un lugar donde no
+                  hay dónde ponerlo. Se sigue eligiendo el ÁREA, no la bodega, porque el papel
+                  distingue "Pelado" de "Descabezado" aunque sean el mismo piso: eso no es dónde va
+                  el producto sino qué se le va a hacer. */}
               <select required value={areaDestino} onChange={e => setAreaDestino(e.target.value)}
                 className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400">
                 <option value="">Selecciona...</option>
-                {areas.map(a => <option key={a.Codigo} value={a.Codigo}>{a.Nombre}</option>)}
+                {areasPorBodega.map(([bodega, lista]) => (
+                  <optgroup key={bodega} label={bodega}>
+                    {lista.map(a => <option key={a.Codigo} value={a.Codigo}>{a.Nombre}</option>)}
+                  </optgroup>
+                ))}
               </select>
               <p className="text-xs text-gray-400 mt-1">El producto no sale de la planta: se traslada a esta área y vuelve a ingresar como producto nuevo, con etiqueta nueva.</p>
               <div className="mt-4">
