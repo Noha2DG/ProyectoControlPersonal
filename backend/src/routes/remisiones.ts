@@ -4,6 +4,8 @@ import prisma from "../lib/prisma.ts";
 import { requireAuth, requirePerm, AuthRequest } from "../middleware/auth.ts";
 import { MASTER_SELECT, formatearMaster } from "../lib/masters.ts";
 import { normalizarCorrelativo, resolverEtiqueta } from "../lib/correlativo.ts";
+import { registrarIngresoDesdeRemision, revertirIngresoDeRemision } from "../lib/inventarioPiso.ts";
+import { hoyGT } from "../lib/dateGT.ts";
 
 // Salida de bodega = Remisión (ver createRemisiones.ts para el modelo y las decisiones de diseño).
 //
@@ -517,7 +519,7 @@ router.delete("/:id", requireAuth, requirePerm("remisiones", "eliminar"), async 
 // (CodigoPedido + EsMixta) que necesitan los dos endpoints de alta.
 async function exigirBorrador(tx: any, remisionId: number) {
   const rows: any[] = await tx.$queryRaw`
-    SELECT r.RemisionId, r.Folio, r.Estatus, r.CodigoPedido, r.EsMixta, se.PideLinea
+    SELECT r.RemisionId, r.Folio, r.Estatus, r.CodigoPedido, r.EsMixta, r.AreaDestino, se.PideLinea
     FROM Remisiones r JOIN SerieRemision se ON r.Tipo = se.Tipo
     WHERE r.RemisionId = ${remisionId} LIMIT 1 FOR UPDATE
   `;
@@ -839,7 +841,17 @@ router.post("/:id/confirmar", requireAuth, requirePerm("remisiones", "editar"), 
         UPDATE Remisiones SET Estatus = 'Confirmada', ConfirmadaPor = ${operador}, ConfirmadaEn = NOW()
         WHERE RemisionId = ${remisionId}
       `;
-      respuesta = { ok: true, Folio: remision.Folio, Masters: lineas.length, PolinesDespachados: despachados };
+
+      // Traslado interno: lo que sale de bodega entra al piso del área en el mismo instante, dentro
+      // de esta misma transacción. La jornada es el día de la confirmación en Guatemala, que es
+      // cuando el área lo recibe de verdad —  no la Fecha del documento, que puede ser de otro día.
+      let piso = { lineas: 0, kg: 0 };
+      if (remision.AreaDestino) {
+        piso = await registrarIngresoDesdeRemision(tx, remisionId, remision.AreaDestino, hoyGT(), operador);
+      }
+
+      respuesta = { ok: true, Folio: remision.Folio, Masters: lineas.length, PolinesDespachados: despachados,
+                    PisoLineas: piso.lineas, PisoKg: piso.kg };
     }, { timeout: 60_000 });
 
     res.json(respuesta);
@@ -973,6 +985,15 @@ router.post("/:id/anular", requireAuth, requirePerm("remisiones", "anular"), asy
       // Vigente = NULL (no 0): así el master queda libre para una remisión nueva sin que su línea
       // vieja desaparezca ni choque contra el UNIQUE si se vuelve a anular otra vez más adelante.
       await tx.$executeRaw`UPDATE RemisionDetalle SET Vigente = NULL WHERE RemisionId = ${remisionId}`;
+
+      // Si fue un traslado interno, el producto también sale del piso del área. Se niega si el área
+      // ya lo trabajó: ahí la historia no se puede deshacer y la corrección va por un ajuste.
+      try {
+        await revertirIngresoDeRemision(tx, remisionId);
+      } catch (e: any) {
+        throw new ErrorNegocio(400, e.message);
+      }
+
       await tx.$executeRaw`
         UPDATE Remisiones SET Estatus = 'Anulada', AnuladaPor = ${operador}, AnuladaEn = NOW(), MotivoAnulacion = ${motivo}
         WHERE RemisionId = ${remisionId}

@@ -25,6 +25,9 @@ const MODULOS = [
   // ── Planificación
   { key: "planificacion",  label: "Planificación por Área",         acciones: ["ver","editar"],                    grupo: "Config"   },
   // ── Destajo (producción)
+  // "cerrar" es aparte de "editar" a propósito: capturar renglones lo hace el operador de turno,
+  // pero cerrar la hoja fija la merma y el rendimiento del día, y reabrirla los borra.
+  { key: "descongelado",   label: "Descongelado de Materia Prima",   acciones: ["ver","crear","editar","eliminar","cerrar"], grupo: "Operación" },
   { key: "destajo",        label: "Destajo — Materia Prima y Pesaje", acciones: ["ver","crear","editar","eliminar"], grupo: "Operación" },
   { key: "etiquetado",     label: "Etiquetado — Orden de Trabajo",   acciones: ["ver","crear","editar","eliminar","imprimir"], grupo: "Operación" },
   // "trasladar" es la acción fuerte de bodega: mueve cajas de un polín SELLADO (cerrado y ubicado en

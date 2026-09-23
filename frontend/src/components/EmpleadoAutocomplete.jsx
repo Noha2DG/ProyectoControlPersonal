@@ -18,10 +18,17 @@ export default function EmpleadoAutocomplete({ empleados, value, onSelect }) {
     onSelect(emp.Codigo);
   };
 
+  // Escribir (o escanear) el código completo ya selecciona, sin bajar a hacer clic en la sugerencia:
+  // en planta el código se teclea entero o entra de un lector, y quedarse esperando el clic dejaba
+  // el campo "lleno" a la vista pero vacío para el formulario, con el botón de guardar apagado y
+  // sin ninguna pista de por qué.
   const handleChange = (e) => {
-    setQuery(e.target.value);
+    const texto = e.target.value;
+    setQuery(texto);
     setOpen(true);
-    if (value) onSelect("");
+    const exacto = empleados.find(emp => emp.Codigo.toLowerCase() === texto.trim().toLowerCase());
+    if (exacto) { onSelect(exacto.Codigo); setOpen(false); }
+    else if (value) onSelect("");
   };
 
   return (
@@ -48,7 +55,7 @@ export default function EmpleadoAutocomplete({ empleados, value, onSelect }) {
         </ul>
       )}
       {value && seleccionado && (
-        <p className="text-xs text-gray-500 mt-1">{seleccionado.NombreCompleto}</p>
+        <p className="text-xs text-green-700 font-semibold mt-1">{seleccionado.NombreCompleto}</p>
       )}
     </div>
   );

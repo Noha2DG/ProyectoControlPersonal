@@ -16,6 +16,7 @@ import EquipoUniformesPage from "./pages/EquipoUniformesPage.jsx";
 import PedidosClientesPage from "./pages/PedidosClientesPage.jsx";
 import CatalogosPage from "./pages/CatalogosPage.jsx";
 import DestajoPage from "./pages/DestajoPage.jsx";
+import DescongeladoPage from "./pages/DescongeladoPage.jsx";
 import EtiquetadoPage from "./pages/EtiquetadoPage.jsx";
 import ImpresionEtiquetasPage from "./pages/ImpresionEtiquetasPage.jsx";
 import PalletsPage from "./pages/PalletsPage.jsx";
@@ -201,6 +202,7 @@ function Dashboard() {
   if (perm("movimientos",    "ver")) nav.push({ key: "kiosco",    label: "Entradas / Salidas",  icon: "kiosco"   });
   if (perm("transferencias", "ver")) nav.push({ key: "transf",    label: "Transferencias",      icon: "transf"   });
   if (perm("planificacion",   "ver")) nav.push({ key: "planif",    label: "Planificación",       icon: "planif"   });
+  if (perm("descongelado",   "ver")) nav.push({ key: "descongelado", label: "Descongelado",     icon: "destajo"  });
   if (perm("destajo",        "ver")) nav.push({ key: "destajo",   label: "Destajo",             icon: "destajo"  });
   if (perm("pedidos",        "ver")) nav.push({ key: "pedidos",   label: "Pedidos",             icon: "pedidos" });
   if (perm("etiquetado",     "ver")) nav.push({ key: "etiquetado", label: "Agrupación",          icon: "etiquetado" });
@@ -230,6 +232,7 @@ function Dashboard() {
     kiosco:    "Entradas / Salidas — Corrección",
     transf:    "Transferencias — Corrección",
     planif:    "Planificación por Área",
+    descongelado: "Descongelado de Materia Prima",
     destajo:   "Destajo — Materia Prima y Pesaje",
     etiquetado: "Agrupación — Orden de Trabajo",
     imprimirEtiquetas: "Impresión de Etiquetas",
@@ -381,6 +384,7 @@ function Dashboard() {
             {seccion === "kiosco"   && perm("movimientos",    "ver") && <MovimientosAdminPage />}
             {seccion === "transf"   && perm("transferencias", "ver") && <TransferenciasAdminPage />}
             {seccion === "planif"   && perm("planificacion",   "ver") && <PlanificacionPage />}
+            {seccion === "descongelado" && perm("descongelado", "ver") && <DescongeladoPage />}
             {seccion === "destajo"  && perm("destajo",         "ver") && <DestajoPage />}
             {seccion === "pedidos"   && perm("pedidos",       "ver") && <PedidosClientesPage />}
             {seccion === "etiquetado" && perm("etiquetado",    "ver") && <EtiquetadoPage />}
