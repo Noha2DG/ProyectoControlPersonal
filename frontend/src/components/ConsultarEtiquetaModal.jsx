@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { authHeader } from "../context/AuthContext.jsx";
-import { fmtFechaHoraLarga } from "../utils/fecha.js";
+import { fmtFechaHoraLarga, fmtDia } from "../utils/fecha.js";
 
 // Consulta un correlativo por completo: producto, historial de impresión y si ya está escaneado en
 // bodega (y dónde) — usable tanto desde Impresión (antes de reimprimir) como desde Bodega (para
@@ -125,6 +125,18 @@ export default function ConsultarEtiquetaModal({ onCerrar }) {
                   )}
                 </div>
 
+                {pallet.Remisiones?.length > 0 && (
+                  <div className="rounded-lg p-3 border bg-slate-50 border-slate-200">
+                    <p className="font-semibold text-slate-800 mb-1">Despachado en remisión</p>
+                    {pallet.Remisiones.map(r => (
+                      <p key={r.Folio}>
+                        <span className="font-mono font-semibold">{r.Folio}</span>
+                        <span className="text-gray-600"> · {fmtDia(r.Fecha)} · {r.Masters} master{r.Masters === 1 ? "" : "s"}</span>
+                      </p>
+                    ))}
+                  </div>
+                )}
+
                 <div className="text-xs text-gray-500 space-y-0.5">
                   <p>Creado por {pallet.CreadoPor || "-"}{pallet.CreadoEn ? ` · ${fmtFechaHoraLarga(pallet.CreadoEn)}` : ""}</p>
                   {pallet.CerradoEn && <p>Cerrado por {pallet.CerradoPor || "-"} · {fmtFechaHoraLarga(pallet.CerradoEn)}</p>}
@@ -199,6 +211,17 @@ export default function ConsultarEtiquetaModal({ onCerrar }) {
                   <p className="font-semibold text-green-800">Todavía no se ha escaneado en bodega</p>
                 )}
               </div>
+
+              {/* "Salido" lo pone la confirmación de la remisión; antes de eso la caja solo está
+                  apartada en un borrador y físicamente sigue en bodega. */}
+              {resultado.Master?.RemisionFolio && (
+                <div className="rounded-lg p-3 border bg-slate-50 border-slate-200">
+                  <p className="font-semibold text-slate-800">
+                    {resultado.Master.Estatus === "Salido" ? "Despachado en remisión" : "Apartado en remisión (sin confirmar)"}{" "}
+                    <span className="font-mono">{resultado.Master.RemisionFolio}</span>
+                  </p>
+                </div>
+              )}
 
               <div>
                 <p className="font-semibold text-gray-700 mb-1">

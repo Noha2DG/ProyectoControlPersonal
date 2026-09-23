@@ -33,10 +33,11 @@ import ordenEtiquetadoRouter from "./routes/ordenEtiquetado.ts";
 import etiquetaImpresaRouter from "./routes/etiquetaImpresa.ts";
 import disenoEtiquetaClienteRouter from "./routes/disenoEtiquetaCliente.ts";
 import palletsRouter from "./routes/pallets.ts";
-import bodegaVirtualRouter from "./routes/bodegaVirtual.ts";
+import bodegasRouter from "./routes/bodegas.ts";
 import bodegaFisicaRouter from "./routes/bodegaFisica.ts";
 import remisionesRouter from "./routes/remisiones.ts";
 import reportesRouter from "./routes/reportes.ts";
+import descongeladoRouter from "./routes/descongelado.ts";
 import { requireAuth } from "./middleware/auth.ts";
 import { barridoCorteMedianoche } from "./lib/corteMedianoche.ts";
 import { barridoEtiquetasVencidas } from "./lib/etiquetasVencidas.ts";
@@ -107,10 +108,14 @@ app.use("/api/orden-etiquetado", ordenEtiquetadoRouter);
 app.use("/api/etiqueta-impresa", etiquetaImpresaRouter);
 app.use("/api/diseno-etiqueta-cliente", disenoEtiquetaClienteRouter);
 app.use("/api/pallets", palletsRouter);
-app.use("/api/bodega-virtual", bodegaVirtualRouter);
+app.use("/api/bodegas", bodegasRouter);
+// Alias del nombre viejo: una pestaña abierta desde antes del despliegue sigue pidiendo esta ruta.
+// Se puede quitar cuando ya nadie tenga la pantalla de polines cargada de la versión anterior.
+app.use("/api/bodega-virtual", bodegasRouter);
 app.use("/api/bodega-fisica", bodegaFisicaRouter);
 app.use("/api/remisiones", remisionesRouter);
 app.use("/api/reportes", reportesRouter);
+app.use("/api/descongelado", descongeladoRouter);
 
 // Sirve el frontend ya compilado (frontend/dist) desde este mismo proceso: así el despliegue es un
 // solo servicio, sin un servidor web aparte para los archivos estáticos.

@@ -279,9 +279,22 @@ async function detallePallet(palletId: number) {
       SELECT Usuario, Fecha FROM MovimientosBodega
       WHERE PalletId = ${palletId} AND Tipo = 'INGRESO' ORDER BY MovimientoId DESC LIMIT 1
     `;
+    // Por qué remisión(es) salió lo despachado: un polín se va vaciando en varias salidas, así que
+    // se agrupa por remisión con cuántos masters se llevó cada una. Solo las líneas vigentes — una
+    // devuelta (Vigente = 0) ya no salió por ahí, el master volvió a bodega.
+    const remisiones: any[] = salidos === 0 ? [] : await prisma.$queryRaw`
+      SELECT r.Folio, r.Tipo, r.Estatus, r.Fecha, COUNT(*) AS Masters
+      FROM Masters m
+      JOIN RemisionDetalle rd ON rd.MasterId = m.MasterId AND rd.Vigente = 1
+      JOIN Remisiones r ON rd.RemisionId = r.RemisionId
+      WHERE m.PalletId = ${palletId} AND m.Estatus = 'Salido'
+      GROUP BY r.RemisionId, r.Folio, r.Tipo, r.Estatus, r.Fecha
+      ORDER BY r.Fecha, r.Folio
+    `;
     return {
       ...rows[0], PalletId: Number(rows[0].PalletId), CantidadMaster: cantidadMaster,
       UbicadoPor: ubic[0]?.Usuario ?? null, UbicadoEn: ubic[0]?.Fecha ?? null,
+      Remisiones: remisiones.map(r => ({ ...r, Masters: Number(r.Masters) })),
       Masters: masters,
       CantidadMasters: masters.length - salidos, CantidadSalidos: salidos,
       Cuadre: calcularCuadre(cantidadMaster, masters.length),
@@ -289,23 +302,29 @@ async function detallePallet(palletId: number) {
   }
 }
 
-// POST /api/pallets  { Origen, CantidadMaster, AreaCodigo, Motivo }
+// POST /api/pallets  { Origen, CantidadMaster, BodegaCodigo, Motivo }
 // Crea un pallet vacío y Abierto. Sin Pedido/Cliente/línea de pedido: se arma solo con lo que se
 // escanee después — pero SÍ requiere Origen (informativo, no filtra qué se puede escanear ahí),
-// CantidadMaster (meta de referencia, no bloquea el escaneo) y AreaCodigo — el área REAL donde se
-// está trabajando (Túnel, Masterizado...), no un tipo de bodega elegido a mano. De ahí el sistema
-// resuelve solo la bodega virtual correspondiente (BodegaVirtual.AreaCodigo) y su letra de código
-// (ej. "T0001" para Túnel) — el pallet queda en esa bodega virtual antes de pasar a la bodega
-// física real (asignación de posición + hoja física impresa — todavía no existe ese siguiente paso).
+// CantidadMaster (meta de referencia, no bloquea el escaneo) y BodegaCodigo — la bodega donde se
+// está trabajando (Túnel, Masterizado...), de donde sale la letra del código (ej. "T0001" para
+// Túnel). El pallet queda en esa bodega antes de pasar a la bodega física real (asignación de
+// posición + hoja física impresa).
+//
+// Antes esto pedía un AreaCodigo y de ahí rebotaba a BodegaVirtual.AreaCodigo. El rodeo se fue con
+// la fusión de las dos tablas de bodegas (scripts/fusionarBodegas.ts): el selector de la pantalla
+// siempre listó bodegas, no áreas, aunque la etiqueta dijera "área".
 //
 // Motivo solo se exige cuando Origen = DEVOLUCION (ver project_devoluciones_design): un pallet de
 // devolución es un caso de negocio que necesita quedar explicado, el resto de orígenes no.
 router.post("/", requireAuth, requirePerm("bodega", "escanear"), async (req: Request, res: Response) => {
   try {
-    const { Origen, CantidadMaster, AreaCodigo } = req.body;
+    const { Origen, CantidadMaster } = req.body;
+    // AreaCodigo es el nombre viejo del campo. Una pestaña cargada antes del despliegue lo sigue
+    // mandando, y trae el mismo valor, porque /api/bodegas lo repite en esa llave.
+    const BodegaCodigo = String(req.body.BodegaCodigo ?? req.body.AreaCodigo ?? "").trim();
     const motivo = String(req.body.Motivo ?? "").trim();
     if (!Origen) { res.status(400).json({ error: "El origen es requerido" }); return; }
-    if (!AreaCodigo) { res.status(400).json({ error: "El área es requerida" }); return; }
+    if (!BodegaCodigo) { res.status(400).json({ error: "La bodega es requerida" }); return; }
     if (Origen === "DEVOLUCION" && !motivo) { res.status(400).json({ error: "El motivo de la devolución es requerido" }); return; }
     const cantidad = Number(CantidadMaster);
     if (!Number.isInteger(cantidad) || cantidad <= 0) {
@@ -316,22 +335,25 @@ router.post("/", requireAuth, requirePerm("bodega", "escanear"), async (req: Req
     const operador = getOperador(req);
     let nuevoPalletId = 0;
     let codigo = "";
-    // El secuencial de la bodega virtual se incrementa dentro de la transacción (UPDATE ...
-    // SET x = x + 1 bloquea la fila hasta el commit) — dos pallets creados a la vez en la misma
-    // bodega virtual no pueden terminar con el mismo código.
+    // El secuencial de la bodega se incrementa dentro de la transacción (UPDATE ... SET x = x + 1
+    // bloquea la fila hasta el commit) — dos pallets creados a la vez en la misma bodega no pueden
+    // terminar con el mismo código.
     await prisma.$transaction(async (tx) => {
-      const bvRows: any[] = await tx.$queryRaw`SELECT Codigo, Letra, Activo FROM BodegaVirtual WHERE AreaCodigo = ${AreaCodigo} FOR UPDATE`;
-      if (!bvRows.length) throw new ErrorNegocio(404, "Esta área todavía no tiene bodega virtual asignada");
-      if (!Number(bvRows[0].Activo)) throw new ErrorNegocio(400, "La bodega virtual de esta área está inactiva");
-      const bodegaVirtualCodigo = String(bvRows[0].Codigo);
+      const bvRows: any[] = await tx.$queryRaw`SELECT Codigo, Letra, Activo FROM BodegaVirtual WHERE Codigo = ${BodegaCodigo} FOR UPDATE`;
+      if (!bvRows.length) throw new ErrorNegocio(404, "Esta bodega no existe. Recargue la página (F5).");
+      // Sin letra no hay código de polín que formar: es una bodega de piso (Descongelado, un Blast)
+      // que existe en el flujo pero no arma pallets.
+      if (!bvRows[0].Letra) throw new ErrorNegocio(400, "Esta bodega no genera pallets");
+      if (!Number(bvRows[0].Activo)) throw new ErrorNegocio(400, "Esta bodega está inactiva");
+      const bodegaCodigo = String(bvRows[0].Codigo);
 
-      await tx.$executeRaw`UPDATE BodegaVirtual SET UltimoSecuencial = UltimoSecuencial + 1 WHERE Codigo = ${bodegaVirtualCodigo}`;
-      const secRows: any[] = await tx.$queryRaw`SELECT UltimoSecuencial FROM BodegaVirtual WHERE Codigo = ${bodegaVirtualCodigo}`;
+      await tx.$executeRaw`UPDATE BodegaVirtual SET UltimoSecuencial = UltimoSecuencial + 1 WHERE Codigo = ${bodegaCodigo}`;
+      const secRows: any[] = await tx.$queryRaw`SELECT UltimoSecuencial FROM BodegaVirtual WHERE Codigo = ${bodegaCodigo}`;
       codigo = String(bvRows[0].Letra) + String(Number(secRows[0].UltimoSecuencial)).padStart(4, "0");
 
       await tx.$executeRaw`
         INSERT INTO Pallets (Codigo, Origen, Motivo, CantidadMaster, BodegaVirtualCodigo, CreadoPor)
-        VALUES (${codigo}, ${Origen}, ${motivo || null}, ${cantidad}, ${bodegaVirtualCodigo}, ${operador})
+        VALUES (${codigo}, ${Origen}, ${motivo || null}, ${cantidad}, ${bodegaCodigo}, ${operador})
       `;
       const fila: any[] = await tx.$queryRaw`SELECT LAST_INSERT_ID() AS id`;
       nuevoPalletId = Number(fila[0].id);

@@ -606,9 +606,9 @@ function PanelEscaneo({ palletId, onClose, onCambio }) {
 // Se pide Origen y la cantidad de masters que se planea que lleve el polín ANTES de abrir el
 // escaneo — Origen es solo informativo (no filtra qué se puede escanear ahí) y la cantidad es una
 // meta de referencia (no bloquea, se compara contra lo escaneado como Completo/Incompleto/Sobrante).
-function ModalNuevoPallet({ origenes, bodegasVirtuales, onCrear, onClose }) {
+function ModalNuevoPallet({ origenes, bodegas, onCrear, onClose }) {
   const [origen, setOrigen] = useState("");
-  const [areaCodigo, setAreaCodigo] = useState("");
+  const [bodegaCodigo, setBodegaCodigo] = useState("");
   const [cantidad, setCantidad] = useState("");
   const [motivo, setMotivo] = useState("");
   const [error, setError] = useState("");
@@ -620,7 +620,7 @@ function ModalNuevoPallet({ origenes, bodegasVirtuales, onCrear, onClose }) {
     setError("");
     setCreando(true);
     try {
-      await onCrear({ Origen: origen, CantidadMaster: cantidad, AreaCodigo: areaCodigo, Motivo: esDevolucion ? motivo : "" });
+      await onCrear({ Origen: origen, CantidadMaster: cantidad, BodegaCodigo: bodegaCodigo, Motivo: esDevolucion ? motivo : "" });
     } catch (err) {
       setError(err.message);
     } finally {
@@ -636,11 +636,11 @@ function ModalNuevoPallet({ origenes, bodegasVirtuales, onCrear, onClose }) {
         </div>
         <form onSubmit={handleSubmit} className="px-5 py-4 space-y-4">
           <div>
-            <label className="block text-xs font-medium text-gray-500 mb-1">Área donde se está trabajando *</label>
-            <select required value={areaCodigo} onChange={e => setAreaCodigo(e.target.value)} autoFocus
+            <label className="block text-xs font-medium text-gray-500 mb-1">Bodega donde se está trabajando *</label>
+            <select required value={bodegaCodigo} onChange={e => setBodegaCodigo(e.target.value)} autoFocus
               className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400">
               <option value="">Selecciona...</option>
-              {bodegasVirtuales.map(b => <option key={b.AreaCodigo} value={b.AreaCodigo}>{b.Nombre}</option>)}
+              {bodegas.map(b => <option key={b.Codigo} value={b.Codigo}>{b.Nombre}</option>)}
             </select>
           </div>
           <div>
@@ -686,7 +686,7 @@ export default function PalletsPage() {
   const [filtroFecha, setFiltroFecha] = useState(hoyGT);
   const [panelId, setPanelId] = useState(null);
   const [origenes, setOrigenes] = useState([]);
-  const [bodegasVirtuales, setBodegasVirtuales] = useState([]);
+  const [bodegas, setBodegas] = useState([]);
   const [modalNuevo, setModalNuevo] = useState(false);
   const [busquedaPallet, setBusquedaPallet] = useState("");
   const [mostrarConsulta, setMostrarConsulta] = useState(false);
@@ -712,8 +712,10 @@ export default function PalletsPage() {
     fetch("/api/origen", { headers: authHeader() }).then(r => r.json()).then(data => {
       if (Array.isArray(data)) setOrigenes(data.filter(o => o.Activo));
     });
-    fetch("/api/bodega-virtual", { headers: authHeader() }).then(r => r.json()).then(data => {
-      if (Array.isArray(data)) setBodegasVirtuales(data.filter(b => b.Activo));
+    // generan=1: solo las bodegas que arman polines. Descongelado o un Blast son bodegas reales del
+    // flujo pero no tienen letra de correlativo, así que ofrecerlas sería ofrecer un código imposible.
+    fetch("/api/bodegas?generan=1", { headers: authHeader() }).then(r => r.json()).then(data => {
+      if (Array.isArray(data)) setBodegas(data.filter(b => b.Activo));
     });
   }, []);
 
@@ -878,7 +880,7 @@ export default function PalletsPage() {
         </div>
       </div>
 
-      {modalNuevo && <ModalNuevoPallet origenes={origenes} bodegasVirtuales={bodegasVirtuales} onCrear={handleCrear} onClose={() => setModalNuevo(false)} />}
+      {modalNuevo && <ModalNuevoPallet origenes={origenes} bodegas={bodegas} onCrear={handleCrear} onClose={() => setModalNuevo(false)} />}
       {mostrarConsulta && <ConsultarEtiquetaModal onCerrar={() => setMostrarConsulta(false)} />}
 
       {panelId != null && (
