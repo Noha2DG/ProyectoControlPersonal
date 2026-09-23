@@ -20,6 +20,20 @@ const router = Router();
 
 const LB_POR_KG = 2.20462;
 
+// Mismo patrón que pallets.ts/bodegaFisica.ts: error de negocio LANZADO dentro de la transacción,
+// traducido a su status HTTP por el catch de la ruta.
+//
+// Lanzado y no devuelto, y la diferencia no es de estilo: una transacción interactiva de Prisma
+// hace COMMIT cuando el callback termina normalmente. Devolver `{ error }` desde la mitad de un
+// bucle que ya escribió filas confirmaría justo lo que se está rechazando.
+class ErrorNegocio extends Error {
+  status: number;
+  constructor(status: number, mensaje: string) {
+    super(mensaje);
+    this.status = status;
+  }
+}
+
 function getOperador(req: Request): string {
   try {
     const header = req.headers.authorization;
@@ -210,6 +224,30 @@ router.get("/bodegas", requireAuth, requirePerm("descongelado", "ver"), async (_
   }
 });
 
+// GET /api/descongelado/destinos — a dónde se puede mandar lo descongelado, como lo diría la
+// planta: la bodega que lleva el saldo, con las áreas que trabajan en ella colgando.
+//
+// Se ofrecen las dos alturas a propósito. El inventario vive por BODEGA —  Pelado son siete áreas
+// sobre el mismo piso y partir el saldo entre ellas daría siete saldos que nadie cuadra—  pero el
+// operador entrega el termo a un área concreta y esa es la información que el papel conserva. Se
+// escoge el área y el sistema guarda las dos cosas: la bodega en el kardex, el área en
+// AreaDeclarada. Cuando no se sabe todavía cuál de las siete, se escoge la bodega y ya.
+router.get("/destinos", requireAuth, requirePerm("descongelado", "ver"), async (_req: Request, res: Response) => {
+  try {
+    const bodegas: any[] = await prisma.$queryRaw`
+      SELECT Codigo, Nombre, Orden FROM BodegaVirtual
+       WHERE Activo = 1 AND LlevaPiso = 1 ORDER BY Orden`;
+    const areas: any[] = await prisma.$queryRaw`
+      SELECT Codigo, Nombre, BodegaVirtualCodigo AS Bodega FROM Areas
+       WHERE Activa = 1 AND BodegaVirtualCodigo IS NOT NULL ORDER BY Nombre`;
+    res.json(num(bodegas, ["Orden"]).map(b => ({
+      ...b, Areas: areas.filter(a => a.Bodega === b.Codigo).map(a => ({ Codigo: a.Codigo, Nombre: a.Nombre })),
+    })));
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Hojas ────────────────────────────────────────────────────────────────────────────────────
 const SQL_HOJA = `
   SELECT h.HojaId, h.BodegaCodigo, b.Nombre AS NombreBodega, h.FechaProduccion,
@@ -267,7 +305,7 @@ router.get("/hojas/:id", requireAuth, requirePerm("descongelado", "ver"), async 
              m.Talla, ta.Descripcion AS DescripcionTalla,
              m.Peso, m.UM, m.PesoKg, m.Masters, m.KgPorMaster,
              m.BodegaOrigen, m.BodegaDestino, bd.Nombre AS NombreBodegaDestino,
-             m.AreaDeclarada, ar.Nombre AS NombreAreaDeclarada,
+             m.AreaDeclarada, ar.Nombre AS NombreAreaDeclarada, m.ConsumoId,
              m.RemisionId, r.Folio AS FolioRemision, m.NumeroTermo, m.Motivo, m.RegistradoPor,
              DATE_FORMAT(m.FechaHora, '%Y-%m-%d %H:%i') AS FechaHora
       FROM MovimientoPiso m
@@ -279,7 +317,7 @@ router.get("/hojas/:id", requireAuth, requirePerm("descongelado", "ver"), async 
       WHERE m.HojaOrigenId = ? OR m.HojaDestinoId = ?
       ORDER BY m.MovimientoId ASC`, id, id);
 
-    const lineas = num(renglones, ["MovimientoId", "Talla", "Peso", "PesoKg", "Masters", "KgPorMaster"]);
+    const lineas = num(renglones, ["MovimientoId", "Talla", "Peso", "PesoKg", "Masters", "KgPorMaster", "ConsumoId"]);
     res.json({
       ...conRendimiento(hojas)[0],
       entrada:     lineas.filter(l => l.Tipo === "CONSUMO"),
@@ -355,6 +393,9 @@ function fechaDeHoja(hoja: any): string {
 // POST /api/descongelado/hojas/:id/entrada — sección 1: el área entrega a la hoja.
 // Ojo: NO es el ingreso al piso. Eso lo hizo la remisión, que pudo ser de ayer — bodega saca el
 // producto un día antes para descongelar al siguiente. Acá solo se consume del saldo del área.
+//
+// La pantalla ya no llama a esta ruta ni a /salida: usa /descongelar, que escribe el par de una
+// sola vez. Las dos quedan como las piezas sueltas del movimiento, para correcciones y scripts.
 router.post("/hojas/:id/entrada", requireAuth, requirePerm("descongelado", "crear"), async (req: Request, res: Response) => {
   try {
     const id = Number(req.params.id);
@@ -482,6 +523,200 @@ router.post("/hojas/:id/salida", requireAuth, requirePerm("descongelado", "crear
   }
 });
 
+// POST /api/descongelado/hojas/:id/descongelar — EL PASO ÚNICO.
+//
+// Bajar producto del piso y despacharlo al área siguiente eran dos capturas separadas: primero la
+// sección 1 (qué bajó) y después la sección 2, donde había que volver a encontrar en un combo cada
+// línea recién tecleada para ponerle peso y destino. En una jornada de dieciséis lotes son treinta
+// y dos capturas para dieciséis movimientos reales, y la mitad del trabajo es buscarse a uno mismo.
+//
+// Acá el operador confirma UNA vez: estos masters bajaron, pesaron esto y van a esta área. El
+// backend escribe las dos filas del kardex —  CONSUMO del piso a la hoja y TRASLADO de la hoja al
+// área siguiente—  atadas por ConsumoId. La invariante del modelo no cambia en nada: sigue habiendo
+// dos movimientos porque la hoja sigue siendo un lugar por el que el producto pasa; lo que cambia
+// es que la pantalla dejó de pedir dos veces lo mismo.
+//
+// TODO DENTRO DE UNA TRANSACCIÓN, y esto no es un adorno: el flujo viejo hacía N peticiones desde
+// el navegador y si la quinta fallaba, las cuatro anteriores ya estaban escritas — la hoja quedaba
+// a medio capturar y nadie sabía dónde se había cortado.
+//
+// EL PESO PESADO ES OPCIONAL y por omisión es el declarado. Si nadie puso el termo en la báscula,
+// el sistema no tiene por qué inventar una diferencia; si sí lo pusieron, la diferencia queda
+// escrita y sale como merma en el cierre, que es la regla que el papel ya trae impresa.
+router.post("/hojas/:id/descongelar", requireAuth, requirePerm("descongelado", "crear"), async (req: Request, res: Response) => {
+  try {
+    const id = Number(req.params.id);
+    const operador = getOperador(req);
+    const termoGeneral = req.body.NumeroTermo ? String(req.body.NumeroTermo).trim() : null;
+    const lineas: any[] = Array.isArray(req.body.lineas) ? req.body.lineas : [];
+    if (!lineas.length) { res.status(400).json({ error: "No hay líneas que descongelar" }); return; }
+
+    const out = await prisma.$transaction(async (tx) => {
+      // La hoja se bloquea igual que en el cierre: dos descongelados simultáneos sobre el mismo
+      // saldo se pisarían la disponibilidad, que se calcula sumando y no se puede bloquear sola.
+      const [h]: any[] = await tx.$queryRaw`
+        SELECT HojaId, BodegaCodigo, FechaProduccion, Estatus
+          FROM HojaProceso WHERE HojaId = ${id} LIMIT 1 FOR UPDATE`;
+      if (!h) throw new ErrorNegocio(404, "Hoja no encontrada");
+      if (h.Estatus !== "Abierta") throw new ErrorNegocio(400, "La hoja ya está cerrada");
+      const fecha = fechaDeHoja(h);
+
+      let kgDeclarado = 0, kgPesado = 0;
+
+      for (const l of lineas) {
+        const Lote = String(l.Lote ?? "").trim();
+        const Clase = String(l.Clase ?? "").trim();
+        if (!Lote || !Clase) throw new ErrorNegocio(400, "Lote y Clase son requeridos");
+
+        const talla = l.Talla ? Number(l.Talla) : 900;
+        const remId = l.RemisionId ? Number(l.RemisionId) : null;
+        const masters = l.Masters !== "" && l.Masters != null ? Number(l.Masters) : null;
+        const kgxm = l.KgPorMaster !== "" && l.KgPorMaster != null ? Number(l.KgPorMaster) : null;
+
+        const declarado = masters && kgxm
+          ? Number((masters * kgxm).toFixed(2))
+          : Number(l.Peso);
+        if (!declarado || declarado <= 0) {
+          throw new ErrorNegocio(400, `${Lote} ${Clase}: el peso declarado debe ser mayor que cero`);
+        }
+
+        // El destino se puede pedir como ÁREA —  "lo mando a Pelado", que es como habla la planta—
+        // o como bodega. La bodega es la que lleva el saldo; el área se guarda aparte en
+        // AreaDeclarada, que existe justamente para conservar a dónde se dijo que iba sin partir el
+        // inventario de un piso que comparten siete áreas.
+        const areaDecl = l.AreaDeclarada ? String(l.AreaDeclarada).trim() : null;
+        let destino = l.BodegaDestino ? String(l.BodegaDestino).trim() : null;
+        if (!destino && areaDecl) {
+          const [a]: any[] = await tx.$queryRaw`
+            SELECT BodegaVirtualCodigo AS b FROM Areas WHERE Codigo = ${areaDecl} LIMIT 1`;
+          destino = a?.b ?? null;
+        }
+        if (!destino) throw new ErrorNegocio(400, `${Lote} ${Clase}: falta decir a dónde se envía`);
+        if (destino === h.BodegaCodigo) {
+          throw new ErrorNegocio(400, "El destino no puede ser la misma bodega de la hoja");
+        }
+        const [bd]: any[] = await tx.$queryRaw`
+          SELECT Codigo FROM BodegaVirtual
+           WHERE Codigo = ${destino} AND Activo = 1 AND LlevaPiso = 1 LIMIT 1`;
+        if (!bd) throw new ErrorNegocio(400, `${destino} no recibe inventario al piso`);
+
+        // Disponibilidad POR REMISIÓN, igual que en /entrada: `<=>` y no `=` porque RemisionId
+        // puede ser NULL (producto entrado por ajuste) y con `=` esas filas no casan ni consigo
+        // mismas. FechaLote viaja de aquí para que el renglón conserve la antigüedad y el PEPS
+        // siga funcionando aguas abajo.
+        const [disp]: any[] = await tx.$queryRaw`
+          SELECT ROUND(COALESCE(SUM(Delta), 0), 2) AS Kg, COALESCE(SUM(DeltaM), 0) AS Masters,
+                 MAX(FL) AS FechaLote FROM (
+            SELECT PesoKg AS Delta, Masters AS DeltaM, FechaLote AS FL FROM MovimientoPiso
+              WHERE BodegaDestino = ${h.BodegaCodigo} AND RemisionId <=> ${remId}
+                AND Lote = ${Lote} AND Clase = ${Clase} AND Talla = ${talla}
+            UNION ALL
+            SELECT -PesoKg, -Masters, NULL FROM MovimientoPiso
+              WHERE BodegaOrigen = ${h.BodegaCodigo} AND RemisionId <=> ${remId}
+                AND Lote = ${Lote} AND Clase = ${Clase} AND Talla = ${talla}
+          ) t`;
+
+        const um = l.UM === "LB" ? "LB" : "KG";
+        const kgDecl = aKg(declarado, um);
+
+        // Se controla por MASTERS cuando el renglón viene contado en masters, que es como el área
+        // declara: los kilos salen de la presentación y no se teclean, así el control habla el
+        // mismo idioma que el conteo del andén y no compara decimales.
+        if (masters && masters > Number(disp.Masters)) {
+          throw new ErrorNegocio(400, `De esa remisión solo quedan ${Number(disp.Masters)} masters de ${Lote} ${Clase} al piso; está bajando ${masters}.`);
+        }
+        if (kgDecl > Number(disp.Kg) + 0.001) {
+          throw new ErrorNegocio(400, `De esa remisión solo quedan ${Number(disp.Kg).toFixed(2)} kg de ${Lote} ${Clase} al piso; está bajando ${kgDecl.toFixed(2)} kg.`);
+        }
+
+        await tx.$executeRaw`
+          INSERT INTO MovimientoPiso (Tipo, FechaProduccion, BodegaOrigen, HojaDestinoId, Lote, Clase, Talla,
+                                      FechaLote, Peso, UM, PesoKg, Masters, KgPorMaster, RemisionId, RegistradoPor)
+          VALUES ('CONSUMO', ${fecha}, ${h.BodegaCodigo}, ${id}, ${Lote}, ${Clase}, ${talla},
+                  ${disp.FechaLote}, ${declarado}, ${um}, ${kgDecl}, ${masters}, ${kgxm}, ${remId}, ${operador})`;
+        const [ins]: any[] = await tx.$queryRaw`SELECT LAST_INSERT_ID() AS id`;
+        const consumoId = Number(ins.id);
+
+        // El peso real NO se valida contra el declarado: que salga menos es lo normal (faltó un
+        // master, o el glaseo). El control está en el cierre, que rechaza que lo salido supere a lo
+        // entrado en la hoja completa.
+        const pesado = l.PesoReal !== "" && l.PesoReal != null ? Number(l.PesoReal) : declarado;
+        if (!pesado || pesado <= 0) {
+          throw new ErrorNegocio(400, `${Lote} ${Clase}: el peso pesado debe ser mayor que cero`);
+        }
+        const kgReal = aKg(pesado, um);
+
+        await tx.$executeRaw`
+          INSERT INTO MovimientoPiso (Tipo, FechaProduccion, HojaOrigenId, BodegaDestino, AreaDeclarada,
+                                      Lote, Clase, Talla, FechaLote, Peso, UM, PesoKg,
+                                      NumeroTermo, RemisionId, ConsumoId, RegistradoPor)
+          VALUES ('TRASLADO', ${fecha}, ${id}, ${destino}, ${areaDecl}, ${Lote}, ${Clase}, ${talla},
+                  ${disp.FechaLote}, ${pesado}, ${um}, ${kgReal},
+                  ${(l.NumeroTermo ? String(l.NumeroTermo).trim() : null) || termoGeneral},
+                  ${remId}, ${consumoId}, ${operador})`;
+
+        kgDeclarado += kgDecl;
+        kgPesado += kgReal;
+      }
+
+      return { ok: true, lineas: lineas.length,
+               KgDeclarado: Number(kgDeclarado.toFixed(2)), KgPesado: Number(kgPesado.toFixed(2)) };
+    });
+
+    res.status(201).json(out);
+  } catch (err: any) {
+    if (err instanceof ErrorNegocio) res.status(err.status).json({ error: err.message });
+    else if (err.message?.includes("foreign key")) res.status(400).json({ error: "Clase, talla, bodega, área o remisión no existen" });
+    else res.status(500).json({ error: err.message });
+  }
+});
+
+// PUT /api/descongelado/renglon/:id — corrige el peso pesado, el destino o el termo de un renglón
+// ya descongelado, sin tener que borrarlo y volver a bajarlo del piso.
+//
+// Solo toca el TRASLADO. El CONSUMO que lo acompaña se queda como está: lo declarado es lo que
+// bodega despachó y eso no se corrige desde acá — si lo que cambió son los masters que bajaron, el
+// renglón se borra (se lleva su par) y se descongela de nuevo con la cantidad correcta.
+router.put("/renglon/:id", requireAuth, requirePerm("descongelado", "editar"), async (req: Request, res: Response) => {
+  try {
+    const id = Number(req.params.id);
+    const [m]: any[] = await prisma.$queryRaw`
+      SELECT MovimientoId, Tipo, HojaOrigenId, UM FROM MovimientoPiso WHERE MovimientoId = ${id} LIMIT 1`;
+    if (!m) { res.status(404).json({ error: "Renglón no encontrado" }); return; }
+    if (m.Tipo !== "TRASLADO") { res.status(400).json({ error: "Solo se corrige un renglón de descongelado" }); return; }
+
+    const chk = await hojaAbierta(Number(m.HojaOrigenId));
+    if ("error" in chk) { res.status(chk.status!).json({ error: chk.error }); return; }
+
+    const peso = Number(req.body.Peso);
+    if (!peso || peso <= 0) { res.status(400).json({ error: "El peso debe ser mayor que cero" }); return; }
+
+    const areaDecl = req.body.AreaDeclarada ? String(req.body.AreaDeclarada).trim() : null;
+    let destino = req.body.BodegaDestino ? String(req.body.BodegaDestino).trim() : null;
+    if (!destino && areaDecl) {
+      const [a]: any[] = await prisma.$queryRaw`
+        SELECT BodegaVirtualCodigo AS b FROM Areas WHERE Codigo = ${areaDecl} LIMIT 1`;
+      destino = a?.b ?? null;
+    }
+    if (!destino) { res.status(400).json({ error: "Falta decir a dónde se envía" }); return; }
+    if (destino === chk.hoja.BodegaCodigo) {
+      res.status(400).json({ error: "El destino no puede ser la misma bodega de la hoja" }); return;
+    }
+
+    const um = m.UM === "LB" ? "LB" : "KG";
+    await prisma.$executeRaw`
+      UPDATE MovimientoPiso
+         SET Peso = ${peso}, PesoKg = ${aKg(peso, um)}, BodegaDestino = ${destino},
+             AreaDeclarada = ${areaDecl},
+             NumeroTermo = ${req.body.NumeroTermo ? String(req.body.NumeroTermo).trim() : null}
+       WHERE MovimientoId = ${id}`;
+    res.json({ ok: true });
+  } catch (err: any) {
+    if (err.message?.includes("foreign key")) res.status(400).json({ error: "La bodega o el área no existen" });
+    else res.status(500).json({ error: err.message });
+  }
+});
+
 // POST /api/descongelado/hojas/:id/devolucion — sección 3: regresa a bodega sin descongelar.
 router.post("/hojas/:id/devolucion", requireAuth, requirePerm("descongelado", "crear"), async (req: Request, res: Response) => {
   try {
@@ -509,18 +744,40 @@ router.post("/hojas/:id/devolucion", requireAuth, requirePerm("descongelado", "c
 });
 
 // DELETE /api/descongelado/renglon/:id — corrección de captura, solo con la hoja abierta.
+//
+// BORRA EL PAR COMPLETO. Un renglón descongelado son dos filas del kardex —  el consumo que lo bajó
+// del piso y el traslado que lo mandó al área siguiente—  y quitar una sola dejaba la otra huérfana:
+// borrar el traslado dejaba producto consumido que nunca salió de la hoja, y al cerrar se convertía
+// en merma fantasma; borrar el consumo dejaba un despacho de producto que la hoja nunca recibió.
+// Se borre por donde se borre, se van los dos.
 router.delete("/renglon/:id", requireAuth, requirePerm("descongelado", "eliminar"), async (req: Request, res: Response) => {
   try {
     const id = Number(req.params.id);
-    const [m]: any[] = await prisma.$queryRaw`
-      SELECT COALESCE(HojaOrigenId, HojaDestinoId) AS HojaId, Tipo FROM MovimientoPiso WHERE MovimientoId = ${id} LIMIT 1`;
-    if (!m) { res.status(404).json({ error: "Renglón no encontrado" }); return; }
-    if (m.Tipo === "MERMA") { res.status(400).json({ error: "La merma la escribe el cierre; reabra la hoja para rehacerla" }); return; }
+    const out = await prisma.$transaction(async (tx) => {
+      const [m]: any[] = await tx.$queryRaw`
+        SELECT COALESCE(HojaOrigenId, HojaDestinoId) AS HojaId, Tipo, ConsumoId
+          FROM MovimientoPiso WHERE MovimientoId = ${id} LIMIT 1`;
+      if (!m) return { error: "Renglón no encontrado", status: 404 };
+      if (m.Tipo === "MERMA") return { error: "La merma la escribe el cierre; reabra la hoja para rehacerla", status: 400 };
 
-    const [h]: any[] = await prisma.$queryRaw`SELECT Estatus FROM HojaProceso WHERE HojaId = ${Number(m.HojaId)} LIMIT 1`;
-    if (h?.Estatus !== "Abierta") { res.status(400).json({ error: "La hoja ya está cerrada" }); return; }
+      const [h]: any[] = await tx.$queryRaw`
+        SELECT Estatus FROM HojaProceso WHERE HojaId = ${Number(m.HojaId)} LIMIT 1 FOR UPDATE`;
+      if (h?.Estatus !== "Abierta") return { error: "La hoja ya está cerrada", status: 400 };
 
-    await prisma.$executeRaw`DELETE FROM MovimientoPiso WHERE MovimientoId = ${id}`;
+      // El traslado apunta al consumo, así que el traslado se borra primero o la llave se queja.
+      // Los renglones del flujo viejo no tienen par: ConsumoId en NULL y nadie apuntándoles, con lo
+      // que las dos consultas no encuentran nada y se borra una sola fila, como siempre.
+      await tx.$executeRaw`DELETE FROM MovimientoPiso WHERE ConsumoId = ${id}`;
+      if (m.ConsumoId) {
+        await tx.$executeRaw`DELETE FROM MovimientoPiso WHERE MovimientoId = ${id}`;
+        await tx.$executeRaw`DELETE FROM MovimientoPiso WHERE MovimientoId = ${Number(m.ConsumoId)}`;
+      } else {
+        await tx.$executeRaw`DELETE FROM MovimientoPiso WHERE MovimientoId = ${id}`;
+      }
+      return { ok: true };
+    });
+
+    if (!("ok" in out)) { res.status((out as any).status).json({ error: (out as any).error }); return; }
     res.json({ ok: true });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
