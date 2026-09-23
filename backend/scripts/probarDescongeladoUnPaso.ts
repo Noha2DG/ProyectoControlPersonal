@@ -74,11 +74,23 @@ async function main() {
   }
   bien(`hay producto al piso para probar: ${linea.Lote} ${linea.Clase} — ${Number(linea.Masters)} m, ${linea.Kg} kg`);
 
-  const hoja = await uno(prisma, `
-    SELECT HojaId, BodegaCodigo, DATE_FORMAT(FechaProduccion, '%Y-%m-%d') AS Fecha
-      FROM HojaProceso WHERE Estatus = 'Abierta' ORDER BY HojaId DESC LIMIT 1`);
-  check(!!hoja, `hay una hoja abierta para recibirlo (#${hoja?.HojaId ?? "ninguna"})`);
-  if (!hoja) { await prisma.$disconnect(); process.exit(1); }
+  // La hoja se toma prestada si hay una abierta y, si no, se fabrica DENTRO de cada transacción,
+  // que siempre revierte. Depender de que alguien haya dejado una abierta hacía que la prueba
+  // fallara por el estado del día —  y falló—  en vez de por el código, que es lo único que debería
+  // poder romperla.
+  const hoja: any = { BodegaCodigo: "DESCONGELADO", Fecha: (await uno(prisma,
+    `SELECT DATE_FORMAT(CURDATE(), '%Y-%m-%d') AS d`)).d, HojaId: null };
+
+  const abrirHoja = async (tx: any) => {
+    const [h]: any[] = await tx.$queryRawUnsafe(
+      `SELECT HojaId FROM HojaProceso WHERE Estatus = 'Abierta' AND BodegaCodigo = ?
+        ORDER BY HojaId DESC LIMIT 1`, hoja.BodegaCodigo);
+    if (h) { hoja.HojaId = Number(h.HojaId); return; }
+    await tx.$executeRawUnsafe(
+      `INSERT INTO HojaProceso (BodegaCodigo, FechaProduccion, Propiedad, Estatus, CreadoPor)
+       VALUES (?, ?, 'OROPSA', 'Abierta', 'prueba')`, hoja.BodegaCodigo, hoja.Fecha);
+    hoja.HojaId = Number((await tx.$queryRawUnsafe(`SELECT LAST_INSERT_ID() AS id`) as any[])[0].id);
+  };
 
   const destino = destinos.find(d => d.Codigo !== hoja.BodegaCodigo);
   check(!!destino, `hay a dónde mandarlo: ${destino?.Nombre}`);
@@ -95,6 +107,7 @@ async function main() {
 
   try {
     await prisma.$transaction(async (tx) => {
+      await abrirHoja(tx);
       // Las dos filas, tal como las escribe POST /hojas/:id/descongelar.
       await tx.$executeRawUnsafe(
         `INSERT INTO MovimientoPiso (Tipo, FechaProduccion, BodegaOrigen, HojaDestinoId, Lote, Clase, Talla,
@@ -153,84 +166,101 @@ async function main() {
     if (!e.message.includes("ROLLBACK")) throw e;
   }
 
-  // ── LA REMISIÓN ENTERA, EN LOTE.
+  // ── UN DESPACHO GRANDE, EN LOTE.
   //
   // Es el caso que reventó en producción: diecinueve líneas con cinco consultas cada una son casi
-  // cien viajes a la base dentro de una transacción que Prisma corta a los cinco segundos. Acá se
-  // reproduce lo que hace el endpoint ahora —  dos INSERT de varias filas y una lectura de ids—  y
-  // se verifica lo único que ese atajo puede romper: que cada traslado quede atado a SU consumo.
-  const todas: any[] = await prisma.$queryRawUnsafe(`
-    SELECT t.RemisionId, t.Lote, t.Clase, t.Talla, ROUND(SUM(t.Delta), 2) AS Kg,
-           SUM(t.M) AS Masters, MAX(t.KgxM) AS KgPorMaster, MAX(t.FL) AS FechaLote
-      FROM (
-        SELECT RemisionId, Lote, Clase, Talla, PesoKg AS Delta, Masters AS M, KgPorMaster AS KgxM, FechaLote AS FL
-          FROM MovimientoPiso WHERE BodegaDestino = 'DESCONGELADO'
-        UNION ALL
-        SELECT RemisionId, Lote, Clase, Talla, -PesoKg, -Masters, KgPorMaster, NULL
-          FROM MovimientoPiso WHERE BodegaOrigen = 'DESCONGELADO'
-      ) t
-     GROUP BY t.RemisionId, t.Lote, t.Clase, t.Talla
-    HAVING SUM(t.Delta) > 0 AND SUM(t.M) > 0`);
-  check(todas.length > 1, `hay ${todas.length} líneas al piso para probar el lote completo`);
+  // cien viajes a la base dentro de una transacción que Prisma corta a los cinco segundos.
+  //
+  // Las líneas se FABRICAN acá dentro en vez de tomarlas del piso del día. Depender de lo que haya
+  // en la planta hacía que la prueba midiera el inventario de hoy —  una mañana veintidós líneas,
+  // otra una sola—  en vez del código; y el número de líneas es justo la variable que esta prueba
+  // existe para estirar. Todo vive y muere dentro de la transacción que revierte.
+  const N = 30;
+  const [cl]: any[] = await prisma.$queryRawUnsafe(`SELECT Clase FROM Clase WHERE Activo = 1 LIMIT 1`);
+  check(!!cl, `hay una clase válida para armar el despacho de prueba (${cl?.Clase})`);
+  const KGXM = 18.1, MASTERS = 10;
+  const sinteticas = Array.from({ length: N }, (_, i) => ({
+    Lote: `ZZPRUEBA-${String(i + 1).padStart(3, "0")}`,
+    Clase: cl.Clase, Talla: 900, Masters: MASTERS, KgPorMaster: KGXM,
+    Kg: Number((MASTERS * KGXM).toFixed(2)),
+  }));
 
   const arranque = Date.now();
   try {
     await prisma.$transaction(async (tx) => {
+      await abrirHoja(tx);
       const maxAntes = Number((await uno(tx, `SELECT COALESCE(MAX(MovimientoId), 0) AS m FROM MovimientoPiso`)).m);
 
+      // Primero el producto entra al piso, como lo mete una remisión confirmada.
+      const argsI: any[] = [];
+      const filasI = sinteticas.map(l => {
+        argsI.push(hoja.Fecha, hoja.BodegaCodigo, l.Lote, l.Clase, l.Talla, l.Kg, l.Kg, l.Masters, l.KgPorMaster);
+        return "('INGRESO',?,?,?,?,?,?,'KG',?,?,?,'prueba')";
+      }).join(",");
+      await tx.$executeRawUnsafe(
+        `INSERT INTO MovimientoPiso (Tipo, FechaProduccion, BodegaDestino, Lote, Clase, Talla,
+                                     Peso, UM, PesoKg, Masters, KgPorMaster, RegistradoPor)
+         VALUES ${filasI}`, ...argsI);
+
+      const traidoKg = Number((N * MASTERS * KGXM).toFixed(2));
+      check(Math.abs((await saldoDe(tx, hoja.BodegaCodigo) - antesOrigen) - traidoKg) < 0.05,
+        `entraron al piso ${N} líneas de prueba (${traidoKg} kg)`);
+
+      // ── Y ahora el descongelado completo, con los dos INSERT del endpoint.
       const argsC: any[] = [];
-      const filasC = todas.map(l => {
-        const kg = Number((Number(l.Masters) * Number(l.KgPorMaster)).toFixed(2));
-        argsC.push(hoja.Fecha, hoja.BodegaCodigo, hoja.HojaId, l.Lote, l.Clase, Number(l.Talla),
-          l.FechaLote, kg, kg, Number(l.Masters), Number(l.KgPorMaster), l.RemisionId, "prueba");
-        return "('CONSUMO',?,?,?,?,?,?,?,?,'KG',?,?,?,?,?)";
+      const filasC = sinteticas.map(l => {
+        argsC.push(hoja.Fecha, hoja.BodegaCodigo, hoja.HojaId, l.Lote, l.Clase, l.Talla,
+          l.Kg, l.Kg, l.Masters, l.KgPorMaster);
+        return "('CONSUMO',?,?,?,?,?,?,?,'KG',?,?,?,'prueba')";
       }).join(",");
       await tx.$executeRawUnsafe(
         `INSERT INTO MovimientoPiso (Tipo, FechaProduccion, BodegaOrigen, HojaDestinoId, Lote, Clase, Talla,
-                                     FechaLote, Peso, UM, PesoKg, Masters, KgPorMaster, RemisionId, RegistradoPor)
+                                     Peso, UM, PesoKg, Masters, KgPorMaster, RegistradoPor)
          VALUES ${filasC}`, ...argsC);
 
+      // Se lee desde LAST_INSERT_ID(), que tras un INSERT de varias filas devuelve el id de la
+      // PRIMERA — así el endpoint se ahorra preguntar el MAX antes de insertar, que era una ida y
+      // vuelta entera. Que vengan los N ids es la prueba de que el piso es el correcto: si
+      // LAST_INSERT_ID() devolviera el de la ÚLTIMA fila, acá vendría uno solo.
       const nuevos: any[] = await tx.$queryRawUnsafe(
         `SELECT MovimientoId FROM MovimientoPiso
-          WHERE HojaDestinoId = ? AND Tipo = 'CONSUMO' AND MovimientoId > ? ORDER BY MovimientoId`,
-        hoja.HojaId, maxAntes);
-      check(nuevos.length === todas.length,
-        `el INSERT múltiple devolvió un id por línea: ${nuevos.length} de ${todas.length}`);
+          WHERE HojaDestinoId = ? AND Tipo = 'CONSUMO' AND MovimientoId >= LAST_INSERT_ID()
+          ORDER BY MovimientoId`, hoja.HojaId);
+      check(nuevos.length === N, `LAST_INSERT_ID() apunta a la primera fila: ${nuevos.length} ids de ${N} líneas`);
 
       const argsT: any[] = [];
-      const filasT = todas.map((l, i) => {
-        const kg = Number((Number(l.Masters) * Number(l.KgPorMaster)).toFixed(2));
-        argsT.push(hoja.Fecha, hoja.HojaId, destino.Codigo, l.Lote, l.Clase, Number(l.Talla),
-          l.FechaLote, kg, kg, l.RemisionId, Number(nuevos[i].MovimientoId), "prueba");
-        return "('TRASLADO',?,?,?,?,?,?,?,?,'KG',?,?,?,?)";
+      const filasT = sinteticas.map((l, i) => {
+        const pesado = Number((l.Kg - 0.5).toFixed(2));   // pesó menos, que es lo normal
+        argsT.push(hoja.Fecha, hoja.HojaId, destino.Codigo, l.Lote, l.Clase, l.Talla,
+          pesado, pesado, Number(nuevos[i].MovimientoId));
+        return "('TRASLADO',?,?,?,?,?,?,?,'KG',?,?,'prueba')";
       }).join(",");
       await tx.$executeRawUnsafe(
         `INSERT INTO MovimientoPiso (Tipo, FechaProduccion, HojaOrigenId, BodegaDestino, Lote, Clase, Talla,
-                                     FechaLote, Peso, UM, PesoKg, RemisionId, ConsumoId, RegistradoPor)
+                                     Peso, UM, PesoKg, ConsumoId, RegistradoPor)
          VALUES ${filasT}`, ...argsT);
 
       // LO QUE IMPORTA: cada traslado apunta al consumo del MISMO lote, clase y talla. Si el orden
-      // de los ids no casara con el de las filas, el par quedaría cruzado y borrar un renglón se
-      // llevaría el consumo de otro producto — un error que el saldo total no delataría.
+      // de los ids no casara con el de las filas, los pares quedarían cruzados y borrar un renglón
+      // se llevaría el consumo de otro producto — un error que el saldo total NO delataría, porque
+      // los kilos cuadran igual. Los lotes sintéticos van numerados justamente para que un cruce
+      // sea visible.
       const cruzados: any[] = await tx.$queryRawUnsafe(`
         SELECT COUNT(*) AS n FROM MovimientoPiso t
           JOIN MovimientoPiso c ON c.MovimientoId = t.ConsumoId
          WHERE t.HojaOrigenId = ? AND t.Tipo = 'TRASLADO' AND t.MovimientoId > ?
-           AND (t.Lote <> c.Lote OR t.Clase <> c.Clase OR t.Talla <> c.Talla
-                OR NOT (t.RemisionId <=> c.RemisionId))`, hoja.HojaId, maxAntes);
-      check(Number(cruzados[0].n) === 0, `ningún par quedó cruzado (${cruzados[0].n} cruces)`);
+           AND (t.Lote <> c.Lote OR t.Clase <> c.Clase OR t.Talla <> c.Talla)`, hoja.HojaId, maxAntes);
+      check(Number(cruzados[0].n) === 0, `ningún par quedó cruzado en ${N} líneas (${cruzados[0].n} cruces)`);
 
-      const atados: any[] = await tx.$queryRawUnsafe(
+      const atados: any[] = await uno(tx,
         `SELECT COUNT(*) AS n FROM MovimientoPiso
-          WHERE HojaOrigenId = ? AND Tipo = 'TRASLADO' AND ConsumoId IS NOT NULL
-            AND MovimientoId > ?`, hoja.HojaId, maxAntes);
-      check(Number(atados[0].n) === todas.length,
-        `los ${todas.length} traslados quedaron atados a su consumo`);
+          WHERE HojaOrigenId = ? AND Tipo = 'TRASLADO' AND ConsumoId IS NOT NULL AND MovimientoId > ?`,
+        hoja.HojaId, maxAntes);
+      check(Number(atados.n) === N, `los ${N} traslados quedaron atados a su consumo`);
 
-      const totalDecl = todas.reduce((s, l) => s + Number((Number(l.Masters) * Number(l.KgPorMaster)).toFixed(2)), 0);
-      const ahora = await saldoDe(tx, hoja.BodegaCodigo);
-      check(Math.abs((antesOrigen - ahora) - totalDecl) < 0.05,
-        `el piso bajó los ${totalDecl.toFixed(2)} kg del lote completo (bajó ${(antesOrigen - ahora).toFixed(2)})`);
+      // El piso queda como estaba: entró el producto de prueba y salió completo hacia el destino.
+      check(Math.abs(await saldoDe(tx, hoja.BodegaCodigo) - antesOrigen) < 0.05,
+        "el piso vuelve a su saldo: lo que entró de prueba se descongeló completo");
 
       throw new Error("ROLLBACK");
     }, { timeout: 30000, maxWait: 15000 });
@@ -238,9 +268,10 @@ async function main() {
     if (!e.message.includes("ROLLBACK")) throw e;
   }
   const tardo = Date.now() - arranque;
-  // El límite viejo de Prisma era 5 s y es lo que rompía en pantalla; que quepa con holgura ahí es
-  // la prueba de que el arreglo fue quitar viajes, no solo agrandar el plazo.
-  check(tardo < 5000, `las ${todas.length} líneas en lote tardaron ${tardo} ms (antes reventaba a los 5000)`);
+  // El límite viejo de Prisma era 5 s y es lo que rompía en pantalla. Que treinta líneas quepan con
+  // holgura ahí es la prueba de que el arreglo fue quitar viajes, no solo agrandar el plazo: el
+  // trabajo ya no depende de cuántas líneas trae el despacho.
+  check(tardo < 5000, `${N} líneas en lote tardaron ${tardo} ms (antes reventaba a los 5000)`);
 
   // ── Y no quedó rastro.
   const finFilas = Number((await uno(prisma, `SELECT COUNT(*) AS n FROM MovimientoPiso`)).n);

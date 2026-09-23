@@ -593,20 +593,28 @@ router.post("/hojas/:id/descongelar", requireAuth, requirePerm("descongelado", "
         if (!recibe.has(d)) throw new ErrorNegocio(400, `${d} no recibe inventario al piso`);
       }
 
-      // ── La disponibilidad, en UNA consulta para toda la bodega. Traer el saldo completo y
-      // buscarlo en memoria cuesta una consulta en vez de una por línea, y el agrupado es el mismo
-      // que ya usa /saldo, así que la pantalla y el control dicen exactamente lo mismo.
+      // ── La disponibilidad, en UNA consulta para todas las líneas. Una por línea serían veinte
+      // idas y vueltas; esta trae lo de las veinte de un viaje y se busca en memoria.
+      //
+      // Acotada a los LOTES que se están bajando, no a la bodega entera. La diferencia no se nota
+      // hoy —  el kardex tiene sesenta filas—  pero esta consulta agrega todo el histórico del piso
+      // en cada descongelado, así que sin el filtro el costo crece con cada master que pasó por el
+      // área desde que el módulo existe. Con él, el trabajo depende del tamaño del despacho, que es
+      // lo que no crece. Usa idx_movpiso_bdestino / idx_movpiso_borigen y luego idx_movpiso_lote.
+      const lotes = [...new Set(lineas.map(l => l.Lote))];
+      const enLotes = `Lote IN (${lotes.map(() => "?").join(",")})`;
       const saldo: any[] = await tx.$queryRawUnsafe(`
         SELECT RemisionId, Lote, Clase, Talla,
                ROUND(SUM(Delta), 2) AS Kg, COALESCE(SUM(DeltaM), 0) AS Masters, MAX(FL) AS FechaLote
           FROM (
             SELECT RemisionId, Lote, Clase, Talla, PesoKg AS Delta, Masters AS DeltaM, FechaLote AS FL
-              FROM MovimientoPiso WHERE BodegaDestino = ?
+              FROM MovimientoPiso WHERE BodegaDestino = ? AND ${enLotes}
             UNION ALL
             SELECT RemisionId, Lote, Clase, Talla, -PesoKg, -Masters, NULL
-              FROM MovimientoPiso WHERE BodegaOrigen = ?
+              FROM MovimientoPiso WHERE BodegaOrigen = ? AND ${enLotes}
           ) t
-         GROUP BY RemisionId, Lote, Clase, Talla`, h.BodegaCodigo, h.BodegaCodigo);
+         GROUP BY RemisionId, Lote, Clase, Talla`,
+        h.BodegaCodigo, ...lotes, h.BodegaCodigo, ...lotes);
       const hay = new Map<string, any>(saldo.map((s: any) => [
         `${s.RemisionId == null ? "" : Number(s.RemisionId)}|${s.Lote}|${s.Clase}|${Number(s.Talla)}`, s]));
 
@@ -635,9 +643,6 @@ router.post("/hojas/:id/descongelar", requireAuth, requirePerm("descongelado", "
       }
 
       // ── Los consumos, en UN solo INSERT.
-      const [tope]: any[] = await tx.$queryRaw`SELECT COALESCE(MAX(MovimientoId), 0) AS m FROM MovimientoPiso`;
-      const maxAntes = Number(tope.m);
-
       const argsC: any[] = [];
       const filasC = lineas.map(l => {
         argsC.push(fecha, h.BodegaCodigo, id, l.Lote, l.Clase, l.talla, l.fechaLote,
@@ -653,10 +658,16 @@ router.post("/hojas/:id/descongelar", requireAuth, requirePerm("descongelado", "
       // varias filas se escriben en el orden dado, así que sus MovimientoId ascienden en ese mismo
       // orden y casan uno a uno con `lineas`. El filtro por hoja más el candado FOR UPDATE de
       // arriba garantizan que nadie más metió filas de esta hoja en medio.
+      //
+      // El piso desde donde se lee es LAST_INSERT_ID(), que tras un INSERT de varias filas devuelve
+      // el id de la PRIMERA. Antes esto se resolvía preguntando el MAX antes de insertar, que era
+      // una ida y vuelta entera —  unos 110 ms contra la base de la planta—  para averiguar algo que
+      // la propia conexión ya sabía. La transacción interactiva fija la conexión, así que el valor
+      // es el de este INSERT y no el de otro que corriera en paralelo.
       const nuevos: any[] = await tx.$queryRawUnsafe(
         `SELECT MovimientoId FROM MovimientoPiso
-          WHERE HojaDestinoId = ? AND Tipo = 'CONSUMO' AND MovimientoId > ?
-          ORDER BY MovimientoId`, id, maxAntes);
+          WHERE HojaDestinoId = ? AND Tipo = 'CONSUMO' AND MovimientoId >= LAST_INSERT_ID()
+          ORDER BY MovimientoId`, id);
       if (nuevos.length !== lineas.length) {
         throw new ErrorNegocio(500, "No se pudo atar cada renglón con su descongelado; no se guardó nada.");
       }
