@@ -732,11 +732,11 @@ export default function PalletsPage() {
 
   useEffect(() => { fetchPallets(); }, [fetchPallets]);
 
-  const handleCrear = async ({ Origen, CantidadMaster, AreaCodigo, Motivo }) => {
+  const handleCrear = async ({ Origen, CantidadMaster, BodegaCodigo, Motivo }) => {
     const res = await fetch(API, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...authHeader() },
-      body: JSON.stringify({ Origen, CantidadMaster, AreaCodigo, Motivo }),
+      body: JSON.stringify({ Origen, CantidadMaster, BodegaCodigo, Motivo }),
     });
     const data = await leerJSON(res);
     if (!res.ok) throw new Error(data.error || "No se pudo crear el pallet");
