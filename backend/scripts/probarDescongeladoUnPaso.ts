@@ -44,15 +44,12 @@ async function main() {
   check(destinos.some(d => d.Codigo === "DESCONGELADO"),
     "Descongelado está en el catálogo (la pantalla lo quita de su propia lista de destinos)");
 
-  const areas: any[] = await prisma.$queryRawUnsafe(
-    `SELECT a.Codigo, a.Nombre, a.BodegaVirtualCodigo AS b FROM Areas a
-       JOIN BodegaVirtual v ON v.Codigo = a.BodegaVirtualCodigo AND v.LlevaPiso = 1
-      WHERE a.Activa = 1`);
-  check(areas.length > 0, `${areas.length} áreas cuelgan de una bodega con inventario al piso`);
-  // Escoger un área tiene que poder resolver su bodega sin ambigüedad: es de donde sale
-  // BodegaDestino cuando el operador dice "lo mando a Pelado".
-  check(areas.every(a => destinos.some(d => d.Codigo === a.b)),
-    "toda área destino resuelve su bodega");
+  // El destino es la bodega virtual y nada más: ninguna de las que solo existen como origen de
+  // polín puede aparecer, porque ahí no se puede dejar producto a granel.
+  const soloPolin: any[] = await prisma.$queryRawUnsafe(
+    `SELECT Codigo FROM BodegaVirtual WHERE LlevaPiso = 0 AND Letra IS NOT NULL`);
+  check(!destinos.some(d => soloPolin.some((p: any) => p.Codigo === d.Codigo)),
+    `ninguna bodega de solo polín es destino (${soloPolin.map((p: any) => p.Codigo).join(", ") || "ninguna"})`);
 
   // ── Una línea real que esté hoy al piso de Descongelado
   const linea = await uno(prisma, `
@@ -108,10 +105,10 @@ async function main() {
       const consumoId = Number((await uno(tx, `SELECT LAST_INSERT_ID() AS id`)).id);
 
       await tx.$executeRawUnsafe(
-        `INSERT INTO MovimientoPiso (Tipo, FechaProduccion, HojaOrigenId, BodegaDestino, AreaDeclarada,
+        `INSERT INTO MovimientoPiso (Tipo, FechaProduccion, HojaOrigenId, BodegaDestino,
                                      Lote, Clase, Talla, FechaLote, Peso, UM, PesoKg,
                                      NumeroTermo, RemisionId, ConsumoId, RegistradoPor)
-         VALUES ('TRASLADO', ?, ?, ?, NULL, ?, ?, ?, ?, ?, 'KG', ?, '99', ?, ?, 'prueba')`,
+         VALUES ('TRASLADO', ?, ?, ?, ?, ?, ?, ?, ?, 'KG', ?, '99', ?, ?, 'prueba')`,
         hoja.Fecha, hoja.HojaId, destino.Codigo, linea.Lote, linea.Clase, Number(linea.Talla),
         linea.FechaLote, pesado, pesado, linea.RemisionId, consumoId);
       const trasladoId = Number((await uno(tx, `SELECT LAST_INSERT_ID() AS id`)).id);

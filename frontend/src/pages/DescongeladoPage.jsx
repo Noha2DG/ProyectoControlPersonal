@@ -48,17 +48,17 @@ function colorRendimiento(r) {
 }
 
 /* ── Destino ──────────────────────────────────────────────────────── */
-// A dónde va lo descongelado, en las dos alturas con que la planta habla del mismo lugar: la
-// BODEGA lleva el saldo (Pelado es un solo piso con siete áreas encima, y partirlo daría siete
-// saldos que nadie cuadra) y el ÁREA es a quien se le entrega el termo. Se escoge el área y el
-// sistema guarda las dos cosas; cuando todavía no se sabe cuál de las siete, se escoge la bodega.
+// A dónde va lo descongelado: una BODEGA VIRTUAL del catálogo, y nada más.
 //
-// El valor viaja prefijado ("A:DS" / "B:PELADO") porque un área y una bodega pueden llamarse igual
-// y un <select> solo devuelve texto.
-const pagoDestino = (v) => {
-  if (!v) return null;
-  return v.startsWith("A:") ? { AreaDeclarada: v.slice(2) } : { BodegaDestino: v.slice(2) };
-};
+// La bodega es la unidad con la que se lleva el inventario al piso, así que es también la única
+// altura a la que el destino significa algo. Ofrecer además el área de abajo —  "Pelado Selecto" en
+// vez de "Pelado"—  hacía escoger entre treinta y ocho opciones para mover el saldo de catorce
+// lugares: el operador tenía que acertarle a una distinción que el inventario después ignora.
+//
+// La lista viene de /bodegas, que ya filtra Activo = 1 y LlevaPiso = 1 y las ordena por el flujo
+// del proceso. Las que solo existen como origen de polín (Bodega, Devoluciones) no aparecen: ahí no
+// se puede dejar producto a granel.
+const pagoDestino = (v) => v ? { BodegaDestino: v } : null;
 
 function SelectorDestino({ destinos, value, onChange, ancho = "w-full", vacio = "¿A dónde va?…", chico = false }) {
   return (
@@ -67,23 +67,13 @@ function SelectorDestino({ destinos, value, onChange, ancho = "w-full", vacio = 
         ${value ? "border-gray-300" : "border-amber-400 bg-amber-50"}
         focus:outline-none focus:ring-2 focus:ring-blue-400`}>
       <option value="">{vacio}</option>
-      {destinos.map(b => b.Areas.length === 0 ? (
-        <option key={b.Codigo} value={`B:${b.Codigo}`}>{b.Nombre}</option>
-      ) : (
-        <optgroup key={b.Codigo} label={b.Nombre}>
-          {/* El texto se repite a propósito: el <select> cerrado no muestra la etiqueta del grupo,
-              así que la opción tiene que decir sola de qué bodega se trata. */}
-          <option value={`B:${b.Codigo}`}>{b.Nombre} (sin área específica)</option>
-          {b.Areas.map(a => <option key={a.Codigo} value={`A:${a.Codigo}`}>{a.Nombre}</option>)}
-        </optgroup>
-      ))}
+      {destinos.map(b => <option key={b.Codigo} value={b.Codigo}>{b.Nombre}</option>)}
     </select>
   );
 }
 
-// El valor que deja seleccionado un renglón ya guardado: preferimos el área, que es más específica.
-const valorDestinoDe = (l) => l?.AreaDeclarada ? `A:${l.AreaDeclarada}` : l?.BodegaDestino ? `B:${l.BodegaDestino}` : "";
-const nombreDestinoDe = (l) => l?.NombreAreaDeclarada || l?.NombreBodegaDestino || l?.BodegaDestino || "—";
+const valorDestinoDe = (l) => l?.BodegaDestino || "";
+const nombreDestinoDe = (l) => l?.NombreBodegaDestino || l?.BodegaDestino || "—";
 
 /* ── Modal: descongelar ───────────────────────────────────────────── */
 // El único punto de captura del módulo. Confirma tres cosas a la vez —  cuántos masters bajaron de
@@ -169,7 +159,7 @@ function ModalDescongelar({ titulo, lineas, hojaAbierta, destinos, empleados, au
             <div className="flex items-center gap-2">
               <label className="text-xs font-semibold text-gray-600">Enviar todo a</label>
               <SelectorDestino destinos={destinos} value={destinoComun} onChange={aplicarATodas}
-                ancho="w-60" vacio="Escoja el área…" />
+                ancho="w-60" vacio="Escoja la bodega…" />
             </div>
           )}
           <div className="flex items-center gap-2">
@@ -766,9 +756,9 @@ export default function DescongeladoPage() {
     const h = { headers: authHeader() };
     fetch("/api/clase", h).then(leerJSON).then(d => Array.isArray(d) && setClases(d.filter(c => c.Activo)));
     fetch("/api/tallas", h).then(leerJSON).then(d => Array.isArray(d) && setTallas(d.filter(t => t.Activo)));
-    // Los destinos son las bodegas que llevan inventario al piso, con sus áreas colgando. La propia
-    // bodega de la hoja se quita: mandarse producto a uno mismo no es un traslado.
-    fetch(`${API}/destinos`, h).then(leerJSON)
+    // Los destinos son las bodegas virtuales que llevan inventario al piso. La propia bodega de la
+    // hoja se quita: mandarse producto a uno mismo no es un traslado.
+    fetch(`${API}/bodegas`, h).then(leerJSON)
       .then(d => { if (Array.isArray(d)) setDestinos(d.filter(b => b.Codigo !== "DESCONGELADO")); });
     fetch("/api/empleados", h).then(leerJSON).then(d => Array.isArray(d) && setEmpleados(d.filter(e => e.Estado === "Activo")));
   }, []);

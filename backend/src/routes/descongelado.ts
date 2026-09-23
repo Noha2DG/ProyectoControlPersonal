@@ -224,30 +224,6 @@ router.get("/bodegas", requireAuth, requirePerm("descongelado", "ver"), async (_
   }
 });
 
-// GET /api/descongelado/destinos — a dónde se puede mandar lo descongelado, como lo diría la
-// planta: la bodega que lleva el saldo, con las áreas que trabajan en ella colgando.
-//
-// Se ofrecen las dos alturas a propósito. El inventario vive por BODEGA —  Pelado son siete áreas
-// sobre el mismo piso y partir el saldo entre ellas daría siete saldos que nadie cuadra—  pero el
-// operador entrega el termo a un área concreta y esa es la información que el papel conserva. Se
-// escoge el área y el sistema guarda las dos cosas: la bodega en el kardex, el área en
-// AreaDeclarada. Cuando no se sabe todavía cuál de las siete, se escoge la bodega y ya.
-router.get("/destinos", requireAuth, requirePerm("descongelado", "ver"), async (_req: Request, res: Response) => {
-  try {
-    const bodegas: any[] = await prisma.$queryRaw`
-      SELECT Codigo, Nombre, Orden FROM BodegaVirtual
-       WHERE Activo = 1 AND LlevaPiso = 1 ORDER BY Orden`;
-    const areas: any[] = await prisma.$queryRaw`
-      SELECT Codigo, Nombre, BodegaVirtualCodigo AS Bodega FROM Areas
-       WHERE Activa = 1 AND BodegaVirtualCodigo IS NOT NULL ORDER BY Nombre`;
-    res.json(num(bodegas, ["Orden"]).map(b => ({
-      ...b, Areas: areas.filter(a => a.Bodega === b.Codigo).map(a => ({ Codigo: a.Codigo, Nombre: a.Nombre })),
-    })));
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
 // ── Hojas ────────────────────────────────────────────────────────────────────────────────────
 const SQL_HOJA = `
   SELECT h.HojaId, h.BodegaCodigo, b.Nombre AS NombreBodega, h.FechaProduccion,
@@ -580,17 +556,11 @@ router.post("/hojas/:id/descongelar", requireAuth, requirePerm("descongelado", "
           throw new ErrorNegocio(400, `${Lote} ${Clase}: el peso declarado debe ser mayor que cero`);
         }
 
-        // El destino se puede pedir como ÁREA —  "lo mando a Pelado", que es como habla la planta—
-        // o como bodega. La bodega es la que lleva el saldo; el área se guarda aparte en
-        // AreaDeclarada, que existe justamente para conservar a dónde se dijo que iba sin partir el
-        // inventario de un piso que comparten siete áreas.
-        const areaDecl = l.AreaDeclarada ? String(l.AreaDeclarada).trim() : null;
-        let destino = l.BodegaDestino ? String(l.BodegaDestino).trim() : null;
-        if (!destino && areaDecl) {
-          const [a]: any[] = await tx.$queryRaw`
-            SELECT BodegaVirtualCodigo AS b FROM Areas WHERE Codigo = ${areaDecl} LIMIT 1`;
-          destino = a?.b ?? null;
-        }
+        // El destino es una BODEGA VIRTUAL, que es la unidad con la que se lleva el inventario al
+        // piso. No se pide el área de abajo: Pelado son siete áreas sobre el mismo piso y el saldo
+        // no las distingue, así que escogerla sería acertarle a una diferencia que después se
+        // ignora — treinta y ocho opciones para mover el saldo de catorce lugares.
+        const destino = l.BodegaDestino ? String(l.BodegaDestino).trim() : null;
         if (!destino) throw new ErrorNegocio(400, `${Lote} ${Clase}: falta decir a dónde se envía`);
         if (destino === h.BodegaCodigo) {
           throw new ErrorNegocio(400, "El destino no puede ser la misma bodega de la hoja");
@@ -647,10 +617,10 @@ router.post("/hojas/:id/descongelar", requireAuth, requirePerm("descongelado", "
         const kgReal = aKg(pesado, um);
 
         await tx.$executeRaw`
-          INSERT INTO MovimientoPiso (Tipo, FechaProduccion, HojaOrigenId, BodegaDestino, AreaDeclarada,
+          INSERT INTO MovimientoPiso (Tipo, FechaProduccion, HojaOrigenId, BodegaDestino,
                                       Lote, Clase, Talla, FechaLote, Peso, UM, PesoKg,
                                       NumeroTermo, RemisionId, ConsumoId, RegistradoPor)
-          VALUES ('TRASLADO', ${fecha}, ${id}, ${destino}, ${areaDecl}, ${Lote}, ${Clase}, ${talla},
+          VALUES ('TRASLADO', ${fecha}, ${id}, ${destino}, ${Lote}, ${Clase}, ${talla},
                   ${disp.FechaLote}, ${pesado}, ${um}, ${kgReal},
                   ${(l.NumeroTermo ? String(l.NumeroTermo).trim() : null) || termoGeneral},
                   ${remId}, ${consumoId}, ${operador})`;
@@ -691,13 +661,7 @@ router.put("/renglon/:id", requireAuth, requirePerm("descongelado", "editar"), a
     const peso = Number(req.body.Peso);
     if (!peso || peso <= 0) { res.status(400).json({ error: "El peso debe ser mayor que cero" }); return; }
 
-    const areaDecl = req.body.AreaDeclarada ? String(req.body.AreaDeclarada).trim() : null;
-    let destino = req.body.BodegaDestino ? String(req.body.BodegaDestino).trim() : null;
-    if (!destino && areaDecl) {
-      const [a]: any[] = await prisma.$queryRaw`
-        SELECT BodegaVirtualCodigo AS b FROM Areas WHERE Codigo = ${areaDecl} LIMIT 1`;
-      destino = a?.b ?? null;
-    }
+    const destino = req.body.BodegaDestino ? String(req.body.BodegaDestino).trim() : null;
     if (!destino) { res.status(400).json({ error: "Falta decir a dónde se envía" }); return; }
     if (destino === chk.hoja.BodegaCodigo) {
       res.status(400).json({ error: "El destino no puede ser la misma bodega de la hoja" }); return;
@@ -707,12 +671,11 @@ router.put("/renglon/:id", requireAuth, requirePerm("descongelado", "editar"), a
     await prisma.$executeRaw`
       UPDATE MovimientoPiso
          SET Peso = ${peso}, PesoKg = ${aKg(peso, um)}, BodegaDestino = ${destino},
-             AreaDeclarada = ${areaDecl},
              NumeroTermo = ${req.body.NumeroTermo ? String(req.body.NumeroTermo).trim() : null}
        WHERE MovimientoId = ${id}`;
     res.json({ ok: true });
   } catch (err: any) {
-    if (err.message?.includes("foreign key")) res.status(400).json({ error: "La bodega o el área no existen" });
+    if (err.message?.includes("foreign key")) res.status(400).json({ error: "Esa bodega no existe" });
     else res.status(500).json({ error: err.message });
   }
 });
