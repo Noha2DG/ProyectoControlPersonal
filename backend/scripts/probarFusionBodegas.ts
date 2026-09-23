@@ -20,7 +20,7 @@ async function main() {
 
   // ── UNA sola tabla de bodegas.
   const cat = await uno(`SELECT COUNT(*) AS n FROM BodegaVirtual`);
-  check(Number(cat.n) === 23, `el catálogo único tiene 23 bodegas (tiene ${cat.n})`);
+  check(Number(cat.n) === 22, `el catálogo único tiene 22 bodegas (tiene ${cat.n})`);
 
   const m = await uno(`SELECT Letra, UltimoSecuencial AS s FROM BodegaVirtual WHERE Codigo = 'MASTERIZADO'`);
   check(m?.Letra === "M", `Masterizado quedó con letra M (${m?.Letra ?? "sin letra"})`);
@@ -32,6 +32,18 @@ async function main() {
   const dup = await prisma.$queryRawUnsafe(
     `SELECT Letra, COUNT(*) AS n FROM BodegaVirtual WHERE Letra IS NOT NULL GROUP BY Letra HAVING n > 1`) as any[];
   check(dup.length === 0, `ninguna letra repetida${dup.length ? ": " + dup.map(d => d.Letra).join(", ") : ""}`);
+
+  // Bodega y Bodega Conservación eran el mismo lugar visto desde las dos tablas viejas.
+  const bc = await uno(`SELECT COUNT(*) AS n FROM BodegaVirtual WHERE Codigo = 'BODEGA_CONSERVACION'`);
+  check(Number(bc.n) === 0, "BODEGA_CONSERVACION se unió a BODEGA (era el mismo lugar)");
+  const bod = await uno(`
+    SELECT Nombre, Letra, Orden, LlevaPiso,
+           (SELECT COUNT(*) FROM Areas a WHERE a.BodegaVirtualCodigo = 'BODEGA' AND a.Activa = 1) AS Areas
+      FROM BodegaVirtual WHERE Codigo = 'BODEGA'`);
+  check(bod?.Nombre === "Bodega Conservación" && bod?.Letra === "B" && Number(bod?.Areas) === 3,
+    `Bodega quedó como "${bod?.Nombre}" letra ${bod?.Letra}, orden ${bod?.Orden}, ${bod?.Areas} áreas`);
+  // Su inventario ya lo lleva el polín; encenderle el piso contaría el mismo producto dos veces.
+  check(Number(bod?.LlevaPiso) === 0, "Bodega Conservación no lleva inventario al piso (lo lleva por polín)");
 
   // AreaCodigo era la cardinalidad equivocada: apuntaba a UNA área.
   const area = await uno(`SELECT COUNT(*) AS n FROM INFORMATION_SCHEMA.COLUMNS
