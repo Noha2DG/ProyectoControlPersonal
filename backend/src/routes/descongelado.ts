@@ -13,12 +13,17 @@
 import { Router, Request, Response } from "express";
 import jwt from "jsonwebtoken";
 import prisma from "../lib/prisma.ts";
-import { requireAuth, requirePerm } from "../middleware/auth.ts";
+import { requireAuth, requirePerm, AuthRequest } from "../middleware/auth.ts";
 import { hoyGT } from "../lib/dateGT.ts";
 
 const router = Router();
 
 const LB_POR_KG = 2.20462;
+
+// Mismo plazo que para anular una remisión, y por el mismo criterio: pasado ese punto, devolver
+// deja de ser la corrección de la jornada y pasa a ser una decisión que alguien autoriza. La regla
+// operativa del piso es que nada se queda más de dos días, así que cuatro dan margen de sobra.
+const DIAS_PARA_DEVOLVER = 4;
 
 // Mismo patrón que pallets.ts/bodegaFisica.ts: error de negocio LANZADO dentro de la transacción,
 // traducido a su status HTTP por el catch de la ruta.
@@ -733,52 +738,265 @@ router.post("/hojas/:id/descongelar", requireAuth, requirePerm("descongelado", "
   }
 });
 
-// POST /api/descongelado/hojas/:id/devolver — sección 3: regresa a bodega SIN descongelar.
+// ── Devolver a bodega ────────────────────────────────────────────────────────────────────────
 //
-// Escribe el mismo par que un descongelado —  CONSUMO del piso a la hoja y, atada a él, la salida—
-// y ahí está el arreglo, no solo la comodidad. La versión anterior escribía la DEVOLUCION colgada
-// de la hoja SIN el consumo que la respaldara, con dos consecuencias que nadie veía hasta el final
-// del día:
+// El producto que baja al piso pierde su identidad de caja: MovimientoPiso lleva lote, clase, talla
+// y kilos, y no tiene ninguna columna que apunte a un master. Por eso una devolución no se puede
+// resolver solo con el kardex del piso — devolvería kilos a un almacén que cuenta cajas con QR, y
+// los masters se quedarían marcados 'Salido' para siempre, sin polín y sin nada que posicionar.
 //
-//   · el producto seguía contado al piso, aunque físicamente ya estaba de regreso en el congelador;
-//   · la hoja registraba una salida sin su entrada, así que el cierre calculaba merma negativa y se
-//     negaba a cerrar. Con 26 kg de entrada y 25 descongelados, una devolución de 13 dejaba la hoja
-//     imposible de cerrar para siempre.
+// La identidad la conserva la REMISIÓN. RemisionDetalle guarda cada MasterId que salió, con su
+// correlativo, su lote y el polín del que se tomó. Así que devolver es elegir de esa lista, no
+// escanear: en Descongelado no hay lector, y el correlativo que regresa es el mismo que salió.
 //
-// Y se elige de lo que está al piso en vez de teclear lote, producto y talla: esto se llena en el
-// teléfono del área, donde escribir "G430TM03-E02-9" a mano es una errata garantizada.
-router.post("/hojas/:id/devolver", requireAuth, requirePerm("descongelado", "crear"), async (req: Request, res: Response) => {
-  try {
-    const id = Number(req.params.id);
-    const operador = getOperador(req);
-    const motivoGeneral = req.body.Motivo ? String(req.body.Motivo).trim().slice(0, 200) : null;
-    const crudas: any[] = Array.isArray(req.body.lineas) ? req.body.lineas : [];
-    if (!crudas.length) { res.status(400).json({ error: "No hay líneas que devolver" }); return; }
-    const lineas = normalizarLineas(crudas, false, null);
+// Lo que regresa NO vuelve a su polín de origen. Cuando la remisión se lleva un polín completo, ese
+// polín queda Despachado y su posición se LIBERA — a estas alturas la ocupa otro. Por eso nace un
+// polín nuevo con Origen = DEVOLUCION, que bodega ve sin posición y ubica como cualquier otro.
+//
+// El polín nace ABIERTO: bodega decide cuándo cerrarlo, por si llegan más cajas de la misma tanda.
+// Sin posición es como se entera de que tiene trabajo pendiente.
+const BODEGA_DEVOLUCION = "BODEGA";   // Bodega Conservación, letra B — de ahí salen los B00xx que
+                                      // ya usan las devoluciones de cliente. El producto congelado
+                                      // que regresa del piso va al mismo lugar físico.
 
-    const out = await prisma.$transaction(async (tx) => {
+// GET /api/descongelado/devolvibles?remision=N&bodega=DESCONGELADO
+// Lo que esa remisión despachó y todavía se puede devolver, agrupado por el polín del que salió —
+// que es la unidad en que la planta lo devuelve ("generalmente regresan polines completos").
+//
+// Va por bodega y no por hoja a propósito: la hoja del día nace con el primer movimiento, así que
+// preguntar qué se puede devolver no puede exigir que ya exista una.
+//
+// Trae además cuántos masters de cada lote siguen AL PISO: no se puede devolver una caja cuyo
+// producto ya se descongeló, y es mejor que la pantalla lo tape que que el servidor lo rechace
+// después de que el operador marcó veinte casillas.
+router.get("/devolvibles", requireAuth, requirePerm("descongelado", "ver"), async (req: Request, res: Response) => {
+  try {
+    const remisionId = Number(req.query.remision);
+    const bodega = String(req.query.bodega ?? "").trim();
+    if (!remisionId) { res.status(400).json({ error: "Falta la remisión" }); return; }
+    if (!bodega) { res.status(400).json({ error: "Falta la bodega" }); return; }
+
+    const [r]: any[] = await prisma.$queryRawUnsafe(`
+      SELECT Folio, Estatus, DATE_FORMAT(ConfirmadaEn, '%Y-%m-%d %H:%i') AS ConfirmadaEn,
+             DATEDIFF(CURDATE(), DATE(ConfirmadaEn)) AS Dias
+        FROM Remisiones WHERE RemisionId = ? LIMIT 1`, remisionId);
+    if (!r) { res.status(404).json({ error: "Remisión no encontrada" }); return; }
+
+    const filas: any[] = await prisma.$queryRawUnsafe(`
+      SELECT p.PalletId, p.Codigo AS PalletCodigo, p.Estatus AS PalletEstatus,
+             m.MasterId, ei.Correlativo,
+             oe.Lote, dp.Clase, cl.Descripcion AS DescripcionClase,
+             dp.Talla, ta.Descripcion AS DescripcionTalla,
+             ROUND(pre.PesoKG * pre.CajasXMaster, 3) AS KgPorMaster
+        FROM RemisionDetalle rd
+        JOIN Masters m ON m.MasterId = rd.MasterId
+        JOIN Pallets p ON p.PalletId = m.PalletId
+        JOIN EtiquetaImpresa ei ON ei.EtiquetaId = m.EtiquetaId
+        JOIN OrdenEtiquetado oe ON oe.OrdenId = ei.OrdenId
+        JOIN DetallePedido dp ON dp.DetalleId = oe.DetalleId
+        JOIN Clase cl ON cl.Clase = dp.Clase
+        JOIN Tallas ta ON ta.Codigo = dp.Talla
+        JOIN Presentacion pre ON pre.Codigo = dp.Presentacion
+       WHERE rd.RemisionId = ? AND rd.Vigente = 1 AND m.Estatus = 'Salido'
+       ORDER BY p.Codigo, oe.Lote, dp.Talla, ei.Correlativo`, remisionId);
+
+    // Masters que siguen al piso por lote/clase/talla, de esta misma remisión. Sin mirar el Tipo:
+    // es el saldo, igual que en todo el módulo.
+    const alPiso: any[] = await prisma.$queryRawUnsafe(`
+      SELECT Lote, Clase, Talla, COALESCE(SUM(DeltaM), 0) AS Masters FROM (
+        SELECT Lote, Clase, Talla,  Masters AS DeltaM FROM MovimientoPiso
+          WHERE BodegaDestino = ? AND RemisionId = ?
+        UNION ALL
+        SELECT Lote, Clase, Talla, -Masters        FROM MovimientoPiso
+          WHERE BodegaOrigen  = ? AND RemisionId = ?
+      ) t GROUP BY Lote, Clase, Talla`, bodega, remisionId, bodega, remisionId);
+    const tope = new Map<string, number>(alPiso.map((a: any) =>
+      [`${a.Lote}|${a.Clase}|${Number(a.Talla)}`, Number(a.Masters)]));
+
+    const polines: any[] = [];
+    for (const f of filas) {
+      const clave = `${f.Lote}|${f.Clase}|${Number(f.Talla)}`;
+      let p = polines.find(x => x.PalletId === Number(f.PalletId));
+      if (!p) {
+        p = { PalletId: Number(f.PalletId), Codigo: f.PalletCodigo, Estatus: f.PalletEstatus, Masters: [] };
+        polines.push(p);
+      }
+      p.Masters.push({
+        MasterId: Number(f.MasterId), Correlativo: String(f.Correlativo),
+        Lote: f.Lote, Clase: f.Clase, DescripcionClase: f.DescripcionClase,
+        Talla: Number(f.Talla), DescripcionTalla: f.DescripcionTalla,
+        KgPorMaster: Number(f.KgPorMaster),
+        AlPiso: tope.get(clave) ?? 0,
+      });
+    }
+
+    const dias = Number(r.Dias);
+    res.json({
+      Folio: r.Folio, Estatus: r.Estatus, ConfirmadaEn: r.ConfirmadaEn, Dias: dias,
+      // Mismo plazo que anular una remisión, y por el mismo motivo: pasado ese punto devolver deja
+      // de ser una corrección del día y pasa a ser una decisión que alguien autoriza.
+      Vencida: dias > DIAS_PARA_DEVOLVER, DiasLimite: DIAS_PARA_DEVOLVER,
+      polines,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/descongelado/hojas/:id/devolver  { Motivo, Masters: [id, ...] }
+//
+// Cierra el círculo en los DOS inventarios, que es lo que ninguna versión anterior hacía:
+//
+//   bodega   los masters vuelven a EnBodega dentro de un polín nuevo sin posición, salen de la
+//            remisión (RemisionDetalle.Vigente = NULL) y queda su renglón en MovimientosBodega;
+//   piso     el par CONSUMO + DEVOLUCION descuenta los kilos, igual que un descongelado.
+//
+// La versión anterior escribía solo la mitad del piso, y encima sin el consumo: el producto seguía
+// contado al piso aunque ya estaba en el congelador, los masters se quedaban 'Salido' sin polín que
+// posicionar, y la hoja registraba una salida sin su entrada — con lo que el cierre calculaba merma
+// negativa y se negaba a cerrar para siempre.
+// La lógica real vive acá y no dentro del handler —  exportada, igual que devolverMaster()—  para
+// poder ejercitarla contra la base real desde un script que revierte su transacción. No hay base de
+// desarrollo, y una prueba que REPLIQUE estas consultas en vez de llamarlas prueba la réplica.
+export async function devolverDelPiso(
+  tx: any,
+  params: { hojaId: number; masters: any[]; motivo: string; operador: string; esAdmin: boolean },
+) {
+      const id = Number(params.hojaId);
+      const operador = params.operador;
+      const esAdmin = params.esAdmin;
+      const motivo = String(params.motivo ?? "").trim().slice(0, 200);
+      if (!motivo) throw new ErrorNegocio(400, "El motivo de la devolución es requerido");
+
+      const ids = [...new Set((Array.isArray(params.masters) ? params.masters : [])
+        .map((n: any) => Number(n)).filter((n: number) => Number.isInteger(n) && n > 0))];
+      if (!ids.length) throw new ErrorNegocio(400, "No hay masters que devolver");
+
       const h = await hojaParaEscribir(tx, id);
       const fecha = fechaDeHoja(h);
+      const marcas = ids.map(() => "?").join(",");
+
+      // Los masters se bloquean primero y solos: el join descriptivo de abajo toca diez tablas de
+      // catálogo y bloquearlas todas sería tomar candados sobre medio sistema para nada.
+      const bloq: any[] = await tx.$queryRawUnsafe(
+        `SELECT MasterId, Estatus, PalletId FROM Masters WHERE MasterId IN (${marcas}) FOR UPDATE`, ...ids);
+      if (bloq.length !== ids.length) throw new ErrorNegocio(404, "Alguno de los masters no existe en bodega");
+      const noSalido = bloq.find((m: any) => m.Estatus !== "Salido");
+      if (noSalido) {
+        throw new ErrorNegocio(400,
+          "Alguno de estos masters ya no está Salido — quizá alguien lo devolvió antes. Recargue la pantalla (F5).");
+      }
+      const palletOrigen = new Map<number, number>(bloq.map((m: any) => [Number(m.MasterId), Number(m.PalletId)]));
+
+      const filas: any[] = await tx.$queryRawUnsafe(`
+        SELECT m.MasterId, rd.RemisionId, r.Folio, r.Estatus AS EstatusRemision,
+               DATEDIFF(CURDATE(), DATE(r.ConfirmadaEn)) AS Dias,
+               oe.Lote, dp.Clase, dp.Talla,
+               ROUND(pre.PesoKG * pre.CajasXMaster, 3) AS KgPorMaster
+          FROM Masters m
+          JOIN RemisionDetalle rd ON rd.MasterId = m.MasterId AND rd.Vigente = 1
+          JOIN Remisiones r ON r.RemisionId = rd.RemisionId
+          JOIN EtiquetaImpresa ei ON ei.EtiquetaId = m.EtiquetaId
+          JOIN OrdenEtiquetado oe ON oe.OrdenId = ei.OrdenId
+          JOIN DetallePedido dp ON dp.DetalleId = oe.DetalleId
+          JOIN Presentacion pre ON pre.Codigo = dp.Presentacion
+         WHERE m.MasterId IN (${marcas})`, ...ids);
+      if (filas.length !== ids.length) {
+        throw new ErrorNegocio(400,
+          "Alguno de estos masters no tiene una remisión vigente que explique su salida — repórtelo antes de forzar nada.");
+      }
+      const sinConfirmar = filas.find((f: any) => f.EstatusRemision !== "Confirmada");
+      if (sinConfirmar) throw new ErrorNegocio(400, `La remisión ${sinConfirmar.Folio} no está Confirmada`);
+
+      // El plazo se mide por remisión, no por la más vieja del lote: cada caja vuelve de la suya.
+      const vencida = filas.find((f: any) => Number(f.Dias) > DIAS_PARA_DEVOLVER);
+      if (vencida && !esAdmin) {
+        throw new ErrorNegocio(403,
+          `La remisión ${vencida.Folio} se confirmó hace ${Number(vencida.Dias)} días y el plazo para devolver es de ` +
+          `${DIAS_PARA_DEVOLVER}. Pasado ese plazo solo un administrador puede hacerlo.`);
+      }
+
+      // ── El piso primero: si los kilos ya no están (alguien los descongeló), no hay nada que
+      // devolver y conviene enterarse ANTES de haber creado un polín que quedaría vacío.
+      const grupos = new Map<string, any>();
+      for (const f of filas) {
+        const k = `${Number(f.RemisionId)}|${f.Lote}|${f.Clase}|${Number(f.Talla)}`;
+        const g = grupos.get(k) ?? {
+          Lote: f.Lote, Clase: f.Clase, Talla: Number(f.Talla), RemisionId: Number(f.RemisionId),
+          KgPorMaster: Number(f.KgPorMaster), Masters: 0, UM: "KG", Motivo: motivo,
+        };
+        g.Masters += 1;
+        grupos.set(k, g);
+      }
+      const lineas = normalizarLineas([...grupos.values()], false, null);
       const consumos = await consumirDelPiso(tx, h, id, lineas, operador, fecha);
 
-      // Sin BodegaDestino: el producto sale del piso y se acabó. A dónde va exactamente lo sabe
-      // bodega por su propio kardex de polines, que es el que manda sobre el producto congelado.
-      const args: any[] = [];
-      const filas = lineas.map((l, i) => {
-        args.push(fecha, id, l.Lote, l.Clase, l.talla, l.fechaLote, l.declarado, l.um, l.kgDecl,
-                  l.masters, l.motivo || motivoGeneral, l.remId, consumos[i], operador);
+      const argsD: any[] = [];
+      const filasD = lineas.map((l, i) => {
+        argsD.push(fecha, id, l.Lote, l.Clase, l.talla, l.fechaLote, l.declarado, l.um, l.kgDecl,
+                   l.masters, motivo, l.remId, consumos[i], operador);
         return "('DEVOLUCION',?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
       }).join(",");
       await tx.$executeRawUnsafe(
         `INSERT INTO MovimientoPiso (Tipo, FechaProduccion, HojaOrigenId, Lote, Clase, Talla,
                                      FechaLote, Peso, UM, PesoKg, Masters, Motivo, RemisionId,
                                      ConsumoId, RegistradoPor)
-         VALUES ${filas}`, ...args);
+         VALUES ${filasD}`, ...argsD);
 
-      return { ok: true, lineas: lineas.length,
-               KgDevuelto: Number(lineas.reduce((s, l) => s + l.kgDecl, 0).toFixed(2)) };
-    }, { timeout: 30000, maxWait: 15000 });
+      // ── Y ahora bodega: un polín nuevo que recibe las cajas con su correlativo intacto.
+      // El secuencial se incrementa con la fila bloqueada, igual que en POST /api/pallets: dos
+      // devoluciones simultáneas no pueden terminar con el mismo código.
+      const [bv]: any[] = await tx.$queryRawUnsafe(
+        `SELECT Codigo, Letra, Activo FROM BodegaVirtual WHERE Codigo = ? FOR UPDATE`, BODEGA_DEVOLUCION);
+      if (!bv?.Letra || !Number(bv.Activo)) {
+        throw new ErrorNegocio(500, `La bodega ${BODEGA_DEVOLUCION} no puede recibir devoluciones`);
+      }
+      await tx.$executeRawUnsafe(
+        `UPDATE BodegaVirtual SET UltimoSecuencial = UltimoSecuencial + 1 WHERE Codigo = ?`, BODEGA_DEVOLUCION);
+      const [sec]: any[] = await tx.$queryRawUnsafe(
+        `SELECT UltimoSecuencial AS n FROM BodegaVirtual WHERE Codigo = ?`, BODEGA_DEVOLUCION);
+      const codigo = String(bv.Letra) + String(Number(sec.n)).padStart(4, "0");
 
+      // CantidadMaster = lo que regresó, ni más ni menos: así el cuadre del polín cierra en 100 %
+      // desde el primer momento y bodega ve de un vistazo que no falta nada por escanear.
+      await tx.$executeRawUnsafe(
+        `INSERT INTO Pallets (Codigo, Origen, Motivo, CantidadMaster, BodegaVirtualCodigo, CreadoPor)
+         VALUES (?, 'DEVOLUCION', ?, ?, ?, ?)`,
+        codigo, `Devuelto del piso: ${motivo}`.slice(0, 200), ids.length, BODEGA_DEVOLUCION, operador);
+      const [nuevo]: any[] = await tx.$queryRawUnsafe(`SELECT LAST_INSERT_ID() AS id`);
+      const palletId = Number(nuevo.id);
+
+      await tx.$executeRawUnsafe(
+        `UPDATE RemisionDetalle SET Vigente = NULL WHERE MasterId IN (${marcas}) AND Vigente = 1`, ...ids);
+      await tx.$executeRawUnsafe(
+        `UPDATE Masters SET Estatus = 'EnBodega', PalletId = ? WHERE MasterId IN (${marcas})`, palletId, ...ids);
+
+      const argsM: any[] = [];
+      const filasM = filas.map((f: any) => {
+        argsM.push(palletId, palletOrigen.get(Number(f.MasterId)) ?? null, Number(f.MasterId),
+                   Number(f.RemisionId), operador,
+                   `Devolución del piso (remisión ${f.Folio}): ${motivo}`.slice(0, 200));
+        return "(?,?,?,?,'DEVOLUCION',NULL,NULL,?,?)";
+      }).join(",");
+      await tx.$executeRawUnsafe(
+        `INSERT INTO MovimientosBodega (PalletId, PalletOrigenId, MasterId, RemisionId, Tipo,
+                                        PosicionOrigenId, PosicionDestinoId, Usuario, Motivo)
+         VALUES ${filasM}`, ...argsM);
+
+      return {
+        ok: true, Masters: ids.length, Polin: codigo, PalletId: palletId,
+        KgDevuelto: Number(lineas.reduce((s, l) => s + l.kgDecl, 0).toFixed(2)),
+      };
+}
+
+router.post("/hojas/:id/devolver", requireAuth, requirePerm("descongelado", "crear"), async (req: AuthRequest, res: Response) => {
+  try {
+    const out = await prisma.$transaction(
+      (tx) => devolverDelPiso(tx, {
+        hojaId: Number(req.params.id), masters: req.body.Masters, motivo: req.body.Motivo,
+        operador: getOperador(req), esAdmin: req.user?.rol === "admin",
+      }),
+      { timeout: 30000, maxWait: 15000 });
     res.status(201).json(out);
   } catch (err: any) {
     responderError(res, err);

@@ -75,12 +75,58 @@ function SelectorDestino({ destinos, value, onChange, ancho = "w-full", vacio = 
 const valorDestinoDe = (l) => l?.BodegaDestino || "";
 const nombreDestinoDe = (l) => l?.NombreBodegaDestino || l?.BodegaDestino || "—";
 
-/* ── Modal: bajar del piso ────────────────────────────────────────── */
-// El único punto de captura del módulo, para los DOS gestos que sacan producto del piso:
-// descongelarlo (va al área siguiente) o devolverlo a bodega sin descongelar. Son el mismo
-// movimiento hasta la mitad —  el producto baja del piso a la hoja—  y se elige igual, de una lista
-// de lo que hay, así que comparten pantalla. Lo único que cambia es la mitad de abajo: descongelar
-// pregunta a dónde va y cuánto pesó; devolver pregunta por qué regresa.
+/* ── La cabecera de la hoja del día ────────────────────── */
+// La hoja NO se abre a mano: la abre el primer movimiento del día, sea descongelar o devolver. Por
+// eso sus datos —  los del encabezado del formulario de papel—  se piden dentro del modal que esté
+// haciendo ese primer movimiento, y no en una pantalla aparte que no significaría nada por sí sola.
+function CabeceraNuevaHoja({ cab, setCab, empleados, auxiliares }) {
+  const [personasTocado, setPersonasTocado] = useState(false);
+
+  // Personas son los AUXILIARES: todos los que pasaron por el área en la jornada, menos el
+  // encargado, que va aparte. Se recalcula al elegir encargado —  si él mismo aparece en la lista,
+  // el número baja solo—  y deja de recalcularse en cuanto alguien lo escribe a mano.
+  const sinEncargado = auxiliares.filter(a => a.Codigo !== cab.Encargado);
+  useEffect(() => {
+    if (!personasTocado) setCab(c => ({ ...c, Personas: String(sinEncargado.length) }));
+  }, [sinEncargado.length, personasTocado, setCab]);
+
+  return (
+    <div className="mt-4 pt-3 border-t">
+      <p className="text-xs font-semibold text-gray-600 mb-2">
+        No hay hoja abierta hoy — se abre una con estos datos (es la cabecera del formulario de papel).
+      </p>
+      <div className="flex flex-wrap items-end gap-3">
+        <div>
+          <label className="block text-xs text-gray-500 mb-1">Encargado</label>
+          <EmpleadoAutocomplete empleados={empleados} value={cab.Encargado}
+            onSelect={cod => setCab(c => ({ ...c, Encargado: cod }))} />
+        </div>
+        <div>
+          <label className="block text-xs text-gray-500 mb-1">Personas (auxiliares)</label>
+          <input type="number" min="0" value={cab.Personas}
+            onChange={e => { setPersonasTocado(true); setCab(c => ({ ...c, Personas: e.target.value })); }}
+            className="w-20 border border-gray-300 rounded px-2 py-1 text-sm text-right" />
+          <p className="text-xs text-gray-400 mt-1"
+             title={sinEncargado.map(a => `${a.Codigo} ${a.Nombre}`).join(", ")}>
+            {sinEncargado.length} auxiliar{sinEncargado.length !== 1 ? "es" : ""} pasaron por el área
+            {cab.Encargado && auxiliares.some(a => a.Codigo === cab.Encargado) ? " (sin el encargado)" : ""}
+          </p>
+        </div>
+        <div>
+          <label className="block text-xs text-gray-500 mb-1">Hora inicio</label>
+          <input type="time" value={cab.HoraInicio}
+            onChange={e => setCab(c => ({ ...c, HoraInicio: e.target.value }))}
+            className="border border-gray-300 rounded px-2 py-1 text-sm" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ── Modal: descongelar ───────────────────────────────── */
+// Confirma tres cosas a la vez —  cuántos masters bajaron de verdad, a dónde van y (si alguien lo
+// pesó) cuánto pesaron—  y con eso el producto queda descongelado. No hay un segundo paso:
+// presionar el botón ES la confirmación de que ya se hizo.
 //
 // Se elige, no se teclea. Esto se llena en el teléfono del área, donde escribir a mano
 // "G430TM03-E02-9", el producto y la talla es una errata garantizada — y una errata acá inventa un
@@ -92,46 +138,29 @@ const nombreDestinoDe = (l) => l?.NombreBodegaDestino || l?.BodegaDestino || "�
 // Sirve para una remisión entera o para una línea suelta. En el primer caso el destino se pone una
 // vez arriba y baja a todas las líneas, porque lo normal es que una remisión entera vaya al mismo
 // lado; la que no, se corrige en su propia fila.
-function ModalBajarDelPiso({ modo, titulo, lineas, hojaAbierta, destinos, empleados, auxiliares, onConfirmar, onCerrar }) {
-  const devolviendo = modo === "devolver";
+function ModalDescongelar({ titulo, lineas, hojaAbierta, destinos, empleados, auxiliares, onConfirmar, onCerrar }) {
   const clave = l => `${l.RemisionId ?? "-"}|${l.Lote}|${l.Clase}|${l.Talla}`;
 
   const [fila, setFila] = useState(() => Object.fromEntries(lineas.map(l =>
     [clave(l), { masters: String(l.Masters ?? 0), destino: "", peso: "" }])));
   const [termo, setTermo] = useState("");
-  const [motivo, setMotivo] = useState("");
   const [pesar, setPesar] = useState(false);
   const [guardando, setGuardando] = useState(false);
   const [cab, setCab] = useState({ Encargado: "", Personas: "", HoraInicio: horaGT() });
-  const [personasTocado, setPersonasTocado] = useState(false);
 
   const set = (l, k) => (v) => setFila(f => ({ ...f, [clave(l)]: { ...f[clave(l)], [k]: v } }));
   const de = (l) => fila[clave(l)] ?? { masters: "0", destino: "", peso: "" };
 
-  // Personas son los AUXILIARES: todos los que pasaron por el área en la jornada, menos el
-  // encargado, que va aparte. Se recalcula al elegir encargado —  si él mismo aparece en la lista,
-  // el número baja solo—  y deja de recalcularse en cuanto alguien lo escribe a mano.
-  const auxiliaresSinEncargado = auxiliares.filter(a => a.Codigo !== cab.Encargado);
-  useEffect(() => {
-    if (!personasTocado) setCab(c => ({ ...c, Personas: String(auxiliaresSinEncargado.length) }));
-  }, [auxiliaresSinEncargado.length, personasTocado]);
-
   const mastersDe = l => Math.max(0, Math.min(Number(de(l).masters) || 0, l.Masters ?? 0));
   const kgDe = l => Number((mastersDe(l) * (l.KgPorMaster || 0)).toFixed(2));
-  // Una devolución regresa tal como bajó: no hay báscula de por medio, así que el peso es el
-  // declarado y punto.
-  const pesoDe = l => {
-    if (devolviendo) return kgDe(l);
-    const p = Number(de(l).peso);
-    return p > 0 ? p : kgDe(l);
-  };
+  const pesoDe = l => { const p = Number(de(l).peso); return p > 0 ? p : kgDe(l); };
 
   const activas = lineas.filter(l => mastersDe(l) > 0);
   const totalM = activas.reduce((s, l) => s + mastersDe(l), 0);
   const totalKg = Number(activas.reduce((s, l) => s + kgDe(l), 0).toFixed(2));
   const totalPesado = Number(activas.reduce((s, l) => s + pesoDe(l), 0).toFixed(2));
   const faltanM = lineas.reduce((s, l) => s + Math.max(0, (l.Masters ?? 0) - mastersDe(l)), 0);
-  const sinDestino = devolviendo ? [] : activas.filter(l => !de(l).destino);
+  const sinDestino = activas.filter(l => !de(l).destino);
 
   const listo = totalM > 0 && sinDestino.length === 0 && (hojaAbierta || cab.Encargado);
 
@@ -149,13 +178,10 @@ function ModalBajarDelPiso({ modo, titulo, lineas, hojaAbierta, destinos, emplea
     setGuardando(true);
     try {
       await onConfirmar(
-        activas.map(l => ({
-          linea: l, Masters: mastersDe(l),
-          Peso: !devolviendo && pesar ? pesoDe(l) : null,
-          destino: devolviendo ? null : pagoDestino(de(l).destino),
-        })),
+        activas.map(l => ({ linea: l, Masters: mastersDe(l), Peso: pesar ? pesoDe(l) : null,
+                            destino: pagoDestino(de(l).destino) })),
         hojaAbierta ? null : cab,
-        devolviendo ? { Motivo: motivo.trim() || null } : { NumeroTermo: termo.trim() || null },
+        { NumeroTermo: termo.trim() || null },
       );
     } finally { setGuardando(false); }
   };
@@ -165,7 +191,7 @@ function ModalBajarDelPiso({ modo, titulo, lineas, hojaAbierta, destinos, emplea
       <div className="bg-white rounded-xl shadow-2xl w-full max-w-5xl min-w-0 flex flex-col max-h-[92vh]">
         <div className="px-5 py-3 border-b flex items-center justify-between shrink-0">
           <div>
-            <h2 className="font-bold text-gray-800">{devolviendo ? "Devolver a bodega" : "Descongelar"}</h2>
+            <h2 className="font-bold text-gray-800">Descongelar</h2>
             <p className="text-xs text-gray-500 mt-0.5">{titulo}</p>
           </div>
           <button onClick={onCerrar} className="text-gray-400 hover:text-gray-600 text-2xl leading-none">&times;</button>
@@ -173,33 +199,22 @@ function ModalBajarDelPiso({ modo, titulo, lineas, hojaAbierta, destinos, emplea
 
         {/* Controles que aplican a todo el lote */}
         <div className="px-5 py-2.5 bg-gray-50 border-b flex flex-wrap items-center gap-3 shrink-0">
-          {devolviendo ? (
-            <div className="flex items-center gap-2 w-full">
-              <label className="text-xs font-semibold text-gray-600 shrink-0">Por qué regresa</label>
-              <input value={motivo} onChange={e => setMotivo(e.target.value)}
-                placeholder="No se alcanzó a procesar, se pidió de más…"
-                className="flex-1 min-w-0 border border-gray-300 rounded px-2 py-1 text-sm" />
+          {lineas.length > 1 && (
+            <div className="flex items-center gap-2">
+              <label className="text-xs font-semibold text-gray-600">Enviar todo a</label>
+              <SelectorDestino destinos={destinos} value={destinoComun} onChange={aplicarATodas}
+                ancho="w-60" vacio="Escoja la bodega…" />
             </div>
-          ) : (
-            <>
-              {lineas.length > 1 && (
-                <div className="flex items-center gap-2">
-                  <label className="text-xs font-semibold text-gray-600">Enviar todo a</label>
-                  <SelectorDestino destinos={destinos} value={destinoComun} onChange={aplicarATodas}
-                    ancho="w-60" vacio="Escoja la bodega…" />
-                </div>
-              )}
-              <div className="flex items-center gap-2">
-                <label className="text-xs font-semibold text-gray-600">Termo N°</label>
-                <input value={termo} onChange={e => setTermo(e.target.value)} placeholder="opcional"
-                  className="w-24 border border-gray-300 rounded px-2 py-1 text-sm" />
-              </div>
-              <label className="ml-auto flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer select-none">
-                <input type="checkbox" checked={pesar} onChange={e => setPesar(e.target.checked)} />
-                Pesé en báscula
-              </label>
-            </>
           )}
+          <div className="flex items-center gap-2">
+            <label className="text-xs font-semibold text-gray-600">Termo N°</label>
+            <input value={termo} onChange={e => setTermo(e.target.value)} placeholder="opcional"
+              className="w-24 border border-gray-300 rounded px-2 py-1 text-sm" />
+          </div>
+          <label className="ml-auto flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer select-none">
+            <input type="checkbox" checked={pesar} onChange={e => setPesar(e.target.checked)} />
+            Pesé en báscula
+          </label>
         </div>
 
         <div className="px-5 py-3 overflow-y-auto overflow-x-auto">
@@ -212,8 +227,8 @@ function ModalBajarDelPiso({ modo, titulo, lineas, hojaAbierta, destinos, emplea
                 <th className="py-2 text-right font-semibold">Al piso</th>
                 <th className="py-2 text-right font-semibold">Masters</th>
                 <th className="py-2 text-right font-semibold">Kg</th>
-                {pesar && !devolviendo && <th className="py-2 text-right font-semibold">Pesado</th>}
-                {!devolviendo && <th className="py-2 text-left font-semibold pl-3">Destino</th>}
+                {pesar && <th className="py-2 text-right font-semibold">Pesado</th>}
+                <th className="py-2 text-left font-semibold pl-3">Destino</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
@@ -237,21 +252,19 @@ function ModalBajarDelPiso({ modo, titulo, lineas, hojaAbierta, destinos, emplea
                           ${falta > 0 && m > 0 ? "border-amber-400 bg-amber-50" : "border-gray-300"}`} />
                     </td>
                     <td className="py-1.5 text-right tabular-nums font-semibold w-20">{fmtNum(kgDe(l))}</td>
-                    {pesar && !devolviendo && (
+                    {pesar && (
                       <td className="py-1.5 text-right">
                         <input type="number" min="0" step="0.01" value={de(l).peso}
                           onChange={e => set(l, "peso")(e.target.value)} placeholder={fmtNum(kgDe(l))}
                           className="w-24 border border-gray-300 rounded px-2 py-1 text-sm text-right tabular-nums focus:outline-none focus:ring-2 focus:ring-blue-400" />
                       </td>
                     )}
-                    {!devolviendo && (
-                      <td className="py-1.5 pl-3">
-                        {m > 0 && (
-                          <SelectorDestino destinos={destinos} value={de(l).destino}
-                            onChange={set(l, "destino")} ancho="w-56" chico />
-                        )}
-                      </td>
-                    )}
+                    <td className="py-1.5 pl-3">
+                      {m > 0 && (
+                        <SelectorDestino destinos={destinos} value={de(l).destino}
+                          onChange={set(l, "destino")} ancho="w-56" chico />
+                      )}
+                    </td>
                   </tr>
                 );
               })}
@@ -261,19 +274,19 @@ function ModalBajarDelPiso({ modo, titulo, lineas, hojaAbierta, destinos, emplea
                 <td colSpan={4} className="py-2 text-right text-xs font-bold text-gray-600 uppercase">Total</td>
                 <td className="py-2 text-right tabular-nums font-bold">{totalM} m</td>
                 <td className="py-2 text-right tabular-nums font-bold">{fmtNum(totalKg)}</td>
-                {pesar && !devolviendo && <td className="py-2 text-right tabular-nums font-bold">{fmtNum(totalPesado)}</td>}
-                {!devolviendo && <td></td>}
+                {pesar && <td className="py-2 text-right tabular-nums font-bold">{fmtNum(totalPesado)}</td>}
+                <td></td>
               </tr>
             </tfoot>
           </table>
 
           {faltanM > 0 && (
             <p className="mt-3 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2">
-              Quedan <b>{faltanM} master{faltanM !== 1 ? "s" : ""}</b> sin {devolviendo ? "devolver" : "bajar"}.
-              Siguen al piso hasta que se descongelen o se devuelvan a bodega.
+              Quedan <b>{faltanM} master{faltanM !== 1 ? "s" : ""}</b> sin bajar. Siguen al piso
+              hasta que se descongelen o se devuelvan a bodega.
             </p>
           )}
-          {pesar && !devolviendo && Math.abs(totalPesado - totalKg) > 0.001 && (
+          {pesar && Math.abs(totalPesado - totalKg) > 0.001 && (
             <p className="mt-2 text-xs text-gray-600">
               {totalPesado < totalKg
                 ? <>Pesaron <b>{fmtNum(totalKg - totalPesado)} kg menos</b> que lo declarado — esa diferencia sale como merma al cerrar la hoja.</>
@@ -282,35 +295,7 @@ function ModalBajarDelPiso({ modo, titulo, lineas, hojaAbierta, destinos, emplea
           )}
 
           {!hojaAbierta && (
-            <div className="mt-4 pt-3 border-t">
-              <p className="text-xs font-semibold text-gray-600 mb-2">
-                No hay hoja abierta hoy — se abre una con estos datos (es la cabecera del formulario de papel).
-              </p>
-              <div className="flex flex-wrap items-end gap-3">
-                <div>
-                  <label className="block text-xs text-gray-500 mb-1">Encargado</label>
-                  <EmpleadoAutocomplete empleados={empleados} value={cab.Encargado}
-                    onSelect={cod => setCab(c => ({ ...c, Encargado: cod }))} />
-                </div>
-                <div>
-                  <label className="block text-xs text-gray-500 mb-1">Personas (auxiliares)</label>
-                  <input type="number" min="0" value={cab.Personas}
-                    onChange={e => { setPersonasTocado(true); setCab(c => ({ ...c, Personas: e.target.value })); }}
-                    className="w-20 border border-gray-300 rounded px-2 py-1 text-sm text-right" />
-                  <p className="text-xs text-gray-400 mt-1"
-                     title={auxiliaresSinEncargado.map(a => `${a.Codigo} ${a.Nombre}`).join(", ")}>
-                    {auxiliaresSinEncargado.length} auxiliar{auxiliaresSinEncargado.length !== 1 ? "es" : ""} pasaron por el área
-                    {cab.Encargado && auxiliares.some(a => a.Codigo === cab.Encargado) ? " (sin el encargado)" : ""}
-                  </p>
-                </div>
-                <div>
-                  <label className="block text-xs text-gray-500 mb-1">Hora inicio</label>
-                  <input type="time" value={cab.HoraInicio}
-                    onChange={e => setCab(c => ({ ...c, HoraInicio: e.target.value }))}
-                    className="border border-gray-300 rounded px-2 py-1 text-sm" />
-                </div>
-              </div>
-            </div>
+            <CabeceraNuevaHoja cab={cab} setCab={setCab} empleados={empleados} auxiliares={auxiliares} />
           )}
         </div>
 
@@ -320,17 +305,179 @@ function ModalBajarDelPiso({ modo, titulo, lineas, hojaAbierta, destinos, emplea
               ? <>Se agrega a la hoja <b>#{hojaAbierta.HojaId}</b>{hojaAbierta.NombreEncargado ? ` · ${hojaAbierta.NombreEncargado}` : ""}</>
               : "Se abrirá la hoja del día"}
             {sinDestino.length > 0 && <span className="text-amber-700 font-semibold"> · falta el destino de {sinDestino.length} línea{sinDestino.length !== 1 ? "s" : ""}</span>}
-            {devolviendo && <span className="text-gray-400"> · regresa a bodega tal como bajó, sin pesar</span>}
           </span>
           <button onClick={onCerrar}
             className="ml-auto shrink-0 border border-gray-300 rounded px-4 py-1.5 text-sm text-gray-600 hover:bg-gray-50">
             Cancelar
           </button>
           <button onClick={confirmar} disabled={!listo || guardando}
-            className={`shrink-0 whitespace-nowrap text-white rounded px-5 py-1.5 text-sm font-semibold disabled:opacity-40
-              ${devolviendo ? "bg-amber-600 hover:bg-amber-700" : "bg-blue-600 hover:bg-blue-700"}`}>
-            {guardando ? "Guardando…"
-              : `${devolviendo ? "Devolver" : "Descongelar"} ${totalM} master${totalM !== 1 ? "s" : ""}`}
+            className="shrink-0 whitespace-nowrap bg-blue-600 hover:bg-blue-700 text-white rounded px-5 py-1.5 text-sm font-semibold disabled:opacity-40">
+            {guardando ? "Guardando…" : `Descongelar ${totalM} master${totalM !== 1 ? "s" : ""}`}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ── Modal: devolver a bodega ─────────────────────────────────────── */
+// Devolver NO es elegir kilos: es elegir CAJAS, con su correlativo. El piso lleva lote y kilos y no
+// tiene forma de nombrar un master, así que devolver desde ahí dejaría a bodega con kilos que no
+// puede posicionar y con los masters marcados 'Salido' para siempre.
+//
+// La identidad la conserva la remisión, que guarda cada MasterId que despachó. Por eso acá no se
+// escanea nada —  en Descongelado no hay lector—  sino que se marca de la lista que salió, agrupada
+// por el polín del que vino, que es como la planta la devuelve: casi siempre el polín completo.
+function ModalDevolver({ titulo, datos, hojaAbierta, empleados, auxiliares, onConfirmar, onCerrar }) {
+  const [sel, setSel] = useState(() => new Set());
+  const [expandido, setExpandido] = useState(() => new Set());
+  const [motivo, setMotivo] = useState("");
+  const [guardando, setGuardando] = useState(false);
+  const [cab, setCab] = useState({ Encargado: "", Personas: "", HoraInicio: horaGT() });
+
+  const polines = datos?.polines ?? [];
+  const todos = polines.flatMap(p => p.Masters);
+  const claveLote = m => `${m.Lote}|${m.Clase}|${m.Talla}`;
+
+  // Un master cuyo producto YA se descongeló no puede regresar: sus kilos salieron del piso y
+  // devolverlo dejaría el saldo en negativo. El tope se cuenta por lote, y se tapa acá en vez de
+  // dejar que el servidor rechace el lote entero después de marcar veinte casillas.
+  const usadosPorLote = useMemo(() => {
+    const m = new Map();
+    for (const x of todos) if (sel.has(x.MasterId)) m.set(claveLote(x), (m.get(claveLote(x)) ?? 0) + 1);
+    return m;
+  }, [sel, todos]);
+
+  const cabe = (m) => sel.has(m.MasterId) || (usadosPorLote.get(claveLote(m)) ?? 0) < m.AlPiso;
+  const bloqueado = (m) => !sel.has(m.MasterId) && m.AlPiso <= 0;
+
+  const alternar = (id) => setSel(s => {
+    const n = new Set(s);
+    n.has(id) ? n.delete(id) : n.add(id);
+    return n;
+  });
+
+  // Marcar el polín entero es el gesto normal; se saltan las cajas cuyo producto ya se descongeló.
+  const alternarPolin = (p) => setSel(s => {
+    const n = new Set(s);
+    const marcados = p.Masters.filter(m => n.has(m.MasterId)).length;
+    if (marcados === p.Masters.length) { for (const m of p.Masters) n.delete(m.MasterId); return n; }
+    const usados = new Map(usadosPorLote);
+    for (const m of p.Masters) {
+      if (n.has(m.MasterId)) continue;
+      const k = claveLote(m);
+      if ((usados.get(k) ?? 0) < m.AlPiso) { n.add(m.MasterId); usados.set(k, (usados.get(k) ?? 0) + 1); }
+    }
+    return n;
+  });
+
+  const marcados = todos.filter(m => sel.has(m.MasterId));
+  const totalKg = Number(marcados.reduce((s, m) => s + m.KgPorMaster, 0).toFixed(2));
+  const listo = marcados.length > 0 && motivo.trim() && (hojaAbierta || cab.Encargado) && !datos?.Vencida;
+
+  const confirmar = async () => {
+    setGuardando(true);
+    try { await onConfirmar(marcados.map(m => m.MasterId), motivo.trim(), hojaAbierta ? null : cab); }
+    finally { setGuardando(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-3xl min-w-0 flex flex-col max-h-[92vh]">
+        <div className="px-5 py-3 border-b flex items-center justify-between shrink-0">
+          <div>
+            <h2 className="font-bold text-gray-800">Devolver a bodega</h2>
+            <p className="text-xs text-gray-500 mt-0.5">
+              {titulo}
+              {datos?.ConfirmadaEn && ` · confirmada ${datos.ConfirmadaEn}`}
+              {datos?.Dias != null && ` · hace ${datos.Dias} día${datos.Dias !== 1 ? "s" : ""}`}
+            </p>
+          </div>
+          <button onClick={onCerrar} className="text-gray-400 hover:text-gray-600 text-2xl leading-none">&times;</button>
+        </div>
+
+        <div className="px-5 py-2.5 bg-gray-50 border-b flex items-center gap-2 shrink-0">
+          <label className="text-xs font-semibold text-gray-600 shrink-0">Por qué regresa</label>
+          <input value={motivo} onChange={e => setMotivo(e.target.value)}
+            placeholder="No se alcanzó a procesar, se pidió de más…"
+            className="flex-1 min-w-0 border border-gray-300 rounded px-2 py-1 text-sm" />
+        </div>
+
+        <div className="px-5 py-3 overflow-y-auto">
+          {datos?.Vencida && (
+            <p className="mb-3 text-xs text-red-700 bg-red-50 border border-red-200 rounded px-3 py-2">
+              Esta remisión se confirmó hace <b>{datos.Dias} días</b> y el plazo para devolver es de {datos.DiasLimite}.
+              Pasado ese plazo la devolución la tiene que hacer un administrador.
+            </p>
+          )}
+          {polines.length === 0 && (
+            <p className="py-6 text-center text-gray-400 text-xs">
+              Esta remisión ya no tiene cajas que devolver.
+            </p>
+          )}
+
+          {polines.map(p => {
+            const nSel = p.Masters.filter(m => sel.has(m.MasterId)).length;
+            const abierto = expandido.has(p.PalletId);
+            return (
+              <div key={p.PalletId} className="border border-gray-200 rounded mb-2 overflow-hidden">
+                <div className="flex items-center gap-2 px-3 py-2 bg-gray-50">
+                  <input type="checkbox" checked={nSel === p.Masters.length && nSel > 0}
+                    ref={el => { if (el) el.indeterminate = nSel > 0 && nSel < p.Masters.length; }}
+                    onChange={() => alternarPolin(p)} className="w-4 h-4 cursor-pointer" />
+                  <button onClick={() => setExpandido(s => {
+                      const n = new Set(s); n.has(p.PalletId) ? n.delete(p.PalletId) : n.add(p.PalletId); return n;
+                    })}
+                    className="flex-1 min-w-0 text-left">
+                    <span className="font-mono font-bold text-sm text-gray-800">{p.Codigo}</span>
+                    <span className="text-xs text-gray-500 ml-2">{p.Estatus}</span>
+                    <span className="text-xs text-gray-500 ml-2">
+                      · {nSel} de {p.Masters.length} caja{p.Masters.length !== 1 ? "s" : ""}
+                    </span>
+                  </button>
+                  <span className="text-gray-400 text-xs font-bold w-4 text-center">{abierto ? "▾" : "▸"}</span>
+                </div>
+                {abierto && (
+                  <div className="divide-y divide-gray-100">
+                    {p.Masters.map(m => (
+                      <label key={m.MasterId}
+                        className={`flex items-center gap-2 px-3 py-1.5 text-xs
+                          ${bloqueado(m) ? "opacity-40" : "hover:bg-gray-50 cursor-pointer"}`}>
+                        <input type="checkbox" checked={sel.has(m.MasterId)}
+                          disabled={!cabe(m)} onChange={() => alternar(m.MasterId)}
+                          className="w-4 h-4 ml-5 cursor-pointer" />
+                        <span className="font-mono text-gray-700">{m.Correlativo}</span>
+                        <span className="font-mono text-gray-400">{m.Lote}</span>
+                        <span className="text-gray-500">{m.Clase} · {m.DescripcionTalla}</span>
+                        <span className="ml-auto tabular-nums text-gray-600">{fmtNum(m.KgPorMaster)} kg</span>
+                        {bloqueado(m) && <span className="text-amber-600 shrink-0">ya descongelado</span>}
+                      </label>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+
+          {!hojaAbierta && marcados.length > 0 && (
+            <CabeceraNuevaHoja cab={cab} setCab={setCab} empleados={empleados} auxiliares={auxiliares} />
+          )}
+        </div>
+
+        <div className="px-5 py-3 border-t flex flex-wrap items-center gap-x-3 gap-y-2 shrink-0">
+          <span className="text-xs text-gray-500 w-full sm:w-auto">
+            {marcados.length > 0
+              ? <>Regresan <b>{marcados.length}</b> caja{marcados.length !== 1 ? "s" : ""} · {fmtNum(totalKg)} kg ·
+                  se crea un polín de devolución que bodega tiene que ubicar</>
+              : "Marque las cajas que regresan"}
+          </span>
+          <button onClick={onCerrar}
+            className="ml-auto shrink-0 border border-gray-300 rounded px-4 py-1.5 text-sm text-gray-600 hover:bg-gray-50">
+            Cancelar
+          </button>
+          <button onClick={confirmar} disabled={!listo || guardando}
+            className="shrink-0 whitespace-nowrap bg-amber-600 hover:bg-amber-700 text-white rounded px-5 py-1.5 text-sm font-semibold disabled:opacity-40">
+            {guardando ? "Guardando…" : `Devolver ${marcados.length} caja${marcados.length !== 1 ? "s" : ""}`}
           </button>
         </div>
       </div>
@@ -344,7 +491,7 @@ function ModalBajarDelPiso({ modo, titulo, lineas, hojaAbierta, destinos, emplea
 //
 // "Días al piso" cuenta desde que el producto ENTRÓ AL ÁREA, no desde la fecha del lote: hay lotes
 // congelados del año pasado y su edad de producción no dice nada sobre si el área lo tiene parado.
-function InventarioPiso({ saldo, resumen, puedeCrear, onBajar }) {
+function InventarioPiso({ saldo, resumen, puedeCrear, onDescongelar, onDevolver }) {
   const [abierto, setAbierto] = useState(true);
   const totalKg = saldo.reduce((s, r) => s + r.Kg, 0);
   const totalM  = saldo.reduce((s, r) => s + (r.Masters || 0), 0);
@@ -392,7 +539,7 @@ function InventarioPiso({ saldo, resumen, puedeCrear, onBajar }) {
                 <th className="px-3 py-2 text-right font-semibold">Días</th>
                 <th className="px-3 py-2 text-right font-semibold">Masters</th>
                 <th className="px-3 py-2 text-right font-semibold">Kg</th>
-                <th className="px-3 py-2 w-48"></th>
+                <th className="px-3 py-2 w-44"></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
@@ -412,15 +559,21 @@ function InventarioPiso({ saldo, resumen, puedeCrear, onBajar }) {
                     <td className="px-3 py-1.5 text-right tabular-nums font-bold text-blue-900">{fmtNum(g.Kg)}</td>
                     <td className="px-3 py-1.5 text-center whitespace-nowrap">
                       {puedeCrear && (<>
-                        <button onClick={() => onBajar("descongelar", g.Folio || "Sin remisión", g.lineas)}
+                        <button onClick={() => onDescongelar(g.Folio || "Sin remisión", g.lineas)}
                           className="bg-blue-600 text-white rounded px-3 py-1 text-xs font-semibold hover:bg-blue-700">
                           Descongelar todo
                         </button>
-                        <button onClick={() => onBajar("devolver", g.Folio || "Sin remisión", g.lineas)}
-                          title="Regresar a bodega sin descongelar"
-                          className="ml-1.5 border border-amber-300 text-amber-700 rounded px-2 py-1 text-xs font-semibold hover:bg-amber-50">
-                          Devolver
-                        </button>
+                        {/* Devolver va SOLO a nivel de remisión: se rastrea por las cajas que ella
+                            despachó, y un polín que regresa suele traer varios lotes. El producto
+                            que entró por un ajuste no tiene remisión detrás, así que no se puede
+                            devolver — no hay de dónde sacar los correlativos. */}
+                        {g.clave !== "sin-remision" && (
+                          <button onClick={() => onDevolver(g.clave, g.Folio)}
+                            title="Regresar cajas a bodega sin descongelar"
+                            className="ml-1.5 border border-amber-300 text-amber-700 rounded px-2 py-1 text-xs font-semibold hover:bg-amber-50">
+                            Devolver
+                          </button>
+                        )}
                       </>)}
                     </td>
                   </tr>
@@ -438,17 +591,12 @@ function InventarioPiso({ saldo, resumen, puedeCrear, onBajar }) {
                       <td className="px-3 py-1.5 text-center whitespace-nowrap">
                         {/* Siempre visibles, nunca escondidos tras el hover: esto se usa en el
                             teléfono del área y ahí no existe pasar el mouse por encima. */}
-                        {puedeCrear && (<>
-                          <button onClick={() => onBajar("descongelar", `${r.FolioRemision || ""} · ${r.Lote}`, [r])}
+                        {puedeCrear && (
+                          <button onClick={() => onDescongelar(`${r.FolioRemision || ""} · ${r.Lote}`, [r])}
                             className="border border-blue-300 text-blue-700 rounded px-2.5 py-0.5 text-xs font-semibold hover:bg-blue-50">
                             Descongelar
                           </button>
-                          <button onClick={() => onBajar("devolver", `${r.FolioRemision || ""} · ${r.Lote}`, [r])}
-                            title="Regresar a bodega sin descongelar"
-                            className="ml-1.5 border border-amber-300 text-amber-700 rounded px-2.5 py-0.5 text-xs font-semibold hover:bg-amber-50">
-                            Devolver
-                          </button>
-                        </>)}
+                        )}
                       </td>
                     </tr>
                   ))}
@@ -720,7 +868,8 @@ export default function DescongeladoPage() {
   const [error, setError]         = useState("");
   const [auxiliares, setAuxiliares] = useState([]);
   const [resumen, setResumen] = useState(null);
-  const [modal, setModal]   = useState(null);   // { modo, titulo, lineas }
+  const [modal, setModal]   = useState(null);   // { titulo, lineas } — descongelar
+  const [devol, setDevol]   = useState(null);   // { titulo, datos }    — devolver
   const [horaFin, setHoraFin] = useState("");
 
   // La hoja NO se abre a mano: la abre el primer descongelado del día. Es la cabecera del
@@ -804,21 +953,24 @@ export default function DescongeladoPage() {
     if (id) await abrirDetalle(id);
   };
 
-  // Bajar del piso: UN solo viaje al servidor con todas las líneas, descongelando o devolviendo.
-  // Antes era un POST por línea desde el navegador y si el quinto fallaba, los cuatro anteriores ya
-  // estaban escritos.
-  const confirmarBajada = async (seleccion, cabecera, extra) => {
-    let hojaId = hojaAbierta?.HojaId;
-    if (!hojaId) {
-      const out = await post(`${API}/hojas`, {
-        FechaProduccion: fecha, BodegaCodigo: "DESCONGELADO", Propiedad: "OROPSA",
-        Encargado: cabecera?.Encargado, Personas: cabecera?.Personas,
-        HoraInicio: cabecera?.HoraInicio ? `${fecha} ${cabecera.HoraInicio}:00` : null,
-      });
-      if (!out) return;
-      hojaId = out.HojaId;
-    }
-    const out = await post(`${API}/hojas/${hojaId}/${modal.modo === "devolver" ? "devolver" : "descongelar"}`, {
+  // La hoja del día la abre el PRIMER movimiento, sea descongelar o devolver. Devuelve su id, o
+  // null si no se pudo abrir (el modal se queda como está y el operador no pierde lo capturado).
+  const asegurarHoja = async (cabecera) => {
+    if (hojaAbierta?.HojaId) return hojaAbierta.HojaId;
+    const out = await post(`${API}/hojas`, {
+      FechaProduccion: fecha, BodegaCodigo: "DESCONGELADO", Propiedad: "OROPSA",
+      Encargado: cabecera?.Encargado, Personas: cabecera?.Personas,
+      HoraInicio: cabecera?.HoraInicio ? `${fecha} ${cabecera.HoraInicio}:00` : null,
+    });
+    return out ? out.HojaId : null;
+  };
+
+  // Descongelar: UN solo viaje al servidor con todas las líneas. Antes era un POST por línea desde
+  // el navegador y si el quinto fallaba, los cuatro anteriores ya estaban escritos.
+  const confirmarDescongelado = async (seleccion, cabecera, extra) => {
+    const hojaId = await asegurarHoja(cabecera);
+    if (!hojaId) return;
+    const out = await post(`${API}/hojas/${hojaId}/descongelar`, {
       ...extra,
       lineas: seleccion.map(s => ({
         Lote: s.linea.Lote, Clase: s.linea.Clase, Talla: s.linea.Talla, RemisionId: s.linea.RemisionId,
@@ -830,6 +982,27 @@ export default function DescongeladoPage() {
     if (!out) return;
     setModal(null);
     await recargar(hojaId);
+  };
+
+  // Devolver: se pregunta primero QUÉ cajas despachó esa remisión y siguen al piso. No hace falta
+  // que exista una hoja para consultarlo — la hoja se abre al confirmar.
+  const abrirDevolver = async (remisionId, folio) => {
+    const res = await fetch(`${API}/devolvibles?remision=${remisionId}&bodega=DESCONGELADO`, { headers: authHeader() });
+    const data = await leerJSON(res);
+    if (!res.ok) { await mostrarAlerta(data.error || "No se pudo leer la remisión"); return; }
+    setDevol({ titulo: folio || `Remisión ${remisionId}`, datos: data });
+  };
+
+  const confirmarDevolucion = async (masters, motivo, cabecera) => {
+    const hojaId = await asegurarHoja(cabecera);
+    if (!hojaId) return;
+    const out = await post(`${API}/hojas/${hojaId}/devolver`, { Motivo: motivo, Masters: masters });
+    if (!out) return;
+    setDevol(null);
+    await recargar(hojaId);
+    await mostrarAlerta(
+      `Regresaron ${out.Masters} caja${out.Masters !== 1 ? "s" : ""} (${fmtNum(out.KgDevuelto)} kg) en el polín ` +
+      `${out.Polin}. Bodega tiene que ubicarlo: aparece sin posición.`, "exito");
   };
 
   const corregirRenglon = async (id, cambios) => {
@@ -880,10 +1053,14 @@ export default function DescongeladoPage() {
       {/* El key ata el estado del modal al lote que se está bajando: abrir otro no puede heredar
           los masters ni los destinos del anterior. */}
       {modal && (
-        <ModalBajarDelPiso key={`${modal.modo}|${modal.titulo}`} modo={modal.modo}
-          titulo={modal.titulo} lineas={modal.lineas} hojaAbierta={hojaAbierta}
-          destinos={destinos} empleados={empleados} auxiliares={auxiliares}
-          onConfirmar={confirmarBajada} onCerrar={() => setModal(null)} />
+        <ModalDescongelar key={modal.titulo} titulo={modal.titulo} lineas={modal.lineas}
+          hojaAbierta={hojaAbierta} destinos={destinos} empleados={empleados} auxiliares={auxiliares}
+          onConfirmar={confirmarDescongelado} onCerrar={() => setModal(null)} />
+      )}
+      {devol && (
+        <ModalDevolver key={devol.titulo} titulo={devol.titulo} datos={devol.datos}
+          hojaAbierta={hojaAbierta} empleados={empleados} auxiliares={auxiliares}
+          onConfirmar={confirmarDevolucion} onCerrar={() => setDevol(null)} />
       )}
 
       {/* Barra superior */}
@@ -909,7 +1086,8 @@ export default function DescongeladoPage() {
       {error && <div className="bg-red-50 border border-red-300 text-red-700 text-sm px-4 py-2 rounded">⚠ {error}</div>}
 
       <InventarioPiso saldo={saldo} resumen={resumen} puedeCrear={puedeCrear}
-        onBajar={(modo, titulo, lineas) => setModal({ modo, titulo, lineas })} />
+        onDescongelar={(titulo, lineas) => setModal({ titulo, lineas })}
+        onDevolver={abrirDevolver} />
 
       {/* Con más de una hoja (OROPSA y maquila no se mezclan) hay que escoger cuál se ve. Con una
           sola no se dibuja nada: ya está abierta abajo. */}

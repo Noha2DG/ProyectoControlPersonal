@@ -9,6 +9,7 @@
 // desarrollo, así que la única forma honesta de probar contra datos reales es no dejar rastro.
 import "dotenv/config";
 import prisma from "../src/lib/prisma.ts";
+import { devolverDelPiso } from "../src/routes/descongelado.ts";
 
 let ok = 0, fallo = 0;
 const bien = (m: string) => { ok++; console.log(` OK   ${m}`); };
@@ -273,79 +274,119 @@ async function main() {
   // trabajo ya no depende de cuántas líneas trae el despacho.
   check(tardo < 5000, `${N} líneas en lote tardaron ${tardo} ms (antes reventaba a los 5000)`);
 
-  // ── DEVOLVER A BODEGA SIN DESCONGELAR.
+  // ── DEVOLVER A BODEGA: el círculo completo.
   //
-  // La versión vieja escribía la DEVOLUCION colgada de la hoja SIN el consumo que la respaldara, y
-  // eso rompía dos cosas que nadie veía hasta el final del día: el producto seguía contado al piso
-  // aunque ya estaba de vuelta en el congelador, y la hoja quedaba con una salida sin su entrada,
-  // con lo que el cierre calculaba merma NEGATIVA y se negaba a cerrar para siempre.
+  // Devolver toca los DOS inventarios, y ahí está todo el riesgo: el piso cuenta kilos por lote y
+  // bodega cuenta cajas con QR. Si solo se mueve uno de los dos, el producto se duplica o se
+  // evapora — la versión vieja escribía solo el renglón del piso, y encima sin su consumo, así que
+  // los masters se quedaban 'Salido' sin polín que posicionar y la hoja no volvía a cerrar nunca.
   //
-  // Se prueba el escenario exacto de la hoja #18: entra producto, se descongela una parte y se
-  // devuelve otra. Lo que tiene que cumplirse es que el cierre siga dando merma >= 0.
-  try {
-    await prisma.$transaction(async (tx) => {
-      await abrirHoja(tx);
+  // Esta fase llama a devolverDelPiso() de verdad, no a una réplica de sus consultas: una prueba
+  // que copia el SQL prueba la copia.
+  const rem = await uno(prisma, `
+    SELECT rd.RemisionId, r.Folio, COUNT(*) AS Cajas
+      FROM RemisionDetalle rd
+      JOIN Remisiones r ON r.RemisionId = rd.RemisionId AND r.Estatus = 'Confirmada'
+      JOIN Masters m ON m.MasterId = rd.MasterId AND m.Estatus = 'Salido'
+      JOIN Areas a ON a.Codigo = r.AreaDestino
+     WHERE rd.Vigente = 1 AND a.BodegaVirtualCodigo = 'DESCONGELADO'
+       AND DATEDIFF(CURDATE(), DATE(r.ConfirmadaEn)) <= 4
+     GROUP BY rd.RemisionId, r.Folio
+     HAVING COUNT(*) >= 2
+     ORDER BY rd.RemisionId DESC LIMIT 1`);
 
-      const M = 10, KG = Number((M * KGXM).toFixed(2));
-      const lote = "ZZDEVUELTO-001";
-      const pisoAntes = await saldoDe(tx, hoja.BodegaCodigo);
+  if (!rem) {
+    console.log("\n(sin remisión confirmada dentro del plazo con cajas devolvibles: se salta la fase de devolución)");
+  } else {
+    bien(`hay una remisión de la que devolver: ${rem.Folio} con ${Number(rem.Cajas)} cajas al piso`);
 
-      // El cuadre se mide COMO DELTA, no en absoluto: la hoja puede ser una real que ya venía con
-      // su propio desbalance, y lo que esta prueba responde es si LA DEVOLUCIÓN lo empeora.
-      const cuadre = async () => {
-        const c = await uno(tx, `
-          SELECT ROUND(COALESCE(SUM(CASE WHEN HojaDestinoId = ? THEN PesoKg ELSE 0 END), 0), 2) AS Entro,
-                 ROUND(COALESCE(SUM(CASE WHEN HojaOrigenId  = ? THEN PesoKg ELSE 0 END), 0), 2) AS Salio
-            FROM MovimientoPiso WHERE HojaDestinoId = ? OR HojaOrigenId = ?`,
-          hoja.HojaId, hoja.HojaId, hoja.HojaId, hoja.HojaId);
-        return Number((Number(c.Entro) - Number(c.Salio)).toFixed(2));
-      };
-      const mermaAntes = await cuadre();
+    // Dos cajas de un mismo lote que SIGA teniendo saldo al piso: devolver algo ya descongelado
+    // tiene que fallar, y eso se prueba aparte.
+    const cajas = await prisma.$queryRawUnsafe(`
+      SELECT m.MasterId, m.PalletId, ei.Correlativo, oe.Lote, dp.Clase, dp.Talla
+        FROM RemisionDetalle rd
+        JOIN Masters m ON m.MasterId = rd.MasterId
+        JOIN EtiquetaImpresa ei ON ei.EtiquetaId = m.EtiquetaId
+        JOIN OrdenEtiquetado oe ON oe.OrdenId = ei.OrdenId
+        JOIN DetallePedido dp ON dp.DetalleId = oe.DetalleId
+       WHERE rd.RemisionId = ? AND rd.Vigente = 1 AND m.Estatus = 'Salido'
+       ORDER BY oe.Lote, ei.Correlativo LIMIT 2`, Number(rem.RemisionId)) as any[];
+    const ids = cajas.map((c: any) => Number(c.MasterId));
 
-      // Entra al piso, como lo mete una remisión confirmada.
-      await tx.$executeRawUnsafe(
-        `INSERT INTO MovimientoPiso (Tipo, FechaProduccion, BodegaDestino, Lote, Clase, Talla,
-                                     Peso, UM, PesoKg, Masters, KgPorMaster, RegistradoPor)
-         VALUES ('INGRESO', ?, ?, ?, ?, 900, ?, 'KG', ?, ?, ?, 'prueba')`,
-        hoja.Fecha, hoja.BodegaCodigo, lote, cl.Clase, KG, KG, M, KGXM);
+    const pisoAntes = await saldoDe(prisma, "DESCONGELADO");
+    const polinesAntes = Number((await uno(prisma, `SELECT COUNT(*) AS n FROM Pallets`)).n);
 
-      // Y se devuelve entero: el par CONSUMO + DEVOLUCION que escribe /devolver.
-      await tx.$executeRawUnsafe(
-        `INSERT INTO MovimientoPiso (Tipo, FechaProduccion, BodegaOrigen, HojaDestinoId, Lote, Clase,
-                                     Talla, Peso, UM, PesoKg, Masters, KgPorMaster, RegistradoPor)
-         VALUES ('CONSUMO', ?, ?, ?, ?, ?, 900, ?, 'KG', ?, ?, ?, 'prueba')`,
-        hoja.Fecha, hoja.BodegaCodigo, hoja.HojaId, lote, cl.Clase, KG, KG, M, KGXM);
-      const consumoId = Number((await uno(tx, `SELECT LAST_INSERT_ID() AS id`)).id);
+    try {
+      await prisma.$transaction(async (tx) => {
+        await abrirHoja(tx);
+        const cuadre = async () => {
+          const c = await uno(tx, `
+            SELECT ROUND(COALESCE(SUM(CASE WHEN HojaDestinoId = ? THEN PesoKg ELSE 0 END), 0), 2) AS Entro,
+                   ROUND(COALESCE(SUM(CASE WHEN HojaOrigenId  = ? THEN PesoKg ELSE 0 END), 0), 2) AS Salio
+              FROM MovimientoPiso WHERE HojaDestinoId = ? OR HojaOrigenId = ?`,
+            hoja.HojaId, hoja.HojaId, hoja.HojaId, hoja.HojaId);
+          return Number((Number(c.Entro) - Number(c.Salio)).toFixed(2));
+        };
+        const mermaAntes = await cuadre();
 
-      await tx.$executeRawUnsafe(
-        `INSERT INTO MovimientoPiso (Tipo, FechaProduccion, HojaOrigenId, Lote, Clase, Talla,
-                                     Peso, UM, PesoKg, Masters, Motivo, ConsumoId, RegistradoPor)
-         VALUES ('DEVOLUCION', ?, ?, ?, ?, 900, ?, 'KG', ?, ?, 'no se alcanzó a procesar', ?, 'prueba')`,
-        hoja.Fecha, hoja.HojaId, lote, cl.Clase, KG, KG, M, consumoId);
+        const out: any = await devolverDelPiso(tx, {
+          hojaId: hoja.HojaId, masters: ids, motivo: "prueba automatizada", operador: "prueba", esAdmin: false,
+        });
+        check(out.Masters === ids.length, `devolvió las ${ids.length} cajas y abrió el polín ${out.Polin}`);
 
-      // El producto SALIÓ del piso: eso es lo que la versión vieja no hacía.
-      check(Math.abs(await saldoDe(tx, hoja.BodegaCodigo) - pisoAntes) < 0.005,
-        "lo devuelto deja de contar al piso (entró y salió completo)");
+        // ── Bodega: las cajas están de vuelta, con su correlativo, en un polín sin posición.
+        const vueltos = await uno(tx, `
+          SELECT COUNT(*) AS n, SUM(CASE WHEN PalletId = ? THEN 1 ELSE 0 END) AS EnElPolin
+            FROM Masters WHERE MasterId IN (${ids.map(() => "?").join(",")}) AND Estatus = 'EnBodega'`,
+          out.PalletId, ...ids);
+        check(Number(vueltos.n) === ids.length && Number(vueltos.EnElPolin) === ids.length,
+          `las ${ids.length} cajas volvieron a EnBodega dentro de ${out.Polin}`);
 
-      // Lo devuelto entra y sale de la hoja por el mismo peso, así que NO mueve la merma. Antes
-      // solo salía: cada devolución empujaba el cuadre hacia abajo y a la primera dejaba la hoja
-      // imposible de cerrar. Con 26 kg de entrada y 25 descongelados, devolver 13 daba -12.
-      const mermaDespues = await cuadre();
-      check(Math.abs(mermaDespues - mermaAntes) < 0.005,
-        `devolver ${KG} kg no movió la merma de la hoja (${mermaAntes} → ${mermaDespues})`);
-      check(mermaDespues - mermaAntes > -0.005,
-        "una devolución ya no puede empujar el cuadre a negativo");
+        const pol = await uno(tx,
+          `SELECT Origen, Estatus, PosicionId, CantidadMaster FROM Pallets WHERE PalletId = ?`, out.PalletId);
+        check(pol.Origen === "DEVOLUCION" && pol.PosicionId == null,
+          `el polín nace Origen=${pol.Origen}, ${pol.Estatus} y SIN posición — que es la señal para bodega`);
+        check(Number(pol.CantidadMaster) === ids.length,
+          `su cuadre cierra al 100 %: declara ${pol.CantidadMaster} de ${ids.length}`);
 
-      // La devolución queda atada a su consumo, así que quitarla devuelve las dos filas.
-      const par = await uno(tx,
-        `SELECT COUNT(*) AS n FROM MovimientoPiso
-          WHERE Tipo = 'DEVOLUCION' AND HojaOrigenId = ? AND ConsumoId IS NOT NULL`, hoja.HojaId);
-      check(Number(par.n) >= 1, "la devolución quedó atada a su consumo");
+        const fuera = await uno(tx,
+          `SELECT COUNT(*) AS n FROM RemisionDetalle
+            WHERE MasterId IN (${ids.map(() => "?").join(",")}) AND Vigente = 1`, ...ids);
+        check(Number(fuera.n) === 0, "las cajas salieron de la remisión (Vigente = NULL)");
 
-      throw new Error("ROLLBACK");
-    }, { timeout: 30000, maxWait: 15000 });
-  } catch (e: any) {
-    if (!e.message.includes("ROLLBACK")) throw e;
+        const kardex = await uno(tx,
+          `SELECT COUNT(*) AS n FROM MovimientosBodega
+            WHERE Tipo = 'DEVOLUCION' AND PalletId = ?`, out.PalletId);
+        check(Number(kardex.n) === ids.length, `el kardex de bodega registra las ${ids.length} devoluciones`);
+
+        // ── Piso: los kilos salieron, y la hoja no quedó descuadrada.
+        const pisoAhora = await saldoDe(tx, "DESCONGELADO");
+        check(Math.abs((pisoAntes - pisoAhora) - Number(out.KgDevuelto)) < 0.05,
+          `el piso bajó los ${out.KgDevuelto} kg devueltos (bajó ${(pisoAntes - pisoAhora).toFixed(2)})`);
+        const mermaDespues = await cuadre();
+        check(Math.abs(mermaDespues - mermaAntes) < 0.005,
+          `devolver no movió la merma de la hoja (${mermaAntes} → ${mermaDespues})`);
+
+        // ── Y no se puede devolver dos veces la misma caja.
+        let rebotó = false;
+        try {
+          await devolverDelPiso(tx, { hojaId: hoja.HojaId, masters: ids, motivo: "doble", operador: "prueba", esAdmin: false });
+        } catch (e: any) { rebotó = /ya no está Salido/.test(e.message); }
+        check(rebotó, "devolver la misma caja dos veces se rechaza");
+
+        throw new Error("ROLLBACK");
+      }, { timeout: 30000, maxWait: 15000 });
+    } catch (e: any) {
+      if (!e.message.includes("ROLLBACK")) throw e;
+    }
+
+    check(Math.abs(await saldoDe(prisma, "DESCONGELADO") - pisoAntes) < 0.005,
+      "al revertir, el piso queda como estaba");
+    check(Number((await uno(prisma, `SELECT COUNT(*) AS n FROM Pallets`)).n) === polinesAntes,
+      `al revertir, no quedó ningún polín de prueba: ${polinesAntes} polines`);
+    const siguenFuera = await uno(prisma,
+      `SELECT COUNT(*) AS n FROM Masters WHERE MasterId IN (${ids.map(() => "?").join(",")}) AND Estatus = 'Salido'`, ...ids);
+    check(Number(siguenFuera.n) === ids.length, "al revertir, las cajas siguen Salidas como estaban");
   }
 
   // ── Y no quedó rastro.
