@@ -499,6 +499,172 @@ router.post("/hojas/:id/salida", requireAuth, requirePerm("descongelado", "crear
   }
 });
 
+// ── Bajar producto del piso ──────────────────────────────────────────────────────────────────
+//
+// Del piso salen DOS gestos y son el mismo movimiento hasta la mitad: descongelar (la hoja lo
+// entrega al área siguiente) y devolver a bodega (la hoja lo regresa sin descongelar). Los dos
+// empiezan con el mismo CONSUMO —  el producto baja del piso a la hoja—  y se diferencian solo en la
+// fila que va después. Por eso esa primera mitad vive acá y no copiada dos veces: dos copias de la
+// validación de saldo terminarían dando dos inventarios distintos para el mismo producto.
+
+type LineaPiso = {
+  Lote: string; Clase: string; um: string; talla: number; remId: number | null;
+  masters: number | null; kgxm: number | null;
+  declarado: number; kgDecl: number; fechaLote: any;
+  destino?: string | null; pesado?: number; kgReal?: number; termo?: string | null;
+  motivo?: string | null;
+};
+
+// Normaliza lo que llegó por HTTP sin tocar la base. Todo lo que se pueda resolver acá afuera se
+// resuelve acá: dentro de la transacción cada viaje a la base cuesta latencia de red.
+function normalizarLineas(crudas: any[], pideDestino: boolean, termoGeneral: string | null): LineaPiso[] {
+  return crudas.map(l => {
+    const Lote = String(l.Lote ?? "").trim();
+    const Clase = String(l.Clase ?? "").trim();
+    if (!Lote || !Clase) throw new ErrorNegocio(400, "Lote y Clase son requeridos");
+
+    const um = l.UM === "LB" ? "LB" : "KG";
+    const masters = l.Masters !== "" && l.Masters != null ? Number(l.Masters) : null;
+    const kgxm = l.KgPorMaster !== "" && l.KgPorMaster != null ? Number(l.KgPorMaster) : null;
+    const declarado = masters && kgxm ? Number((masters * kgxm).toFixed(2)) : Number(l.Peso);
+    if (!declarado || declarado <= 0) {
+      throw new ErrorNegocio(400, `${Lote} ${Clase}: el peso declarado debe ser mayor que cero`);
+    }
+
+    const base: LineaPiso = {
+      Lote, Clase, um, masters, kgxm, declarado,
+      talla: l.Talla ? Number(l.Talla) : 900,
+      remId: l.RemisionId ? Number(l.RemisionId) : null,
+      kgDecl: aKg(declarado, um),
+      fechaLote: null,
+    };
+
+    if (!pideDestino) {
+      // Devolución: regresa a bodega tal como bajó, así que no hay báscula ni destino que escoger.
+      base.motivo = l.Motivo ? String(l.Motivo).trim().slice(0, 200) : null;
+      return base;
+    }
+
+    // El peso real NO se valida contra el declarado: que salga menos es lo normal (faltó un master,
+    // o el glaseo). El control está en el cierre, que rechaza que lo salido supere a lo entrado en
+    // la hoja completa.
+    const pesado = l.PesoReal !== "" && l.PesoReal != null ? Number(l.PesoReal) : declarado;
+    if (!pesado || pesado <= 0) {
+      throw new ErrorNegocio(400, `${Lote} ${Clase}: el peso pesado debe ser mayor que cero`);
+    }
+    // El destino es una BODEGA VIRTUAL, que es la unidad con la que se lleva el inventario al piso.
+    // No se pide el área de abajo: Pelado son siete áreas sobre el mismo piso y el saldo no las
+    // distingue, así que escogerla sería acertarle a una diferencia que después se ignora.
+    const destino = l.BodegaDestino ? String(l.BodegaDestino).trim() : null;
+    if (!destino) throw new ErrorNegocio(400, `${Lote} ${Clase}: falta decir a dónde se envía`);
+
+    return { ...base, destino, pesado, kgReal: aKg(pesado, um),
+             termo: (l.NumeroTermo ? String(l.NumeroTermo).trim() : null) || termoGeneral };
+  });
+}
+
+// El saldo al piso se lleva POR REMISIÓN: la misma talla del mismo lote entrada en dos remisiones
+// son dos saldos distintos y no se pueden mezclar.
+const claveDeLinea = (r: any) => `${r.remId ?? ""}|${r.Lote}|${r.Clase}|${r.talla}`;
+
+/**
+ * Valida contra el saldo al piso y escribe los CONSUMO. Devuelve sus MovimientoId en el mismo
+ * orden que `lineas`, para que quien llama pueda atarles la fila que sigue.
+ *
+ * Dos consultas para cualquier cantidad de líneas. Hacerlo por línea —  como estaba—  eran cinco
+ * viajes por renglón, y un despacho de diecinueve lotes pasaba de los cinco segundos con que Prisma
+ * corta una transacción interactiva.
+ */
+async function consumirDelPiso(
+  tx: any, hoja: any, hojaId: number, lineas: LineaPiso[], operador: string, fecha: string
+): Promise<number[]> {
+  // La disponibilidad, acotada a los LOTES del despacho. Sin ese filtro la consulta agrega todo el
+  // histórico del piso en cada movimiento, así que su costo crecería con cada master que pasó por
+  // el área desde que existe el módulo; con él depende del tamaño del despacho, que no crece.
+  const lotes = [...new Set(lineas.map(l => l.Lote))];
+  const enLotes = `Lote IN (${lotes.map(() => "?").join(",")})`;
+  const saldo: any[] = await tx.$queryRawUnsafe(`
+    SELECT RemisionId, Lote, Clase, Talla,
+           ROUND(SUM(Delta), 2) AS Kg, COALESCE(SUM(DeltaM), 0) AS Masters, MAX(FL) AS FechaLote
+      FROM (
+        SELECT RemisionId, Lote, Clase, Talla, PesoKg AS Delta, Masters AS DeltaM, FechaLote AS FL
+          FROM MovimientoPiso WHERE BodegaDestino = ? AND ${enLotes}
+        UNION ALL
+        SELECT RemisionId, Lote, Clase, Talla, -PesoKg, -Masters, NULL
+          FROM MovimientoPiso WHERE BodegaOrigen = ? AND ${enLotes}
+      ) t
+     GROUP BY RemisionId, Lote, Clase, Talla`,
+    hoja.BodegaCodigo, ...lotes, hoja.BodegaCodigo, ...lotes);
+  const hay = new Map<string, any>(saldo.map((s: any) => [
+    `${s.RemisionId == null ? "" : Number(s.RemisionId)}|${s.Lote}|${s.Clase}|${Number(s.Talla)}`, s]));
+
+  // Se descuenta línea por línea contra un saldo que va bajando: si el mismo lote viene dos veces
+  // en la misma petición, la segunda mide contra lo que dejó la primera. Sin esto, dos renglones de
+  // cien masters pasarían los dos aunque al piso solo hubiera cien.
+  const usadoKg = new Map<string, number>(), usadoM = new Map<string, number>();
+  for (const l of lineas) {
+    const k = claveDeLinea(l);
+    const d = hay.get(k);
+    l.fechaLote = d?.FechaLote ?? null;
+    const kgHay = (d ? Number(d.Kg) : 0) - (usadoKg.get(k) ?? 0);
+    const mHay  = (d ? Number(d.Masters) : 0) - (usadoM.get(k) ?? 0);
+
+    // Se controla por MASTERS cuando el renglón viene contado en masters, que es como el área
+    // declara: los kilos salen de la presentación y no se teclean, así el control habla el mismo
+    // idioma que el conteo del andén y no compara decimales.
+    if (l.masters && l.masters > mHay) {
+      throw new ErrorNegocio(400, `De esa remisión solo quedan ${mHay} masters de ${l.Lote} ${l.Clase} al piso; está bajando ${l.masters}.`);
+    }
+    if (l.kgDecl > kgHay + 0.001) {
+      throw new ErrorNegocio(400, `De esa remisión solo quedan ${kgHay.toFixed(2)} kg de ${l.Lote} ${l.Clase} al piso; está bajando ${l.kgDecl.toFixed(2)} kg.`);
+    }
+    usadoKg.set(k, (usadoKg.get(k) ?? 0) + l.kgDecl);
+    usadoM.set(k, (usadoM.get(k) ?? 0) + (l.masters ?? 0));
+  }
+
+  const args: any[] = [];
+  const filas = lineas.map(l => {
+    args.push(fecha, hoja.BodegaCodigo, hojaId, l.Lote, l.Clase, l.talla, l.fechaLote,
+              l.declarado, l.um, l.kgDecl, l.masters, l.kgxm, l.remId, operador);
+    return "('CONSUMO',?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
+  }).join(",");
+  await tx.$executeRawUnsafe(
+    `INSERT INTO MovimientoPiso (Tipo, FechaProduccion, BodegaOrigen, HojaDestinoId, Lote, Clase, Talla,
+                                 FechaLote, Peso, UM, PesoKg, Masters, KgPorMaster, RemisionId, RegistradoPor)
+     VALUES ${filas}`, ...args);
+
+  // Los ids, para atar cada fila que sigue con el consumo que la originó. Las filas de un INSERT de
+  // varias filas se escriben en el orden dado, así que sus MovimientoId ascienden en ese mismo
+  // orden y casan uno a uno con `lineas`. El piso desde donde se lee es LAST_INSERT_ID(), que tras
+  // un INSERT de varias filas devuelve el id de la PRIMERA; la transacción interactiva fija la
+  // conexión, así que el valor es el de este INSERT y no el de otro que corriera en paralelo.
+  const nuevos: any[] = await tx.$queryRawUnsafe(
+    `SELECT MovimientoId FROM MovimientoPiso
+      WHERE HojaDestinoId = ? AND Tipo = 'CONSUMO' AND MovimientoId >= LAST_INSERT_ID()
+      ORDER BY MovimientoId`, hojaId);
+  if (nuevos.length !== lineas.length) {
+    throw new ErrorNegocio(500, "No se pudo atar cada renglón con su movimiento; no se guardó nada.");
+  }
+  return nuevos.map((n: any) => Number(n.MovimientoId));
+}
+
+// Abre la hoja para escribirle, con el candado que serializa dos capturas simultáneas: la
+// disponibilidad se calcula sumando y no se puede bloquear sola.
+async function hojaParaEscribir(tx: any, id: number) {
+  const [h]: any[] = await tx.$queryRawUnsafe(
+    `SELECT HojaId, BodegaCodigo, FechaProduccion, Estatus
+       FROM HojaProceso WHERE HojaId = ? LIMIT 1 FOR UPDATE`, id);
+  if (!h) throw new ErrorNegocio(404, "Hoja no encontrada");
+  if (h.Estatus !== "Abierta") throw new ErrorNegocio(400, "La hoja ya está cerrada");
+  return h;
+}
+
+function responderError(res: Response, err: any) {
+  if (err instanceof ErrorNegocio) res.status(err.status).json({ error: err.message });
+  else if (err.message?.includes("foreign key")) res.status(400).json({ error: "Clase, talla, bodega o remisión no existen" });
+  else res.status(500).json({ error: err.message });
+}
+
 // POST /api/descongelado/hojas/:id/descongelar — EL PASO ÚNICO.
 //
 // Bajar producto del piso y despacharlo al área siguiente eran dos capturas separadas: primero la
@@ -515,74 +681,21 @@ router.post("/hojas/:id/salida", requireAuth, requirePerm("descongelado", "crear
 // TODO DENTRO DE UNA TRANSACCIÓN, y esto no es un adorno: el flujo viejo hacía N peticiones desde
 // el navegador y si la quinta fallaba, las cuatro anteriores ya estaban escritas — la hoja quedaba
 // a medio capturar y nadie sabía dónde se había cortado.
-//
-// EL PESO PESADO ES OPCIONAL y por omisión es el declarado. Si nadie puso el termo en la báscula,
-// el sistema no tiene por qué inventar una diferencia; si sí lo pusieron, la diferencia queda
-// escrita y sale como merma en el cierre, que es la regla que el papel ya trae impresa.
 router.post("/hojas/:id/descongelar", requireAuth, requirePerm("descongelado", "crear"), async (req: Request, res: Response) => {
   try {
     const id = Number(req.params.id);
     const operador = getOperador(req);
-    const termoGeneral = req.body.NumeroTermo ? String(req.body.NumeroTermo).trim() : null;
     const crudas: any[] = Array.isArray(req.body.lineas) ? req.body.lineas : [];
     if (!crudas.length) { res.status(400).json({ error: "No hay líneas que descongelar" }); return; }
-
-    // Todo lo que se puede resolver SIN tocar la base se resuelve acá afuera. Dentro de la
-    // transacción cada viaje cuenta: una remisión de diecinueve lotes con cinco consultas por línea
-    // son casi cien idas y venidas, y Prisma aborta la transacción a los cinco segundos —  que es
-    // exactamente el "Transaction not found" que salía en pantalla.
-    const lineas = crudas.map(l => {
-      const Lote = String(l.Lote ?? "").trim();
-      const Clase = String(l.Clase ?? "").trim();
-      if (!Lote || !Clase) throw new ErrorNegocio(400, "Lote y Clase son requeridos");
-
-      const um = l.UM === "LB" ? "LB" : "KG";
-      const masters = l.Masters !== "" && l.Masters != null ? Number(l.Masters) : null;
-      const kgxm = l.KgPorMaster !== "" && l.KgPorMaster != null ? Number(l.KgPorMaster) : null;
-      const declarado = masters && kgxm ? Number((masters * kgxm).toFixed(2)) : Number(l.Peso);
-      if (!declarado || declarado <= 0) {
-        throw new ErrorNegocio(400, `${Lote} ${Clase}: el peso declarado debe ser mayor que cero`);
-      }
-      // El peso real NO se valida contra el declarado: que salga menos es lo normal (faltó un
-      // master, o el glaseo). El control está en el cierre, que rechaza que lo salido supere a lo
-      // entrado en la hoja completa.
-      const pesado = l.PesoReal !== "" && l.PesoReal != null ? Number(l.PesoReal) : declarado;
-      if (!pesado || pesado <= 0) {
-        throw new ErrorNegocio(400, `${Lote} ${Clase}: el peso pesado debe ser mayor que cero`);
-      }
-      // El destino es una BODEGA VIRTUAL, que es la unidad con la que se lleva el inventario al
-      // piso. No se pide el área de abajo: Pelado son siete áreas sobre el mismo piso y el saldo no
-      // las distingue, así que escogerla sería acertarle a una diferencia que después se ignora.
-      const destino = l.BodegaDestino ? String(l.BodegaDestino).trim() : null;
-      if (!destino) throw new ErrorNegocio(400, `${Lote} ${Clase}: falta decir a dónde se envía`);
-
-      return {
-        Lote, Clase, um, masters, kgxm, destino, declarado, pesado,
-        talla: l.Talla ? Number(l.Talla) : 900,
-        remId: l.RemisionId ? Number(l.RemisionId) : null,
-        kgDecl: aKg(declarado, um),
-        kgReal: aKg(pesado, um),
-        termo: (l.NumeroTermo ? String(l.NumeroTermo).trim() : null) || termoGeneral,
-        fechaLote: null as any,
-      };
-    });
-
-    // El saldo al piso se lleva POR REMISIÓN: la misma talla del mismo lote entrada en dos
-    // remisiones son dos saldos distintos y no se pueden mezclar.
-    const clave = (r: any) => `${r.remId ?? ""}|${r.Lote}|${r.Clase}|${r.talla}`;
+    const lineas = normalizarLineas(
+      crudas, true, req.body.NumeroTermo ? String(req.body.NumeroTermo).trim() : null);
 
     const out = await prisma.$transaction(async (tx) => {
-      // La hoja se bloquea igual que en el cierre: dos descongelados simultáneos sobre el mismo
-      // saldo se pisarían la disponibilidad, que se calcula sumando y no se puede bloquear sola.
-      const [h]: any[] = await tx.$queryRaw`
-        SELECT HojaId, BodegaCodigo, FechaProduccion, Estatus
-          FROM HojaProceso WHERE HojaId = ${id} LIMIT 1 FOR UPDATE`;
-      if (!h) throw new ErrorNegocio(404, "Hoja no encontrada");
-      if (h.Estatus !== "Abierta") throw new ErrorNegocio(400, "La hoja ya está cerrada");
+      const h = await hojaParaEscribir(tx, id);
       const fecha = fechaDeHoja(h);
 
-      // ── Los destinos, en UNA consulta para todos.
-      const destinos = [...new Set(lineas.map(l => l.destino))];
+      // Los destinos, en UNA consulta para todos.
+      const destinos = [...new Set(lineas.map(l => l.destino!))];
       const validas: any[] = await tx.$queryRawUnsafe(
         `SELECT Codigo FROM BodegaVirtual
           WHERE Activo = 1 AND LlevaPiso = 1 AND Codigo IN (${destinos.map(() => "?").join(",")})`,
@@ -593,110 +706,82 @@ router.post("/hojas/:id/descongelar", requireAuth, requirePerm("descongelado", "
         if (!recibe.has(d)) throw new ErrorNegocio(400, `${d} no recibe inventario al piso`);
       }
 
-      // ── La disponibilidad, en UNA consulta para todas las líneas. Una por línea serían veinte
-      // idas y vueltas; esta trae lo de las veinte de un viaje y se busca en memoria.
-      //
-      // Acotada a los LOTES que se están bajando, no a la bodega entera. La diferencia no se nota
-      // hoy —  el kardex tiene sesenta filas—  pero esta consulta agrega todo el histórico del piso
-      // en cada descongelado, así que sin el filtro el costo crece con cada master que pasó por el
-      // área desde que el módulo existe. Con él, el trabajo depende del tamaño del despacho, que es
-      // lo que no crece. Usa idx_movpiso_bdestino / idx_movpiso_borigen y luego idx_movpiso_lote.
-      const lotes = [...new Set(lineas.map(l => l.Lote))];
-      const enLotes = `Lote IN (${lotes.map(() => "?").join(",")})`;
-      const saldo: any[] = await tx.$queryRawUnsafe(`
-        SELECT RemisionId, Lote, Clase, Talla,
-               ROUND(SUM(Delta), 2) AS Kg, COALESCE(SUM(DeltaM), 0) AS Masters, MAX(FL) AS FechaLote
-          FROM (
-            SELECT RemisionId, Lote, Clase, Talla, PesoKg AS Delta, Masters AS DeltaM, FechaLote AS FL
-              FROM MovimientoPiso WHERE BodegaDestino = ? AND ${enLotes}
-            UNION ALL
-            SELECT RemisionId, Lote, Clase, Talla, -PesoKg, -Masters, NULL
-              FROM MovimientoPiso WHERE BodegaOrigen = ? AND ${enLotes}
-          ) t
-         GROUP BY RemisionId, Lote, Clase, Talla`,
-        h.BodegaCodigo, ...lotes, h.BodegaCodigo, ...lotes);
-      const hay = new Map<string, any>(saldo.map((s: any) => [
-        `${s.RemisionId == null ? "" : Number(s.RemisionId)}|${s.Lote}|${s.Clase}|${Number(s.Talla)}`, s]));
+      const consumos = await consumirDelPiso(tx, h, id, lineas, operador, fecha);
 
-      // Se descuenta línea por línea contra un saldo que va bajando: si el mismo lote viene dos
-      // veces en la misma petición, la segunda mide contra lo que dejó la primera. Sin esto, dos
-      // renglones de cien masters pasarían los dos aunque al piso solo hubiera cien.
-      const usadoKg = new Map<string, number>(), usadoM = new Map<string, number>();
-      for (const l of lineas) {
-        const k = clave(l);
-        const d = hay.get(k);
-        l.fechaLote = d?.FechaLote ?? null;
-        const kgHay = (d ? Number(d.Kg) : 0) - (usadoKg.get(k) ?? 0);
-        const mHay  = (d ? Number(d.Masters) : 0) - (usadoM.get(k) ?? 0);
-
-        // Se controla por MASTERS cuando el renglón viene contado en masters, que es como el área
-        // declara: los kilos salen de la presentación y no se teclean, así el control habla el
-        // mismo idioma que el conteo del andén y no compara decimales.
-        if (l.masters && l.masters > mHay) {
-          throw new ErrorNegocio(400, `De esa remisión solo quedan ${mHay} masters de ${l.Lote} ${l.Clase} al piso; está bajando ${l.masters}.`);
-        }
-        if (l.kgDecl > kgHay + 0.001) {
-          throw new ErrorNegocio(400, `De esa remisión solo quedan ${kgHay.toFixed(2)} kg de ${l.Lote} ${l.Clase} al piso; está bajando ${l.kgDecl.toFixed(2)} kg.`);
-        }
-        usadoKg.set(k, (usadoKg.get(k) ?? 0) + l.kgDecl);
-        usadoM.set(k, (usadoM.get(k) ?? 0) + (l.masters ?? 0));
-      }
-
-      // ── Los consumos, en UN solo INSERT.
-      const argsC: any[] = [];
-      const filasC = lineas.map(l => {
-        argsC.push(fecha, h.BodegaCodigo, id, l.Lote, l.Clase, l.talla, l.fechaLote,
-                   l.declarado, l.um, l.kgDecl, l.masters, l.kgxm, l.remId, operador);
-        return "('CONSUMO',?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
-      }).join(",");
-      await tx.$executeRawUnsafe(
-        `INSERT INTO MovimientoPiso (Tipo, FechaProduccion, BodegaOrigen, HojaDestinoId, Lote, Clase, Talla,
-                                     FechaLote, Peso, UM, PesoKg, Masters, KgPorMaster, RemisionId, RegistradoPor)
-         VALUES ${filasC}`, ...argsC);
-
-      // Y sus ids, para atar cada traslado con el consumo que lo originó. Las filas de un INSERT de
-      // varias filas se escriben en el orden dado, así que sus MovimientoId ascienden en ese mismo
-      // orden y casan uno a uno con `lineas`. El filtro por hoja más el candado FOR UPDATE de
-      // arriba garantizan que nadie más metió filas de esta hoja en medio.
-      //
-      // El piso desde donde se lee es LAST_INSERT_ID(), que tras un INSERT de varias filas devuelve
-      // el id de la PRIMERA. Antes esto se resolvía preguntando el MAX antes de insertar, que era
-      // una ida y vuelta entera —  unos 110 ms contra la base de la planta—  para averiguar algo que
-      // la propia conexión ya sabía. La transacción interactiva fija la conexión, así que el valor
-      // es el de este INSERT y no el de otro que corriera en paralelo.
-      const nuevos: any[] = await tx.$queryRawUnsafe(
-        `SELECT MovimientoId FROM MovimientoPiso
-          WHERE HojaDestinoId = ? AND Tipo = 'CONSUMO' AND MovimientoId >= LAST_INSERT_ID()
-          ORDER BY MovimientoId`, id);
-      if (nuevos.length !== lineas.length) {
-        throw new ErrorNegocio(500, "No se pudo atar cada renglón con su descongelado; no se guardó nada.");
-      }
-
-      // ── Los traslados, en UN solo INSERT.
-      const argsT: any[] = [];
-      const filasT = lineas.map((l, i) => {
-        argsT.push(fecha, id, l.destino, l.Lote, l.Clase, l.talla, l.fechaLote,
-                   l.pesado, l.um, l.kgReal, l.termo, l.remId, Number(nuevos[i].MovimientoId), operador);
+      const args: any[] = [];
+      const filas = lineas.map((l, i) => {
+        args.push(fecha, id, l.destino, l.Lote, l.Clase, l.talla, l.fechaLote,
+                  l.pesado, l.um, l.kgReal, l.termo, l.remId, consumos[i], operador);
         return "('TRASLADO',?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
       }).join(",");
       await tx.$executeRawUnsafe(
         `INSERT INTO MovimientoPiso (Tipo, FechaProduccion, HojaOrigenId, BodegaDestino, Lote, Clase, Talla,
                                      FechaLote, Peso, UM, PesoKg, NumeroTermo, RemisionId, ConsumoId, RegistradoPor)
-         VALUES ${filasT}`, ...argsT);
+         VALUES ${filas}`, ...args);
 
       return { ok: true, lineas: lineas.length,
                KgDeclarado: Number(lineas.reduce((s, l) => s + l.kgDecl, 0).toFixed(2)),
-               KgPesado: Number(lineas.reduce((s, l) => s + l.kgReal, 0).toFixed(2)) };
-    // Seis consultas para cualquier cantidad de líneas, pero el margen se deja holgado igual: la
+               KgPesado: Number(lineas.reduce((s, l) => s + (l.kgReal ?? 0), 0).toFixed(2)) };
+    // Siete viajes a la base para cualquier cantidad de líneas, pero el margen se deja holgado: la
     // base está al otro lado de la red y un despacho grande no puede morirse por medio segundo de
     // latencia. El valor por omisión de Prisma (5 s) es para transacciones de una o dos escrituras.
     }, { timeout: 30000, maxWait: 15000 });
 
     res.status(201).json(out);
   } catch (err: any) {
-    if (err instanceof ErrorNegocio) res.status(err.status).json({ error: err.message });
-    else if (err.message?.includes("foreign key")) res.status(400).json({ error: "Clase, talla, bodega o remisión no existen" });
-    else res.status(500).json({ error: err.message });
+    responderError(res, err);
+  }
+});
+
+// POST /api/descongelado/hojas/:id/devolver — sección 3: regresa a bodega SIN descongelar.
+//
+// Escribe el mismo par que un descongelado —  CONSUMO del piso a la hoja y, atada a él, la salida—
+// y ahí está el arreglo, no solo la comodidad. La versión anterior escribía la DEVOLUCION colgada
+// de la hoja SIN el consumo que la respaldara, con dos consecuencias que nadie veía hasta el final
+// del día:
+//
+//   · el producto seguía contado al piso, aunque físicamente ya estaba de regreso en el congelador;
+//   · la hoja registraba una salida sin su entrada, así que el cierre calculaba merma negativa y se
+//     negaba a cerrar. Con 26 kg de entrada y 25 descongelados, una devolución de 13 dejaba la hoja
+//     imposible de cerrar para siempre.
+//
+// Y se elige de lo que está al piso en vez de teclear lote, producto y talla: esto se llena en el
+// teléfono del área, donde escribir "G430TM03-E02-9" a mano es una errata garantizada.
+router.post("/hojas/:id/devolver", requireAuth, requirePerm("descongelado", "crear"), async (req: Request, res: Response) => {
+  try {
+    const id = Number(req.params.id);
+    const operador = getOperador(req);
+    const motivoGeneral = req.body.Motivo ? String(req.body.Motivo).trim().slice(0, 200) : null;
+    const crudas: any[] = Array.isArray(req.body.lineas) ? req.body.lineas : [];
+    if (!crudas.length) { res.status(400).json({ error: "No hay líneas que devolver" }); return; }
+    const lineas = normalizarLineas(crudas, false, null);
+
+    const out = await prisma.$transaction(async (tx) => {
+      const h = await hojaParaEscribir(tx, id);
+      const fecha = fechaDeHoja(h);
+      const consumos = await consumirDelPiso(tx, h, id, lineas, operador, fecha);
+
+      // Sin BodegaDestino: el producto sale del piso y se acabó. A dónde va exactamente lo sabe
+      // bodega por su propio kardex de polines, que es el que manda sobre el producto congelado.
+      const args: any[] = [];
+      const filas = lineas.map((l, i) => {
+        args.push(fecha, id, l.Lote, l.Clase, l.talla, l.fechaLote, l.declarado, l.um, l.kgDecl,
+                  l.masters, l.motivo || motivoGeneral, l.remId, consumos[i], operador);
+        return "('DEVOLUCION',?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
+      }).join(",");
+      await tx.$executeRawUnsafe(
+        `INSERT INTO MovimientoPiso (Tipo, FechaProduccion, HojaOrigenId, Lote, Clase, Talla,
+                                     FechaLote, Peso, UM, PesoKg, Masters, Motivo, RemisionId,
+                                     ConsumoId, RegistradoPor)
+         VALUES ${filas}`, ...args);
+
+      return { ok: true, lineas: lineas.length,
+               KgDevuelto: Number(lineas.reduce((s, l) => s + l.kgDecl, 0).toFixed(2)) };
+    }, { timeout: 30000, maxWait: 15000 });
+
+    res.status(201).json(out);
+  } catch (err: any) {
+    responderError(res, err);
   }
 });
 
@@ -736,32 +821,6 @@ router.put("/renglon/:id", requireAuth, requirePerm("descongelado", "editar"), a
   } catch (err: any) {
     if (err.message?.includes("foreign key")) res.status(400).json({ error: "Esa bodega no existe" });
     else res.status(500).json({ error: err.message });
-  }
-});
-
-// POST /api/descongelado/hojas/:id/devolucion — sección 3: regresa a bodega sin descongelar.
-router.post("/hojas/:id/devolucion", requireAuth, requirePerm("descongelado", "crear"), async (req: Request, res: Response) => {
-  try {
-    const id = Number(req.params.id);
-    const chk = await hojaAbierta(id);
-    if ("error" in chk) { res.status(chk.status!).json({ error: chk.error }); return; }
-
-    const { Lote, Clase, Talla, Masters, Peso, UM, Motivo } = req.body;
-    if (!Lote || !Clase) { res.status(400).json({ error: "Lote y Clase son requeridos" }); return; }
-    const peso = Number(Peso);
-    if (!peso || peso <= 0) { res.status(400).json({ error: "El peso devuelto debe ser mayor que cero" }); return; }
-
-    const um = UM === "LB" ? "LB" : "KG";
-    await prisma.$executeRaw`
-      INSERT INTO MovimientoPiso (Tipo, FechaProduccion, HojaOrigenId, Lote, Clase, Talla,
-                                  Peso, UM, PesoKg, Masters, Motivo, RegistradoPor)
-      VALUES ('DEVOLUCION', ${fechaDeHoja(chk.hoja)}, ${id}, ${Lote}, ${Clase},
-              ${Talla ? Number(Talla) : 900}, ${peso}, ${um}, ${aKg(peso, um)},
-              ${Masters ? Number(Masters) : null}, ${Motivo || null}, ${getOperador(req)})
-    `;
-    res.status(201).json({ ok: true });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
   }
 });
 

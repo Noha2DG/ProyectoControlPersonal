@@ -273,6 +273,81 @@ async function main() {
   // trabajo ya no depende de cuántas líneas trae el despacho.
   check(tardo < 5000, `${N} líneas en lote tardaron ${tardo} ms (antes reventaba a los 5000)`);
 
+  // ── DEVOLVER A BODEGA SIN DESCONGELAR.
+  //
+  // La versión vieja escribía la DEVOLUCION colgada de la hoja SIN el consumo que la respaldara, y
+  // eso rompía dos cosas que nadie veía hasta el final del día: el producto seguía contado al piso
+  // aunque ya estaba de vuelta en el congelador, y la hoja quedaba con una salida sin su entrada,
+  // con lo que el cierre calculaba merma NEGATIVA y se negaba a cerrar para siempre.
+  //
+  // Se prueba el escenario exacto de la hoja #18: entra producto, se descongela una parte y se
+  // devuelve otra. Lo que tiene que cumplirse es que el cierre siga dando merma >= 0.
+  try {
+    await prisma.$transaction(async (tx) => {
+      await abrirHoja(tx);
+
+      const M = 10, KG = Number((M * KGXM).toFixed(2));
+      const lote = "ZZDEVUELTO-001";
+      const pisoAntes = await saldoDe(tx, hoja.BodegaCodigo);
+
+      // El cuadre se mide COMO DELTA, no en absoluto: la hoja puede ser una real que ya venía con
+      // su propio desbalance, y lo que esta prueba responde es si LA DEVOLUCIÓN lo empeora.
+      const cuadre = async () => {
+        const c = await uno(tx, `
+          SELECT ROUND(COALESCE(SUM(CASE WHEN HojaDestinoId = ? THEN PesoKg ELSE 0 END), 0), 2) AS Entro,
+                 ROUND(COALESCE(SUM(CASE WHEN HojaOrigenId  = ? THEN PesoKg ELSE 0 END), 0), 2) AS Salio
+            FROM MovimientoPiso WHERE HojaDestinoId = ? OR HojaOrigenId = ?`,
+          hoja.HojaId, hoja.HojaId, hoja.HojaId, hoja.HojaId);
+        return Number((Number(c.Entro) - Number(c.Salio)).toFixed(2));
+      };
+      const mermaAntes = await cuadre();
+
+      // Entra al piso, como lo mete una remisión confirmada.
+      await tx.$executeRawUnsafe(
+        `INSERT INTO MovimientoPiso (Tipo, FechaProduccion, BodegaDestino, Lote, Clase, Talla,
+                                     Peso, UM, PesoKg, Masters, KgPorMaster, RegistradoPor)
+         VALUES ('INGRESO', ?, ?, ?, ?, 900, ?, 'KG', ?, ?, ?, 'prueba')`,
+        hoja.Fecha, hoja.BodegaCodigo, lote, cl.Clase, KG, KG, M, KGXM);
+
+      // Y se devuelve entero: el par CONSUMO + DEVOLUCION que escribe /devolver.
+      await tx.$executeRawUnsafe(
+        `INSERT INTO MovimientoPiso (Tipo, FechaProduccion, BodegaOrigen, HojaDestinoId, Lote, Clase,
+                                     Talla, Peso, UM, PesoKg, Masters, KgPorMaster, RegistradoPor)
+         VALUES ('CONSUMO', ?, ?, ?, ?, ?, 900, ?, 'KG', ?, ?, ?, 'prueba')`,
+        hoja.Fecha, hoja.BodegaCodigo, hoja.HojaId, lote, cl.Clase, KG, KG, M, KGXM);
+      const consumoId = Number((await uno(tx, `SELECT LAST_INSERT_ID() AS id`)).id);
+
+      await tx.$executeRawUnsafe(
+        `INSERT INTO MovimientoPiso (Tipo, FechaProduccion, HojaOrigenId, Lote, Clase, Talla,
+                                     Peso, UM, PesoKg, Masters, Motivo, ConsumoId, RegistradoPor)
+         VALUES ('DEVOLUCION', ?, ?, ?, ?, 900, ?, 'KG', ?, ?, 'no se alcanzó a procesar', ?, 'prueba')`,
+        hoja.Fecha, hoja.HojaId, lote, cl.Clase, KG, KG, M, consumoId);
+
+      // El producto SALIÓ del piso: eso es lo que la versión vieja no hacía.
+      check(Math.abs(await saldoDe(tx, hoja.BodegaCodigo) - pisoAntes) < 0.005,
+        "lo devuelto deja de contar al piso (entró y salió completo)");
+
+      // Lo devuelto entra y sale de la hoja por el mismo peso, así que NO mueve la merma. Antes
+      // solo salía: cada devolución empujaba el cuadre hacia abajo y a la primera dejaba la hoja
+      // imposible de cerrar. Con 26 kg de entrada y 25 descongelados, devolver 13 daba -12.
+      const mermaDespues = await cuadre();
+      check(Math.abs(mermaDespues - mermaAntes) < 0.005,
+        `devolver ${KG} kg no movió la merma de la hoja (${mermaAntes} → ${mermaDespues})`);
+      check(mermaDespues - mermaAntes > -0.005,
+        "una devolución ya no puede empujar el cuadre a negativo");
+
+      // La devolución queda atada a su consumo, así que quitarla devuelve las dos filas.
+      const par = await uno(tx,
+        `SELECT COUNT(*) AS n FROM MovimientoPiso
+          WHERE Tipo = 'DEVOLUCION' AND HojaOrigenId = ? AND ConsumoId IS NOT NULL`, hoja.HojaId);
+      check(Number(par.n) >= 1, "la devolución quedó atada a su consumo");
+
+      throw new Error("ROLLBACK");
+    }, { timeout: 30000, maxWait: 15000 });
+  } catch (e: any) {
+    if (!e.message.includes("ROLLBACK")) throw e;
+  }
+
   // ── Y no quedó rastro.
   const finFilas = Number((await uno(prisma, `SELECT COUNT(*) AS n FROM MovimientoPiso`)).n);
   check(finFilas === antesFilas, `la prueba no dejó rastro: ${finFilas} filas en el kardex`);

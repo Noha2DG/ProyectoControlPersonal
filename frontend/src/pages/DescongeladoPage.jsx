@@ -75,10 +75,16 @@ function SelectorDestino({ destinos, value, onChange, ancho = "w-full", vacio = 
 const valorDestinoDe = (l) => l?.BodegaDestino || "";
 const nombreDestinoDe = (l) => l?.NombreBodegaDestino || l?.BodegaDestino || "—";
 
-/* ── Modal: descongelar ───────────────────────────────────────────── */
-// El único punto de captura del módulo. Confirma tres cosas a la vez —  cuántos masters bajaron de
-// verdad, a dónde van y (si alguien lo pesó) cuánto pesaron—  y con eso el producto queda
-// descongelado. No hay un segundo paso: presionar el botón ES la confirmación de que ya se hizo.
+/* ── Modal: bajar del piso ────────────────────────────────────────── */
+// El único punto de captura del módulo, para los DOS gestos que sacan producto del piso:
+// descongelarlo (va al área siguiente) o devolverlo a bodega sin descongelar. Son el mismo
+// movimiento hasta la mitad —  el producto baja del piso a la hoja—  y se elige igual, de una lista
+// de lo que hay, así que comparten pantalla. Lo único que cambia es la mitad de abajo: descongelar
+// pregunta a dónde va y cuánto pesó; devolver pregunta por qué regresa.
+//
+// Se elige, no se teclea. Esto se llena en el teléfono del área, donde escribir a mano
+// "G430TM03-E02-9", el producto y la talla es una errata garantizada — y una errata acá inventa un
+// lote que no existe y rompe la trazabilidad del despacho.
 //
 // Los kilos declarados se DERIVAN de los masters y no se teclean nunca: si se pudieran escribir
 // habría dos verdades sobre el mismo peso y el cuadre del día dejaría de significar algo.
@@ -86,12 +92,14 @@ const nombreDestinoDe = (l) => l?.NombreBodegaDestino || l?.BodegaDestino || "�
 // Sirve para una remisión entera o para una línea suelta. En el primer caso el destino se pone una
 // vez arriba y baja a todas las líneas, porque lo normal es que una remisión entera vaya al mismo
 // lado; la que no, se corrige en su propia fila.
-function ModalDescongelar({ titulo, lineas, hojaAbierta, destinos, empleados, auxiliares, onConfirmar, onCerrar }) {
+function ModalBajarDelPiso({ modo, titulo, lineas, hojaAbierta, destinos, empleados, auxiliares, onConfirmar, onCerrar }) {
+  const devolviendo = modo === "devolver";
   const clave = l => `${l.RemisionId ?? "-"}|${l.Lote}|${l.Clase}|${l.Talla}`;
 
   const [fila, setFila] = useState(() => Object.fromEntries(lineas.map(l =>
     [clave(l), { masters: String(l.Masters ?? 0), destino: "", peso: "" }])));
   const [termo, setTermo] = useState("");
+  const [motivo, setMotivo] = useState("");
   const [pesar, setPesar] = useState(false);
   const [guardando, setGuardando] = useState(false);
   const [cab, setCab] = useState({ Encargado: "", Personas: "", HoraInicio: horaGT() });
@@ -110,14 +118,20 @@ function ModalDescongelar({ titulo, lineas, hojaAbierta, destinos, empleados, au
 
   const mastersDe = l => Math.max(0, Math.min(Number(de(l).masters) || 0, l.Masters ?? 0));
   const kgDe = l => Number((mastersDe(l) * (l.KgPorMaster || 0)).toFixed(2));
-  const pesoDe = l => { const p = Number(de(l).peso); return p > 0 ? p : kgDe(l); };
+  // Una devolución regresa tal como bajó: no hay báscula de por medio, así que el peso es el
+  // declarado y punto.
+  const pesoDe = l => {
+    if (devolviendo) return kgDe(l);
+    const p = Number(de(l).peso);
+    return p > 0 ? p : kgDe(l);
+  };
 
   const activas = lineas.filter(l => mastersDe(l) > 0);
   const totalM = activas.reduce((s, l) => s + mastersDe(l), 0);
   const totalKg = Number(activas.reduce((s, l) => s + kgDe(l), 0).toFixed(2));
   const totalPesado = Number(activas.reduce((s, l) => s + pesoDe(l), 0).toFixed(2));
   const faltanM = lineas.reduce((s, l) => s + Math.max(0, (l.Masters ?? 0) - mastersDe(l)), 0);
-  const sinDestino = activas.filter(l => !de(l).destino);
+  const sinDestino = devolviendo ? [] : activas.filter(l => !de(l).destino);
 
   const listo = totalM > 0 && sinDestino.length === 0 && (hojaAbierta || cab.Encargado);
 
@@ -135,19 +149,23 @@ function ModalDescongelar({ titulo, lineas, hojaAbierta, destinos, empleados, au
     setGuardando(true);
     try {
       await onConfirmar(
-        activas.map(l => ({ linea: l, Masters: mastersDe(l), Peso: pesar ? pesoDe(l) : null, destino: pagoDestino(de(l).destino) })),
+        activas.map(l => ({
+          linea: l, Masters: mastersDe(l),
+          Peso: !devolviendo && pesar ? pesoDe(l) : null,
+          destino: devolviendo ? null : pagoDestino(de(l).destino),
+        })),
         hojaAbierta ? null : cab,
-        termo.trim() || null,
+        devolviendo ? { Motivo: motivo.trim() || null } : { NumeroTermo: termo.trim() || null },
       );
     } finally { setGuardando(false); }
   };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-5xl flex flex-col max-h-[92vh]">
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-5xl min-w-0 flex flex-col max-h-[92vh]">
         <div className="px-5 py-3 border-b flex items-center justify-between shrink-0">
           <div>
-            <h2 className="font-bold text-gray-800">Descongelar</h2>
+            <h2 className="font-bold text-gray-800">{devolviendo ? "Devolver a bodega" : "Descongelar"}</h2>
             <p className="text-xs text-gray-500 mt-0.5">{titulo}</p>
           </div>
           <button onClick={onCerrar} className="text-gray-400 hover:text-gray-600 text-2xl leading-none">&times;</button>
@@ -155,26 +173,37 @@ function ModalDescongelar({ titulo, lineas, hojaAbierta, destinos, empleados, au
 
         {/* Controles que aplican a todo el lote */}
         <div className="px-5 py-2.5 bg-gray-50 border-b flex flex-wrap items-center gap-3 shrink-0">
-          {lineas.length > 1 && (
-            <div className="flex items-center gap-2">
-              <label className="text-xs font-semibold text-gray-600">Enviar todo a</label>
-              <SelectorDestino destinos={destinos} value={destinoComun} onChange={aplicarATodas}
-                ancho="w-60" vacio="Escoja la bodega…" />
+          {devolviendo ? (
+            <div className="flex items-center gap-2 w-full">
+              <label className="text-xs font-semibold text-gray-600 shrink-0">Por qué regresa</label>
+              <input value={motivo} onChange={e => setMotivo(e.target.value)}
+                placeholder="No se alcanzó a procesar, se pidió de más…"
+                className="flex-1 min-w-0 border border-gray-300 rounded px-2 py-1 text-sm" />
             </div>
+          ) : (
+            <>
+              {lineas.length > 1 && (
+                <div className="flex items-center gap-2">
+                  <label className="text-xs font-semibold text-gray-600">Enviar todo a</label>
+                  <SelectorDestino destinos={destinos} value={destinoComun} onChange={aplicarATodas}
+                    ancho="w-60" vacio="Escoja la bodega…" />
+                </div>
+              )}
+              <div className="flex items-center gap-2">
+                <label className="text-xs font-semibold text-gray-600">Termo N°</label>
+                <input value={termo} onChange={e => setTermo(e.target.value)} placeholder="opcional"
+                  className="w-24 border border-gray-300 rounded px-2 py-1 text-sm" />
+              </div>
+              <label className="ml-auto flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer select-none">
+                <input type="checkbox" checked={pesar} onChange={e => setPesar(e.target.checked)} />
+                Pesé en báscula
+              </label>
+            </>
           )}
-          <div className="flex items-center gap-2">
-            <label className="text-xs font-semibold text-gray-600">Termo N°</label>
-            <input value={termo} onChange={e => setTermo(e.target.value)} placeholder="opcional"
-              className="w-24 border border-gray-300 rounded px-2 py-1 text-sm" />
-          </div>
-          <label className="ml-auto flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer select-none">
-            <input type="checkbox" checked={pesar} onChange={e => setPesar(e.target.checked)} />
-            Pesé en báscula
-          </label>
         </div>
 
-        <div className="px-5 py-3 overflow-y-auto">
-          <table className="w-full text-sm">
+        <div className="px-5 py-3 overflow-y-auto overflow-x-auto">
+          <table className="w-full text-sm min-w-[34rem]">
             <thead className="text-xs text-gray-500 uppercase border-b">
               <tr>
                 <th className="py-2 text-left font-semibold">Lote</th>
@@ -183,8 +212,8 @@ function ModalDescongelar({ titulo, lineas, hojaAbierta, destinos, empleados, au
                 <th className="py-2 text-right font-semibold">Al piso</th>
                 <th className="py-2 text-right font-semibold">Masters</th>
                 <th className="py-2 text-right font-semibold">Kg</th>
-                {pesar && <th className="py-2 text-right font-semibold">Pesado</th>}
-                <th className="py-2 text-left font-semibold pl-3">Destino</th>
+                {pesar && !devolviendo && <th className="py-2 text-right font-semibold">Pesado</th>}
+                {!devolviendo && <th className="py-2 text-left font-semibold pl-3">Destino</th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
@@ -208,19 +237,21 @@ function ModalDescongelar({ titulo, lineas, hojaAbierta, destinos, empleados, au
                           ${falta > 0 && m > 0 ? "border-amber-400 bg-amber-50" : "border-gray-300"}`} />
                     </td>
                     <td className="py-1.5 text-right tabular-nums font-semibold w-20">{fmtNum(kgDe(l))}</td>
-                    {pesar && (
+                    {pesar && !devolviendo && (
                       <td className="py-1.5 text-right">
                         <input type="number" min="0" step="0.01" value={de(l).peso}
                           onChange={e => set(l, "peso")(e.target.value)} placeholder={fmtNum(kgDe(l))}
                           className="w-24 border border-gray-300 rounded px-2 py-1 text-sm text-right tabular-nums focus:outline-none focus:ring-2 focus:ring-blue-400" />
                       </td>
                     )}
-                    <td className="py-1.5 pl-3">
-                      {m > 0 && (
-                        <SelectorDestino destinos={destinos} value={de(l).destino}
-                          onChange={set(l, "destino")} ancho="w-56" chico />
-                      )}
-                    </td>
+                    {!devolviendo && (
+                      <td className="py-1.5 pl-3">
+                        {m > 0 && (
+                          <SelectorDestino destinos={destinos} value={de(l).destino}
+                            onChange={set(l, "destino")} ancho="w-56" chico />
+                        )}
+                      </td>
+                    )}
                   </tr>
                 );
               })}
@@ -230,19 +261,19 @@ function ModalDescongelar({ titulo, lineas, hojaAbierta, destinos, empleados, au
                 <td colSpan={4} className="py-2 text-right text-xs font-bold text-gray-600 uppercase">Total</td>
                 <td className="py-2 text-right tabular-nums font-bold">{totalM} m</td>
                 <td className="py-2 text-right tabular-nums font-bold">{fmtNum(totalKg)}</td>
-                {pesar && <td className="py-2 text-right tabular-nums font-bold">{fmtNum(totalPesado)}</td>}
-                <td></td>
+                {pesar && !devolviendo && <td className="py-2 text-right tabular-nums font-bold">{fmtNum(totalPesado)}</td>}
+                {!devolviendo && <td></td>}
               </tr>
             </tfoot>
           </table>
 
           {faltanM > 0 && (
             <p className="mt-3 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2">
-              Quedan <b>{faltanM} master{faltanM !== 1 ? "s" : ""}</b> sin bajar. Siguen al piso hasta que se
-              descongelen o se devuelvan a bodega.
+              Quedan <b>{faltanM} master{faltanM !== 1 ? "s" : ""}</b> sin {devolviendo ? "devolver" : "bajar"}.
+              Siguen al piso hasta que se descongelen o se devuelvan a bodega.
             </p>
           )}
-          {pesar && Math.abs(totalPesado - totalKg) > 0.001 && (
+          {pesar && !devolviendo && Math.abs(totalPesado - totalKg) > 0.001 && (
             <p className="mt-2 text-xs text-gray-600">
               {totalPesado < totalKg
                 ? <>Pesaron <b>{fmtNum(totalKg - totalPesado)} kg menos</b> que lo declarado — esa diferencia sale como merma al cerrar la hoja.</>
@@ -283,20 +314,23 @@ function ModalDescongelar({ titulo, lineas, hojaAbierta, destinos, empleados, au
           )}
         </div>
 
-        <div className="px-5 py-3 border-t flex items-center gap-3 shrink-0">
-          <span className="text-xs text-gray-500">
+        <div className="px-5 py-3 border-t flex flex-wrap items-center gap-x-3 gap-y-2 shrink-0">
+          <span className="text-xs text-gray-500 w-full sm:w-auto">
             {hojaAbierta
               ? <>Se agrega a la hoja <b>#{hojaAbierta.HojaId}</b>{hojaAbierta.NombreEncargado ? ` · ${hojaAbierta.NombreEncargado}` : ""}</>
               : "Se abrirá la hoja del día"}
             {sinDestino.length > 0 && <span className="text-amber-700 font-semibold"> · falta el destino de {sinDestino.length} línea{sinDestino.length !== 1 ? "s" : ""}</span>}
+            {devolviendo && <span className="text-gray-400"> · regresa a bodega tal como bajó, sin pesar</span>}
           </span>
           <button onClick={onCerrar}
-            className="ml-auto border border-gray-300 rounded px-4 py-1.5 text-sm text-gray-600 hover:bg-gray-50">
+            className="ml-auto shrink-0 border border-gray-300 rounded px-4 py-1.5 text-sm text-gray-600 hover:bg-gray-50">
             Cancelar
           </button>
           <button onClick={confirmar} disabled={!listo || guardando}
-            className="bg-blue-600 text-white rounded px-5 py-1.5 text-sm font-semibold hover:bg-blue-700 disabled:opacity-40">
-            {guardando ? "Guardando…" : `Descongelar ${totalM} master${totalM !== 1 ? "s" : ""}`}
+            className={`shrink-0 whitespace-nowrap text-white rounded px-5 py-1.5 text-sm font-semibold disabled:opacity-40
+              ${devolviendo ? "bg-amber-600 hover:bg-amber-700" : "bg-blue-600 hover:bg-blue-700"}`}>
+            {guardando ? "Guardando…"
+              : `${devolviendo ? "Devolver" : "Descongelar"} ${totalM} master${totalM !== 1 ? "s" : ""}`}
           </button>
         </div>
       </div>
@@ -310,7 +344,7 @@ function ModalDescongelar({ titulo, lineas, hojaAbierta, destinos, empleados, au
 //
 // "Días al piso" cuenta desde que el producto ENTRÓ AL ÁREA, no desde la fecha del lote: hay lotes
 // congelados del año pasado y su edad de producción no dice nada sobre si el área lo tiene parado.
-function InventarioPiso({ saldo, resumen, puedeCrear, onDescongelar }) {
+function InventarioPiso({ saldo, resumen, puedeCrear, onBajar }) {
   const [abierto, setAbierto] = useState(true);
   const totalKg = saldo.reduce((s, r) => s + r.Kg, 0);
   const totalM  = saldo.reduce((s, r) => s + (r.Masters || 0), 0);
@@ -358,7 +392,7 @@ function InventarioPiso({ saldo, resumen, puedeCrear, onDescongelar }) {
                 <th className="px-3 py-2 text-right font-semibold">Días</th>
                 <th className="px-3 py-2 text-right font-semibold">Masters</th>
                 <th className="px-3 py-2 text-right font-semibold">Kg</th>
-                <th className="px-3 py-2 w-32"></th>
+                <th className="px-3 py-2 w-48"></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
@@ -376,13 +410,18 @@ function InventarioPiso({ saldo, resumen, puedeCrear, onDescongelar }) {
                     <td className="px-3 py-1.5"></td>
                     <td className="px-3 py-1.5 text-right tabular-nums text-xs font-semibold text-blue-900">{g.Masters || "—"}</td>
                     <td className="px-3 py-1.5 text-right tabular-nums font-bold text-blue-900">{fmtNum(g.Kg)}</td>
-                    <td className="px-3 py-1.5 text-center">
-                      {puedeCrear && (
-                        <button onClick={() => onDescongelar(g.Folio || "Sin remisión", g.lineas)}
-                          className="bg-blue-600 text-white rounded px-3 py-1 text-xs font-semibold hover:bg-blue-700 whitespace-nowrap">
+                    <td className="px-3 py-1.5 text-center whitespace-nowrap">
+                      {puedeCrear && (<>
+                        <button onClick={() => onBajar("descongelar", g.Folio || "Sin remisión", g.lineas)}
+                          className="bg-blue-600 text-white rounded px-3 py-1 text-xs font-semibold hover:bg-blue-700">
                           Descongelar todo
                         </button>
-                      )}
+                        <button onClick={() => onBajar("devolver", g.Folio || "Sin remisión", g.lineas)}
+                          title="Regresar a bodega sin descongelar"
+                          className="ml-1.5 border border-amber-300 text-amber-700 rounded px-2 py-1 text-xs font-semibold hover:bg-amber-50">
+                          Devolver
+                        </button>
+                      </>)}
                     </td>
                   </tr>
                   {g.lineas.map(r => (
@@ -396,15 +435,20 @@ function InventarioPiso({ saldo, resumen, puedeCrear, onDescongelar }) {
                       </td>
                       <td className="px-3 py-1.5 text-right tabular-nums">{r.Masters ?? "—"}</td>
                       <td className="px-3 py-1.5 text-right tabular-nums font-semibold">{fmtNum(r.Kg)}</td>
-                      <td className="px-3 py-1.5 text-center">
-                        {/* Siempre visible, nunca escondido tras el hover: esto se usa en el
-                            handheld del área y ahí no existe pasar el mouse por encima. */}
-                        {puedeCrear && (
-                          <button onClick={() => onDescongelar(`${r.FolioRemision || ""} · ${r.Lote}`, [r])}
-                            className="border border-blue-300 text-blue-700 rounded px-2.5 py-0.5 text-xs font-semibold hover:bg-blue-50 whitespace-nowrap">
-                            Solo este
+                      <td className="px-3 py-1.5 text-center whitespace-nowrap">
+                        {/* Siempre visibles, nunca escondidos tras el hover: esto se usa en el
+                            teléfono del área y ahí no existe pasar el mouse por encima. */}
+                        {puedeCrear && (<>
+                          <button onClick={() => onBajar("descongelar", `${r.FolioRemision || ""} · ${r.Lote}`, [r])}
+                            className="border border-blue-300 text-blue-700 rounded px-2.5 py-0.5 text-xs font-semibold hover:bg-blue-50">
+                            Descongelar
                           </button>
-                        )}
+                          <button onClick={() => onBajar("devolver", `${r.FolioRemision || ""} · ${r.Lote}`, [r])}
+                            title="Regresar a bodega sin descongelar"
+                            className="ml-1.5 border border-amber-300 text-amber-700 rounded px-2.5 py-0.5 text-xs font-semibold hover:bg-amber-50">
+                            Devolver
+                          </button>
+                        </>)}
                       </td>
                     </tr>
                   ))}
@@ -561,14 +605,12 @@ function TablaDescongelado({ hoja, destinos, puedeEditar, puedeBorrar, onCorregi
 }
 
 /* ── Devoluciones a bodega ────────────────────────────────────────── */
-// Producto que bajó del piso y regresa sin descongelar. Va colapsada porque es la excepción: en las
-// hojas reales del 21-sep no hubo ninguna.
-function SeccionDevoluciones({ hoja, clases, tallas, puedeEditar, onAgregar, onBorrar }) {
-  const vacio = { Lote: "", Clase: "", Talla: "900", Masters: "", Peso: "", Motivo: "" };
-  const [f, setF] = useState(vacio);
+// Producto que bajó del piso y regresa sin descongelar. SOLO SE LEE: la captura vive en la lista
+// del piso, con el botón "Devolver", porque ahí el producto ya está escrito y solo hay que
+// señalarlo. Este formulario pedía teclear lote, producto y talla a mano — en el teléfono del área
+// eso es una errata garantizada, y una errata acá inventa un lote que no existe.
+function SeccionDevoluciones({ hoja, puedeBorrar, onBorrar }) {
   const [abierto, setAbierto] = useState((hoja.devoluciones?.length ?? 0) > 0);
-  const set = k => v => setF(p => ({ ...p, [k]: v }));
-  const agregar = async () => { if (await onAgregar(f)) setF(vacio); };
 
   return (
     <section className="bg-white border border-gray-300 rounded-lg overflow-hidden">
@@ -576,7 +618,9 @@ function SeccionDevoluciones({ hoja, clases, tallas, puedeEditar, onAgregar, onB
         <button onClick={() => setAbierto(a => !a)}
           className="text-gray-500 hover:text-gray-800 text-xs font-bold w-4">{abierto ? "▾" : "▸"}</button>
         <h3 className="font-bold text-sm text-gray-700">DEVOLUCIONES A BODEGA</h3>
-        <span className="text-xs text-gray-500">sin descongelar</span>
+        <span className="text-xs text-gray-500">
+          {hoja.devoluciones.length === 0 ? "ninguna" : `${hoja.devoluciones.length} renglón${hoja.devoluciones.length !== 1 ? "es" : ""} · sin descongelar`}
+        </span>
         <span className="ml-auto font-mono tabular-nums text-sm font-bold text-gray-800">{fmtNum(hoja.KgDevuelto)} kg</span>
       </header>
       {abierto && (
@@ -587,70 +631,37 @@ function SeccionDevoluciones({ hoja, clases, tallas, puedeEditar, onAgregar, onB
                 <th className="px-3 py-2 text-left font-semibold">Lote</th>
                 <th className="px-3 py-2 text-left font-semibold">Producto</th>
                 <th className="px-3 py-2 text-left font-semibold">Talla</th>
+                <th className="px-3 py-2 text-left font-semibold">Remisión</th>
                 <th className="px-3 py-2 text-right font-semibold">Masters</th>
                 <th className="px-3 py-2 text-right font-semibold">Kg</th>
                 <th className="px-3 py-2 text-left font-semibold">Motivo</th>
-                <th className="px-3 py-2 w-10"></th>
+                <th className="px-3 py-2 w-12"></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {hoja.devoluciones.length === 0 && !puedeEditar && (
-                <tr><td colSpan={7} className="px-4 py-4 text-center text-gray-400 text-xs">Sin devoluciones.</td></tr>
+              {hoja.devoluciones.length === 0 && (
+                <tr><td colSpan={8} className="px-4 py-6 text-center text-gray-400 text-xs">
+                  Nada devuelto. Use <b>Devolver</b> en la lista del piso para regresar a bodega lo que
+                  no se alcanzó a descongelar.</td></tr>
               )}
               {hoja.devoluciones.map(l => (
                 <tr key={l.MovimientoId} className="hover:bg-gray-50">
                   <td className="px-3 py-1.5 font-mono text-xs">{l.Lote}</td>
                   <td className="px-3 py-1.5 text-xs"><span className="font-mono text-gray-500">{l.Clase}</span> {l.DescripcionClase}</td>
                   <td className="px-3 py-1.5 text-xs">{l.DescripcionTalla}</td>
+                  <td className="px-3 py-1.5 font-mono text-xs text-blue-700">{l.FolioRemision || "—"}</td>
                   <td className="px-3 py-1.5 text-right tabular-nums">{l.Masters ?? "—"}</td>
                   <td className="px-3 py-1.5 text-right tabular-nums font-semibold">{fmtNum(l.PesoKg)}</td>
-                  <td className="px-3 py-1.5 text-xs text-gray-600">{l.Motivo || "—"}</td>
+                  <td className="px-3 py-1.5 text-xs text-gray-600 truncate max-w-[18rem]">{l.Motivo || "—"}</td>
                   <td className="px-3 py-1.5 text-center">
-                    {puedeEditar && (
-                      <button onClick={() => onBorrar(l.MovimientoId)} title="Quitar renglón"
-                        className="text-gray-300 hover:text-red-600 text-lg leading-none">&times;</button>
+                    {puedeBorrar && (
+                      <button onClick={() => onBorrar(l.MovimientoId)}
+                        title="Quitar la devolución y regresar el producto al piso"
+                        className="text-gray-400 hover:text-red-600 text-lg leading-none px-1.5">&times;</button>
                     )}
                   </td>
                 </tr>
               ))}
-              {puedeEditar && (
-                <tr className="bg-blue-50/40">
-                  <td className="px-3 py-2">
-                    <input value={f.Lote} onChange={e => set("Lote")(e.target.value.toUpperCase())} placeholder="Lote"
-                      className="w-32 border border-gray-300 rounded px-2 py-1 text-sm" />
-                  </td>
-                  <td className="px-3 py-2">
-                    <select value={f.Clase} onChange={e => set("Clase")(e.target.value)}
-                      className="w-40 border border-gray-300 rounded px-2 py-1 text-sm">
-                      <option value="">Producto…</option>
-                      {clases.map(c => <option key={c.Clase} value={c.Clase}>{c.Clase} {c.Descripcion}</option>)}
-                    </select>
-                  </td>
-                  <td className="px-3 py-2">
-                    <select value={f.Talla} onChange={e => set("Talla")(e.target.value)}
-                      className="w-28 border border-gray-300 rounded px-2 py-1 text-sm">
-                      {tallas.map(t => <option key={t.Codigo} value={t.Codigo}>{t.Descripcion}</option>)}
-                    </select>
-                  </td>
-                  <td className="px-3 py-2 text-right">
-                    <input type="number" min="0" step="1" value={f.Masters} onChange={e => set("Masters")(e.target.value)}
-                      className="w-20 border border-gray-300 rounded px-2 py-1 text-sm text-right tabular-nums" />
-                  </td>
-                  <td className="px-3 py-2 text-right">
-                    <input type="number" min="0" step="0.01" value={f.Peso} onChange={e => set("Peso")(e.target.value)}
-                      placeholder="0.00"
-                      className="w-24 border border-gray-300 rounded px-2 py-1 text-sm text-right tabular-nums" />
-                  </td>
-                  <td className="px-3 py-2">
-                    <input value={f.Motivo} onChange={e => set("Motivo")(e.target.value)} placeholder="Por qué regresa"
-                      className="w-full border border-gray-300 rounded px-2 py-1 text-sm" />
-                  </td>
-                  <td className="px-3 py-2 text-center">
-                    <button onClick={agregar} disabled={!f.Lote || !f.Clase || !(Number(f.Peso) > 0)}
-                      className="bg-blue-600 text-white rounded px-2 py-1 text-xs font-semibold hover:bg-blue-700 disabled:opacity-40">+</button>
-                  </td>
-                </tr>
-              )}
             </tbody>
           </table>
         </div>
@@ -702,8 +713,6 @@ export default function DescongeladoPage() {
   const [hojas, setHojas]   = useState([]);
   const [selId, setSelId]   = useState(null);
   const [sel, setSel]       = useState(null);     // la hoja con sus renglones
-  const [clases, setClases] = useState([]);
-  const [tallas, setTallas] = useState([]);
   const [destinos, setDestinos] = useState([]);
   const [saldo, setSaldo]   = useState([]);
   const [empleados, setEmpleados] = useState([]);
@@ -711,7 +720,7 @@ export default function DescongeladoPage() {
   const [error, setError]         = useState("");
   const [auxiliares, setAuxiliares] = useState([]);
   const [resumen, setResumen] = useState(null);
-  const [modal, setModal]   = useState(null);
+  const [modal, setModal]   = useState(null);   // { modo, titulo, lineas }
   const [horaFin, setHoraFin] = useState("");
 
   // La hoja NO se abre a mano: la abre el primer descongelado del día. Es la cabecera del
@@ -754,8 +763,6 @@ export default function DescongeladoPage() {
 
   useEffect(() => {
     const h = { headers: authHeader() };
-    fetch("/api/clase", h).then(leerJSON).then(d => Array.isArray(d) && setClases(d.filter(c => c.Activo)));
-    fetch("/api/tallas", h).then(leerJSON).then(d => Array.isArray(d) && setTallas(d.filter(t => t.Activo)));
     // Los destinos son las bodegas virtuales que llevan inventario al piso. La propia bodega de la
     // hoja se quita: mandarse producto a uno mismo no es un traslado.
     fetch(`${API}/bodegas`, h).then(leerJSON)
@@ -797,9 +804,10 @@ export default function DescongeladoPage() {
     if (id) await abrirDetalle(id);
   };
 
-  // Descongelar: UN solo viaje al servidor con todas las líneas. Antes era un POST por línea desde
-  // el navegador y si el quinto fallaba, los cuatro anteriores ya estaban escritos.
-  const confirmarDescongelado = async (seleccion, cabecera, termo) => {
+  // Bajar del piso: UN solo viaje al servidor con todas las líneas, descongelando o devolviendo.
+  // Antes era un POST por línea desde el navegador y si el quinto fallaba, los cuatro anteriores ya
+  // estaban escritos.
+  const confirmarBajada = async (seleccion, cabecera, extra) => {
     let hojaId = hojaAbierta?.HojaId;
     if (!hojaId) {
       const out = await post(`${API}/hojas`, {
@@ -810,8 +818,8 @@ export default function DescongeladoPage() {
       if (!out) return;
       hojaId = out.HojaId;
     }
-    const out = await post(`${API}/hojas/${hojaId}/descongelar`, {
-      NumeroTermo: termo,
+    const out = await post(`${API}/hojas/${hojaId}/${modal.modo === "devolver" ? "devolver" : "descongelar"}`, {
+      ...extra,
       lineas: seleccion.map(s => ({
         Lote: s.linea.Lote, Clase: s.linea.Clase, Talla: s.linea.Talla, RemisionId: s.linea.RemisionId,
         Masters: s.Masters, KgPorMaster: s.linea.KgPorMaster, UM: "KG",
@@ -826,12 +834,6 @@ export default function DescongeladoPage() {
 
   const corregirRenglon = async (id, cambios) => {
     if (!await post(`${API}/renglon/${id}`, cambios, "PUT")) return false;
-    await recargar(sel.HojaId);
-    return true;
-  };
-
-  const agregarDevolucion = async (f) => {
-    if (!await post(`${API}/hojas/${sel.HojaId}/devolucion`, f)) return false;
     await recargar(sel.HojaId);
     return true;
   };
@@ -863,7 +865,6 @@ export default function DescongeladoPage() {
     await recargar(sel.HojaId);
   };
 
-  const editable = sel?.Estatus === "Abierta" && puedeCrear;
 
   const cabecera = useMemo(() => {
     if (!sel) return "";
@@ -879,9 +880,10 @@ export default function DescongeladoPage() {
       {/* El key ata el estado del modal al lote que se está bajando: abrir otro no puede heredar
           los masters ni los destinos del anterior. */}
       {modal && (
-        <ModalDescongelar key={modal.titulo} titulo={modal.titulo} lineas={modal.lineas} hojaAbierta={hojaAbierta}
+        <ModalBajarDelPiso key={`${modal.modo}|${modal.titulo}`} modo={modal.modo}
+          titulo={modal.titulo} lineas={modal.lineas} hojaAbierta={hojaAbierta}
           destinos={destinos} empleados={empleados} auxiliares={auxiliares}
-          onConfirmar={confirmarDescongelado} onCerrar={() => setModal(null)} />
+          onConfirmar={confirmarBajada} onCerrar={() => setModal(null)} />
       )}
 
       {/* Barra superior */}
@@ -907,7 +909,7 @@ export default function DescongeladoPage() {
       {error && <div className="bg-red-50 border border-red-300 text-red-700 text-sm px-4 py-2 rounded">⚠ {error}</div>}
 
       <InventarioPiso saldo={saldo} resumen={resumen} puedeCrear={puedeCrear}
-        onDescongelar={(titulo, lineas) => setModal({ titulo, lineas })} />
+        onBajar={(modo, titulo, lineas) => setModal({ modo, titulo, lineas })} />
 
       {/* Con más de una hoja (OROPSA y maquila no se mezclan) hay que escoger cuál se ve. Con una
           sola no se dibuja nada: ya está abierta abajo. */}
@@ -972,8 +974,8 @@ export default function DescongeladoPage() {
             puedeEditar={sel.Estatus === "Abierta" && puedeEditar}
             puedeBorrar={sel.Estatus === "Abierta" && puedeBorrar}
             onCorregir={corregirRenglon} onBorrar={borrarRenglon} />
-          <SeccionDevoluciones hoja={sel} clases={clases} tallas={tallas} puedeEditar={editable}
-            onAgregar={agregarDevolucion} onBorrar={puedeBorrar ? borrarRenglon : () => {}} />
+          <SeccionDevoluciones hoja={sel}
+            puedeBorrar={sel.Estatus === "Abierta" && puedeBorrar} onBorrar={borrarRenglon} />
         </div>
       )}
     </div>
