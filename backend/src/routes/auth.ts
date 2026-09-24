@@ -7,6 +7,24 @@ import { requireAuth, AuthRequest } from "../middleware/auth.ts";
 const router = Router();
 const SECRET = process.env.JWT_SECRET!;
 
+// Un kiosco es una pantalla fija de planta que nadie atiende: no hay quien vuelva a iniciar sesión
+// cuando el token vence, y en planta nadie sabe la contraseña, así que un vencimiento —por largo que
+// sea— acaba convirtiéndose en una pantalla muerta hasta que alguien de sistemas vaya a desbloquearla.
+// Antes eran 30 días apoyados en la renovación silenciosa cada 12 h de AuthContext, pero eso solo
+// aguanta mientras el equipo siga encendido y con red: una PC apagada un mes largo llegaba igual al
+// login. Por eso el token de kiosco va SIN `exp`.
+//
+// El precio, que hay que tener presente: un token de kiosco copiado del navegador sirve para siempre,
+// y desactivar la cuenta (`activo = 0`) NO lo invalida, porque eso solo se comprueba al iniciar sesión
+// o al renovar — no en cada petición. Para revocar uno de verdad hay que cambiar JWT_SECRET, y eso
+// cierra TODAS las sesiones del sistema. Es un intercambio aceptable para cuentas de una sola pantalla
+// y permisos de solo ver; pensarlo dos veces antes de darle rol kiosco a una cuenta que escriba.
+function firmarToken(payload: object, rol: string) {
+  return rol === "kiosco"
+    ? jwt.sign(payload, SECRET)
+    : jwt.sign(payload, SECRET, { expiresIn: "8h" });
+}
+
 // POST /api/auth/login
 router.post("/login", async (req: Request, res: Response) => {
   const { username, password } = req.body;
@@ -31,10 +49,7 @@ router.post("/login", async (req: Request, res: Response) => {
     }
     const permisos = user.permisos ? JSON.parse(user.permisos) : null;
     const payload = { id: user.id, username: user.username, nombre: user.nombre, rol: user.rol, permisos };
-    // El kiosco es un dispositivo físico que permanece logueado sin interacción humana;
-    // un token de 8h lo deja "Token inválido o expirado" a medio turno.
-    const expiresIn = user.rol === "kiosco" ? "30d" : "8h";
-    const token = jwt.sign(payload, SECRET, { expiresIn });
+    const token = firmarToken(payload, user.rol);
     res.json({ token, user: payload });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -58,8 +73,7 @@ router.post("/refresh", requireAuth, async (req: AuthRequest, res: Response) => 
     }
     const permisos = user.permisos ? JSON.parse(user.permisos) : null;
     const payload = { id: user.id, username: user.username, nombre: user.nombre, rol: user.rol, permisos };
-    const expiresIn = user.rol === "kiosco" ? "30d" : "8h";
-    const token = jwt.sign(payload, SECRET, { expiresIn });
+    const token = firmarToken(payload, user.rol);
     res.json({ token, user: payload });
   } catch (err: any) {
     res.status(500).json({ error: err.message });

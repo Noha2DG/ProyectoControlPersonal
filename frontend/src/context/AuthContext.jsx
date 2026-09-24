@@ -51,15 +51,22 @@ export function AuthProvider({ children }) {
     setUser(data.user);
   };
 
-  // Renovación silenciosa para las terminales de kiosco (Entrada/Salida, Transferencias, Uniformes
-  // y Mi Producción). Son dispositivos que quedan encendidos sin nadie que los atienda: cuando el
-  // token de 30 días vence, la pantalla cae al login y en planta nadie sabe la contraseña, así que
-  // la terminal queda muerta hasta que alguien de sistemas vaya a desbloquearla.
+  // Renovación silenciosa para las terminales de kiosco (Entrada/Salida, Transferencias, Uniformes,
+  // Mi Producción y la pantalla de Ranking). Son dispositivos que quedan encendidos sin nadie que
+  // los atienda.
   //
-  // Al renovar cada 12 h el token nunca se acerca a su vencimiento mientras el equipo siga
-  // encendido. No sirve renovar solo al vencer: /api/auth/refresh exige un token todavía válido.
+  // Ya NO es lo que los mantiene vivos: desde sep 2026 el token de kiosco se emite sin vencimiento
+  // (ver firmarToken en backend/src/routes/auth.ts), justamente porque esta renovación solo protege
+  // mientras el equipo siga encendido y con red — una PC apagada un mes largo llegaba igual al login.
+  //
+  // Sigue aquí por dos razones que no cubre el token eterno: (1) rol y permisos viajan DENTRO del
+  // JWT, así que sin renovar, un cambio de permisos no llega nunca a una pantalla que jamás vuelve a
+  // iniciar sesión; (2) migra sola a los equipos que todavía cargan un token viejo de 30 días —a la
+  // primera renovación reciben uno sin vencimiento—, sin que nadie tenga que ir a re-loguearlos.
+  //
   // Se renueva a los 60 s de arrancar (no de inmediato: si la pantalla se abrió justo al reiniciar
-  // el equipo, la red puede no estar lista) y de ahí en adelante cada 12 h.
+  // el equipo, la red puede no estar lista) y de ahí en adelante cada 12 h. Si falla, se reintenta
+  // en la siguiente vuelta: con el token ya sin vencimiento, fallar no rompe nada.
   useEffect(() => {
     if (user?.rol !== "kiosco") return;
     const renovar = () => { refreshUser(); };
