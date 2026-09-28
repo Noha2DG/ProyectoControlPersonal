@@ -139,7 +139,7 @@ router.get("/existencias", requireAuth, requirePerm("bodega", "ver"), async (_re
   try {
     const rows: any[] = await prisma.$queryRaw`
       SELECT ped.CodigoPedido AS Pedido, cli.RazonSocial AS Cliente, sub.RazonSocial AS Subcliente,
-             pc.Descripcion AS Clase, ta.Descripcion AS Talla,
+             dp.Clase AS CodigoClase, pc.Descripcion AS Clase, dp.Talla AS CodigoTalla, ta.Descripcion AS Talla,
              p.PalletId, p.Codigo AS Polin, p.Estatus, pr.Descripcion AS Presentacion,
              oe.FechaProduccion, oe.Lote, oe.AreaCodigo, ar.Nombre AS NombreArea,
              p.PosicionId, pos.Codigo AS PosicionCodigo,
@@ -161,14 +161,14 @@ router.get("/existencias", requireAuth, requirePerm("bodega", "ver"), async (_re
       LEFT JOIN Subcliente sub ON ped.CodigoCliente = sub.CodigoCliente AND ped.CodigoSubcliente = sub.CodigoSubcliente
       LEFT JOIN Areas ar ON oe.AreaCodigo = ar.Codigo
       LEFT JOIN Posiciones pos ON p.PosicionId = pos.PosicionId
-      GROUP BY ped.CodigoPedido, cli.RazonSocial, sub.RazonSocial, pc.Descripcion, ta.Descripcion,
+      GROUP BY ped.CodigoPedido, cli.RazonSocial, sub.RazonSocial, dp.Clase, pc.Descripcion, dp.Talla, ta.Descripcion,
                p.PalletId, p.Codigo, p.Estatus, pr.Descripcion, oe.FechaProduccion, oe.Lote, oe.AreaCodigo, ar.Nombre,
                p.PosicionId, pos.Codigo
       ORDER BY cli.RazonSocial ASC, oe.Lote ASC, p.Codigo ASC
     `;
     res.json(rows.map(r => ({
       Pedido: r.Pedido, Cliente: r.Cliente, Subcliente: r.Subcliente,
-      Clase: r.Clase, Talla: r.Talla,
+      CodigoClase: r.CodigoClase, Clase: r.Clase, CodigoTalla: String(r.CodigoTalla), Talla: r.Talla,
       PalletId: Number(r.PalletId), Polin: r.Polin, Estatus: r.Estatus, Presentacion: r.Presentacion,
       Fecha: r.FechaProduccion ? new Date(r.FechaProduccion).toISOString().slice(0, 10) : null,
       Lote: r.Lote, AreaCodigo: r.AreaCodigo, NombreArea: r.NombreArea,

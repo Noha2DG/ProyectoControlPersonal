@@ -356,7 +356,9 @@ export function exportarExistenciaBodega(filas, ubicacionDe) {
     "Ubicación":    ubicacionDe(f),
     "Posición":     f.PosicionCodigo ?? "",
     "Área (origen)": f.NombreArea ?? "",
+    "Cód. Clase":   f.CodigoClase,
     "Clase":        f.Clase,
+    "Cód. Talla":   f.CodigoTalla,
     "Talla":        f.Talla,
     "Presentación": f.Presentacion,
     // dd/mm/aaaa como se ve en pantalla — Excel interpreta el ISO (aaaa-mm-dd) como texto suelto
