@@ -201,7 +201,10 @@ router.get("/auxiliares", requireAuth, requirePerm("descongelado", "ver"), async
              CONCAT_WS(' ', e.PrimerNombre, e.PrimerApellido) AS Nombre,
              DATE_FORMAT(MIN(tr.FechaHora), '%H:%i') AS Desde,
              DATE_FORMAT(MAX(COALESCE(tr.FechaSalida, NOW())), '%H:%i') AS Hasta,
-             SUM(TIMESTAMPDIFF(MINUTE, tr.FechaHora, COALESCE(tr.FechaSalida, NOW()))) AS Minutos
+             SUM(TIMESTAMPDIFF(MINUTE, tr.FechaHora, COALESCE(tr.FechaSalida, NOW()))) AS Minutos,
+             -- Sigue en el área si alguna de sus transferencias no tiene salida. Es el dato que el
+             -- cierre muestra al lado del total: quién pasó en el turno y quién está todavía.
+             MAX(CASE WHEN tr.FechaSalida IS NULL THEN 1 ELSE 0 END) AS Presente
       FROM Transferencias tr
       JOIN Empleados e ON e.Codigo = tr.Codigo
       JOIN Areas ar ON ar.Codigo = tr.CodigoArea
@@ -210,7 +213,7 @@ router.get("/auxiliares", requireAuth, requirePerm("descongelado", "ver"), async
         AND (tr.FechaSalida IS NULL OR tr.FechaSalida >= ${fecha})
       GROUP BY tr.Codigo, e.PrimerNombre, e.PrimerApellido
       ORDER BY MIN(tr.FechaHora)`;
-    res.json(num(rows, ["Minutos"]));
+    res.json(num(rows, ["Minutos", "Presente"]).map(r => ({ ...r, Presente: r.Presente === 1 })));
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -1094,6 +1097,12 @@ router.post("/hojas/:id/cerrar", requireAuth, requirePerm("descongelado", "cerra
     const id = Number(req.params.id);
     const operador = getOperador(req);
     const { HoraFin } = req.body;
+    // Las personas se cuentan AL CERRAR, no al abrir: la hoja la abre el primer movimiento del día y a
+    // esa hora todavía no ha llegado todo el turno. Si no viene, se conserva lo que tuviera la hoja.
+    const personas = req.body.Personas === "" || req.body.Personas == null ? null : Number(req.body.Personas);
+    if (personas != null && (!Number.isInteger(personas) || personas < 0)) {
+      res.status(400).json({ error: "Personas debe ser un número entero" }); return;
+    }
 
     const out = await prisma.$transaction(async (tx) => {
       const [h]: any[] = await tx.$queryRaw`
@@ -1129,6 +1138,7 @@ router.post("/hojas/:id/cerrar", requireAuth, requirePerm("descongelado", "cerra
 
       await tx.$executeRaw`
         UPDATE HojaProceso SET Estatus = 'Cerrada', HoraFin = ${HoraFin || null},
+                               Personas = COALESCE(${personas}, Personas),
                                CerradaPor = ${operador}, CerradaEn = NOW()
         WHERE HojaId = ${id}
       `;

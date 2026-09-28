@@ -75,20 +75,21 @@ function SelectorDestino({ destinos, value, onChange, ancho = "w-full", vacio = 
 const valorDestinoDe = (l) => l?.BodegaDestino || "";
 const nombreDestinoDe = (l) => l?.NombreBodegaDestino || l?.BodegaDestino || "—";
 
-/* ── La cabecera de la hoja del día ────────────────────── */
+/* ── La cabecera de la hoja del día ───────────────────────────────── */
 // La hoja NO se abre a mano: la abre el primer movimiento del día, sea descongelar o devolver. Por
 // eso sus datos —  los del encabezado del formulario de papel—  se piden dentro del modal que esté
 // haciendo ese primer movimiento, y no en una pantalla aparte que no significaría nada por sí sola.
+//
+// Al abrir se pide SOLO quién es el encargado y a qué hora arrancó. Cuántas personas trabajaron se
+// cuenta al CERRAR: a la hora del primer movimiento todavía no ha llegado todo el turno, y el
+// número que se tomaba acá era siempre el de los primeros que marcaron.
+//
+// El encargado se ESCOGE de quienes marcaron en el área, no se teclea: en el teléfono escribir un
+// código de empleado es una errata segura, y la lista ya está en la pantalla. Si el encargado
+// todavía no marcó —  o no marca en esa área—, "Otro empleado" abre el buscador de siempre.
 function CabeceraNuevaHoja({ cab, setCab, empleados, auxiliares }) {
-  const [personasTocado, setPersonasTocado] = useState(false);
-
-  // Personas son los AUXILIARES: todos los que pasaron por el área en la jornada, menos el
-  // encargado, que va aparte. Se recalcula al elegir encargado —  si él mismo aparece en la lista,
-  // el número baja solo—  y deja de recalcularse en cuanto alguien lo escribe a mano.
-  const sinEncargado = auxiliares.filter(a => a.Codigo !== cab.Encargado);
-  useEffect(() => {
-    if (!personasTocado) setCab(c => ({ ...c, Personas: String(sinEncargado.length) }));
-  }, [sinEncargado.length, personasTocado, setCab]);
+  const [otro, setOtro] = useState(false);
+  const buscar = otro || auxiliares.length === 0;
 
   return (
     <div className="mt-4 pt-3 border-t">
@@ -96,27 +97,153 @@ function CabeceraNuevaHoja({ cab, setCab, empleados, auxiliares }) {
         No hay hoja abierta hoy — se abre una con estos datos (es la cabecera del formulario de papel).
       </p>
       <div className="flex flex-wrap items-end gap-3">
-        <div>
-          <label className="block text-xs text-gray-500 mb-1">Encargado</label>
-          <EmpleadoAutocomplete empleados={empleados} value={cab.Encargado}
-            onSelect={cod => setCab(c => ({ ...c, Encargado: cod }))} />
-        </div>
-        <div>
-          <label className="block text-xs text-gray-500 mb-1">Personas (auxiliares)</label>
-          <input type="number" min="0" value={cab.Personas}
-            onChange={e => { setPersonasTocado(true); setCab(c => ({ ...c, Personas: e.target.value })); }}
-            className="w-20 border border-gray-300 rounded px-2 py-1 text-sm text-right" />
-          <p className="text-xs text-gray-400 mt-1"
-             title={sinEncargado.map(a => `${a.Codigo} ${a.Nombre}`).join(", ")}>
-            {sinEncargado.length} auxiliar{sinEncargado.length !== 1 ? "es" : ""} pasaron por el área
-            {cab.Encargado && auxiliares.some(a => a.Codigo === cab.Encargado) ? " (sin el encargado)" : ""}
-          </p>
+        <div className="min-w-0">
+          <label className="block text-xs text-gray-500 mb-1">Encargado del área</label>
+          {buscar ? (
+            <div className="flex items-center gap-2">
+              <EmpleadoAutocomplete empleados={empleados} value={cab.Encargado}
+                onSelect={cod => setCab(c => ({ ...c, Encargado: cod }))} />
+              {auxiliares.length > 0 && (
+                <button type="button" onClick={() => { setOtro(false); setCab(c => ({ ...c, Encargado: "" })); }}
+                  className="text-xs text-blue-600 hover:underline whitespace-nowrap">Ver lista</button>
+              )}
+            </div>
+          ) : (
+            <select value={cab.Encargado}
+              onChange={e => {
+                if (e.target.value === "__otro") { setOtro(true); setCab(c => ({ ...c, Encargado: "" })); }
+                else setCab(c => ({ ...c, Encargado: e.target.value }));
+              }}
+              className={`w-64 max-w-full border rounded px-2 py-1.5 text-sm
+                ${cab.Encargado ? "border-gray-300" : "border-amber-400 bg-amber-50"}`}>
+              <option value="">Escoja al encargado…</option>
+              {auxiliares.map(a => (
+                <option key={a.Codigo} value={a.Codigo}>{a.Nombre} · {a.Codigo}</option>
+              ))}
+              <option value="__otro">Otro empleado…</option>
+            </select>
+          )}
         </div>
         <div>
           <label className="block text-xs text-gray-500 mb-1">Hora inicio</label>
           <input type="time" value={cab.HoraInicio}
             onChange={e => setCab(c => ({ ...c, HoraInicio: e.target.value }))}
             className="border border-gray-300 rounded px-2 py-1 text-sm" />
+        </div>
+      </div>
+      <p className="text-xs text-gray-400 mt-2">Las personas del turno se cuentan al cerrar la hoja.</p>
+    </div>
+  );
+}
+
+/* ── Modal: cerrar la hoja ────────────────────────────────────────── */
+// El cierre es el momento de contar a la gente: quién trabajó el turno ya se sabe entero. Se
+// ofrece la lista de quienes marcaron en el área durante la jornada —  todos marcados salvo el
+// encargado, que va aparte en la cabecera—  y el encargado desmarca a quien solo pasó de visita.
+// El número que se guarda es el de la lista, así que siempre se puede decir quiénes eran.
+//
+// "Ahora en el área" se muestra al lado para quien entienda la pregunta como "cuántos hay al
+// momento de cerrar": los dos datos están, y la casilla decide.
+function ModalCerrarHoja({ hoja, auxiliares, onConfirmar, onCerrar }) {
+  const gente = auxiliares.filter(a => a.Codigo !== hoja.Encargado);
+  const [marcados, setMarcados] = useState(() => new Set(gente.map(a => a.Codigo)));
+  const [manual, setManual] = useState("");
+  const [horaFin, setHoraFin] = useState(horaGT());
+  const [guardando, setGuardando] = useState(false);
+
+  const presentes = gente.filter(a => a.Presente).length;
+  const personas = gente.length ? marcados.size : Number(manual) || 0;
+  const merma = Number((hoja.KgEntrada - hoja.KgDescongelado - hoja.KgDevuelto).toFixed(2));
+
+  const alternar = (cod) => setMarcados(s => {
+    const n = new Set(s); n.has(cod) ? n.delete(cod) : n.add(cod); return n;
+  });
+  const soloPresentes = () => setMarcados(new Set(gente.filter(a => a.Presente).map(a => a.Codigo)));
+  const todos = () => setMarcados(new Set(gente.map(a => a.Codigo)));
+
+  const confirmar = async () => {
+    setGuardando(true);
+    try { await onConfirmar({ HoraFin: horaFin, Personas: personas }); }
+    finally { setGuardando(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-xl min-w-0 flex flex-col max-h-[92vh]">
+        <div className="px-5 py-3 border-b flex items-center justify-between shrink-0">
+          <div>
+            <h2 className="font-bold text-gray-800">Cerrar hoja #{hoja.HojaId}</h2>
+            <p className="text-xs text-gray-500 mt-0.5">
+              Encargado: {hoja.NombreEncargado || hoja.Encargado || "—"}
+            </p>
+          </div>
+          <button onClick={onCerrar} className="text-gray-400 hover:text-gray-600 text-2xl leading-none">&times;</button>
+        </div>
+
+        <div className="px-5 py-3 overflow-y-auto">
+          <div className="flex items-baseline justify-between mb-2">
+            <h3 className="text-xs font-bold text-gray-600 uppercase">Personas del turno</h3>
+            {gente.length > 0 && (
+              <span className="text-xs text-gray-500">
+                <button onClick={todos} className="text-blue-600 hover:underline">todos ({gente.length})</button>
+                {" · "}
+                <button onClick={soloPresentes} className="text-blue-600 hover:underline">solo los que están ahora ({presentes})</button>
+              </span>
+            )}
+          </div>
+
+          {gente.length === 0 ? (
+            <div className="flex items-center gap-2 text-sm">
+              <span className="text-xs text-gray-500">Nadie marcó en el área hoy. ¿Cuántas personas trabajaron?</span>
+              <input type="number" min="0" value={manual} onChange={e => setManual(e.target.value)}
+                className="w-20 border border-gray-300 rounded px-2 py-1 text-sm text-right" />
+            </div>
+          ) : (
+            <div className="border border-gray-200 rounded divide-y divide-gray-100">
+              {gente.map(a => (
+                <label key={a.Codigo} className="flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-gray-50 cursor-pointer">
+                  <input type="checkbox" checked={marcados.has(a.Codigo)} onChange={() => alternar(a.Codigo)}
+                    className="w-4 h-4 cursor-pointer" />
+                  <span className="truncate">{a.Nombre}</span>
+                  <span className="font-mono text-xs text-gray-400">{a.Codigo}</span>
+                  <span className="ml-auto text-xs text-gray-500 tabular-nums whitespace-nowrap">{a.Desde}–{a.Presente ? "ahora" : a.Hasta}</span>
+                  {a.Presente && <span className="text-xs text-green-600 font-semibold whitespace-nowrap">en el área</span>}
+                </label>
+              ))}
+            </div>
+          )}
+
+          <div className="mt-4 flex flex-wrap items-end gap-4">
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Hora fin</label>
+              <input type="time" value={horaFin} onChange={e => setHoraFin(e.target.value)}
+                className="border border-gray-300 rounded px-2 py-1 text-sm" />
+            </div>
+            <p className="text-xs text-gray-600">
+              Merma que se anota: <b className={merma > 0.004 ? "text-amber-600" : ""}>{fmtNum(merma)} kg</b>
+              <span className="text-gray-400"> = entrada {fmtNum(hoja.KgEntrada)} − descongelado {fmtNum(hoja.KgDescongelado)} − devuelto {fmtNum(hoja.KgDevuelto)}</span>
+            </p>
+          </div>
+          {merma < -0.004 && (
+            <p className="mt-3 text-xs text-red-700 bg-red-50 border border-red-200 rounded px-3 py-2">
+              Salió más de lo que entró ({fmtNum(-merma)} kg de más). Corrija el peso pesado de algún
+              renglón con el lápiz antes de cerrar: la hoja no cierra con merma negativa.
+            </p>
+          )}
+        </div>
+
+        <div className="px-5 py-3 border-t flex flex-wrap items-center gap-x-3 gap-y-2 shrink-0">
+          <span className="text-xs text-gray-500 w-full sm:w-auto">
+            Se guardan <b>{personas}</b> persona{personas !== 1 ? "s" : ""} además del encargado
+          </span>
+          <button onClick={onCerrar}
+            className="ml-auto shrink-0 border border-gray-300 rounded px-4 py-1.5 text-sm text-gray-600 hover:bg-gray-50">
+            Cancelar
+          </button>
+          <button onClick={confirmar} disabled={guardando || merma < -0.004}
+            className="shrink-0 whitespace-nowrap bg-green-600 hover:bg-green-700 text-white rounded px-5 py-1.5 text-sm font-semibold disabled:opacity-40">
+            {guardando ? "Cerrando…" : "Cerrar hoja"}
+          </button>
         </div>
       </div>
     </div>
@@ -870,7 +997,7 @@ export default function DescongeladoPage() {
   const [resumen, setResumen] = useState(null);
   const [modal, setModal]   = useState(null);   // { titulo, lineas } — descongelar
   const [devol, setDevol]   = useState(null);   // { titulo, datos }    — devolver
-  const [horaFin, setHoraFin] = useState("");
+  const [cierre, setCierre] = useState(false);   // modal de cerrar la hoja
 
   // La hoja NO se abre a mano: la abre el primer descongelado del día. Es la cabecera del
   // formulario de papel (hora, encargado, personas), y pedirla antes de que haya algo que bajar
@@ -959,7 +1086,7 @@ export default function DescongeladoPage() {
     if (hojaAbierta?.HojaId) return hojaAbierta.HojaId;
     const out = await post(`${API}/hojas`, {
       FechaProduccion: fecha, BodegaCodigo: "DESCONGELADO", Propiedad: "OROPSA",
-      Encargado: cabecera?.Encargado, Personas: cabecera?.Personas,
+      Encargado: cabecera?.Encargado,
       HoraInicio: cabecera?.HoraInicio ? `${fecha} ${cabecera.HoraInicio}:00` : null,
     });
     return out ? out.HojaId : null;
@@ -1019,17 +1146,24 @@ export default function DescongeladoPage() {
     await recargar(sel.HojaId);
   };
 
-  const cerrarHoja = async () => {
-    const dif = sel.KgEntrada - sel.KgDescongelado - sel.KgDevuelto;
-    const fin = horaFin || horaGT();
-    const msg = `Se va a cerrar la hoja y anotar ${fmtNum(dif)} kg de merma.\n\n`
-      + `Entrada ${fmtNum(sel.KgEntrada)} − descongelado ${fmtNum(sel.KgDescongelado)} `
-      + `− devuelto ${fmtNum(sel.KgDevuelto)} = ${fmtNum(dif)} kg.`;
-    if (!(await pedirConfirmacion(`${msg}\n\nHora de finalización: ${fin}`))) return;
-    const out = await post(`${API}/hojas/${sel.HojaId}/cerrar`, { HoraFin: `${fecha} ${fin}:00` });
+  // Al cerrar se vuelve a preguntar quién pasó por el área: desde que se cargó la pantalla pudo
+  // haber llegado gente, y el conteo tiene que ser el del turno completo.
+  const abrirCierre = async () => {
+    try {
+      const ra = await fetch(`${API}/auxiliares?bodega=DESCONGELADO&fecha=${fecha}`, { headers: authHeader() });
+      const aux = await leerJSON(ra);
+      if (Array.isArray(aux)) setAuxiliares(aux);
+    } catch { /* se usa la lista que ya había */ }
+    setCierre(true);
+  };
+
+  const cerrarHoja = async ({ HoraFin, Personas }) => {
+    const out = await post(`${API}/hojas/${sel.HojaId}/cerrar`,
+      { HoraFin: `${fecha} ${HoraFin || horaGT()}:00`, Personas });
     if (!out) return;
-    await mostrarAlerta(`Hoja cerrada. Rendimiento de descongelado: ${fmtNum(out.Rendimiento)} %`, "exito");
+    setCierre(false);
     await recargar(sel.HojaId);
+    await mostrarAlerta(`Hoja cerrada. Rendimiento de descongelado: ${fmtNum(out.Rendimiento)} %`, "exito");
   };
 
   const reabrirHoja = async () => {
@@ -1056,6 +1190,10 @@ export default function DescongeladoPage() {
         <ModalDescongelar key={modal.titulo} titulo={modal.titulo} lineas={modal.lineas}
           hojaAbierta={hojaAbierta} destinos={destinos} empleados={empleados} auxiliares={auxiliares}
           onConfirmar={confirmarDescongelado} onCerrar={() => setModal(null)} />
+      )}
+      {cierre && sel && (
+        <ModalCerrarHoja hoja={sel} auxiliares={auxiliares}
+          onConfirmar={cerrarHoja} onCerrar={() => setCierre(false)} />
       )}
       {devol && (
         <ModalDevolver key={devol.titulo} titulo={devol.titulo} datos={devol.datos}
@@ -1127,16 +1265,10 @@ export default function DescongeladoPage() {
             </div>
             <div className="ml-auto flex items-center gap-2">
               {sel.Estatus === "Abierta" && puedeCerrar && (
-                <>
-                  <label className="text-xs text-gray-300">Hora fin</label>
-                  <input type="time" value={horaFin} onChange={e => setHoraFin(e.target.value)}
-                    title="Si se deja vacío se usa la hora actual"
-                    className="bg-gray-700 border border-gray-500 rounded px-2 py-1 text-sm text-white" />
-                  <button onClick={cerrarHoja}
-                    className="bg-green-600 rounded px-4 py-1.5 text-sm font-semibold hover:bg-green-700">
-                    Cerrar hoja
-                  </button>
-                </>
+                <button onClick={abrirCierre}
+                  className="bg-green-600 rounded px-4 py-1.5 text-sm font-semibold hover:bg-green-700">
+                  Cerrar hoja
+                </button>
               )}
               {sel.Estatus === "Cerrada" && puedeCerrar && (
                 <button onClick={reabrirHoja}
