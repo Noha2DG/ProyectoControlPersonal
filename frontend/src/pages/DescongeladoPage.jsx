@@ -118,7 +118,7 @@ function CabeceraNuevaHoja({ cab, setCab, empleados, auxiliares }) {
                 ${cab.Encargado ? "border-gray-300" : "border-amber-400 bg-amber-50"}`}>
               <option value="">Escoja al encargado…</option>
               {auxiliares.map(a => (
-                <option key={a.Codigo} value={a.Codigo}>{a.Nombre} · {a.Codigo}</option>
+                <option key={a.Codigo} value={a.Codigo}>{a.Nombre} · {a.Codigo}{a.Presente ? " (en el área)" : ""}</option>
               ))}
               <option value="__otro">Otro empleado…</option>
             </select>
@@ -136,34 +136,91 @@ function CabeceraNuevaHoja({ cab, setCab, empleados, auxiliares }) {
   );
 }
 
-/* ── Modal: cerrar la hoja ────────────────────────────────────────── */
-// El cierre es el momento de contar a la gente: quién trabajó el turno ya se sabe entero. Se
-// ofrece la lista de quienes marcaron en el área durante la jornada —  todos marcados salvo el
-// encargado, que va aparte en la cabecera—  y el encargado desmarca a quien solo pasó de visita.
-// El número que se guarda es el de la lista, así que siempre se puede decir quiénes eran.
+/* ── Los auxiliares de una hoja ───────────────────────────────────── */
+// Un número, "ver lista" al lado y las horas que sumaron en el área. La lista va plegada porque lo
+// que se declara en el papel es el número; la lista existe para poder decir quiénes eran.
 //
-// "Ahora en el área" se muestra al lado para quien entienda la pregunta como "cuántos hay al
-// momento de cerrar": los dos datos están, y la casilla decide.
-function ModalCerrarHoja({ hoja, auxiliares, onConfirmar, onCerrar }) {
-  const gente = auxiliares.filter(a => a.Codigo !== hoja.Encargado);
-  const [marcados, setMarcados] = useState(() => new Set(gente.map(a => a.Codigo)));
-  const [manual, setManual] = useState("");
+// Todo sale del marcaje DENTRO de la ventana de la hoja (su hora de inicio a su hora de fin), no de
+// la jornada: con dos turnos, cada hoja cuenta a su gente y a nadie del otro turno. Las horas son el
+// traslape de cada marcaje con esa ventana, así que quien cruzó el cambio de turno reparte sus
+// horas entre las dos hojas en vez de sumarlas dos veces.
+function fmtHoras(min) {
+  const h = Math.floor(min / 60), m = min % 60;
+  return m ? `${h} h ${m} min` : `${h} h`;
+}
+
+function ResumenAuxiliares({ datos, cargando, oscuro = false }) {
+  const [abierto, setAbierto] = useState(false);
+  if (!datos) {
+    return <span className={`text-xs ${oscuro ? "text-gray-400" : "text-gray-400"}`}>{cargando ? "Contando…" : "—"}</span>;
+  }
+  return (
+    <div className="min-w-0">
+      <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-sm">
+        <span className="text-gray-600">Auxiliares</span>
+        <b className="text-lg tabular-nums text-gray-900">{datos.Personas}</b>
+        {datos.Personas > 0 && (
+          <button onClick={() => setAbierto(a => !a)}
+            className="text-xs text-blue-600 hover:underline font-semibold">
+            {abierto ? "ocultar lista" : "ver lista"}
+          </button>
+        )}
+        <span className="text-gray-300">·</span>
+        <b className="tabular-nums text-gray-900">{fmtHoras(datos.Minutos)}</b>
+        <span className="text-gray-600">en el área</span>
+        {cargando && <span className="text-xs text-gray-400">actualizando…</span>}
+      </div>
+      <p className="text-xs text-gray-400 mt-0.5">
+        de {datos.Desde.slice(11)} a {datos.Hasta.slice(11)}
+        {datos.Hasta.slice(0, 10) !== datos.Desde.slice(0, 10) && " del día siguiente"}
+        {datos.Presentes > 0 && ` · ${datos.Presentes} ${datos.Presentes === 1 ? "sigue" : "siguen"} en el área`}
+        {" · sin contar al encargado"}
+      </p>
+      {abierto && (
+        <div className="mt-2 border border-gray-200 rounded divide-y divide-gray-100 max-h-64 overflow-y-auto">
+          {datos.lista.map(a => (
+            <div key={a.Codigo} className="flex items-center gap-2 px-3 py-1.5 text-sm">
+              <span className="truncate">{a.Nombre}</span>
+              <span className="font-mono text-xs text-gray-400">{a.Codigo}</span>
+              <span className="ml-auto text-xs text-gray-500 tabular-nums whitespace-nowrap">
+                {a.Desde}–{a.Presente ? "ahora" : a.Hasta}
+              </span>
+              <span className="text-xs tabular-nums font-semibold w-20 text-right whitespace-nowrap">{fmtHoras(a.Minutos)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ── Modal: cerrar la hoja ────────────────────────────────────────── */
+// El cierre es cuando se sabe entero quién trabajó el turno. Las personas no se teclean ni se
+// marcan: salen del marcaje en la ventana de la hoja, y el número que ve el encargado es el que el
+// servidor va a guardar —  la cuenta la rehace él mismo al cerrar, con la misma hora de fin.
+function ModalCerrarHoja({ hoja, onConfirmar, onCerrar }) {
   const [horaFin, setHoraFin] = useState(horaGT());
+  const [aux, setAux] = useState(null);
+  const [cargando, setCargando] = useState(false);
   const [guardando, setGuardando] = useState(false);
 
-  const presentes = gente.filter(a => a.Presente).length;
-  const personas = gente.length ? marcados.size : Number(manual) || 0;
-  const merma = Number((hoja.KgEntrada - hoja.KgDescongelado - hoja.KgDevuelto).toFixed(2));
+  // Se recuenta con cada cambio de la hora de fin: bajarla a las 14:00 saca a quien llegó después.
+  useEffect(() => {
+    if (!/^\d{2}:\d{2}$/.test(horaFin)) return;
+    let vigente = true;
+    setCargando(true);
+    fetch(`${API}/hojas/${hoja.HojaId}/auxiliares?hasta=${horaFin}`, { headers: authHeader() })
+      .then(leerJSON)
+      .then(d => { if (vigente && d && Array.isArray(d.lista)) setAux(d); })
+      .finally(() => { if (vigente) setCargando(false); });
+    return () => { vigente = false; };
+  }, [hoja.HojaId, horaFin]);
 
-  const alternar = (cod) => setMarcados(s => {
-    const n = new Set(s); n.has(cod) ? n.delete(cod) : n.add(cod); return n;
-  });
-  const soloPresentes = () => setMarcados(new Set(gente.filter(a => a.Presente).map(a => a.Codigo)));
-  const todos = () => setMarcados(new Set(gente.map(a => a.Codigo)));
+  const merma = Number((hoja.KgEntrada - hoja.KgDescongelado - hoja.KgDevuelto).toFixed(2));
 
   const confirmar = async () => {
     setGuardando(true);
-    try { await onConfirmar({ HoraFin: horaFin, Personas: personas }); }
+    try { await onConfirmar({ HoraFin: horaFin }); }
     finally { setGuardando(false); }
   };
 
@@ -175,57 +232,27 @@ function ModalCerrarHoja({ hoja, auxiliares, onConfirmar, onCerrar }) {
             <h2 className="font-bold text-gray-800">Cerrar hoja #{hoja.HojaId}</h2>
             <p className="text-xs text-gray-500 mt-0.5">
               Encargado: {hoja.NombreEncargado || hoja.Encargado || "—"}
+              {hoja.HoraInicio && ` · inicio ${hoja.HoraInicio.slice(11)}`}
             </p>
           </div>
           <button onClick={onCerrar} className="text-gray-400 hover:text-gray-600 text-2xl leading-none">&times;</button>
         </div>
 
-        <div className="px-5 py-3 overflow-y-auto">
-          <div className="flex items-baseline justify-between mb-2">
-            <h3 className="text-xs font-bold text-gray-600 uppercase">Personas del turno</h3>
-            {gente.length > 0 && (
-              <span className="text-xs text-gray-500">
-                <button onClick={todos} className="text-blue-600 hover:underline">todos ({gente.length})</button>
-                {" · "}
-                <button onClick={soloPresentes} className="text-blue-600 hover:underline">solo los que están ahora ({presentes})</button>
-              </span>
-            )}
+        <div className="px-5 py-3 overflow-y-auto space-y-4">
+          <div>
+            <label className="block text-xs text-gray-500 mb-1">Hora fin</label>
+            <input type="time" value={horaFin} onChange={e => setHoraFin(e.target.value)}
+              className="border border-gray-300 rounded px-2 py-1 text-sm" />
           </div>
 
-          {gente.length === 0 ? (
-            <div className="flex items-center gap-2 text-sm">
-              <span className="text-xs text-gray-500">Nadie marcó en el área hoy. ¿Cuántas personas trabajaron?</span>
-              <input type="number" min="0" value={manual} onChange={e => setManual(e.target.value)}
-                className="w-20 border border-gray-300 rounded px-2 py-1 text-sm text-right" />
-            </div>
-          ) : (
-            <div className="border border-gray-200 rounded divide-y divide-gray-100">
-              {gente.map(a => (
-                <label key={a.Codigo} className="flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-gray-50 cursor-pointer">
-                  <input type="checkbox" checked={marcados.has(a.Codigo)} onChange={() => alternar(a.Codigo)}
-                    className="w-4 h-4 cursor-pointer" />
-                  <span className="truncate">{a.Nombre}</span>
-                  <span className="font-mono text-xs text-gray-400">{a.Codigo}</span>
-                  <span className="ml-auto text-xs text-gray-500 tabular-nums whitespace-nowrap">{a.Desde}–{a.Presente ? "ahora" : a.Hasta}</span>
-                  {a.Presente && <span className="text-xs text-green-600 font-semibold whitespace-nowrap">en el área</span>}
-                </label>
-              ))}
-            </div>
-          )}
+          <ResumenAuxiliares datos={aux} cargando={cargando} />
 
-          <div className="mt-4 flex flex-wrap items-end gap-4">
-            <div>
-              <label className="block text-xs text-gray-500 mb-1">Hora fin</label>
-              <input type="time" value={horaFin} onChange={e => setHoraFin(e.target.value)}
-                className="border border-gray-300 rounded px-2 py-1 text-sm" />
-            </div>
-            <p className="text-xs text-gray-600">
-              Merma que se anota: <b className={merma > 0.004 ? "text-amber-600" : ""}>{fmtNum(merma)} kg</b>
-              <span className="text-gray-400"> = entrada {fmtNum(hoja.KgEntrada)} − descongelado {fmtNum(hoja.KgDescongelado)} − devuelto {fmtNum(hoja.KgDevuelto)}</span>
-            </p>
-          </div>
+          <p className="text-xs text-gray-600">
+            Merma que se anota: <b className={merma > 0.004 ? "text-amber-600" : ""}>{fmtNum(merma)} kg</b>
+            <span className="text-gray-400"> = entrada {fmtNum(hoja.KgEntrada)} − descongelado {fmtNum(hoja.KgDescongelado)} − devuelto {fmtNum(hoja.KgDevuelto)}</span>
+          </p>
           {merma < -0.004 && (
-            <p className="mt-3 text-xs text-red-700 bg-red-50 border border-red-200 rounded px-3 py-2">
+            <p className="text-xs text-red-700 bg-red-50 border border-red-200 rounded px-3 py-2">
               Salió más de lo que entró ({fmtNum(-merma)} kg de más). Corrija el peso pesado de algún
               renglón con el lápiz antes de cerrar: la hoja no cierra con merma negativa.
             </p>
@@ -233,8 +260,8 @@ function ModalCerrarHoja({ hoja, auxiliares, onConfirmar, onCerrar }) {
         </div>
 
         <div className="px-5 py-3 border-t flex flex-wrap items-center gap-x-3 gap-y-2 shrink-0">
-          <span className="text-xs text-gray-500 w-full sm:w-auto">
-            Se guardan <b>{personas}</b> persona{personas !== 1 ? "s" : ""} además del encargado
+          <span className="text-xs text-gray-500 w-full">
+            Al cerrar, el siguiente movimiento abre la hoja del turno que sigue.
           </span>
           <button onClick={onCerrar}
             className="ml-auto shrink-0 border border-gray-300 rounded px-4 py-1.5 text-sm text-gray-600 hover:bg-gray-50">
@@ -1148,18 +1175,12 @@ export default function DescongeladoPage() {
 
   // Al cerrar se vuelve a preguntar quién pasó por el área: desde que se cargó la pantalla pudo
   // haber llegado gente, y el conteo tiene que ser el del turno completo.
-  const abrirCierre = async () => {
-    try {
-      const ra = await fetch(`${API}/auxiliares?bodega=DESCONGELADO&fecha=${fecha}`, { headers: authHeader() });
-      const aux = await leerJSON(ra);
-      if (Array.isArray(aux)) setAuxiliares(aux);
-    } catch { /* se usa la lista que ya había */ }
-    setCierre(true);
-  };
+  const abrirCierre = () => setCierre(true);
 
-  const cerrarHoja = async ({ HoraFin, Personas }) => {
-    const out = await post(`${API}/hojas/${sel.HojaId}/cerrar`,
-      { HoraFin: `${fecha} ${HoraFin || horaGT()}:00`, Personas });
+  // La hora de fin viaja como HH:MM: el servidor la pega al día en que EMPEZÓ la hoja y, si queda
+  // antes del inicio, al siguiente. Pegarla aquí a la fecha de la jornada rompía los turnos de noche.
+  const cerrarHoja = async ({ HoraFin }) => {
+    const out = await post(`${API}/hojas/${sel.HojaId}/cerrar`, { HoraFin: HoraFin || horaGT() });
     if (!out) return;
     setCierre(false);
     await recargar(sel.HojaId);
@@ -1176,7 +1197,6 @@ export default function DescongeladoPage() {
   const cabecera = useMemo(() => {
     if (!sel) return "";
     return [fmtDia(sel.FechaProduccion), sel.Propiedad, sel.NombreEncargado || sel.Encargado,
-            sel.Personas ? `${sel.Personas} personas` : null,
             sel.HoraInicio ? `inicio ${sel.HoraInicio.slice(11)}` : null,
             sel.HoraFin ? `fin ${sel.HoraFin.slice(11)}` : null].filter(Boolean).join(" · ");
   }, [sel]);
@@ -1192,7 +1212,7 @@ export default function DescongeladoPage() {
           onConfirmar={confirmarDescongelado} onCerrar={() => setModal(null)} />
       )}
       {cierre && sel && (
-        <ModalCerrarHoja hoja={sel} auxiliares={auxiliares}
+        <ModalCerrarHoja hoja={sel}
           onConfirmar={cerrarHoja} onCerrar={() => setCierre(false)} />
       )}
       {devol && (
@@ -1237,7 +1257,9 @@ export default function DescongeladoPage() {
               className={`rounded px-3 py-1 text-xs font-semibold border ${
                 selId === h.HojaId ? "bg-blue-600 text-white border-blue-600"
                                    : "border-gray-300 text-gray-600 hover:bg-gray-50"}`}>
-              #{h.HojaId} · {h.Propiedad} · {fmtNum(h.KgDescongelado)} kg
+              #{h.HojaId} · {h.NombreEncargado || h.Encargado || h.Propiedad}
+              {h.HoraInicio ? ` · ${h.HoraInicio.slice(11)}–${h.HoraFin ? h.HoraFin.slice(11) : "…"}` : ""}
+              {" · "}{fmtNum(h.KgDescongelado)} kg
               <span className={`ml-1.5 font-normal ${h.Estatus === "Abierta" ? "text-green-500" : "opacity-60"}`}>
                 {h.Estatus}
               </span>
@@ -1279,6 +1301,9 @@ export default function DescongeladoPage() {
             </div>
           </div>
 
+          <div className="bg-white border border-gray-300 rounded-lg px-4 py-2.5">
+            <ResumenAuxiliares datos={sel.Auxiliares} />
+          </div>
           <Cuadre hoja={sel} />
           <TablaDescongelado hoja={sel} destinos={destinos}
             puedeEditar={sel.Estatus === "Abierta" && puedeEditar}

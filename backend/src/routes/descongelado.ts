@@ -212,7 +212,7 @@ router.get("/auxiliares", requireAuth, requirePerm("descongelado", "ver"), async
         AND tr.FechaHora < DATE_ADD(${fecha}, INTERVAL 1 DAY)
         AND (tr.FechaSalida IS NULL OR tr.FechaSalida >= ${fecha})
       GROUP BY tr.Codigo, e.PrimerNombre, e.PrimerApellido
-      ORDER BY MIN(tr.FechaHora)`;
+      ORDER BY Presente DESC, MIN(tr.FechaHora)`;
     res.json(num(rows, ["Minutos", "Presente"]).map(r => ({ ...r, Presente: r.Presente === 1 })));
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -227,6 +227,91 @@ router.get("/bodegas", requireAuth, requirePerm("descongelado", "ver"), async (_
       SELECT Codigo, Nombre, Orden FROM BodegaVirtual
        WHERE Activo = 1 AND LlevaPiso = 1 ORDER BY Orden`;
     res.json(num(rows, ["Orden"]));
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── La gente de una hoja ─────────────────────────────────────────────────────────────────────
+//
+// Los auxiliares de una hoja se cuentan DENTRO DE SU VENTANA —  de su hora de inicio a su hora de
+// fin—, no en toda la jornada. Con un solo turno da lo mismo; con dos, contar por jornada metía a
+// la gente del primer turno en la hoja del segundo, y el encargado de la tarde declaraba personas
+// que se habían ido a las dos. Cada hoja es un turno, y su ventana es la que dice quién trabajó en él.
+//
+// Las horas son el TRASLAPE de cada marcaje con esa ventana: quien entró a las 13:00 y salió a las
+// 15:00, con un cambio de turno a las 14:00, suma una hora en cada hoja y no dos en ninguna.
+//
+// El encargado de la hoja no cuenta como auxiliar: el papel lo pone aparte en la cabecera. El del
+// turno anterior sí cuenta en la hoja siguiente por los minutos que se quedó —  estuvo trabajando.
+
+// La hora de fin llega como HH:MM desde el teléfono. Se pega al DÍA EN QUE EMPEZÓ la hoja, y si
+// queda antes del inicio es que el turno cruzó la medianoche: va al día siguiente. Antes se pegaba
+// a la fecha de la jornada y la hoja #12 quedó "de 22:50 a 10:33 del mismo día", terminando antes
+// de empezar.
+export function finDesdeHora(ini: string, hhmm: string): string {
+  const dia = ini.slice(0, 10);
+  let fin = `${dia} ${hhmm}:00`;
+  if (fin < ini) {
+    const [a, m, d] = dia.split("-").map(Number);
+    fin = `${new Date(Date.UTC(a, m - 1, d + 1)).toISOString().slice(0, 10)} ${hhmm}:00`;
+  }
+  return fin;
+}
+
+export async function auxiliaresDeHoja(client: any, hojaId: number, hasta?: string | null) {
+  // Las fechas viajan como texto armado por la base: un DATETIME leído por Prisma trae una Z que
+  // miente, y cualquier cuenta en JavaScript lo corre seis horas.
+  const [h]: any[] = await client.$queryRawUnsafe(`
+    SELECT BodegaCodigo, Encargado,
+           DATE_FORMAT(COALESCE(HoraInicio, TIMESTAMP(FechaProduccion)), '%Y-%m-%d %H:%i:%s') AS Ini,
+           -- Una hoja ABIERTA sigue sumando hasta ahora aunque tenga HoraFin: puede ser una que se
+           -- cerró y se reabrió, y esa hora vieja ya no es el final de nada.
+           DATE_FORMAT(CASE WHEN Estatus = 'Cerrada' AND HoraFin IS NOT NULL THEN HoraFin ELSE NOW() END,
+                       '%Y-%m-%d %H:%i:%s') AS Fin
+      FROM HojaProceso WHERE HojaId = ? LIMIT 1`, hojaId);
+  if (!h) return null;
+  const fin = hasta && /^\d{2}:\d{2}$/.test(hasta) ? finDesdeHora(h.Ini, hasta) : String(h.Fin);
+
+  const rows: any[] = await client.$queryRawUnsafe(`
+    SELECT tr.Codigo, CONCAT_WS(' ', e.PrimerNombre, e.PrimerApellido) AS Nombre,
+           DATE_FORMAT(MIN(GREATEST(tr.FechaHora, v.Ini)), '%H:%i') AS Desde,
+           DATE_FORMAT(MAX(LEAST(COALESCE(tr.FechaSalida, NOW()), v.Fin)), '%H:%i') AS Hasta,
+           SUM(GREATEST(0, TIMESTAMPDIFF(MINUTE, GREATEST(tr.FechaHora, v.Ini),
+                                                 LEAST(COALESCE(tr.FechaSalida, NOW()), v.Fin)))) AS Minutos,
+           MAX(CASE WHEN tr.FechaSalida IS NULL THEN 1 ELSE 0 END) AS Presente
+      FROM (SELECT CAST(? AS DATETIME) AS Ini, CAST(? AS DATETIME) AS Fin) v
+      JOIN Areas ar ON ar.BodegaVirtualCodigo = ?
+      JOIN Transferencias tr ON tr.CodigoArea = ar.Codigo
+                            AND tr.FechaHora < v.Fin
+                            AND COALESCE(tr.FechaSalida, NOW()) > v.Ini
+      JOIN Empleados e ON e.Codigo = tr.Codigo
+     WHERE NOT (tr.Codigo <=> ?)
+     GROUP BY tr.Codigo, e.PrimerNombre, e.PrimerApellido
+    HAVING Minutos > 0
+     ORDER BY MIN(tr.FechaHora)`, h.Ini, fin, h.BodegaCodigo, h.Encargado);
+
+  const lista = rows.map(r => ({
+    Codigo: r.Codigo, Nombre: r.Nombre, Desde: r.Desde, Hasta: r.Hasta,
+    Minutos: Number(r.Minutos), Horas: Number((Number(r.Minutos) / 60).toFixed(2)),
+    Presente: Number(r.Presente) === 1,
+  }));
+  const minutos = lista.reduce((t, r) => t + r.Minutos, 0);
+  return {
+    Desde: h.Ini.slice(0, 16), Hasta: fin.slice(0, 16),
+    Personas: lista.length, Minutos: minutos, Horas: Number((minutos / 60).toFixed(2)),
+    Presentes: lista.filter(r => r.Presente).length, lista,
+  };
+}
+
+// GET /api/descongelado/hojas/:id/auxiliares?hasta=HH:MM
+// Los auxiliares de UNA hoja, en su ventana. `hasta` es la hora de fin que el encargado está por
+// poner al cerrar, para que el número que ve sea el que se va a guardar.
+router.get("/hojas/:id/auxiliares", requireAuth, requirePerm("descongelado", "ver"), async (req: Request, res: Response) => {
+  try {
+    const out = await auxiliaresDeHoja(prisma, Number(req.params.id), (req.query.hasta as string) || null);
+    if (!out) { res.status(404).json({ error: "Hoja no encontrada" }); return; }
+    res.json(out);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -304,6 +389,7 @@ router.get("/hojas/:id", requireAuth, requirePerm("descongelado", "ver"), async 
     const lineas = num(renglones, ["MovimientoId", "Talla", "Peso", "PesoKg", "Masters", "KgPorMaster", "ConsumoId"]);
     res.json({
       ...conRendimiento(hojas)[0],
+      Auxiliares: await auxiliaresDeHoja(prisma, id),
       entrada:     lineas.filter(l => l.Tipo === "CONSUMO"),
       descongelado: lineas.filter(l => l.Tipo === "TRASLADO"),
       devoluciones: lineas.filter(l => l.Tipo === "DEVOLUCION"),
@@ -1096,19 +1182,28 @@ router.post("/hojas/:id/cerrar", requireAuth, requirePerm("descongelado", "cerra
   try {
     const id = Number(req.params.id);
     const operador = getOperador(req);
-    const { HoraFin } = req.body;
-    // Las personas se cuentan AL CERRAR, no al abrir: la hoja la abre el primer movimiento del día y a
-    // esa hora todavía no ha llegado todo el turno. Si no viene, se conserva lo que tuviera la hoja.
-    const personas = req.body.Personas === "" || req.body.Personas == null ? null : Number(req.body.Personas);
-    if (personas != null && (!Number.isInteger(personas) || personas < 0)) {
-      res.status(400).json({ error: "Personas debe ser un número entero" }); return;
-    }
+    // La hora llega como HH:MM y se resuelve contra el inicio de la hoja (ver finDesdeHora). Una
+    // fecha completa se respeta tal cual, por si la manda una pestaña anterior al despliegue.
+    const horaFin = String(req.body.HoraFin ?? "").trim();
 
     const out = await prisma.$transaction(async (tx) => {
       const [h]: any[] = await tx.$queryRaw`
         SELECT HojaId, BodegaCodigo, FechaProduccion, Estatus FROM HojaProceso WHERE HojaId = ${id} LIMIT 1 FOR UPDATE`;
       if (!h) return { error: "Hoja no encontrada", status: 404 };
       if (h.Estatus !== "Abierta") return { error: "La hoja ya está cerrada", status: 400 };
+
+      const [ini]: any[] = await tx.$queryRaw`
+        SELECT DATE_FORMAT(COALESCE(HoraInicio, TIMESTAMP(FechaProduccion)), '%Y-%m-%d %H:%i:%s') AS Ini
+          FROM HojaProceso WHERE HojaId = ${id}`;
+      const fin = /^\d{2}:\d{2}$/.test(horaFin) ? finDesdeHora(ini.Ini, horaFin)
+                : horaFin || null;
+      if (fin && fin < ini.Ini) {
+        return { error: "La hora de fin queda antes del inicio de la hoja", status: 400 };
+      }
+
+      // Las personas son las del marcaje dentro de la ventana de ESTA hoja. Nadie las teclea: son
+      // un dato que el sistema ya tiene, y teclearlas daba dos números para la misma pregunta.
+      const gente = await auxiliaresDeHoja(tx, id, /^\d{2}:\d{2}$/.test(horaFin) ? horaFin : null);
 
       const [c]: any[] = await tx.$queryRaw`
         SELECT ROUND(COALESCE(SUM(CASE WHEN HojaDestinoId = ${id} THEN PesoKg ELSE 0 END), 0), 2) AS Entro,
@@ -1137,8 +1232,8 @@ router.post("/hojas/:id/cerrar", requireAuth, requirePerm("descongelado", "cerra
       }
 
       await tx.$executeRaw`
-        UPDATE HojaProceso SET Estatus = 'Cerrada', HoraFin = ${HoraFin || null},
-                               Personas = COALESCE(${personas}, Personas),
+        UPDATE HojaProceso SET Estatus = 'Cerrada', HoraFin = ${fin},
+                               Personas = ${gente?.Personas ?? null},
                                CerradaPor = ${operador}, CerradaEn = NOW()
         WHERE HojaId = ${id}
       `;
@@ -1162,10 +1257,13 @@ router.post("/hojas/:id/reabrir", requireAuth, requirePerm("descongelado", "cerr
       if (!h) return { error: "Hoja no encontrada", status: 404 };
       if (h.Estatus !== "Cerrada") return { error: "La hoja no está cerrada", status: 400 };
       // La merma es un cálculo del cierre, no una captura: se borra y se vuelve a escribir al
-      // cerrar de nuevo. Los renglones capturados por la gente no se tocan.
+      // cerrar de nuevo. Los renglones capturados por la gente no se tocan. La hora de fin y las
+      // personas también son del cierre: se vacían para que la hoja reabierta vuelva a contar gente
+      // hasta el nuevo cierre, en vez de quedarse cortada en la hora vieja.
       await tx.$executeRaw`DELETE FROM MovimientoPiso WHERE HojaOrigenId = ${id} AND Tipo = 'MERMA'`;
       await tx.$executeRaw`
-        UPDATE HojaProceso SET Estatus = 'Abierta', CerradaPor = NULL, CerradaEn = NULL WHERE HojaId = ${id}`;
+        UPDATE HojaProceso SET Estatus = 'Abierta', HoraFin = NULL, Personas = NULL,
+                               CerradaPor = NULL, CerradaEn = NULL WHERE HojaId = ${id}`;
       return { ok: true };
     });
     if (!("ok" in out)) { res.status((out as any).status).json({ error: (out as any).error }); return; }
