@@ -87,7 +87,7 @@ const nombreDestinoDe = (l) => l?.NombreBodegaDestino || l?.BodegaDestino || "�
 // El encargado se ESCOGE de quienes marcaron en el área, no se teclea: en el teléfono escribir un
 // código de empleado es una errata segura, y la lista ya está en la pantalla. Si el encargado
 // todavía no marcó —  o no marca en esa área—, "Otro empleado" abre el buscador de siempre.
-function CabeceraNuevaHoja({ cab, setCab, empleados, auxiliares }) {
+function CabeceraNuevaHoja({ cab, setCab, empleados, auxiliares, inicioSugerido }) {
   const [otro, setOtro] = useState(false);
   const buscar = otro || auxiliares.length === 0;
 
@@ -131,7 +131,12 @@ function CabeceraNuevaHoja({ cab, setCab, empleados, auxiliares }) {
             className="border border-gray-300 rounded px-2 py-1 text-sm" />
         </div>
       </div>
-      <p className="text-xs text-gray-400 mt-2">Las personas del turno se cuentan al cerrar la hoja.</p>
+      <p className="text-xs text-gray-400 mt-2">
+        {inicioSugerido && cab.HoraInicio === inicioSugerido.Hora
+          ? `Hora de inicio tomada del ${inicioSugerido.Motivo}. `
+          : ""}
+        Las personas del turno se cuentan al cerrar la hoja.
+      </p>
     </div>
   );
 }
@@ -199,28 +204,35 @@ function ResumenAuxiliares({ datos, cargando, oscuro = false }) {
 // marcan: salen del marcaje en la ventana de la hoja, y el número que ve el encargado es el que el
 // servidor va a guardar —  la cuenta la rehace él mismo al cerrar, con la misma hora de fin.
 function ModalCerrarHoja({ hoja, onConfirmar, onCerrar }) {
+  const inicioOriginal = hoja.HoraInicio ? hoja.HoraInicio.slice(11, 16) : "";
+  const [horaInicio, setHoraInicio] = useState(inicioOriginal);
   const [horaFin, setHoraFin] = useState(horaGT());
   const [aux, setAux] = useState(null);
   const [cargando, setCargando] = useState(false);
   const [guardando, setGuardando] = useState(false);
 
-  // Se recuenta con cada cambio de la hora de fin: bajarla a las 14:00 saca a quien llegó después.
+  // Se recuenta con cada cambio de hora: bajar el fin a las 14:00 saca a quien llegó después, y
+  // adelantar el inicio mete a quien trabajó antes de que la hoja se abriera en el sistema.
   useEffect(() => {
     if (!/^\d{2}:\d{2}$/.test(horaFin)) return;
     let vigente = true;
     setCargando(true);
-    fetch(`${API}/hojas/${hoja.HojaId}/auxiliares?hasta=${horaFin}`, { headers: authHeader() })
+    const desde = /^\d{2}:\d{2}$/.test(horaInicio) ? `&desde=${horaInicio}` : "";
+    fetch(`${API}/hojas/${hoja.HojaId}/auxiliares?hasta=${horaFin}${desde}`, { headers: authHeader() })
       .then(leerJSON)
       .then(d => { if (vigente && d && Array.isArray(d.lista)) setAux(d); })
       .finally(() => { if (vigente) setCargando(false); });
     return () => { vigente = false; };
-  }, [hoja.HojaId, horaFin]);
+  }, [hoja.HojaId, horaFin, horaInicio]);
 
   const merma = Number((hoja.KgEntrada - hoja.KgDescongelado - hoja.KgDevuelto).toFixed(2));
 
   const confirmar = async () => {
     setGuardando(true);
-    try { await onConfirmar({ HoraFin: horaFin }); }
+    try {
+      await onConfirmar({ HoraFin: horaFin,
+                          ...(horaInicio && horaInicio !== inicioOriginal ? { HoraInicio: horaInicio } : {}) });
+    }
     finally { setGuardando(false); }
   };
 
@@ -239,11 +251,34 @@ function ModalCerrarHoja({ hoja, onConfirmar, onCerrar }) {
         </div>
 
         <div className="px-5 py-3 overflow-y-auto space-y-4">
-          <div>
-            <label className="block text-xs text-gray-500 mb-1">Hora fin</label>
-            <input type="time" value={horaFin} onChange={e => setHoraFin(e.target.value)}
-              className="border border-gray-300 rounded px-2 py-1 text-sm" />
+          <div className="flex flex-wrap items-end gap-4">
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Hora inicio del turno</label>
+              <input type="time" value={horaInicio} onChange={e => setHoraInicio(e.target.value)}
+                className="border border-gray-300 rounded px-2 py-1 text-sm" />
+            </div>
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Hora fin</label>
+              <input type="time" value={horaFin} onChange={e => setHoraFin(e.target.value)}
+                className="border border-gray-300 rounded px-2 py-1 text-sm" />
+            </div>
           </div>
+
+          {/* La hoja se abre con el primer movimiento que se CAPTURA, y el papel va adelante del
+              sistema: el turno pudo haber empezado horas antes. Si el área tiene marcajes antes
+              del inicio de la hoja, se dice aquí — con el inicio tarde, esa gente no cuenta. */}
+          {aux?.InicioSugerido && (
+            <div className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-3 py-2 flex flex-wrap items-center gap-2">
+              <span>
+                La hoja empieza a las <b>{horaInicio || "—"}</b>, pero el {aux.InicioSugerido.Motivo} fue a
+                las <b>{aux.InicioSugerido.Hora}</b>. Quien trabajó antes del inicio no se cuenta.
+              </span>
+              <button onClick={() => setHoraInicio(aux.InicioSugerido.Hora)}
+                className="ml-auto bg-amber-600 hover:bg-amber-700 text-white rounded px-3 py-1 font-semibold whitespace-nowrap">
+                Usar {aux.InicioSugerido.Hora}
+              </button>
+            </div>
+          )}
 
           <ResumenAuxiliares datos={aux} cargando={cargando} />
 
@@ -292,7 +327,7 @@ function ModalCerrarHoja({ hoja, onConfirmar, onCerrar }) {
 // Sirve para una remisión entera o para una línea suelta. En el primer caso el destino se pone una
 // vez arriba y baja a todas las líneas, porque lo normal es que una remisión entera vaya al mismo
 // lado; la que no, se corrige en su propia fila.
-function ModalDescongelar({ titulo, lineas, hojaAbierta, destinos, empleados, auxiliares, onConfirmar, onCerrar }) {
+function ModalDescongelar({ titulo, lineas, hojaAbierta, destinos, empleados, auxiliares, inicioSugerido, onConfirmar, onCerrar }) {
   const clave = l => `${l.RemisionId ?? "-"}|${l.Lote}|${l.Clase}|${l.Talla}`;
 
   const [fila, setFila] = useState(() => Object.fromEntries(lineas.map(l =>
@@ -300,7 +335,9 @@ function ModalDescongelar({ titulo, lineas, hojaAbierta, destinos, empleados, au
   const [termo, setTermo] = useState("");
   const [pesar, setPesar] = useState(false);
   const [guardando, setGuardando] = useState(false);
-  const [cab, setCab] = useState({ Encargado: "", Personas: "", HoraInicio: horaGT() });
+  // El inicio arranca en el inicio real del turno (cierre de la hoja anterior o primer marcaje del
+  // área), no en la hora de captura: la hoja casi siempre se abre tarde.
+  const [cab, setCab] = useState({ Encargado: "", HoraInicio: inicioSugerido?.Hora || horaGT() });
 
   const set = (l, k) => (v) => setFila(f => ({ ...f, [clave(l)]: { ...f[clave(l)], [k]: v } }));
   const de = (l) => fila[clave(l)] ?? { masters: "0", destino: "", peso: "" };
@@ -449,7 +486,8 @@ function ModalDescongelar({ titulo, lineas, hojaAbierta, destinos, empleados, au
           )}
 
           {!hojaAbierta && (
-            <CabeceraNuevaHoja cab={cab} setCab={setCab} empleados={empleados} auxiliares={auxiliares} />
+            <CabeceraNuevaHoja cab={cab} setCab={setCab} empleados={empleados} auxiliares={auxiliares}
+              inicioSugerido={inicioSugerido} />
           )}
         </div>
 
@@ -482,12 +520,14 @@ function ModalDescongelar({ titulo, lineas, hojaAbierta, destinos, empleados, au
 // La identidad la conserva la remisión, que guarda cada MasterId que despachó. Por eso acá no se
 // escanea nada —  en Descongelado no hay lector—  sino que se marca de la lista que salió, agrupada
 // por el polín del que vino, que es como la planta la devuelve: casi siempre el polín completo.
-function ModalDevolver({ titulo, datos, hojaAbierta, empleados, auxiliares, onConfirmar, onCerrar }) {
+function ModalDevolver({ titulo, datos, hojaAbierta, empleados, auxiliares, inicioSugerido, onConfirmar, onCerrar }) {
   const [sel, setSel] = useState(() => new Set());
   const [expandido, setExpandido] = useState(() => new Set());
   const [motivo, setMotivo] = useState("");
   const [guardando, setGuardando] = useState(false);
-  const [cab, setCab] = useState({ Encargado: "", Personas: "", HoraInicio: horaGT() });
+  // El inicio arranca en el inicio real del turno (cierre de la hoja anterior o primer marcaje del
+  // área), no en la hora de captura: la hoja casi siempre se abre tarde.
+  const [cab, setCab] = useState({ Encargado: "", HoraInicio: inicioSugerido?.Hora || horaGT() });
 
   const polines = datos?.polines ?? [];
   const todos = polines.flatMap(p => p.Masters);
@@ -614,7 +654,8 @@ function ModalDevolver({ titulo, datos, hojaAbierta, empleados, auxiliares, onCo
           })}
 
           {!hojaAbierta && marcados.length > 0 && (
-            <CabeceraNuevaHoja cab={cab} setCab={setCab} empleados={empleados} auxiliares={auxiliares} />
+            <CabeceraNuevaHoja cab={cab} setCab={setCab} empleados={empleados} auxiliares={auxiliares}
+              inicioSugerido={inicioSugerido} />
           )}
         </div>
 
@@ -1025,6 +1066,7 @@ export default function DescongeladoPage() {
   const [modal, setModal]   = useState(null);   // { titulo, lineas } — descongelar
   const [devol, setDevol]   = useState(null);   // { titulo, datos }    — devolver
   const [cierre, setCierre] = useState(false);   // modal de cerrar la hoja
+  const [inicioSug, setInicioSug] = useState(null);   // { Hora, Motivo } del turno que sigue
 
   // La hoja NO se abre a mano: la abre el primer descongelado del día. Es la cabecera del
   // formulario de papel (hora, encargado, personas), y pedirla antes de que haya algo que bajar
@@ -1179,8 +1221,17 @@ export default function DescongeladoPage() {
 
   // La hora de fin viaja como HH:MM: el servidor la pega al día en que EMPEZÓ la hoja y, si queda
   // antes del inicio, al siguiente. Pegarla aquí a la fecha de la jornada rompía los turnos de noche.
-  const cerrarHoja = async ({ HoraFin }) => {
-    const out = await post(`${API}/hojas/${sel.HojaId}/cerrar`, { HoraFin: HoraFin || horaGT() });
+  useEffect(() => {
+    let vigente = true;
+    fetch(`${API}/inicio-sugerido?bodega=DESCONGELADO&fecha=${fecha}`, { headers: authHeader() })
+      .then(leerJSON).then(d => { if (vigente) setInicioSug(d && d.Hora ? d : null); })
+      .catch(() => { if (vigente) setInicioSug(null); });
+    return () => { vigente = false; };
+  }, [fecha, hojas]);
+
+  const cerrarHoja = async ({ HoraFin, HoraInicio }) => {
+    const out = await post(`${API}/hojas/${sel.HojaId}/cerrar`,
+      { HoraFin: HoraFin || horaGT(), ...(HoraInicio ? { HoraInicio } : {}) });
     if (!out) return;
     setCierre(false);
     await recargar(sel.HojaId);
@@ -1207,7 +1258,7 @@ export default function DescongeladoPage() {
       {/* El key ata el estado del modal al lote que se está bajando: abrir otro no puede heredar
           los masters ni los destinos del anterior. */}
       {modal && (
-        <ModalDescongelar key={modal.titulo} titulo={modal.titulo} lineas={modal.lineas}
+        <ModalDescongelar key={modal.titulo} titulo={modal.titulo} lineas={modal.lineas} inicioSugerido={inicioSug}
           hojaAbierta={hojaAbierta} destinos={destinos} empleados={empleados} auxiliares={auxiliares}
           onConfirmar={confirmarDescongelado} onCerrar={() => setModal(null)} />
       )}
@@ -1216,7 +1267,7 @@ export default function DescongeladoPage() {
           onConfirmar={cerrarHoja} onCerrar={() => setCierre(false)} />
       )}
       {devol && (
-        <ModalDevolver key={devol.titulo} titulo={devol.titulo} datos={devol.datos}
+        <ModalDevolver key={devol.titulo} titulo={devol.titulo} datos={devol.datos} inicioSugerido={inicioSug}
           hojaAbierta={hojaAbierta} empleados={empleados} auxiliares={auxiliares}
           onConfirmar={confirmarDevolucion} onCerrar={() => setDevol(null)} />
       )}

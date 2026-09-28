@@ -9,7 +9,7 @@
 // desarrollo, así que la única forma honesta de probar contra datos reales es no dejar rastro.
 import "dotenv/config";
 import prisma from "../src/lib/prisma.ts";
-import { devolverDelPiso, auxiliaresDeHoja, finDesdeHora } from "../src/routes/descongelado.ts";
+import { devolverDelPiso, auxiliaresDeHoja, finDesdeHora, inicioSugerido } from "../src/routes/descongelado.ts";
 
 let ok = 0, fallo = 0;
 const bien = (m: string) => { ok++; console.log(` OK   ${m}`); };
@@ -457,6 +457,27 @@ async function main() {
         check(p2(a) === 60 && p2(b) === 60, "quien cruzó el cambio de turno reparte sus horas: 1 h en cada hoja");
         check(c.Personas === 1 && c.Minutos === 300 && c.Hasta === `${N} 03:00`,
           `el turno de noche termina al día siguiente y cuenta 5 h (${c.Hasta}, ${c.Minutos} min)`);
+
+        // ── La hoja #49: el turno empezó con el primer marcaje, pero la hoja se abrió cuando se
+        // capturó el primer descongelado, horas después. Con la ventana arrancando ahí, el cierre
+        // contaba cero. Se simula el turno A abierto en el sistema a las 13:00.
+        const tarde = await hoja(`${D} 13:00:00`, E1);
+        const t: any = await auxiliaresDeHoja(tx, tarde, "14:00");
+        check(t.Minutos < a.Minutos,
+          `abierta tarde (13:00), la hoja solo ve ${t.Minutos} min de los ${a.Minutos} del turno`);
+        check(t.InicioSugerido?.Hora === "05:50" && /primer marcaje/.test(t.InicioSugerido?.Motivo),
+          `y lo avisa: sugiere empezar a las ${t.InicioSugerido?.Hora} (${t.InicioSugerido?.Motivo})`);
+        const corregida: any = await auxiliaresDeHoja(tx, tarde, "14:00", "05:50");
+        check(corregida.Personas === 3 && corregida.Minutos === 545,
+          `con el inicio corregido cuenta el turno entero: ${corregida.Personas} auxiliares, ${corregida.Minutos} min`);
+        check(corregida.InicioSugerido == null, "ya corregida, deja de sugerir");
+
+        // Cerrado el turno A, el turno siguiente empieza donde terminó: no en el primer marcaje del día.
+        await tx.$executeRawUnsafe(
+          `UPDATE HojaProceso SET Estatus = 'Cerrada', HoraFin = ? WHERE HojaId = ?`, `${D} 14:00:00`, A);
+        const sigB: any = await inicioSugerido(tx, "DESCONGELADO", D, B);
+        check(sigB?.Inicio === `${D} 14:00:00` && /turno anterior/.test(sigB?.Motivo),
+          `el turno B arranca en el cierre del A: ${sigB?.Inicio?.slice(11, 16)} (${sigB?.Motivo})`);
 
         throw new Error("ROLLBACK");
       }, { timeout: 30000, maxWait: 15000 });

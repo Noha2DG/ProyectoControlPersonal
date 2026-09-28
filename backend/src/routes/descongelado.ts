@@ -259,11 +259,37 @@ export function finDesdeHora(ini: string, hhmm: string): string {
   return fin;
 }
 
-export async function auxiliaresDeHoja(client: any, hojaId: number, hasta?: string | null) {
+// Dónde empezó DE VERDAD el turno. La hoja se abre con el primer movimiento que se captura, y eso
+// casi nunca es el inicio del turno: el papel va adelante del sistema. El 28-sep el área marcó desde
+// las 03:45 y la hoja #49 se abrió a las 15:24, cuando se capturó el primer descongelado; con la
+// ventana arrancando ahí, el cierre contó cero auxiliares.
+//
+// Primero manda el cierre de la hoja anterior de la misma jornada —  el turno anterior terminó ahí,
+// así que este empezó ahí— ; si no hay, el primer marcaje del área en la jornada.
+export async function inicioSugerido(client: any, bodega: string, fecha: string, antesDeHoja?: number | null) {
+  const [prev]: any[] = await client.$queryRawUnsafe(`
+    SELECT DATE_FORMAT(MAX(HoraFin), '%Y-%m-%d %H:%i:%s') AS t FROM HojaProceso
+     WHERE BodegaCodigo = ? AND FechaProduccion = ? AND Estatus = 'Cerrada' AND HoraFin IS NOT NULL
+       AND (? IS NULL OR HojaId < ?)`, bodega, fecha, antesDeHoja ?? null, antesDeHoja ?? null);
+  if (prev?.t) return { Inicio: String(prev.t), Motivo: "cierre del turno anterior" };
+  const [pm]: any[] = await client.$queryRawUnsafe(`
+    SELECT DATE_FORMAT(MIN(tr.FechaHora), '%Y-%m-%d %H:%i:%s') AS t
+      FROM Transferencias tr JOIN Areas ar ON ar.Codigo = tr.CodigoArea
+     WHERE ar.BodegaVirtualCodigo = ?
+       AND tr.FechaHora >= ? AND tr.FechaHora < DATE_ADD(?, INTERVAL 1 DAY)`, bodega, fecha, fecha);
+  if (pm?.t) return { Inicio: String(pm.t), Motivo: "primer marcaje del área" };
+  return null;
+}
+
+// La hora de inicio llega como HH:MM y se pega a la JORNADA de la hoja: la jornada es el día en que
+// arrancó el turno, aunque cruce la medianoche.
+const inicioDesdeHora = (fecha: string, hhmm: string) => `${fecha} ${hhmm}:00`;
+
+export async function auxiliaresDeHoja(client: any, hojaId: number, hasta?: string | null, desde?: string | null) {
   // Las fechas viajan como texto armado por la base: un DATETIME leído por Prisma trae una Z que
   // miente, y cualquier cuenta en JavaScript lo corre seis horas.
   const [h]: any[] = await client.$queryRawUnsafe(`
-    SELECT BodegaCodigo, Encargado,
+    SELECT BodegaCodigo, Encargado, DATE_FORMAT(FechaProduccion, '%Y-%m-%d') AS Fecha,
            DATE_FORMAT(COALESCE(HoraInicio, TIMESTAMP(FechaProduccion)), '%Y-%m-%d %H:%i:%s') AS Ini,
            -- Una hoja ABIERTA sigue sumando hasta ahora aunque tenga HoraFin: puede ser una que se
            -- cerró y se reabrió, y esa hora vieja ya no es el final de nada.
@@ -271,7 +297,8 @@ export async function auxiliaresDeHoja(client: any, hojaId: number, hasta?: stri
                        '%Y-%m-%d %H:%i:%s') AS Fin
       FROM HojaProceso WHERE HojaId = ? LIMIT 1`, hojaId);
   if (!h) return null;
-  const fin = hasta && /^\d{2}:\d{2}$/.test(hasta) ? finDesdeHora(h.Ini, hasta) : String(h.Fin);
+  const ini = desde && /^\d{2}:\d{2}$/.test(desde) ? inicioDesdeHora(h.Fecha, desde) : String(h.Ini);
+  const fin = hasta && /^\d{2}:\d{2}$/.test(hasta) ? finDesdeHora(ini, hasta) : String(h.Fin);
 
   const rows: any[] = await client.$queryRawUnsafe(`
     SELECT tr.Codigo, CONCAT_WS(' ', e.PrimerNombre, e.PrimerApellido) AS Nombre,
@@ -289,7 +316,7 @@ export async function auxiliaresDeHoja(client: any, hojaId: number, hasta?: stri
      WHERE NOT (tr.Codigo <=> ?)
      GROUP BY tr.Codigo, e.PrimerNombre, e.PrimerApellido
     HAVING Minutos > 0
-     ORDER BY MIN(tr.FechaHora)`, h.Ini, fin, h.BodegaCodigo, h.Encargado);
+     ORDER BY MIN(tr.FechaHora)`, ini, fin, h.BodegaCodigo, h.Encargado);
 
   const lista = rows.map(r => ({
     Codigo: r.Codigo, Nombre: r.Nombre, Desde: r.Desde, Hasta: r.Hasta,
@@ -297,21 +324,37 @@ export async function auxiliaresDeHoja(client: any, hojaId: number, hasta?: stri
     Presente: Number(r.Presente) === 1,
   }));
   const minutos = lista.reduce((t, r) => t + r.Minutos, 0);
+  const sug = await inicioSugerido(client, h.BodegaCodigo, h.Fecha, hojaId);
   return {
-    Desde: h.Ini.slice(0, 16), Hasta: fin.slice(0, 16),
+    Desde: ini.slice(0, 16), Hasta: fin.slice(0, 16),
+    // Se ofrece solo si es ANTERIOR al inicio que tiene la hoja: es la señal de que se abrió tarde.
+    InicioSugerido: sug && sug.Inicio < ini ? { Hora: sug.Inicio.slice(11, 16), Motivo: sug.Motivo } : null,
     Personas: lista.length, Minutos: minutos, Horas: Number((minutos / 60).toFixed(2)),
     Presentes: lista.filter(r => r.Presente).length, lista,
   };
 }
 
-// GET /api/descongelado/hojas/:id/auxiliares?hasta=HH:MM
-// Los auxiliares de UNA hoja, en su ventana. `hasta` es la hora de fin que el encargado está por
-// poner al cerrar, para que el número que ve sea el que se va a guardar.
+// GET /api/descongelado/hojas/:id/auxiliares?desde=HH:MM&hasta=HH:MM
+// Los auxiliares de UNA hoja, en su ventana. `desde` y `hasta` son las horas que el encargado está
+// por poner al cerrar, para que el número que ve sea exactamente el que se va a guardar.
 router.get("/hojas/:id/auxiliares", requireAuth, requirePerm("descongelado", "ver"), async (req: Request, res: Response) => {
   try {
-    const out = await auxiliaresDeHoja(prisma, Number(req.params.id), (req.query.hasta as string) || null);
+    const out = await auxiliaresDeHoja(prisma, Number(req.params.id),
+      (req.query.hasta as string) || null, (req.query.desde as string) || null);
     if (!out) { res.status(404).json({ error: "Hoja no encontrada" }); return; }
     res.json(out);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/descongelado/inicio-sugerido?bodega=DESCONGELADO&fecha=YYYY-MM-DD
+// Para abrir la hoja con la hora en que empezó el turno y no con la hora en que alguien capturó.
+router.get("/inicio-sugerido", requireAuth, requirePerm("descongelado", "ver"), async (req: Request, res: Response) => {
+  try {
+    const sug = await inicioSugerido(prisma, String(req.query.bodega || "DESCONGELADO"),
+      String(req.query.fecha || hoyGT()), null);
+    res.json(sug ? { Hora: sug.Inicio.slice(11, 16), Motivo: sug.Motivo } : null);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -1185,6 +1228,9 @@ router.post("/hojas/:id/cerrar", requireAuth, requirePerm("descongelado", "cerra
     // La hora llega como HH:MM y se resuelve contra el inicio de la hoja (ver finDesdeHora). Una
     // fecha completa se respeta tal cual, por si la manda una pestaña anterior al despliegue.
     const horaFin = String(req.body.HoraFin ?? "").trim();
+    // La de inicio es opcional: se manda cuando el encargado la corrige porque la hoja se abrió
+    // tarde. Sin ella el cierre usa la que ya tiene la hoja.
+    const horaInicio = /^\d{2}:\d{2}$/.test(String(req.body.HoraInicio ?? "")) ? String(req.body.HoraInicio) : null;
 
     const out = await prisma.$transaction(async (tx) => {
       const [h]: any[] = await tx.$queryRaw`
@@ -1193,8 +1239,13 @@ router.post("/hojas/:id/cerrar", requireAuth, requirePerm("descongelado", "cerra
       if (h.Estatus !== "Abierta") return { error: "La hoja ya está cerrada", status: 400 };
 
       const [ini]: any[] = await tx.$queryRaw`
-        SELECT DATE_FORMAT(COALESCE(HoraInicio, TIMESTAMP(FechaProduccion)), '%Y-%m-%d %H:%i:%s') AS Ini
+        SELECT DATE_FORMAT(COALESCE(HoraInicio, TIMESTAMP(FechaProduccion)), '%Y-%m-%d %H:%i:%s') AS Ini,
+               DATE_FORMAT(FechaProduccion, '%Y-%m-%d') AS Fecha
           FROM HojaProceso WHERE HojaId = ${id}`;
+      if (horaInicio) {
+        ini.Ini = inicioDesdeHora(ini.Fecha, horaInicio);
+        await tx.$executeRaw`UPDATE HojaProceso SET HoraInicio = ${ini.Ini} WHERE HojaId = ${id}`;
+      }
       const fin = /^\d{2}:\d{2}$/.test(horaFin) ? finDesdeHora(ini.Ini, horaFin)
                 : horaFin || null;
       if (fin && fin < ini.Ini) {
