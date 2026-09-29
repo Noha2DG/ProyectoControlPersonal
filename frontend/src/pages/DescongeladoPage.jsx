@@ -21,6 +21,7 @@ import { authHeader, usePuede } from "../context/AuthContext.jsx";
 import { useAviso } from "../hooks/useAviso.js";
 import AvisoModal from "../components/AvisoModal.jsx";
 import EmpleadoAutocomplete from "../components/EmpleadoAutocomplete.jsx";
+import HojaDescongeladoModal from "../components/HojaDescongeladoModal.jsx";
 
 const API = "/api/descongelado";
 
@@ -1066,6 +1067,7 @@ export default function DescongeladoPage() {
   const [modal, setModal]   = useState(null);   // { titulo, lineas } — descongelar
   const [devol, setDevol]   = useState(null);   // { titulo, datos }    — devolver
   const [cierre, setCierre] = useState(false);   // modal de cerrar la hoja
+  const [imprimir, setImprimir] = useState(false); // vista previa de la hoja para imprimir / PDF
   const [inicioSug, setInicioSug] = useState(null);   // { Hora, Motivo } del turno que sigue
 
   // La hoja NO se abre a mano: la abre el primer descongelado del día. Es la cabecera del
@@ -1235,7 +1237,9 @@ export default function DescongeladoPage() {
     if (!out) return;
     setCierre(false);
     await recargar(sel.HojaId);
-    await mostrarAlerta(`Hoja cerrada. Rendimiento de descongelado: ${fmtNum(out.Rendimiento)} %`, "exito");
+    // Cerrar es el momento de sacar el papel: la vista previa se abre sola, ya con la merma escrita y
+    // el rendimiento, lista para imprimir o guardar como PDF.
+    setImprimir(true);
   };
 
   const reabrirHoja = async () => {
@@ -1261,6 +1265,9 @@ export default function DescongeladoPage() {
         <ModalDescongelar key={modal.titulo} titulo={modal.titulo} lineas={modal.lineas} inicioSugerido={inicioSug}
           hojaAbierta={hojaAbierta} destinos={destinos} empleados={empleados} auxiliares={auxiliares}
           onConfirmar={confirmarDescongelado} onCerrar={() => setModal(null)} />
+      )}
+      {imprimir && sel && (
+        <HojaDescongeladoModal hoja={sel} filas={filasDeHoja(sel)} onCerrar={() => setImprimir(false)} />
       )}
       {cierre && sel && (
         <ModalCerrarHoja hoja={sel}
@@ -1337,6 +1344,11 @@ export default function DescongeladoPage() {
               <p className="text-gray-300 text-xs mt-0.5">{cabecera}</p>
             </div>
             <div className="ml-auto flex items-center gap-2">
+              <button onClick={() => setImprimir(true)}
+                title={sel.Estatus === "Cerrada" ? "Imprimir o guardar como PDF" : "Se imprime como borrador: la hoja sigue abierta"}
+                className="border border-gray-500 rounded px-4 py-1.5 text-sm font-semibold hover:bg-gray-700">
+                Imprimir
+              </button>
               {sel.Estatus === "Abierta" && puedeCerrar && (
                 <button onClick={abrirCierre}
                   className="bg-green-600 rounded px-4 py-1.5 text-sm font-semibold hover:bg-green-700">
