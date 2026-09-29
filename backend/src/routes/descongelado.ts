@@ -113,26 +113,31 @@ const SQL_SALDO = `
 // GET /api/descongelado/saldo?area=DE&hasta=YYYY-MM-DD
 // El saldo al piso de un área: lo que entró menos lo que salió, desde siempre hasta esa jornada.
 // No hay proceso de cierre nocturno que arrastre nada — si nadie sacó el producto, sigue ahí.
+// El saldo al piso hasta una jornada, por remisión y lote. Una sola función para la pantalla y el
+// reporte: si cada uno armara su consulta, el "queda al piso" impreso podría no coincidir con el
+// que se ve.
+async function saldoAlPiso(bodega: string | undefined, hasta: string) {
+  const filtro = bodega ? "WHERE t.Bodega = ?" : "";
+  // Tres veces la misma fecha, en el orden en que MySQL ata los placeholders: la de DiasAlPiso
+  // en el SELECT y las dos del WHERE de cada rama del UNION.
+  const args = bodega ? [hasta, hasta, hasta, bodega] : [hasta, hasta, hasta];
+  // Remisión más vieja primero (por cuándo la confirmó bodega) y, dentro de cada una, el lote más
+  // viejo primero. Ese es el orden en que hay que bajar el producto.
+  const rows: any[] = await prisma.$queryRawUnsafe(
+    `${SQL_SALDO} ${filtro}
+     GROUP BY t.Bodega, b.Nombre, t.RemisionId, rm.Folio, rm.ConfirmadaEn,
+              t.Lote, t.Clase, cl.Descripcion, t.Talla, ta.Descripcion, t.FechaLote
+     HAVING ABS(Kg) > 0.001
+     ORDER BY t.Bodega, rm.ConfirmadaEn IS NULL, rm.ConfirmadaEn ASC, t.RemisionId,
+              t.FechaLote IS NULL, t.FechaLote ASC, t.Lote, t.Talla`, ...args);
+  return num(rows, ["Kg", "Talla", "Masters", "KgPorMaster", "DiasAlPiso", "RemisionId"]);
+}
+
 router.get("/saldo", requireAuth, requirePerm("descongelado", "ver"), async (req: Request, res: Response) => {
   try {
     const hasta = (req.query.hasta as string) || hoyGT();
     const bodega = (req.query.bodega || req.query.area) as string | undefined;
-    const filtro = bodega ? "WHERE t.Bodega = ?" : "";
-    // Tres veces la misma fecha, en el orden en que MySQL ata los placeholders: la de DiasAlPiso
-    // en el SELECT y las dos del WHERE de cada rama del UNION.
-    const args = bodega ? [hasta, hasta, hasta, bodega] : [hasta, hasta, hasta];
-    // Lo más viejo primero: es el orden en que hay que bajar el producto, y el único que le sirve a
-    // quien decide qué descongelar. Los lotes sin FechaLote (carga manual) van al final.
-    // Remisión más vieja primero (por cuándo la confirmó bodega) y, dentro de cada una, el lote más
-    // viejo primero. Ese es el orden en que hay que bajar el producto.
-    const rows: any[] = await prisma.$queryRawUnsafe(
-      `${SQL_SALDO} ${filtro}
-       GROUP BY t.Bodega, b.Nombre, t.RemisionId, rm.Folio, rm.ConfirmadaEn,
-                t.Lote, t.Clase, cl.Descripcion, t.Talla, ta.Descripcion, t.FechaLote
-       HAVING ABS(Kg) > 0.001
-       ORDER BY t.Bodega, rm.ConfirmadaEn IS NULL, rm.ConfirmadaEn ASC, t.RemisionId,
-                t.FechaLote IS NULL, t.FechaLote ASC, t.Lote, t.Talla`, ...args);
-    res.json(num(rows, ["Kg", "Talla", "Masters", "KgPorMaster", "DiasAlPiso", "RemisionId"]));
+    res.json(await saldoAlPiso(bodega, hasta));
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -360,6 +365,125 @@ router.get("/inicio-sugerido", requireAuth, requirePerm("descongelado", "ver"), 
   }
 });
 
+// ── Reporte de la jornada ────────────────────────────────────────────────────────────────────
+//
+// La hoja es por turno; el reporte es el DÍA COMPLETO del área, en el orden en que se mueve el
+// producto: lo que se recibió, lo que se descongeló, lo que se devolvió y lo que queda al piso.
+//
+// Cuadra por construcción, y el reporte lo muestra:
+//     al piso al iniciar + recibido − bajado del piso = queda al piso
+// y lo bajado se reparte entre lo que se descongeló y lo que se devolvió. Todo sale de sumar el
+// kardex, igual que el saldo de la pantalla, así que el papel no puede decir otra cosa.
+
+// El día anterior a una fecha YYYY-MM-DD, sin pasar por la hora local (ver utils/fecha.js).
+function diaAnterior(fecha: string) {
+  const [a, m, d] = fecha.split("-").map(Number);
+  return new Date(Date.UTC(a, m - 1, d - 1)).toISOString().slice(0, 10);
+}
+
+export async function reporteJornada(bodega: string, fecha: string) {
+  const [bv]: any[] = await prisma.$queryRawUnsafe(
+    `SELECT Codigo, Nombre FROM BodegaVirtual WHERE Codigo = ? LIMIT 1`, bodega);
+
+  const hojas = conRendimiento(await prisma.$queryRawUnsafe(
+    `${SQL_HOJA} WHERE h.BodegaCodigo = ? AND h.FechaProduccion = ? ORDER BY h.HoraInicio, h.HojaId`,
+    bodega, fecha) as any[]);
+
+  // RECIBIDO: todo lo que entró al piso ese día y no salió de una hoja de esta misma área —  una
+  // remisión de bodega, el traslado de otra área o un ajuste. Lo que devuelve la propia hoja no es
+  // "recibido": nunca salió del área.
+  const recibido = num(await prisma.$queryRawUnsafe(`
+    SELECT m.MovimientoId, m.Tipo, m.RemisionId, r.Folio AS FolioRemision,
+           m.HojaOrigenId, bo.Nombre AS BodegaOrigenHoja, m.Motivo,
+           m.Lote, m.Clase, cl.Descripcion AS DescripcionClase, m.Talla, ta.Descripcion AS DescripcionTalla,
+           m.Masters, m.PesoKg
+      FROM MovimientoPiso m
+      JOIN Clase cl ON cl.Clase = m.Clase
+      JOIN Tallas ta ON ta.Codigo = m.Talla
+      LEFT JOIN Remisiones r ON r.RemisionId = m.RemisionId
+      LEFT JOIN HojaProceso ho ON ho.HojaId = m.HojaOrigenId
+      LEFT JOIN BodegaVirtual bo ON bo.Codigo = ho.BodegaCodigo
+     WHERE m.BodegaDestino = ? AND m.FechaProduccion = ?
+       AND (m.HojaOrigenId IS NULL OR ho.BodegaCodigo <> ?)
+     ORDER BY r.Folio IS NULL, r.Folio, m.Lote, m.Talla`, bodega, fecha, bodega) as any[],
+    ["MovimientoId", "Talla", "Masters", "PesoKg", "RemisionId", "HojaOrigenId"]).map(r => ({
+      ...r,
+      Origen: r.FolioRemision ? `Remisión ${r.FolioRemision}`
+            : r.HojaOrigenId ? `Hoja #${r.HojaOrigenId} · ${r.BodegaOrigenHoja}`
+            : `${r.Tipo === "AJUSTE" ? "Ajuste" : r.Tipo}${r.Motivo ? ` · ${r.Motivo}` : ""}`,
+    }));
+
+  // Lo que salió de las hojas del día, con lo declarado que le corresponde (el consumo al que está
+  // atado). Los renglones anteriores a ConsumoId no tienen par y quedan sin declarado.
+  const salidas = num(await prisma.$queryRawUnsafe(`
+    SELECT t.Tipo, h.HojaId, t.MovimientoId, t.Lote, t.Clase, cl.Descripcion AS DescripcionClase,
+           t.Talla, ta.Descripcion AS DescripcionTalla, r.Folio AS FolioRemision,
+           COALESCE(c.Masters, t.Masters) AS Masters, c.PesoKg AS Declarado, t.PesoKg AS Pesado,
+           COALESCE(ar.Nombre, bd.Nombre, t.BodegaDestino) AS Destino, t.NumeroTermo, t.Motivo
+      FROM MovimientoPiso t
+      JOIN HojaProceso h ON h.HojaId = t.HojaOrigenId AND h.BodegaCodigo = ? AND h.FechaProduccion = ?
+      LEFT JOIN MovimientoPiso c ON c.MovimientoId = t.ConsumoId
+      JOIN Clase cl ON cl.Clase = t.Clase
+      JOIN Tallas ta ON ta.Codigo = t.Talla
+      LEFT JOIN Remisiones r ON r.RemisionId = t.RemisionId
+      LEFT JOIN BodegaVirtual bd ON bd.Codigo = t.BodegaDestino
+      LEFT JOIN Areas ar ON ar.Codigo = t.AreaDeclarada
+     WHERE t.Tipo IN ('TRASLADO', 'DEVOLUCION', 'MERMA')
+     ORDER BY h.HoraInicio, h.HojaId, t.MovimientoId`, bodega, fecha) as any[],
+    ["HojaId", "MovimientoId", "Talla", "Masters", "Declarado", "Pesado"]);
+
+  const descongelado = salidas.filter(x => x.Tipo === "TRASLADO");
+  const devuelto = salidas.filter(x => x.Tipo === "DEVOLUCION");
+  const kgMerma = salidas.filter(x => x.Tipo === "MERMA").reduce((t, x) => t + x.Pesado, 0);
+
+  const alPiso = await saldoAlPiso(bodega, fecha);
+  const alPisoInicio = await saldoAlPiso(bodega, diaAnterior(fecha));
+
+  const [baj]: any[] = await prisma.$queryRawUnsafe(`
+    SELECT COALESCE(SUM(PesoKg), 0) AS Kg, COALESCE(SUM(Masters), 0) AS Masters
+      FROM MovimientoPiso WHERE BodegaOrigen = ? AND FechaProduccion = ?`, bodega, fecha);
+
+  const suma = (xs: any[], k: string) => Number(xs.reduce((t, x) => t + (Number(x[k]) || 0), 0).toFixed(2));
+  // El rendimiento se mide solo donde hay declarado contra qué medir.
+  const conPar = descongelado.filter(x => x.Declarado != null);
+  const declaradoDesc = suma(conPar, "Declarado");
+
+  // Por destino: a dónde se fue lo descongelado, que es la pregunta de quien recibe.
+  const porDestino = Object.values(descongelado.reduce((acc: any, x) => {
+    acc[x.Destino] ??= { Destino: x.Destino, Masters: 0, Declarado: 0, Pesado: 0 };
+    acc[x.Destino].Masters += x.Masters || 0;
+    acc[x.Destino].Declarado += x.Declarado || 0;
+    acc[x.Destino].Pesado += x.Pesado || 0;
+    return acc;
+  }, {}));
+
+  return {
+    Bodega: bv?.Codigo ?? bodega, NombreBodega: bv?.Nombre ?? bodega, Fecha: fecha,
+    hojas, recibido, descongelado, devuelto, alPiso, porDestino,
+    Totales: {
+      InicioKg: suma(alPisoInicio, "Kg"), InicioMasters: suma(alPisoInicio, "Masters"),
+      RecibidoKg: suma(recibido, "PesoKg"), RecibidoMasters: suma(recibido, "Masters"),
+      BajadoKg: Number(Number(baj.Kg).toFixed(2)), BajadoMasters: Number(baj.Masters),
+      DescongeladoDeclaradoKg: suma(descongelado, "Declarado"),
+      DescongeladoPesadoKg: suma(descongelado, "Pesado"),
+      DescongeladoMasters: suma(descongelado, "Masters"),
+      DevueltoKg: suma(devuelto, "Pesado"), DevueltoMasters: suma(devuelto, "Masters"),
+      MermaKg: Number(kgMerma.toFixed(2)),
+      AlPisoKg: suma(alPiso, "Kg"), AlPisoMasters: suma(alPiso, "Masters"),
+      Rendimiento: declaradoDesc > 0.001 ? Number((100 * suma(conPar, "Pesado") / declaradoDesc).toFixed(2)) : null,
+    },
+  };
+}
+
+// GET /api/descongelado/reporte?bodega=DESCONGELADO&fecha=YYYY-MM-DD
+router.get("/reporte", requireAuth, requirePerm("descongelado", "ver"), async (req: Request, res: Response) => {
+  try {
+    res.json(await reporteJornada(String(req.query.bodega || "DESCONGELADO"), String(req.query.fecha || hoyGT())));
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Hojas ────────────────────────────────────────────────────────────────────────────────────
 const SQL_HOJA = `
   SELECT h.HojaId, h.BodegaCodigo, b.Nombre AS NombreBodega, h.FechaProduccion,
@@ -381,12 +505,20 @@ const SQL_HOJA = `
 
 const CAMPOS_HOJA = ["HojaId", "Personas", "MetabisulfitoKg", "KgEntrada", "KgDescongelado", "KgDevuelto", "KgMerma"];
 
-// El rendimiento que pidió el usuario: lo pesado de verdad contra lo que se declaró que entró.
-// El master faltante NO se separa — por decisión suya, entra completo en este porcentaje.
+// RENDIMIENTO = lo pesado contra lo declarado, SOLO de lo que se descongeló. Lo devuelto a bodega no
+// entra: bajó del piso y regresó igual, sin pasar por el proceso, así que meterlo en el denominador
+// bajaba el rendimiento por una devolución que nada tiene que ver con descongelar. Como la
+// devolución entra y sale de la hoja por el mismo peso, lo declarado de lo descongelado es la
+// entrada menos lo devuelto. El master faltante NO se separa — por decisión del usuario, entra
+// completo en este porcentaje.
+function rendimiento(kgEntrada: number, kgDevuelto: number, kgDescongelado: number) {
+  const declarado = kgEntrada - kgDevuelto;
+  return declarado > 0.001 ? Number((100 * kgDescongelado / declarado).toFixed(2)) : null;
+}
+
 function conRendimiento(rows: any[]) {
   return num(rows, CAMPOS_HOJA).map(h => ({
-    ...h,
-    Rendimiento: h.KgEntrada > 0 ? Number((100 * h.KgDescongelado / h.KgEntrada).toFixed(2)) : null,
+    ...h, Rendimiento: rendimiento(h.KgEntrada, h.KgDevuelto, h.KgDescongelado),
   }));
 }
 
@@ -1261,6 +1393,9 @@ router.post("/hojas/:id/cerrar", requireAuth, requirePerm("descongelado", "cerra
                ROUND(COALESCE(SUM(CASE WHEN HojaOrigenId  = ${id} THEN PesoKg ELSE 0 END), 0), 2) AS Salio
         FROM MovimientoPiso WHERE HojaDestinoId = ${id} OR HojaOrigenId = ${id}`;
       const entro = Number(c.Entro), salio = Number(c.Salio);
+      const [dv]: any[] = await tx.$queryRaw`
+        SELECT COALESCE(SUM(PesoKg), 0) AS Kg FROM MovimientoPiso
+         WHERE HojaOrigenId = ${id} AND Tipo = 'DEVOLUCION'`;
       if (entro <= 0) return { error: "La hoja no tiene entrada declarada; no se puede cerrar", status: 400 };
 
       const merma = Number((entro - salio).toFixed(2));
@@ -1289,7 +1424,7 @@ router.post("/hojas/:id/cerrar", requireAuth, requirePerm("descongelado", "cerra
         WHERE HojaId = ${id}
       `;
       return { ok: true, Entro: entro, Salio: salio, Merma: merma,
-               Rendimiento: Number((100 * salio / entro).toFixed(2)) };
+               Rendimiento: rendimiento(entro, Number(dv.Kg), salio - Number(dv.Kg)) };
     });
 
     if (!("ok" in out)) { res.status((out as any).status).json({ error: (out as any).error }); return; }

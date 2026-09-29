@@ -9,7 +9,7 @@
 // desarrollo, así que la única forma honesta de probar contra datos reales es no dejar rastro.
 import "dotenv/config";
 import prisma from "../src/lib/prisma.ts";
-import { devolverDelPiso, auxiliaresDeHoja, finDesdeHora, inicioSugerido } from "../src/routes/descongelado.ts";
+import { devolverDelPiso, auxiliaresDeHoja, finDesdeHora, inicioSugerido, reporteJornada } from "../src/routes/descongelado.ts";
 
 let ok = 0, fallo = 0;
 const bien = (m: string) => { ok++; console.log(` OK   ${m}`); };
@@ -486,6 +486,23 @@ async function main() {
     }
     const resto = await uno(prisma, `SELECT COUNT(*) AS n FROM Transferencias WHERE FechaHora >= '2031-01-01'`);
     check(Number(resto.n) === 0, "los marcajes de prueba no quedaron en la base");
+  }
+
+  // ── EL REPORTE DE LA JORNADA CUADRA, en los últimos días con movimiento real.
+  //   al piso al iniciar + recibido − bajado = queda al piso, y lo bajado = descongelado + devuelto.
+  // Y la continuidad: lo que queda al piso un día es con lo que arranca el siguiente.
+  const dias: any[] = await prisma.$queryRawUnsafe(`
+    SELECT DISTINCT DATE_FORMAT(FechaProduccion, '%Y-%m-%d') AS f FROM MovimientoPiso
+     WHERE BodegaDestino = 'DESCONGELADO' OR BodegaOrigen = 'DESCONGELADO'
+     ORDER BY f DESC LIMIT 3`);
+
+  for (const { f } of [...dias].reverse()) {
+    const T = (await reporteJornada("DESCONGELADO", f)).Totales;
+    check(Math.abs(T.InicioKg + T.RecibidoKg - T.BajadoKg - T.AlPisoKg) < 0.05,
+      `reporte ${f}: ${T.InicioKg} + ${T.RecibidoKg} − ${T.BajadoKg} = ${T.AlPisoKg} al piso`);
+    check(Math.abs(T.BajadoKg - (T.DescongeladoDeclaradoKg + T.DevueltoKg)) < 0.05,
+      `reporte ${f}: lo bajado (${T.BajadoKg}) es descongelado ${T.DescongeladoDeclaradoKg} + devuelto ${T.DevueltoKg}`);
+
   }
 
   // ── Y no quedó rastro.

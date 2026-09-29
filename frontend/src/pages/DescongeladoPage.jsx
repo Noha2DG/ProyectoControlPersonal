@@ -22,6 +22,7 @@ import { useAviso } from "../hooks/useAviso.js";
 import AvisoModal from "../components/AvisoModal.jsx";
 import EmpleadoAutocomplete from "../components/EmpleadoAutocomplete.jsx";
 import HojaDescongeladoModal from "../components/HojaDescongeladoModal.jsx";
+import ReporteDescongeladoModal from "../components/ReporteDescongeladoModal.jsx";
 
 const API = "/api/descongelado";
 
@@ -1068,6 +1069,7 @@ export default function DescongeladoPage() {
   const [devol, setDevol]   = useState(null);   // { titulo, datos }    — devolver
   const [cierre, setCierre] = useState(false);   // modal de cerrar la hoja
   const [imprimir, setImprimir] = useState(false); // vista previa de la hoja para imprimir / PDF
+  const [reporte, setReporte] = useState(false);   // reporte de la jornada completa
   const [inicioSug, setInicioSug] = useState(null);   // { Hora, Motivo } del turno que sigue
 
   // La hoja NO se abre a mano: la abre el primer descongelado del día. Es la cabecera del
@@ -1266,6 +1268,7 @@ export default function DescongeladoPage() {
           hojaAbierta={hojaAbierta} destinos={destinos} empleados={empleados} auxiliares={auxiliares}
           onConfirmar={confirmarDescongelado} onCerrar={() => setModal(null)} />
       )}
+      {reporte && <ReporteDescongeladoModal fecha={fecha} onCerrar={() => setReporte(false)} />}
       {imprimir && sel && (
         <HojaDescongeladoModal hoja={sel} filas={filasDeHoja(sel)} onCerrar={() => setImprimir(false)} />
       )}
@@ -1290,6 +1293,11 @@ export default function DescongeladoPage() {
         <button onClick={() => { fetchHojas(); fetchSaldo(); }}
           className="border border-gray-300 rounded px-3 py-1.5 text-xs font-semibold text-gray-600 hover:bg-gray-50">
           Actualizar
+        </button>
+        {/* El reporte es del DÍA, no de una hoja: por eso vive en la barra de la jornada. */}
+        <button onClick={() => setReporte(true)}
+          className="border border-blue-300 text-blue-700 rounded px-3 py-1.5 text-xs font-semibold hover:bg-blue-50">
+          Reporte del día
         </button>
         {hojaAbierta && (
           <span className="ml-auto text-xs text-gray-500">
