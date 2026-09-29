@@ -590,7 +590,8 @@ export default function PedidosPage() {
 
   const handleDeleteDetalle = async (d) => {
     if (!confirm("¿Eliminar esta línea del pedido?")) return;
-    await fetch(`/api/detalle-pedido/${d.DetalleId}`, { method: "DELETE", headers: authHeader() });
+    const res = await fetch(`/api/detalle-pedido/${d.DetalleId}`, { method: "DELETE", headers: authHeader() });
+    if (!res.ok) { const e = await res.json().catch(() => ({})); alert("Error: " + (e.error || res.statusText)); return; }
     fetchDetalles(pedidoSel.CodigoPedido);
   };
 

@@ -285,6 +285,18 @@ router.delete("/:id", requireAuth, requirePerm("pedidos", "eliminar"), async (re
     if (!previas.length) { res.status(404).json({ error: "Línea de pedido no encontrada" }); return; }
     const p = previas[0];
 
+    // OrdenEtiquetado cuelga de la línea por FK: sin este aviso el DELETE revienta con un 500 genérico.
+    const ordenes: any[] = await prisma.$queryRaw`
+      SELECT COUNT(*) AS n FROM OrdenEtiquetado WHERE DetalleId = ${id}
+    `;
+    const nOrdenes = Number(ordenes[0].n);
+    if (nOrdenes > 0) {
+      res.status(409).json({
+        error: `La línea tiene ${nOrdenes} orden(es) de etiquetado. Elimina o anula esas órdenes antes de borrar la línea.`,
+      });
+      return;
+    }
+
     await prisma.$executeRaw`DELETE FROM DetallePedido WHERE DetalleId = ${id}`;
 
     await registrarHistorial(prisma, {

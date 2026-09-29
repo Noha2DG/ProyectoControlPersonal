@@ -21,6 +21,22 @@ function numerizar(rows: any[], campos: string[]) {
   });
 }
 
+const MAX_CONSULTAS_REPORTE = 2;
+
+// Corre las tareas con a lo sumo `limite` en vuelo y devuelve los resultados en el mismo orden.
+async function conLimite(tareas: (() => Promise<unknown>)[], limite: number): Promise<unknown[]> {
+  const resultados: unknown[] = new Array(tareas.length);
+  let siguiente = 0;
+  const carril = async () => {
+    while (siguiente < tareas.length) {
+      const i = siguiente++;
+      resultados[i] = await tareas[i]();
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limite, tareas.length) }, carril));
+  return resultados;
+}
+
 // GET /api/reportes/produccion?desde=&hasta=&finca=
 router.get("/produccion", requireAuth, requirePerm("destajo", "ver"), async (req: Request, res: Response) => {
   try {
@@ -31,11 +47,12 @@ router.get("/produccion", requireAuth, requirePerm("destajo", "ver"), async (req
     const filtroFinca = finca ? "AND f.Codigo = ?" : "";
     const argsFinca = finca ? [finca] : [];
 
-    // Las cinco consultas son independientes entre sí (ninguna usa el resultado de otra), así que
-    // se lanzan juntas con Promise.all y el endpoint tarda lo que la más lenta, no la suma de las
-    // cinco. Van como promesas sin await individual justamente para eso: poner un await acá
-    // volvería a serializarlas sin que se note en el código.
-    const pLote = prisma.$queryRawUnsafe(`
+    // Las siete consultas son independientes entre sí, pero NO se lanzan todas juntas: el pool de
+    // Prisma en kronos es de 3 conexiones y compartido con pesaje, etiquetas y kioscos. Siete a la
+    // vez dejaban 4 en cola y, con un rango de un mes, pasaban los 10 s de pool_timeout y el reporte
+    // entero reventaba ("Timed out fetching a new connection"). Van como funciones y corren de a
+    // MAX_CONSULTAS_REPORTE, lo que siempre deja al menos una conexión libre para el resto.
+    const pLote = () => prisma.$queryRawUnsafe(`
       SELECT l.Lote, f.Codigo AS CodigoFinca, f.Descripcion AS NombreFinca, l.Clase, c.Descripcion AS DescripcionClase,
              l.Fecha, l.PesoIngreso, l.UM, l.Notas,
              COALESCE((SELECT SUM(pd.Peso) FROM PesajeDetalle pd
@@ -59,7 +76,7 @@ router.get("/produccion", requireAuth, requirePerm("destajo", "ver"), async (req
       ORDER BY l.Fecha DESC, l.Lote DESC, l.Clase ASC
     `, desde, hasta, ...argsFinca);
 
-    const pTermo = prisma.$queryRawUnsafe(`
+    const pTermo = () => prisma.$queryRawUnsafe(`
       SELECT t.TermoId, t.NumeroTermo, tp.Lote, tp.ClaseOrigen, tp.Talla, ta.Descripcion AS DescripcionTalla,
              tp.Proceso, pr.Descripcion AS DescripcionProceso, tp.FechaProduccion,
              COALESCE(SUM(pd.Peso), 0) AS Procesado
@@ -76,7 +93,7 @@ router.get("/produccion", requireAuth, requirePerm("destajo", "ver"), async (req
       ORDER BY tp.FechaProduccion DESC, tp.Lote DESC, t.NumeroTermo ASC
     `, desde, hasta, ...argsFinca);
 
-    const pLoteTalla = prisma.$queryRawUnsafe(`
+    const pLoteTalla = () => prisma.$queryRawUnsafe(`
       SELECT tp.Lote, tp.ClaseOrigen, tp.Talla, ta.Descripcion AS DescripcionTalla, tp.ClasePT, cl.Descripcion AS DescripcionClasePT,
              tp.Estado, COALESCE(SUM(pd.Peso), 0) AS Procesado, COUNT(pd.PesajeId) AS NumPesajes
       FROM TransaccionesProduccion tp
@@ -91,7 +108,7 @@ router.get("/produccion", requireAuth, requirePerm("destajo", "ver"), async (req
       ORDER BY tp.Lote DESC
     `, desde, hasta, ...argsFinca);
 
-    const pTalla = prisma.$queryRawUnsafe(`
+    const pTalla = () => prisma.$queryRawUnsafe(`
       SELECT tp.Talla, ta.Descripcion AS DescripcionTalla,
              COALESCE(SUM(pd.Peso), 0) AS Procesado, COUNT(pd.PesajeId) AS NumPesajes
       FROM TransaccionesProduccion tp
@@ -110,7 +127,7 @@ router.get("/produccion", requireAuth, requirePerm("destajo", "ver"), async (req
     // por fila y deja inservible el índice idx_pesaje_fecha. Escrito así es un rango de índice.
     // Mismo criterio en /ranking-produccion y en el kiosco (pesajeDetalle.ts) — si se vuelve a meter
     // DATE() alrededor de la columna, se pierde el índice otra vez.
-    const pPersona = prisma.$queryRawUnsafe(`
+    const pPersona = () => prisma.$queryRawUnsafe(`
       SELECT e.Codigo AS IdEmpleado,
              CONCAT_WS(' ', e.PrimerNombre, e.SegundoNombre, e.PrimerApellido, e.SegundoApellido) AS Nombre,
              (SELECT a.Nombre FROM Transferencias tr
@@ -143,7 +160,7 @@ router.get("/produccion", requireAuth, requirePerm("destajo", "ver"), async (req
     // (utils/destajo.js) las usa para restar del bloque de tiempo entre dos pesadas consecutivas de
     // la misma persona: sin esto, si alguien sale a cafetería y vuelve a pesar en la misma área, ese
     // hueco se contaba entero como horas trabajadas y diluía su Lb/Hora real.
-    const pPausas = prisma.$queryRawUnsafe(`
+    const pPausas = () => prisma.$queryRawUnsafe(`
       SELECT tr.Codigo AS IdEmpleado, tr.FechaHora, tr.FechaSalida
       FROM Transferencias tr
       JOIN Areas a ON tr.CodigoArea = a.Codigo
@@ -154,7 +171,7 @@ router.get("/produccion", requireAuth, requirePerm("destajo", "ver"), async (req
 
     // Fincas con lotes en el rango para el selector de Finca. Va SIN el filtro de finca a propósito:
     // si se filtrara, al elegir una finca el selector se quedaría solo con esa.
-    const pFincas = prisma.$queryRawUnsafe(`
+    const pFincas = () => prisma.$queryRawUnsafe(`
       SELECT DISTINCT f.Codigo, f.Descripcion
       FROM Lotes l
       JOIN Piscina p ON l.PiscinaId = p.PiscinaId
@@ -163,8 +180,9 @@ router.get("/produccion", requireAuth, requirePerm("destajo", "ver"), async (req
       ORDER BY f.Codigo
     `, desde, hasta);
 
-    const [porLote, porTermo, porLoteTalla, porTalla, porPersona, pausasNoPaga, fincasConLotes] =
-      await Promise.all([pLote, pTermo, pLoteTalla, pTalla, pPersona, pPausas, pFincas]) as any[][];
+    // pPersona es la más pesada: va primero para que las livianas corran en el otro carril mientras tanto.
+    const [porPersona, porLote, porTermo, porLoteTalla, porTalla, pausasNoPaga, fincasConLotes] =
+      await conLimite([pPersona, pLote, pTermo, pLoteTalla, pTalla, pPausas, pFincas], MAX_CONSULTAS_REPORTE) as any[][];
 
     const lotesFmt = numerizar(porLote, ["PesoIngreso", "Procesado", "NumTransacciones"])
       .map(l => ({ ...l, Pendiente: l.PesoIngreso - l.Procesado, Rendimiento: l.PesoIngreso > 0 ? (l.Procesado / l.PesoIngreso * 100) : 0 }));
