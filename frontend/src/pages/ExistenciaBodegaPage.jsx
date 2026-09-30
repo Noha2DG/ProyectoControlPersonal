@@ -7,7 +7,7 @@ import { exportarExistenciaBodega } from "../utils/exportExcel.js";
 const API = "/api/bodega-fisica/existencias";
 
 const COL_DEFAULTS = {
-  pedido: 90, cliente: 170, lote: 110, polin: 100, ubicacion: 140, posicion: 100, area: 110,
+  pedido: 90, descripcion: 200, cliente: 170, lote: 110, polin: 100, ubicacion: 140, posicion: 100, area: 110,
   codClase: 80, clase: 150, codTalla: 80, talla: 90, presentacion: 180, fecha: 100, master: 80, cajas: 80, kilos: 100, libras: 100,
 };
 const COLS = Object.keys(COL_DEFAULTS);
@@ -138,6 +138,7 @@ export default function ExistenciaBodegaPage() {
         f.Lote?.toLowerCase().includes(buscar) ||
         f.Polin?.toLowerCase().includes(buscar) ||
         f.Pedido?.toLowerCase().includes(buscar) ||
+        f.DescripcionPedido?.toLowerCase().includes(buscar) ||
         f.PosicionCodigo?.toLowerCase().includes(buscar))
     );
   }, [filas, filtros]);
@@ -149,7 +150,7 @@ export default function ExistenciaBodegaPage() {
 
   // Master/Cajas/Kilos/Libras se comparan como números, no por el texto con decimales.
   const ordenadas = ordenarFilas(filtradas, orden, {
-    pedido: f => f.Pedido, cliente: f => f.Cliente, lote: f => f.Lote, polin: f => f.Polin,
+    pedido: f => f.Pedido, descripcion: f => f.DescripcionPedido, cliente: f => f.Cliente, lote: f => f.Lote, polin: f => f.Polin,
     ubicacion: f => ubicacionDe(f), posicion: f => f.PosicionCodigo, area: f => f.NombreArea,
     codClase: f => f.CodigoClase, clase: f => f.Clase, codTalla: f => f.CodigoTalla, talla: f => f.Talla, presentacion: f => f.Presentacion,
     fecha: f => f.Fecha, master: f => f.Master, cajas: f => f.Cajas,
@@ -211,6 +212,7 @@ export default function ExistenciaBodegaPage() {
               <thead className="sticky top-0 z-10">
                 <tr className="bg-gray-100 text-gray-600 uppercase text-xs tracking-wider">
                   <Th width={widths.pedido} onResizeStart={startResize("pedido")} sortKey="pedido" orden={orden} onOrdenar={alternarOrden} className="px-4 py-3 text-left">Pedido</Th>
+                  <Th width={widths.descripcion} onResizeStart={startResize("descripcion")} sortKey="descripcion" orden={orden} onOrdenar={alternarOrden} className="px-4 py-3 text-left">Descripción</Th>
                   <Th width={widths.cliente} onResizeStart={startResize("cliente")} sortKey="cliente" orden={orden} onOrdenar={alternarOrden} className="px-4 py-3 text-left">Cliente</Th>
                   <Th width={widths.lote} onResizeStart={startResize("lote")} sortKey="lote" orden={orden} onOrdenar={alternarOrden} className="px-4 py-3 text-left">Lote</Th>
                   <Th width={widths.polin} onResizeStart={startResize("polin")} sortKey="polin" orden={orden} onOrdenar={alternarOrden} className="px-4 py-3 text-left">Polín</Th>
@@ -239,6 +241,7 @@ export default function ExistenciaBodegaPage() {
                   return (
                     <tr key={i} className="hover:bg-gray-50 transition">
                       <td className="px-4 py-2.5 font-mono text-gray-700">{f.Pedido}</td>
+                      <td className="px-4 py-2.5 text-gray-900 truncate" title={f.DescripcionPedido}>{f.DescripcionPedido}</td>
                       <td className="px-4 py-2.5 text-gray-900 truncate" title={f.Subcliente ? `${f.Cliente} · ${f.Subcliente}` : f.Cliente}>
                         {f.Cliente}{f.Subcliente ? <span className="text-gray-400"> · {f.Subcliente}</span> : ""}
                       </td>
@@ -266,7 +269,7 @@ export default function ExistenciaBodegaPage() {
               {filtradas.length > 0 && (
                 <tfoot className="sticky bottom-0 z-10">
                   <tr className="bg-gray-50 border-t-2 border-gray-200 font-bold text-gray-700">
-                    <td colSpan={13} className="px-4 py-2.5 text-right text-xs uppercase tracking-wide text-gray-500">Total</td>
+                    <td colSpan={14} className="px-4 py-2.5 text-right text-xs uppercase tracking-wide text-gray-500">Total</td>
                     <td className="px-4 py-2.5 text-right tabular-nums">{fmtEntero(totales.Master)}</td>
                     <td className="px-4 py-2.5 text-right tabular-nums">{fmtEntero(totales.Cajas)}</td>
                     <td className="px-4 py-2.5 text-right tabular-nums">{fmtNum(totales.KilosBrutos)}</td>

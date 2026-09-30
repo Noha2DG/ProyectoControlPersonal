@@ -349,6 +349,7 @@ export function exportarPermisos(registros, fecha, hasta) {
 export function exportarExistenciaBodega(filas, ubicacionDe) {
   const datos = filas.map(f => ({
     "Pedido":       f.Pedido,
+    "Descripción":  f.DescripcionPedido ?? "",
     "Cliente":      f.Cliente,
     "Subcliente":   f.Subcliente ?? "",
     "Lote":         f.Lote,

@@ -138,7 +138,8 @@ router.get("/pendientes", requireAuth, requirePerm("bodega", "ver"), async (_req
 router.get("/existencias", requireAuth, requirePerm("bodega", "ver"), async (_req: Request, res: Response) => {
   try {
     const rows: any[] = await prisma.$queryRaw`
-      SELECT ped.CodigoPedido AS Pedido, cli.RazonSocial AS Cliente, sub.RazonSocial AS Subcliente,
+      SELECT ped.CodigoPedido AS Pedido, ped.Descripcion AS DescripcionPedido,
+             cli.RazonSocial AS Cliente, sub.RazonSocial AS Subcliente,
              dp.Clase AS CodigoClase, pc.Descripcion AS Clase, dp.Talla AS CodigoTalla, ta.Descripcion AS Talla,
              p.PalletId, p.Codigo AS Polin, p.Estatus, pr.Descripcion AS Presentacion,
              oe.FechaProduccion, oe.Lote, oe.AreaCodigo, ar.Nombre AS NombreArea,
@@ -161,13 +162,13 @@ router.get("/existencias", requireAuth, requirePerm("bodega", "ver"), async (_re
       LEFT JOIN Subcliente sub ON ped.CodigoCliente = sub.CodigoCliente AND ped.CodigoSubcliente = sub.CodigoSubcliente
       LEFT JOIN Areas ar ON oe.AreaCodigo = ar.Codigo
       LEFT JOIN Posiciones pos ON p.PosicionId = pos.PosicionId
-      GROUP BY ped.CodigoPedido, cli.RazonSocial, sub.RazonSocial, dp.Clase, pc.Descripcion, dp.Talla, ta.Descripcion,
+      GROUP BY ped.CodigoPedido, ped.Descripcion, cli.RazonSocial, sub.RazonSocial, dp.Clase, pc.Descripcion, dp.Talla, ta.Descripcion,
                p.PalletId, p.Codigo, p.Estatus, pr.Descripcion, oe.FechaProduccion, oe.Lote, oe.AreaCodigo, ar.Nombre,
                p.PosicionId, pos.Codigo
       ORDER BY cli.RazonSocial ASC, oe.Lote ASC, p.Codigo ASC
     `;
     res.json(rows.map(r => ({
-      Pedido: r.Pedido, Cliente: r.Cliente, Subcliente: r.Subcliente,
+      Pedido: r.Pedido, DescripcionPedido: r.DescripcionPedido, Cliente: r.Cliente, Subcliente: r.Subcliente,
       CodigoClase: r.CodigoClase, Clase: r.Clase, CodigoTalla: String(r.CodigoTalla), Talla: r.Talla,
       PalletId: Number(r.PalletId), Polin: r.Polin, Estatus: r.Estatus, Presentacion: r.Presentacion,
       Fecha: r.FechaProduccion ? new Date(r.FechaProduccion).toISOString().slice(0, 10) : null,
