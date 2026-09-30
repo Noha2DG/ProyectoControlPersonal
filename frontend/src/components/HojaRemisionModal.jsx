@@ -120,11 +120,14 @@ function ContenidoHoja({ remision }) {
             <tr key={g.clave}>
               {conLinea && <td className="py-1.5 pr-3 text-center font-mono font-bold">{g.Linea ?? "—"}</td>}
               <td className="py-1.5 pr-3 font-mono">{g.CodigoPedido}</td>
-              <td className="py-1.5 pr-3 whitespace-nowrap">
-                {g.Cliente}
-                {/* El producto se despacha con la etiqueta que traía: si es de otro cliente, quien
-                    recibe tiene que poder verlo en el papel, no solo en pantalla. */}
-                {g.CalzaConDestino === false && <span className="ml-1 text-xs font-bold">(*)</span>}
+              <td className="py-1.5 pr-3 max-w-[10rem] print:max-w-[14rem]">
+                <div className="flex items-baseline">
+                  <span className="truncate" title={g.Cliente}>{g.Cliente}</span>
+                  {/* El producto se despacha con la etiqueta que traía: si es de otro cliente, quien
+                      recibe tiene que poder verlo en el papel, no solo en pantalla. No se recorta
+                      junto con el nombre — si el nombre es largo, la marca sigue visible detrás. */}
+                  {g.CalzaConDestino === false && <span className="ml-1 text-xs font-bold shrink-0">(*)</span>}
+                </div>
               </td>
               <td className="py-1.5 pr-3 font-mono whitespace-nowrap">{g.Lote}</td>
               <td className="py-1.5 pr-3 whitespace-nowrap">{g.Producto}</td>
