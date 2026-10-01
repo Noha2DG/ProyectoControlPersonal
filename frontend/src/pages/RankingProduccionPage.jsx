@@ -14,7 +14,12 @@ const MS_TRANSICION = 4_000;
 
 // El ranking se mueve durante el turno: refrescar los datos del backend es independiente del avance
 // de diapositivas (esto no reinicia el ciclo de paginación, solo actualiza los números y posiciones).
-const MS_REFRESCO = 45_000;
+// Cada 3 min y no en "tiempo real": cada consulta recalcula el área de TODAS las pesadas del día, y
+// en la tarde son miles compitiendo por el mismo pool de 3 conexiones que usa el pesaje.
+const MS_REFRESCO = 180_000;
+// Si una consulta falla no se espera el ciclo completo: con 3 min la pantalla quedaba en rojo todo
+// ese tiempo por un corte de red de segundos.
+const MS_REINTENTO = 30_000;
 
 // Mismas áreas y nombres que AREAS_DESTAJO (destajo.js), con un color propio cada una (esmeralda
 // Pelado, azul Descabezado, violeta Pinchado) para que la pantalla de pared se lea igual que el
@@ -198,7 +203,11 @@ export default function RankingProduccionPage() {
 
   useEffect(() => {
     let cancelado = false;
+    let id;
+    // setTimeout encadenado y no setInterval: la espera depende de cómo salió la consulta anterior
+    // (ciclo normal si salió bien, reintento corto si falló).
     const cargar = async () => {
+      let ok = false;
       try {
         const res = await fetch("/api/reportes/ranking-produccion", { headers: authHeader() });
         const data = await res.json();
@@ -207,15 +216,18 @@ export default function RankingProduccionPage() {
         setPersonas(calcularLbsPorPersona(data.ranking));
         setError("");
         setActualizado(new Date());
+        ok = true;
       } catch {
         if (!cancelado) setError("Sin conexión con el servidor");
       } finally {
-        if (!cancelado) setCargando(false);
+        if (!cancelado) {
+          setCargando(false);
+          id = setTimeout(cargar, ok ? MS_REFRESCO : MS_REINTENTO);
+        }
       }
     };
     cargar();
-    const id = setInterval(cargar, MS_REFRESCO);
-    return () => { cancelado = true; clearInterval(id); };
+    return () => { cancelado = true; clearTimeout(id); };
   }, []);
 
   // Una sección por área (solo las que tienen a alguien produciendo hoy), cada una paginada en
@@ -247,7 +259,7 @@ export default function RankingProduccionPage() {
   // Temporizador único que se reprograma solo: cada tipo de diapositiva dura distinto (transición
   // más corta que una página de nombres), así que un setInterval de duración fija no sirve. Depende
   // de frames.length y no de frames en sí para no reiniciar la cuenta regresiva cada vez que el
-  // refresco de datos (cada 45s) genera un array de frames nuevo con el mismo tamaño.
+  // refresco de datos (cada 2 min) genera un array de frames nuevo con el mismo tamaño.
   useEffect(() => {
     if (frames.length <= 1) return;
     const actual = frames[frameIndex % frames.length];
@@ -290,7 +302,9 @@ export default function RankingProduccionPage() {
           <EstadoCentral>
             <div className="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" />
           </EstadoCentral>
-        ) : error ? (
+        ) : error && !actualizado ? (
+          // Solo tapa la pantalla si nunca hubo datos: con un ranking ya cargado, un fallo deja los
+          // últimos números a la vista y avisa en el pie.
           <EstadoCentral>
             <p className="text-[clamp(1.25rem,3.6vh,2.4rem)] font-bold text-red-700">{error}</p>
             <p className="text-[clamp(0.875rem,2.2vh,1.35rem)] text-slate-600">Reintentando automáticamente…</p>
@@ -320,8 +334,9 @@ export default function RankingProduccionPage() {
             </div>
 
             <div className="flex items-center justify-between shrink-0 pt-1">
-              <span className="text-[clamp(0.75rem,1.5vh,0.9rem)] text-slate-400">
+              <span className={`text-[clamp(0.75rem,1.5vh,0.9rem)] ${error ? "text-red-600 font-semibold" : "text-slate-400"}`}>
                 {actualizado && `Actualizado ${actualizado.toLocaleTimeString("es-GT", { hour12: false })}`}
+                {error && ` · ${error}, reintentando…`}
               </span>
               {frameActual.seccion.paginas.length > 1 && (
                 <div className="flex items-center gap-2">

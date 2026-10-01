@@ -214,16 +214,20 @@ router.get("/produccion", requireAuth, requirePerm("destajo", "ver"), async (req
 
 // GET /api/reportes/ranking-produccion?fecha=YYYY-MM-DD
 // Endpoint chico y aparte del reporte completo (/produccion) para la pantalla de pared de ranking:
-// esa pantalla hace polling cada 30-60s con una cuenta kiosco que solo tiene este permiso, no
+// esa pantalla hace polling cada 3 min (30 s si falló) con una cuenta kiosco que solo tiene este permiso, no
 // "destajo:ver" completo, y no necesita porLote/porTermo/porTalla — solo el desglose del día por
 // persona, ya agregado en SQL. El Área de cada pesada se resuelve igual que en porPersona (la
 // Transferencia vigente al momento de esa pesada), pero acá se calcula una sola vez por fila en la
 // subconsulta derivada y se agrega afuera con SUM(CASE...) — así no se repite el correlacionado dos
 // veces por fila como pasaría metiéndolo directo en cada CASE.
-router.get("/ranking-produccion", requireAuth, requirePerm("kiosco_ranking", "ver"), async (req: Request, res: Response) => {
-  try {
-    const fecha = (req.query.fecha as string) || hoyGT();
+//
+// Resultado en memoria por fecha: la pantalla de pared (y cualquier otra que se encienda) pregunta
+// lo mismo cada pocos minutos, y un retraso de hasta un minuto en el ranking no lo nota nadie. Las
+// peticiones simultáneas comparten la misma consulta en vuelo.
+const CACHE_RANKING_MS = 60_000;
+const cacheRanking = new Map<string, { en: number; datos?: any; vuelo?: Promise<any> }>();
 
+async function consultarRanking(fecha: string) {
     const ranking: any[] = await prisma.$queryRawUnsafe(`
       SELECT IdEmpleado, Nombre,
              SUM(CASE WHEN Area = 'DESCABEZADO' THEN Kilos ELSE 0 END) AS KilosDescabezado,
@@ -250,7 +254,21 @@ router.get("/ranking-produccion", requireAuth, requirePerm("kiosco_ranking", "ve
       ORDER BY KilosTotal DESC
     `, fecha, fecha);
 
-    res.json({ fecha, ranking: numerizar(ranking, ["KilosDescabezado", "KilosPelado", "KilosPinchado", "KilosReprocesoDescolado", "KilosReprocesoCorte", "KilosTotal"]) });
+    return { fecha, ranking: numerizar(ranking, ["KilosDescabezado", "KilosPelado", "KilosPinchado", "KilosReprocesoDescolado", "KilosReprocesoCorte", "KilosTotal"]) };
+}
+
+router.get("/ranking-produccion", requireAuth, requirePerm("kiosco_ranking", "ver"), async (req: Request, res: Response) => {
+  try {
+    const fecha = (req.query.fecha as string) || hoyGT();
+    let hit = cacheRanking.get(fecha);
+    if (hit?.datos && Date.now() - hit.en < CACHE_RANKING_MS) { res.json(hit.datos); return; }
+    if (!hit?.vuelo) {
+      const vuelo = consultarRanking(fecha);
+      hit = { en: hit?.en ?? 0, datos: hit?.datos, vuelo };
+      cacheRanking.set(fecha, hit);
+      vuelo.then(datos => cacheRanking.set(fecha, { en: Date.now(), datos }), () => cacheRanking.delete(fecha));
+    }
+    res.json(await hit.vuelo);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
