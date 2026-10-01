@@ -24,11 +24,17 @@ const router = Router();
 // exactamente "descolar", con 7 personas transferidas a RD sin poder pesar ninguna. Si algún día se
 // reprocesa un Producto de Familia D (colas) en estas áreas, el mapa lo va a rechazar: admite una
 // sola Familia por área y habría que decidir si se abre o si el reproceso de colas lleva área propia.
-const FAMILIA_ESPERADA_POR_AREA: Record<string, string> = { DS: "E", DU: "D", DT: "E", RD: "E", RC: "E" };
+//
+// Familia P (las clases con "*", ej. P34 → P14 "CULTIVO PELADO P&D T-OFF *") es el mismo Producto
+// pelado con otra certificación: se agregó el 1 oct 2026 porque bloqueaba el pesaje en DS. Por eso
+// cada área admite una lista de Familias.
+const FAMILIAS_ESPERADAS_POR_AREA: Record<string, string[]> = {
+  DS: ["E", "P"], DU: ["D"], DT: ["E", "P"], RD: ["E", "P"], RC: ["E", "P"],
+};
 
 // Las únicas áreas donde se pesa a destajo — se derivan del mapa de arriba para no tener dos listas
 // que se puedan desincronizar.
-const AREAS_DESTAJO = Object.keys(FAMILIA_ESPERADA_POR_AREA);
+const AREAS_DESTAJO = Object.keys(FAMILIAS_ESPERADAS_POR_AREA);
 
 function getOperador(req: Request): string {
   try {
@@ -277,10 +283,10 @@ router.post("/", requireAuth, requirePerm("destajo", "crear"), async (req: Reque
 
       // La transacción debe ser del Producto que corresponde al área donde está físicamente la persona
       // (Descabezado no puede pesar Pelado y viceversa, aunque ambas sean áreas de destajo válidas).
-      const familiaEsperada = FAMILIA_ESPERADA_POR_AREA[areaActual[0].CodigoArea];
-      if (familiaEsperada) {
+      const familiasEsperadas = FAMILIAS_ESPERADAS_POR_AREA[areaActual[0].CodigoArea];
+      if (familiasEsperadas) {
         const clase: any[] = await tx.$queryRaw`SELECT Familia, Descripcion FROM Clase WHERE Clase = ${bloqueo.trans.ClasePT} LIMIT 1`;
-        if (clase.length && clase[0].Familia !== familiaEsperada) {
+        if (clase.length && !familiasEsperadas.includes(clase[0].Familia)) {
           return {
             error: `Esta transacción es de ${clase[0].Descripcion} — no corresponde al área ${areaActual[0].NombreArea}`,
             status: 400,
