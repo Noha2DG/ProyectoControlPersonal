@@ -118,7 +118,9 @@ function FilaPersona({ fila, valor, colorTexto }) {
       {primero && (
         <span className="pointer-events-none absolute inset-0 rounded-xl border-4 border-amber-400/70 motion-safe:animate-pulse" />
       )}
-      <div className="relative shrink-0 w-[clamp(2.25rem,6.5vh,3.75rem)] h-[clamp(2.25rem,6.5vh,3.75rem)]">
+      {/* Tamaños pensados para 10 filas en 1920×1080 (~90 px por fila): los topes del clamp quedan
+          por encima de lo que da el vh a esa resolución, para que no recorten el tamaño en la tele. */}
+      <div className="relative shrink-0 w-[clamp(2.75rem,7.5vh,6rem)] h-[clamp(2.75rem,7.5vh,6rem)]">
         {primero && (
           <>
             <span className="absolute inset-0 rounded-full bg-amber-500/40 motion-safe:animate-ping" />
@@ -126,15 +128,15 @@ function FilaPersona({ fila, valor, colorTexto }) {
           </>
         )}
         <div className={`relative w-full h-full rounded-full border-4 flex items-center justify-center ${estilo.anillo}`}>
-          <span className={`text-[clamp(1rem,3vh,1.75rem)] font-extrabold tabular-nums leading-none ${estilo.texto}`}>
+          <span className={`text-[clamp(1.25rem,3.8vh,3rem)] font-extrabold tabular-nums leading-none ${estilo.texto}`}>
             {fila.Puesto}
           </span>
         </div>
       </div>
-      <p className="flex-1 min-w-0 text-[clamp(1.1rem,3.6vh,2.1rem)] font-extrabold text-slate-900 uppercase truncate">
+      <p className="flex-1 min-w-0 text-[clamp(1.4rem,6.48vh,4.5rem)] leading-[1.15] font-extrabold text-slate-900 uppercase truncate">
         {fila.Nombre}
       </p>
-      <p className={`shrink-0 text-[clamp(1.25rem,4vh,2.4rem)] font-mono font-extrabold tabular-nums leading-none ${colorTexto}`}>
+      <p className={`shrink-0 text-[clamp(1.6rem,6.48vh,4.5rem)] font-mono font-extrabold tabular-nums leading-none ${colorTexto}`}>
         {valor.toFixed(1)}
         <span className="text-[0.4em] text-slate-500 ml-2">LB</span>
       </p>
