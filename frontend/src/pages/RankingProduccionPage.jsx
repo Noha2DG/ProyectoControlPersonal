@@ -8,7 +8,10 @@ const MESES = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto"
 // Pantalla 100% pasiva (nadie escanea nada, es solo para mirar) — project_ranking_produccion_pantalla_design.
 // Separada por área (primero Pelado y Devenado, luego Descabezado) con una diapositiva de transición
 // entre una y otra — cada área es su propio ranking, no una columna dentro de uno combinado.
-const POR_DIAPOSITIVA = 10;
+// Solo los 5 primeros de cada área, una sola diapositiva por área y con letra para leerse de lejos.
+// El corte es solo de pantalla: el backend devuelve a todos (el puesto y el semáforo se calculan
+// sobre el área completa, y para saber quiénes son los 5 primeros hay que sumar a todos de todos modos).
+const TOP_POR_AREA = 5;
 const MS_DIAPOSITIVA = 9_000;
 const MS_TRANSICION = 4_000;
 
@@ -112,15 +115,16 @@ function FilaPersona({ fila, valor, colorTexto }) {
   const estilo = MEDALLA[fila.Puesto] ?? SEMAFORO[fila.Semaforo];
   const primero = fila.Puesto === 1;
   return (
-    <div className={`relative flex-1 min-h-0 flex items-center gap-4 px-5 rounded-xl border-2 ${estilo.tarjeta} ${
+    <div className={`relative flex-1 min-h-0 flex items-center gap-6 px-6 rounded-2xl border-2 ${estilo.tarjeta} ${
       primero ? "shadow-[0_0_0_4px_rgba(245,158,11,0.25),0_0_24px_6px_rgba(217,119,6,0.35)]" : ""
     }`}>
       {primero && (
-        <span className="pointer-events-none absolute inset-0 rounded-xl border-4 border-amber-400/70 motion-safe:animate-pulse" />
+        <span className="pointer-events-none absolute inset-0 rounded-2xl border-4 border-amber-400/70 motion-safe:animate-pulse" />
       )}
-      {/* Tamaños pensados para 10 filas en 1920×1080 (~90 px por fila): los topes del clamp quedan
-          por encima de lo que da el vh a esa resolución, para que no recorten el tamaño en la tele. */}
-      <div className="relative shrink-0 w-[clamp(2.75rem,7.5vh,6rem)] h-[clamp(2.75rem,7.5vh,6rem)]">
+      {/* Tamaños pensados para 5 filas en 1920×1080 (~180 px por fila): los topes del clamp quedan
+          por encima de lo que da el vh a esa resolución, para que no recorten el tamaño en la tele.
+          El nombre va a dos líneas (no truncate): a este tamaño un nombre completo no cabe en una. */}
+      <div className="relative shrink-0 w-[clamp(4rem,13vh,10rem)] h-[clamp(4rem,13vh,10rem)]">
         {primero && (
           <>
             <span className="absolute inset-0 rounded-full bg-amber-500/40 motion-safe:animate-ping" />
@@ -128,15 +132,15 @@ function FilaPersona({ fila, valor, colorTexto }) {
           </>
         )}
         <div className={`relative w-full h-full rounded-full border-4 flex items-center justify-center ${estilo.anillo}`}>
-          <span className={`text-[clamp(1.25rem,3.8vh,3rem)] font-extrabold tabular-nums leading-none ${estilo.texto}`}>
+          <span className={`text-[clamp(2rem,6.5vh,5rem)] font-extrabold tabular-nums leading-none ${estilo.texto}`}>
             {fila.Puesto}
           </span>
         </div>
       </div>
-      <p className="flex-1 min-w-0 text-[clamp(1.4rem,6.48vh,4.5rem)] leading-[1.15] font-extrabold text-slate-900 uppercase truncate">
+      <p className="flex-1 min-w-0 text-[clamp(1.75rem,7.4vh,6rem)] leading-[1.05] font-extrabold text-slate-900 uppercase line-clamp-2 break-words">
         {fila.Nombre}
       </p>
-      <p className={`shrink-0 text-[clamp(1.6rem,6.48vh,4.5rem)] font-mono font-extrabold tabular-nums leading-none ${colorTexto}`}>
+      <p className={`shrink-0 text-[clamp(2.25rem,10.2vh,7.5rem)] font-mono font-extrabold tabular-nums leading-none ${colorTexto}`}>
         {valor.toFixed(1)}
         <span className="text-[0.4em] text-slate-500 ml-2">LB</span>
       </p>
@@ -232,15 +236,14 @@ export default function RankingProduccionPage() {
     return () => { cancelado = true; clearTimeout(id); };
   }, []);
 
-  // Una sección por área (solo las que tienen a alguien produciendo hoy), cada una paginada en
-  // bloques de POR_DIAPOSITIVA. Si un área está vacía, ni ella ni su transición aparecen en la
+  // Una sección por área (solo las que tienen a alguien produciendo hoy), con una sola diapositiva:
+  // sus TOP_POR_AREA primeros. Si un área está vacía, ni ella ni su transición aparecen en la
   // secuencia — no tiene sentido "cambiar a Descabezado" para mostrar una pantalla sin nadie.
   const secciones = useMemo(() => {
     return SECCIONES_CONFIG
       .map(cfg => {
         const datos = calcularRankingPorArea(personas, cfg.campo);
-        const paginas = [];
-        for (let i = 0; i < datos.length; i += POR_DIAPOSITIVA) paginas.push(datos.slice(i, i + POR_DIAPOSITIVA));
+        const paginas = datos.length ? [datos.slice(0, TOP_POR_AREA)] : [];
         return { ...cfg, paginas, total: datos.length };
       })
       .filter(s => s.paginas.length > 0);
@@ -288,12 +291,13 @@ export default function RankingProduccionPage() {
 
       {/* Título centrado sobre el ancho completo de la barra (absolute + -translate-x-1/2), no sobre
           el espacio que le deja el bloque de fecha/hora — así no se desplaza hacia la izquierda
-          cuando el sufijo de área (" — DESCABEZADO") lo alarga. */}
-      <div className="relative bg-blue-800 text-white flex items-baseline justify-end px-5 py-2 shrink-0">
-        <h1 className="absolute left-1/2 -translate-x-1/2 max-w-[55vw] truncate text-center text-[clamp(1rem,2.4vh,1.4rem)] font-bold tracking-widest uppercase">
+          cuando el sufijo de área (" — DESCABEZADO") lo alarga. La fecha va encima de la hora (no al
+          lado) para dejarle al título ~70vw: el más largo, "… — REPROCESO DESCOLADO", cabe entero. */}
+      <div className="relative bg-blue-800 text-white flex items-center justify-end px-5 py-2 shrink-0">
+        <h1 className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 max-w-[70vw] truncate text-center text-[clamp(1.25rem,3.7vh,3rem)] leading-tight font-bold tracking-wide uppercase">
           Ranking de Producción{tituloArea}
         </h1>
-        <div className="flex items-baseline gap-5 pr-8">
+        <div className="flex flex-col items-end leading-tight pr-8">
           <span className="text-[clamp(0.75rem,1.5vh,0.9rem)] text-blue-200">{fecha}</span>
           <span className="text-[clamp(1.25rem,3.4vh,2rem)] font-mono tabular-nums">{hora}</span>
         </div>
@@ -329,9 +333,13 @@ export default function RankingProduccionPage() {
           <Transicion seccion={frameActual.seccion} />
         ) : (
           <>
-            <div key={`${frameActual.seccion.key}-${frameActual.pagina}`} className="flex-1 min-h-0 flex flex-col gap-2 animate-[fadeIn_0.5s_ease]">
+            <div key={`${frameActual.seccion.key}-${frameActual.pagina}`} className="flex-1 min-h-0 flex flex-col gap-3 animate-[fadeIn_0.5s_ease]">
               {frameActual.filas.map(fila => (
                 <FilaPersona key={fila.IdEmpleado} fila={fila} valor={fila[frameActual.seccion.campo]} colorTexto={frameActual.seccion.texto} />
+              ))}
+              {/* Relleno invisible: con menos de 5 personas las filas no se estiran a media pantalla. */}
+              {Array.from({ length: TOP_POR_AREA - frameActual.filas.length }, (_, i) => (
+                <div key={`vacio-${i}`} className="flex-1 min-h-0" />
               ))}
             </div>
 
@@ -340,14 +348,8 @@ export default function RankingProduccionPage() {
                 {actualizado && `Actualizado ${actualizado.toLocaleTimeString("es-GT", { hour12: false })}`}
                 {error && ` · ${error}, reintentando…`}
               </span>
-              {frameActual.seccion.paginas.length > 1 && (
-                <div className="flex items-center gap-2">
-                  {frameActual.seccion.paginas.map((_, i) => (
-                    <span key={i} className={`w-2.5 h-2.5 rounded-full ${i === frameActual.pagina ? "bg-blue-700" : "bg-slate-300"}`} />
-                  ))}
-                </div>
-              )}
               <span className="text-[clamp(0.75rem,1.5vh,0.9rem)] text-slate-400">
+                {frameActual.seccion.total > TOP_POR_AREA && `Top ${TOP_POR_AREA} de `}
                 {frameActual.seccion.total} persona{frameActual.seccion.total !== 1 ? "s" : ""} en {frameActual.seccion.nombre.toLowerCase()}
               </span>
             </div>
