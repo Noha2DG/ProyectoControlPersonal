@@ -8,12 +8,14 @@ const MESES = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto"
 // Pantalla 100% pasiva (nadie escanea nada, es solo para mirar) — project_ranking_produccion_pantalla_design.
 // Separada por área (primero Pelado y Devenado, luego Descabezado) con una diapositiva de transición
 // entre una y otra — cada área es su propio ranking, no una columna dentro de uno combinado.
-// Solo los 5 primeros de cada área, una sola diapositiva por área y con letra para leerse de lejos.
+// Solo los 10 primeros de cada área, en una sola diapositiva por área.
 // El corte es solo de pantalla: el backend devuelve a todos (el puesto y el semáforo se calculan
-// sobre el área completa, y para saber quiénes son los 5 primeros hay que sumar a todos de todos modos).
-const TOP_POR_AREA = 5;
-const MS_DIAPOSITIVA = 9_000;
-const MS_TRANSICION = 4_000;
+// sobre el área completa, y para saber quiénes son los 10 primeros hay que sumar a todos de todos modos).
+const TOP_POR_AREA = 10;
+// 20 s deja leer la hoja completa de lejos antes de cambiar.
+const MS_DIAPOSITIVA = 20_000;
+// 4 s no alcanzaban para leer "Cambiando a …" desde lejos antes de que entraran los nombres.
+const MS_TRANSICION = 7_000;
 
 // El ranking se mueve durante el turno: refrescar los datos del backend es independiente del avance
 // de diapositivas (esto no reinicia el ciclo de paginación, solo actualiza los números y posiciones).
@@ -115,16 +117,15 @@ function FilaPersona({ fila, valor, colorTexto }) {
   const estilo = MEDALLA[fila.Puesto] ?? SEMAFORO[fila.Semaforo];
   const primero = fila.Puesto === 1;
   return (
-    <div className={`relative flex-1 min-h-0 flex items-center gap-6 px-6 rounded-2xl border-2 ${estilo.tarjeta} ${
+    <div className={`relative flex-1 min-h-0 flex items-center gap-4 px-5 rounded-xl border-2 ${estilo.tarjeta} ${
       primero ? "shadow-[0_0_0_4px_rgba(245,158,11,0.25),0_0_24px_6px_rgba(217,119,6,0.35)]" : ""
     }`}>
       {primero && (
-        <span className="pointer-events-none absolute inset-0 rounded-2xl border-4 border-amber-400/70 motion-safe:animate-pulse" />
+        <span className="pointer-events-none absolute inset-0 rounded-xl border-4 border-amber-400/70 motion-safe:animate-pulse" />
       )}
-      {/* Tamaños pensados para 5 filas en 1920×1080 (~180 px por fila): los topes del clamp quedan
-          por encima de lo que da el vh a esa resolución, para que no recorten el tamaño en la tele.
-          El nombre va a dos líneas (no truncate): a este tamaño un nombre completo no cabe en una. */}
-      <div className="relative shrink-0 w-[clamp(4rem,13vh,10rem)] h-[clamp(4rem,13vh,10rem)]">
+      {/* Tamaños pensados para 10 filas en 1920×1080 (~85 px por fila): los topes del clamp quedan
+          por encima de lo que da el vh a esa resolución, para que no recorten el tamaño en la tele. */}
+      <div className="relative shrink-0 w-[clamp(2.75rem,7.5vh,6rem)] h-[clamp(2.75rem,7.5vh,6rem)]">
         {primero && (
           <>
             <span className="absolute inset-0 rounded-full bg-amber-500/40 motion-safe:animate-ping" />
@@ -132,15 +133,15 @@ function FilaPersona({ fila, valor, colorTexto }) {
           </>
         )}
         <div className={`relative w-full h-full rounded-full border-4 flex items-center justify-center ${estilo.anillo}`}>
-          <span className={`text-[clamp(2rem,6.5vh,5rem)] font-extrabold tabular-nums leading-none ${estilo.texto}`}>
+          <span className={`text-[clamp(1.25rem,3.8vh,3rem)] font-extrabold tabular-nums leading-none ${estilo.texto}`}>
             {fila.Puesto}
           </span>
         </div>
       </div>
-      <p className="flex-1 min-w-0 text-[clamp(1.75rem,7.4vh,6rem)] leading-[1.05] font-extrabold text-slate-900 uppercase line-clamp-2 break-words">
+      <p className="flex-1 min-w-0 text-[clamp(1.4rem,6.48vh,4.5rem)] leading-[1.15] font-extrabold text-slate-900 uppercase truncate">
         {fila.Nombre}
       </p>
-      <p className={`shrink-0 text-[clamp(2.25rem,10.2vh,7.5rem)] font-mono font-extrabold tabular-nums leading-none ${colorTexto}`}>
+      <p className={`shrink-0 text-[clamp(1.6rem,6.48vh,4.5rem)] font-mono font-extrabold tabular-nums leading-none ${colorTexto}`}>
         {valor.toFixed(1)}
         <span className="text-[0.4em] text-slate-500 ml-2">LB</span>
       </p>
@@ -333,11 +334,11 @@ export default function RankingProduccionPage() {
           <Transicion seccion={frameActual.seccion} />
         ) : (
           <>
-            <div key={`${frameActual.seccion.key}-${frameActual.pagina}`} className="flex-1 min-h-0 flex flex-col gap-3 animate-[fadeIn_0.5s_ease]">
+            <div key={`${frameActual.seccion.key}-${frameActual.pagina}`} className="flex-1 min-h-0 flex flex-col gap-2 animate-[fadeIn_0.5s_ease]">
               {frameActual.filas.map(fila => (
                 <FilaPersona key={fila.IdEmpleado} fila={fila} valor={fila[frameActual.seccion.campo]} colorTexto={frameActual.seccion.texto} />
               ))}
-              {/* Relleno invisible: con menos de 5 personas las filas no se estiran a media pantalla. */}
+              {/* Relleno invisible: con menos de 10 personas las filas no se estiran a media pantalla. */}
               {Array.from({ length: TOP_POR_AREA - frameActual.filas.length }, (_, i) => (
                 <div key={`vacio-${i}`} className="flex-1 min-h-0" />
               ))}
