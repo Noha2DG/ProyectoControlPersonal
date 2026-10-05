@@ -26,6 +26,22 @@ const MS_REFRESCO = 180_000;
 // ese tiempo por un corte de red de segundos.
 const MS_REINTENTO = 30_000;
 
+// La pantalla de pared nunca se recarga sola (Chromium en kiosco en una Orange Pi, sin teclado): los
+// datos se refrescan, pero el código se quedaba en el del día que arrancó y ningún despliegue llegaba.
+// Cada tanto se pide el index.html y, si apunta a otro bundle que el cargado, se recarga. Solo con
+// respuestas buenas y con el bundle nuevo ya servible: recargar con el servidor caído o a media
+// compilación dejaría la pantalla en blanco, y en blanco ya no hay JavaScript que la vuelva a recargar.
+const MS_REVISAR_VERSION = 300_000;
+const RE_BUNDLE = /\/assets\/index-[\w-]+\.js/;
+
+function bundleCargado() {
+  for (const sc of document.scripts) {
+    const m = (sc.getAttribute("src") || "").match(RE_BUNDLE);
+    if (m) return m[0];
+  }
+  return null;
+}
+
 // Mismas áreas y nombres que AREAS_DESTAJO (destajo.js), con un color propio cada una (esmeralda
 // Pelado, azul Descabezado, violeta Pinchado) para que la pantalla de pared se lea igual que el
 // resto del sistema. El orden de acá es el orden de las diapositivas, no el de AREAS_DESTAJO.
@@ -214,14 +230,33 @@ export default function RankingProduccionPage() {
   }, []);
 
   useEffect(() => {
+    const cargado = bundleCargado();
+    if (!cargado) return; // npm run dev: no hay bundle compilado que comparar
+    const id = setInterval(async () => {
+      try {
+        const res = await fetch("/", { cache: "no-store" });
+        if (!res.ok) return;
+        const nuevo = (await res.text()).match(RE_BUNDLE)?.[0];
+        if (!nuevo || nuevo === cargado) return;
+        const js = await fetch(nuevo, { method: "HEAD", cache: "no-store" });
+        if (js.ok) window.location.reload();
+      } catch { /* sin red: se vuelve a intentar en la próxima vuelta */ }
+    }, MS_REVISAR_VERSION);
+    return () => clearInterval(id);
+  }, []);
+
+  useEffect(() => {
     let cancelado = false;
     let id;
     // setTimeout encadenado y no setInterval: la espera depende de cómo salió la consulta anterior
     // (ciclo normal si salió bien, reintento corto si falló).
     const cargar = async () => {
       let ok = false;
+      // Sin tope, un WiFi que se cae a media consulta deja el fetch colgado y nunca se reprograma el siguiente.
+      const control = new AbortController();
+      const corte = setTimeout(() => control.abort(), 20_000);
       try {
-        const res = await fetch("/api/reportes/ranking-produccion", { headers: authHeader() });
+        const res = await fetch("/api/reportes/ranking-produccion", { headers: authHeader(), signal: control.signal });
         const data = await res.json();
         if (cancelado) return;
         if (!res.ok) { setError(data.error || "No se pudo cargar el ranking"); return; }
@@ -232,6 +267,7 @@ export default function RankingProduccionPage() {
       } catch {
         if (!cancelado) setError("Sin conexión con el servidor");
       } finally {
+        clearTimeout(corte);
         if (!cancelado) {
           setCargando(false);
           id = setTimeout(cargar, ok ? MS_REFRESCO : MS_REINTENTO);
