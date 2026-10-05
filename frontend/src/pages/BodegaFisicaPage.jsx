@@ -28,8 +28,8 @@ const TIPO_MOV_BADGE = {
 
 // Tailwind purga las clases que no aparezcan literales en el código, así que los tonos van como
 // strings completos y no armados con plantillas (`border-${x}-200` se perdería en el build).
-// El color sube con la antigüedad del polín abierto más viejo: cuanto más lleva sin cerrarse ni
-// ubicarse, más grita.
+// El color sube con los días que lleva el polín abierto más quieto (desde su último cambio, no desde
+// que se creó — ver /sueltos en bodegaFisica.ts): cuanto más lleva sin tocarse, más grita.
 // Cuántos polines sin ubicar se listan antes de plegar el resto. Vienen ordenados por antigüedad,
 // así que estos son siempre los que más urgen.
 const TOPE_SUELTOS = 4;
@@ -425,7 +425,7 @@ export default function BodegaFisicaPage() {
               const totalMasters = sueltos.reduce((a, s) => a + s.Masters, 0);
               const masViejo = Math.max(...sueltos.map(s => s.Dias ?? 0));
               const t = TONO_SUELTOS[masViejo >= 7 ? "rojo" : masViejo >= 3 ? "naranja" : "ambar"];
-              // Vienen ordenados por antigüedad (SueltoDesde ASC), así que los primeros son los que urgen.
+              // Vienen ordenados por último cambio (UltimoCambio ASC), así que los primeros son los que urgen.
               const rezagados = sueltos.filter(s => (s.Dias ?? 0) >= 1).length;
               const visibles = verTodosSueltos ? sueltos : sueltos.slice(0, TOPE_SUELTOS);
               const ocultos = sueltos.length - visibles.length;
@@ -441,8 +441,8 @@ export default function BodegaFisicaPage() {
                   <div className="px-4 py-3">
                     <p className="text-[11px] text-gray-500 leading-snug mb-2">
                       {rezagados > 0
-                        ? <><span className="font-semibold text-gray-700">{rezagados}</span> lleva{rezagados === 1 ? "" : "n"} más de un día sin cerrarse.</>
-                        : "Todos abiertos hoy."} Ciérralos y ubícalos, o consolídalos en otro polín.
+                        ? <><span className="font-semibold text-gray-700">{rezagados}</span> lleva{rezagados === 1 ? "" : "n"} más de un día sin moverse.</>
+                        : "Todos con movimiento hoy."} Ciérralos y ubícalos, o consolídalos en otro polín.
                     </p>
                     {/* Altura tope + scroll: aunque se expanda, el riel no crece sin control. */}
                     <div className={`space-y-2 ${verTodosSueltos ? "max-h-56 overflow-y-auto pr-1" : ""}`}>
@@ -451,7 +451,8 @@ export default function BodegaFisicaPage() {
                           <div className="flex items-center gap-2">
                             <span className="font-mono font-semibold text-gray-700">{s.PalletCodigo}</span>
                             <span className="text-gray-500">{s.Masters} master{s.Masters === 1 ? "" : "s"}</span>
-                            <span className={`ml-auto text-[10px] font-semibold px-1.5 py-0.5 rounded-full shrink-0 ${
+                            <span title={s.UltimoCambio ? `Último cambio: ${fmtFecha(s.UltimoCambio)}` : undefined}
+                              className={`ml-auto text-[10px] font-semibold px-1.5 py-0.5 rounded-full shrink-0 ${
                               s.Dias == null ? "bg-gray-100 text-gray-500"
                                 : s.Dias >= 7 ? "bg-red-100 text-red-700"
                                 : s.Dias >= 3 ? "bg-orange-100 text-orange-700"

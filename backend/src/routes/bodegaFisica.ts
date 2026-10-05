@@ -187,18 +187,31 @@ router.get("/existencias", requireAuth, requirePerm("bodega", "ver"), async (_re
 // Es legítimo mientras se arma el polín, pero NADIE está obligado a cerrarlo — de ahí este listado,
 // para que un polín a medias no se quede meses ocupando espacio sin registrar.
 //
-// "Sin ubicar desde" = cuándo se creó el polín, o el último traslado que recibió si es posterior:
-// un polín que sigue recibiendo cajas está vivo, no olvidado.
+// Los días se cuentan desde el ÚLTIMO CAMBIO del polín, no desde su creación: uno que sigue
+// recibiendo o soltando cajas está vivo, no olvidado. Pallets no tiene columna de modificación, así
+// que el último cambio es lo más reciente entre:
+//   - su creación (CreadoEn),
+//   - el último master escaneado en él (Masters.FechaIngreso — antes NO se tomaba en cuenta, y era
+//     el cambio más común),
+//   - cualquier movimiento del kardex donde sea destino O origen: traslado que entra o sale,
+//     retiro de una caja, devolución.
+// Cada subconsulta es por índice (fk_master_pallet; idx_movbodega_pallet ∪ fk_movbodega_palletorigen)
+// y corre una vez por polín abierto, no por master.
+// Reabrir un polín cerrado no deja fecha en ningún lado, así que no cuenta como cambio.
 router.get("/sueltos", requireAuth, requirePerm("bodega", "ver"), async (_req: Request, res: Response) => {
   try {
     const rows: any[] = await prisma.$queryRaw`
+      SELECT t.*, TIMESTAMPDIFF(DAY, t.UltimoCambio, NOW()) AS Dias
+      FROM (
       SELECT p.PalletId, p.Codigo AS PalletCodigo, p.Estatus AS PalletEstatus,
              bv.Nombre AS NombreBodegaVirtual,
              COUNT(m.MasterId) AS Masters,
              COALESCE(SUM(pr.PesoKG * pr.CajasXMaster), 0) AS PesoKg,
-             GREATEST(p.CreadoEn, COALESCE(
-               (SELECT MAX(mb.Fecha) FROM MovimientosBodega mb
-                WHERE mb.Tipo = 'TRASLADO' AND mb.PalletId = p.PalletId), p.CreadoEn)) AS SueltoDesde,
+             GREATEST(p.CreadoEn,
+               COALESCE((SELECT MAX(mx.FechaIngreso) FROM Masters mx WHERE mx.PalletId = p.PalletId), p.CreadoEn),
+               COALESCE((SELECT MAX(mb.Fecha) FROM MovimientosBodega mb
+                         WHERE mb.PalletId = p.PalletId OR mb.PalletOrigenId = p.PalletId), p.CreadoEn)
+             ) AS UltimoCambio,
              GROUP_CONCAT(DISTINCT cli.RazonSocial ORDER BY cli.RazonSocial SEPARATOR ', ') AS Clientes,
              GROUP_CONCAT(DISTINCT ped.CodigoPedido ORDER BY ped.CodigoPedido SEPARATOR ', ') AS Pedidos,
              GROUP_CONCAT(DISTINCT CONCAT(pc.Descripcion, ' ', ta.Descripcion) SEPARATOR ' · ') AS Productos
@@ -216,21 +229,20 @@ router.get("/sueltos", requireAuth, requirePerm("bodega", "ver"), async (_req: R
       LEFT JOIN BodegaVirtual bv ON p.BodegaVirtualCodigo = bv.Codigo
       WHERE m.Estatus <> 'Salido'
       GROUP BY p.PalletId, p.Codigo, p.Estatus, bv.Nombre, p.CreadoEn
-      ORDER BY SueltoDesde ASC
+      ) t
+      ORDER BY t.UltimoCambio ASC
     `;
-    // Los días se calculan aquí y no en SQL para usar la misma zona horaria que ve el operador.
-    const hoy = Date.now();
-    res.json(rows.map(r => {
-      const desde = r.SueltoDesde ? new Date(r.SueltoDesde) : null;
-      return {
-        PalletId: Number(r.PalletId), PalletCodigo: r.PalletCodigo, PalletEstatus: r.PalletEstatus,
-        NombreBodegaVirtual: r.NombreBodegaVirtual,
-        Masters: Number(r.Masters), PesoKg: Number(r.PesoKg),
-        SueltoDesde: desde ? desde.toISOString() : null,
-        Dias: desde ? Math.floor((hoy - desde.getTime()) / 86_400_000) : null,
-        Clientes: r.Clientes, Pedidos: r.Pedidos, Productos: r.Productos,
-      };
-    }));
+    // Los días salen del SQL contra NOW() y no de Date.now() en JS: los DATETIME guardan hora de
+    // Guatemala con una "Z" mentirosa, y restarlos contra el reloj UTC real le sumaba 6 horas a
+    // cada polín: RP0039 salía con 6 días cuando llevaba 5 (feedback_fechas_backend_z_mentirosa).
+    res.json(rows.map(r => ({
+      PalletId: Number(r.PalletId), PalletCodigo: r.PalletCodigo, PalletEstatus: r.PalletEstatus,
+      NombreBodegaVirtual: r.NombreBodegaVirtual,
+      Masters: Number(r.Masters), PesoKg: Number(r.PesoKg),
+      UltimoCambio: r.UltimoCambio,
+      Dias: r.Dias == null ? null : Number(r.Dias),
+      Clientes: r.Clientes, Pedidos: r.Pedidos, Productos: r.Productos,
+    })));
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
