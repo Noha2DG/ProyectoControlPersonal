@@ -224,9 +224,23 @@ export function calcularLbsPorPersona(filas) {
 // así que cada una rankea solo a quien produjo ALGO en esa área hoy (filtro > 0), no a todo el
 // personal con un cero incómodo, y el semáforo por tercios se calcula sobre ese subconjunto, no
 // sobre la planta completa.
+//
+// Piso de LB_MINIMO_RANKING: quien solo fue de apoyo un rato a otra área (una pesada de 2 lb) no
+// entra en el ranking de esa área. Si entrara, quedaría al fondo y engordaría el tercio rojo,
+// subiendo de color a gente que no produjo más — 5 oct 2026 fueron 14 personas así en Pelado. Su
+// producción sigue contando en su área principal y en los reportes; esto es solo la pantalla.
+export const LB_MINIMO_RANKING = 5;
 export function calcularRankingPorArea(filas, campoLb) {
-  const activos = filas.filter(f => f[campoLb] > 0);
+  const activos = filas.filter(f => f[campoLb] >= LB_MINIMO_RANKING);
   return asignarPuestoYSemaforo(activos.slice().sort((a, b) => b[campoLb] - a[campoLb]));
+}
+
+// Recién ingresados (menos de 30 días en la empresa) se rankean aparte en la pantalla de pared: no
+// compiten contra quien lleva años pelando. DiasIngreso lo calcula el backend contra la fecha del
+// ranking; null = sin fecha de ingreso cargada, y sin dato se queda en el ranking general.
+export const DIAS_APRENDIZAJE = 30;
+export function esAprendiz(f) {
+  return f.DiasIngreso != null && f.DiasIngreso < DIAS_APRENDIZAJE;
 }
 
 // Promedio de Lb/Hora ponderado por horas (no un promedio simple de las tasas individuales), y solo

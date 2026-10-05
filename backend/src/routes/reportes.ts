@@ -221,6 +221,12 @@ router.get("/produccion", requireAuth, requirePerm("destajo", "ver"), async (req
 // subconsulta derivada y se agrega afuera con SUM(CASE...) — así no se repite el correlacionado dos
 // veces por fila como pasaría metiéndolo directo en cada CASE.
 //
+// DiasIngreso (días desde la PRIMERA alta hasta la fecha consultada) separa a los aprendices en la
+// pantalla. Es la más antigua entre Empleados.FechaIngreso y Altas.FechaAlta: en un reingreso RRHH
+// suele sobrescribir FechaIngreso con la fecha del recontrato (HER0007: alta 2026-06-11, reingreso
+// 2026-09-29 con FechaIngreso = 2026-09-29), y con solo esa columna salía como aprendiz alguien con
+// experiencia. El MIN de Altas es una búsqueda por índice (Codigo) por persona, no por pesada.
+//
 // Resultado en memoria por fecha: la pantalla de pared (y cualquier otra que se encienda) pregunta
 // lo mismo cada pocos minutos, y un retraso de hasta un minuto en el ranking no lo nota nadie. Las
 // peticiones simultáneas comparten la misma consulta en vuelo.
@@ -235,10 +241,15 @@ async function consultarRanking(fecha: string) {
              SUM(CASE WHEN Area = 'PELADO Y PINCHADO' THEN Kilos ELSE 0 END) AS KilosPinchado,
              SUM(CASE WHEN Area = 'REPROCESO DESCOLADO' THEN Kilos ELSE 0 END) AS KilosReprocesoDescolado,
              SUM(CASE WHEN Area = 'REPROCESO CORTE' THEN Kilos ELSE 0 END) AS KilosReprocesoCorte,
-             SUM(Kilos) AS KilosTotal
+             SUM(Kilos) AS KilosTotal,
+             DATEDIFF(?, NULLIF(LEAST(
+               CASE WHEN MAX(FechaIngreso) > '1900-01-01' THEN MAX(FechaIngreso) ELSE CAST('9999-12-31' AS DATE) END,
+               COALESCE((SELECT MIN(al.FechaAlta) FROM Altas al WHERE al.Codigo = t.IdEmpleado), CAST('9999-12-31' AS DATE))
+             ), CAST('9999-12-31' AS DATE))) AS DiasIngreso
       FROM (
         SELECT e.Codigo AS IdEmpleado,
                CONCAT_WS(' ', e.PrimerNombre, e.SegundoNombre, e.PrimerApellido, e.SegundoApellido) AS Nombre,
+               e.FechaIngreso,
                pd.Peso AS Kilos,
                (SELECT a.Nombre FROM Transferencias tr
                 JOIN Areas a ON tr.CodigoArea = a.Codigo
@@ -252,8 +263,10 @@ async function consultarRanking(fecha: string) {
       ) t
       GROUP BY IdEmpleado
       ORDER BY KilosTotal DESC
-    `, fecha, fecha);
+    `, fecha, fecha, fecha);
 
+    // DiasIngreso queda null (no 0) para quien no tiene fecha de ingreso cargada ('0000-00-00'): sin
+    // dato no se le puede llamar aprendiz, y numerizar lo volvería 0 = "ingresó hoy".
     return { fecha, ranking: numerizar(ranking, ["KilosDescabezado", "KilosPelado", "KilosPinchado", "KilosReprocesoDescolado", "KilosReprocesoCorte", "KilosTotal"]) };
 }
 

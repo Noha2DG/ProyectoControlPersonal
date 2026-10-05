@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
 import { useAuth, authHeader } from "../context/AuthContext.jsx";
-import { calcularLbsPorPersona, calcularRankingPorArea } from "../utils/destajo.js";
+import { calcularLbsPorPersona, calcularRankingPorArea, esAprendiz, DIAS_APRENDIZAJE } from "../utils/destajo.js";
 
 const DIAS = ["Domingo","Lunes","Martes","Miércoles","Jueves","Viernes","Sábado"];
 const MESES = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
@@ -8,12 +8,12 @@ const MESES = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto"
 // Pantalla 100% pasiva (nadie escanea nada, es solo para mirar) — project_ranking_produccion_pantalla_design.
 // Separada por área (primero Pelado y Devenado, luego Descabezado) con una diapositiva de transición
 // entre una y otra — cada área es su propio ranking, no una columna dentro de uno combinado.
-// Solo los 10 primeros de cada área, en una sola diapositiva por área.
-// El corte es solo de pantalla: el backend devuelve a todos (el puesto y el semáforo se calculan
-// sobre el área completa, y para saber quiénes son los 10 primeros hay que sumar a todos de todos modos).
-const TOP_POR_AREA = 10;
-// 20 s deja leer la hoja completa de lejos antes de cambiar.
-const MS_DIAPOSITIVA = 20_000;
+// Todas las personas de cada área, de 10 en 10 por diapositiva. Dentro de cada área, los recién
+// ingresados (esAprendiz, destajo.js) van en un ranking aparte "Aprendizaje" después del general:
+// su propio puesto 1 y su propio semáforo, sin competir contra el personal con experiencia.
+// Paginar es solo de pantalla: el backend ya devuelve a todos en una sola consulta.
+const POR_PAGINA = 10;
+const MS_DIAPOSITIVA = 10_000;
 // 4 s no alcanzaban para leer "Cambiando a …" desde lejos antes de que entraran los nombres.
 const MS_TRANSICION = 7_000;
 
@@ -183,6 +183,11 @@ function Transicion({ seccion }) {
           </svg>
           <p className="text-[clamp(0.9rem,2vh,1.1rem)] font-semibold uppercase tracking-widest text-slate-400">Cambiando a</p>
           <p className={`text-[clamp(2rem,7vh,4rem)] font-extrabold uppercase tracking-wide text-center ${seccion.texto}`}>{seccion.nombre}</p>
+          {seccion.aprendiz && (
+            <p className="mt-1 px-6 py-1 rounded-full bg-amber-400 text-amber-950 font-extrabold uppercase tracking-widest text-[clamp(1.1rem,3.5vh,2rem)]">
+              Aprendizaje
+            </p>
+          )}
         </div>
       </div>
     </div>
@@ -237,16 +242,17 @@ export default function RankingProduccionPage() {
     return () => { cancelado = true; clearTimeout(id); };
   }, []);
 
-  // Una sección por área (solo las que tienen a alguien produciendo hoy), con una sola diapositiva:
-  // sus TOP_POR_AREA primeros. Si un área está vacía, ni ella ni su transición aparecen en la
-  // secuencia — no tiene sentido "cambiar a Descabezado" para mostrar una pantalla sin nadie.
+  // Dos secciones por área (general y aprendizaje), solo las que tienen a alguien produciendo hoy,
+  // paginadas de POR_PAGINA en POR_PAGINA. Una sección vacía no entra en la secuencia, ni ella ni
+  // su transición — no tiene sentido "cambiar a Descabezado" para mostrar una pantalla sin nadie.
   const secciones = useMemo(() => {
     return SECCIONES_CONFIG
-      .map(cfg => {
-        const datos = calcularRankingPorArea(personas, cfg.campo);
-        const paginas = datos.length ? [datos.slice(0, TOP_POR_AREA)] : [];
-        return { ...cfg, paginas, total: datos.length };
-      })
+      .flatMap(cfg => [false, true].map(aprendiz => {
+        const datos = calcularRankingPorArea(personas.filter(p => esAprendiz(p) === aprendiz), cfg.campo);
+        const paginas = [];
+        for (let i = 0; i < datos.length; i += POR_PAGINA) paginas.push(datos.slice(i, i + POR_PAGINA));
+        return { ...cfg, key: aprendiz ? `${cfg.key}-aprendiz` : cfg.key, aprendiz, paginas, total: datos.length };
+      }))
       .filter(s => s.paginas.length > 0);
   }, [personas]);
 
@@ -276,6 +282,7 @@ export default function RankingProduccionPage() {
 
   const frameActual = frames.length ? frames[frameIndex % frames.length] : null;
   const tituloArea = frameActual?.tipo === "pagina" ? ` — ${frameActual.seccion.nombre}` : "";
+  const enAprendizaje = frameActual?.tipo === "pagina" && frameActual.seccion.aprendiz;
 
   return (
     <div className="h-screen overflow-hidden bg-white flex flex-col select-none">
@@ -303,6 +310,14 @@ export default function RankingProduccionPage() {
           <span className="text-[clamp(1.25rem,3.4vh,2rem)] font-mono tabular-nums">{hora}</span>
         </div>
       </div>
+
+      {/* Franja y no sufijo en el título: "… — REPROCESO DESCOLADO · APRENDIZAJE" no cabe, y una
+          banda de color se distingue desde lejos antes de leer cualquier nombre. */}
+      {enAprendizaje && (
+        <div className="bg-amber-400 text-amber-950 text-center font-extrabold uppercase tracking-widest py-1 shrink-0 text-[clamp(1rem,3vh,2rem)]">
+          Aprendizaje · menos de {DIAS_APRENDIZAJE} días en la empresa
+        </div>
+      )}
 
       <div className="flex-1 min-h-0 flex flex-col px-4 py-3 gap-3">
         {cargando ? (
@@ -339,7 +354,7 @@ export default function RankingProduccionPage() {
                 <FilaPersona key={fila.IdEmpleado} fila={fila} valor={fila[frameActual.seccion.campo]} colorTexto={frameActual.seccion.texto} />
               ))}
               {/* Relleno invisible: con menos de 10 personas las filas no se estiran a media pantalla. */}
-              {Array.from({ length: TOP_POR_AREA - frameActual.filas.length }, (_, i) => (
+              {Array.from({ length: POR_PAGINA - frameActual.filas.length }, (_, i) => (
                 <div key={`vacio-${i}`} className="flex-1 min-h-0" />
               ))}
             </div>
@@ -350,8 +365,9 @@ export default function RankingProduccionPage() {
                 {error && ` · ${error}, reintentando…`}
               </span>
               <span className="text-[clamp(0.75rem,1.5vh,0.9rem)] text-slate-400">
-                {frameActual.seccion.total > TOP_POR_AREA && `Top ${TOP_POR_AREA} de `}
+                {frameActual.seccion.paginas.length > 1 && `Página ${frameActual.pagina + 1} de ${frameActual.seccion.paginas.length} · `}
                 {frameActual.seccion.total} persona{frameActual.seccion.total !== 1 ? "s" : ""} en {frameActual.seccion.nombre.toLowerCase()}
+                {frameActual.seccion.aprendiz && " (aprendizaje)"}
               </span>
             </div>
           </>
