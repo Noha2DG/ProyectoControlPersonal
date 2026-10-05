@@ -29,6 +29,8 @@
    separados del esmeralda/azul/violeta de la línea a la distancia de una pantalla de pared. */
 .fondo-olas-cyan    { background: linear-gradient(135deg, #155e75, #06b6d4); }
 .fondo-olas-rose    { background: linear-gradient(135deg, #881337, #f43f5e); }
+/* Transición hacia una hoja de Aprendizaje (recién ingresados), sea del área que sea. */
+.fondo-olas-lime    { background: linear-gradient(135deg, #365314, #84cc16); }
 
 /* Ráfaga de confeti del puesto 1 (RankingProduccionPage.jsx, componente Confeti) — cada pieza trae
    su propio --tx/--ty/--rot por variable CSS (calculados en JS, uno por pieza) y esta única

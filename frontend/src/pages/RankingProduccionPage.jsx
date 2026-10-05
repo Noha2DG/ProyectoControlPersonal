@@ -58,6 +58,21 @@ const SECCIONES_CONFIG = [
     fondo: "fondo-olas-rose", olas: ["rgba(255,255,255,0.14)", "rgba(255,255,255,0.24)", "#ffe4e6"] },
 ];
 
+// Tema de las hojas de Aprendizaje: verde lima de "brote". No ámbar, que es el color del puesto 1
+// (medalla, halo y confeti) y le quitaría protagonismo al primer lugar; tampoco ninguno de los
+// colores de área, para que el cambio se note aunque la hoja sea de la misma área que la anterior.
+const OLAS_APRENDIZ = ["rgba(255,255,255,0.14)", "rgba(255,255,255,0.24)", "#ecfccb"];
+
+function IconBrote({ className }) {
+  return (
+    <svg className={className} fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M12 21v-9" />
+      <path d="M12 12C12 8 9 5 4 5c0 4 3 7 8 7z" />
+      <path d="M12 10c0-3.5 2.5-6 7-6 0 3.5-2.5 6-7 6z" />
+    </svg>
+  );
+}
+
 // Un solo período (1200 de 2400 de ancho del viewBox) para que el bucle de translateX(-50%) en
 // @keyframes deslizarOlas (ver index.css) caiga exacto en el borde del período y no se note.
 const OLA_PATH = "M0,100 C300,60 900,140 1200,100 C1500,60 2100,140 2400,100 L2400,200 L0,200 Z";
@@ -185,22 +200,31 @@ function CapaOlas({ color, alturaClase, duracion, reversa }) {
 // Descabezado al vuelo. El degradado con olas en movimiento (ver .fondo-olas-* en index.css) ya
 // adelanta de qué área se trata por su color, antes de leer el texto; la tarjeta clara flotando
 // encima es lo que mantiene el texto legible sobre un fondo que no deja de moverse.
+// Hacia una hoja de Aprendizaje las olas son lima y no del color del área: el nombre del área sigue
+// en su color dentro de la tarjeta, pero lo primero que se ve de lejos es que viene aprendizaje.
 function Transicion({ seccion }) {
+  const fondo = seccion.aprendiz ? "fondo-olas-lime" : seccion.fondo;
+  const olas = seccion.aprendiz ? OLAS_APRENDIZ : seccion.olas;
   return (
-    <div className={`relative flex-1 min-h-0 rounded-2xl overflow-hidden animate-[fadeIn_0.4s_ease] ${seccion.fondo}`}>
-      <CapaOlas color={seccion.olas[0]} alturaClase="h-[58%]" duracion={16} />
-      <CapaOlas color={seccion.olas[1]} alturaClase="h-[42%]" duracion={11} reversa />
-      <CapaOlas color={seccion.olas[2]} alturaClase="h-[26%]" duracion={7} />
+    <div className={`relative flex-1 min-h-0 rounded-2xl overflow-hidden animate-[fadeIn_0.4s_ease] ${fondo}`}>
+      <CapaOlas color={olas[0]} alturaClase="h-[58%]" duracion={16} />
+      <CapaOlas color={olas[1]} alturaClase="h-[42%]" duracion={11} reversa />
+      <CapaOlas color={olas[2]} alturaClase="h-[26%]" duracion={7} />
 
-      <div className="absolute inset-0 flex items-center justify-center p-6">
-        <div className="bg-white/90 rounded-2xl shadow-2xl px-12 py-10 flex flex-col items-center gap-3 max-w-[85%]">
-          <svg className={`w-[clamp(2.5rem,8vh,4.5rem)] h-[clamp(2.5rem,8vh,4.5rem)] ${seccion.texto}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <div className="absolute inset-0 flex items-center justify-center">
+        {/* La tarjeta ocupa el 85% de la hoja (ancho y alto) y el resto deja ver las olas del color
+            del área. Letras pensadas para leerse desde el fondo de la planta en 1920×1080: el nombre
+            del área ronda los 160 px y se parte en dos renglones ("PELADO Y / DEVENADO") sin salirse
+            de la tarjeta. Los topes del clamp quedan por encima de lo que da el vh a esa resolución. */}
+        <div className="w-[85%] h-[85%] bg-white/90 rounded-3xl shadow-2xl px-[4vw] py-[4vh] flex flex-col items-center justify-center gap-[2.5vh]">
+          <svg className={`shrink-0 w-[clamp(3rem,13vh,10rem)] h-[clamp(3rem,13vh,10rem)] ${seccion.texto}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13 7l5 5m0 0l-5 5m5-5H6" />
           </svg>
-          <p className="text-[clamp(0.9rem,2vh,1.1rem)] font-semibold uppercase tracking-widest text-slate-400">Cambiando a</p>
-          <p className={`text-[clamp(2rem,7vh,4rem)] font-extrabold uppercase tracking-wide text-center ${seccion.texto}`}>{seccion.nombre}</p>
+          <p className="text-[clamp(1.25rem,5vh,4rem)] leading-none font-bold uppercase tracking-widest text-slate-500">Cambiando a</p>
+          <p className={`text-[clamp(2.5rem,15vh,11rem)] leading-[1.05] font-extrabold uppercase tracking-wide text-center ${seccion.texto}`}>{seccion.nombre}</p>
           {seccion.aprendiz && (
-            <p className="mt-1 px-6 py-1 rounded-full bg-amber-400 text-amber-950 font-extrabold uppercase tracking-widest text-[clamp(1.1rem,3.5vh,2rem)]">
+            <p className="mt-[1vh] px-[3vw] py-[1vh] rounded-full bg-lime-600 text-white font-extrabold uppercase tracking-widest leading-none text-[clamp(1.5rem,7vh,5.5rem)] flex items-center gap-[1vw]">
+              <IconBrote className="w-[1em] h-[1em]" />
               Aprendizaje
             </p>
           )}
@@ -321,7 +345,7 @@ export default function RankingProduccionPage() {
   const enAprendizaje = frameActual?.tipo === "pagina" && frameActual.seccion.aprendiz;
 
   return (
-    <div className="h-screen overflow-hidden bg-white flex flex-col select-none">
+    <div className={`h-screen overflow-hidden flex flex-col select-none transition-colors duration-500 ${enAprendizaje ? "bg-lime-50" : "bg-white"}`}>
       <button
         onClick={() => { logout(); window.location.hash = ""; }}
         title="Cerrar sesión"
@@ -337,12 +361,14 @@ export default function RankingProduccionPage() {
           el espacio que le deja el bloque de fecha/hora — así no se desplaza hacia la izquierda
           cuando el sufijo de área (" — DESCABEZADO") lo alarga. La fecha va encima de la hora (no al
           lado) para dejarle al título ~70vw: el más largo, "… — REPROCESO DESCOLADO", cabe entero. */}
-      <div className="relative bg-blue-800 text-white flex items-center justify-end px-5 py-2 shrink-0">
+      {/* En las hojas de Aprendizaje toda la pantalla cambia de tono (barra, franja y fondo), no solo
+          un letrero: de lejos se distingue antes de leer cualquier nombre. */}
+      <div className={`relative text-white flex items-center justify-end px-5 py-2 shrink-0 transition-colors duration-500 ${enAprendizaje ? "bg-lime-700" : "bg-blue-800"}`}>
         <h1 className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 max-w-[70vw] truncate text-center text-[clamp(1.25rem,3.7vh,3rem)] leading-tight font-bold tracking-wide uppercase">
           Ranking de Producción{tituloArea}
         </h1>
         <div className="flex flex-col items-end leading-tight pr-8">
-          <span className="text-[clamp(0.75rem,1.5vh,0.9rem)] text-blue-200">{fecha}</span>
+          <span className={`text-[clamp(0.75rem,1.5vh,0.9rem)] ${enAprendizaje ? "text-lime-100" : "text-blue-200"}`}>{fecha}</span>
           <span className="text-[clamp(1.25rem,3.4vh,2rem)] font-mono tabular-nums">{hora}</span>
         </div>
       </div>
@@ -350,7 +376,8 @@ export default function RankingProduccionPage() {
       {/* Franja y no sufijo en el título: "… — REPROCESO DESCOLADO · APRENDIZAJE" no cabe, y una
           banda de color se distingue desde lejos antes de leer cualquier nombre. */}
       {enAprendizaje && (
-        <div className="bg-amber-400 text-amber-950 text-center font-extrabold uppercase tracking-widest py-1 shrink-0 text-[clamp(1rem,3vh,2rem)]">
+        <div className="bg-lime-300 text-lime-950 font-extrabold uppercase tracking-widest py-1 shrink-0 text-[clamp(1rem,3vh,2rem)] flex items-center justify-center gap-3">
+          <IconBrote className="w-[1.1em] h-[1.1em]" />
           Aprendizaje · menos de {DIAS_APRENDIZAJE} días en la empresa
         </div>
       )}
