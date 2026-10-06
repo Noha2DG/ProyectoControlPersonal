@@ -13,22 +13,9 @@ const FMT_GT = new Intl.DateTimeFormat("en-US", {
 });
 const DIA_IDX = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
 
-// Diferencia (ms) entre la hora del servidor y el reloj de este equipo; se actualiza con sincronizarHora().
-let offsetServidor = 0;
-
-async function sincronizarHora() {
-  try {
-    const t0 = Date.now();
-    const res = await fetch("/api/hora", { cache: "no-store" });
-    const { ahora } = await res.json();
-    const t1 = Date.now();
-    if (typeof ahora === "number") offsetServidor = ahora - (t0 + t1) / 2; // compensa la latencia de ida y vuelta
-  } catch { /* sin conexion: se queda con el ultimo offset conocido */ }
-}
-
 function partesGT() {
   const p = {};
-  for (const { type, value } of FMT_GT.formatToParts(new Date(Date.now() + offsetServidor))) p[type] = value;
+  for (const { type, value } of FMT_GT.formatToParts(new Date())) p[type] = value;
   return p;
 }
 
@@ -63,11 +50,8 @@ export default function KioscoPage() {
   };
 
   useEffect(() => {
-    const refrescar = () => { setHora(reloj()); setFecha(fechaLarga()); };
-    sincronizarHora().then(refrescar);
-    const id = setInterval(refrescar, 1000);
-    const idSync = setInterval(sincronizarHora, 5 * 60 * 1000);
-    return () => { clearInterval(id); clearInterval(idSync); };
+    const id = setInterval(() => { setHora(reloj()); setFecha(fechaLarga()); }, 1000);
+    return () => clearInterval(id);
   }, []);
 
   const limpiar = useCallback(() => {
