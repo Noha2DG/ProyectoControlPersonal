@@ -73,6 +73,12 @@ app.use(compression());
 app.use(express.json());
 app.use("/uploads", express.static(path.join(RAIZ_BACKEND, "uploads")));
 
+// Hora del servidor (ms UTC) para que el kiosco no dependa del reloj del equipo donde corre.
+app.get("/api/hora", (_req, res) => {
+  res.set("Cache-Control", "no-store");
+  res.json({ ahora: Date.now() });
+});
+
 app.use("/api/auth", authRouter);
 app.use("/api/empleados", requireAuth, empleadosRouter);
 app.use("/api/usuarios", usuariosRouter);
