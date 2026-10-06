@@ -28,8 +28,11 @@ const router = Router();
 // Familia P (las clases con "*", ej. P34 → P14 "CULTIVO PELADO P&D T-OFF *") es el mismo Producto
 // pelado con otra certificación: se agregó el 1 oct 2026 porque bloqueaba el pesaje en DS. Por eso
 // cada área admite una lista de Familias.
+//
+// Familia R ("CULTIVO PELADO *") entró el 6 oct 2026 con R52 (CULTIVO PELADO BFT-ON *), que se pela
+// en DS a partir de P34; va junto a E y P en todas las áreas de pelado.
 const FAMILIAS_ESPERADAS_POR_AREA: Record<string, string[]> = {
-  DS: ["E", "P"], DU: ["D"], DT: ["E", "P"], RD: ["E", "P"], RC: ["E", "P"],
+  DS: ["E", "P", "R"], DU: ["D"], DT: ["E", "P", "R"], RD: ["E", "P", "R"], RC: ["E", "P", "R"],
 };
 
 // Las únicas áreas donde se pesa a destajo — se derivan del mapa de arriba para no tener dos listas
