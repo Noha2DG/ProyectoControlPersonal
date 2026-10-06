@@ -4,32 +4,14 @@ import { useAuth } from "../context/AuthContext.jsx";
 const DIAS = ["Domingo","Lunes","Martes","Miércoles","Jueves","Viernes","Sábado"];
 const MESES = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
 
-// El kiosco corre en una Orange Pi cuyo reloj/zona del sistema no es confiable, y su ICU devuelve
-// "00:06 p. m." con hour12:true. Se fija la zona y se arma el formato a mano (hourCycle h23 + AM/PM propio).
-const FMT_GT = new Intl.DateTimeFormat("en-US", {
-  timeZone: "America/Guatemala", hourCycle: "h23",
-  year: "numeric", month: "numeric", day: "numeric", weekday: "short",
-  hour: "numeric", minute: "numeric", second: "numeric",
-});
-const DIA_IDX = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
-
-function partesGT() {
-  const p = {};
-  for (const { type, value } of FMT_GT.formatToParts(new Date())) p[type] = value;
-  return p;
-}
-
 function reloj() {
-  const p = partesGT();
-  const h24 = Number(p.hour) % 24;
-  const h12 = h24 % 12 === 0 ? 12 : h24 % 12;
-  const dos = (n) => String(n).padStart(2, "0");
-  return `${dos(h12)}:${dos(p.minute)}:${dos(p.second)} ${h24 < 12 ? "a. m." : "p. m."}`;
+  const ahora = new Date();
+  return ahora.toLocaleTimeString("es-GT", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: true });
 }
 
 function fechaLarga() {
-  const p = partesGT();
-  return `${DIAS[DIA_IDX[p.weekday]]} ${Number(p.day)} de ${MESES[Number(p.month) - 1]} de ${p.year}`;
+  const d = new Date();
+  return `${DIAS[d.getDay()]} ${d.getDate()} de ${MESES[d.getMonth()]} de ${d.getFullYear()}`;
 }
 
 export default function KioscoPage() {
