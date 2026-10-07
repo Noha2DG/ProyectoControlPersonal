@@ -60,12 +60,13 @@ export function resumenDelDia(pesadas, pausas) {
   return out;
 }
 
-// "Isabel M." — primer nombre e inicial del primer apellido. Si dos personas de la MISMA vista
+// "Carmen Nohemi S." — primer nombre, segundo nombre completo (si tiene) e inicial del primer apellido. Si dos personas de la MISMA vista
 // quedan iguales se agrega la inicial del segundo apellido ("Rosa C. R." / "Rosa C. C."), y si aun
 // así chocan, el código. Devuelve Map Codigo → nombre corto.
 export function nombresCortos(personas) {
-  const base = p => `${capital(p.PrimerNombre)} ${inicial(p.PrimerApellido)}.`;
-  const conSegundo = p => `${base(p)}${inicial(p.SegundoApellido) ? ` ${inicial(p.SegundoApellido)}.` : ""}`;
+  const ini = s => (inicial(s) ? ` ${inicial(s)}.` : "");
+  const base = p => `${capital(p.PrimerNombre)}${limpio(p.SegundoNombre) ? ` ${capital(p.SegundoNombre)}` : ""}${ini(p.PrimerApellido)}`;
+  const conSegundo = p => `${base(p)}${ini(p.SegundoApellido)}`;
   const contar = (lista, f) => lista.reduce((m, p) => m.set(f(p), (m.get(f(p)) ?? 0) + 1), new Map());
 
   const n1 = contar(personas, base);
@@ -101,7 +102,7 @@ export function calcularProduccionMesas(datos) {
     if (!actual) {
       actual = {
         Codigo: p.IdEmpleado, PrimerNombre: p.PrimerNombre, PrimerApellido: p.PrimerApellido,
-        SegundoApellido: p.SegundoApellido, MesaCodigo: p.MesaCodigo ?? TEMPORAL, EsLider: !!p.EsLider, UltimaHora: p.Hora,
+        SegundoApellido: p.SegundoApellido, SegundoNombre: p.SegundoNombre, MesaCodigo: p.MesaCodigo ?? TEMPORAL, EsLider: !!p.EsLider, UltimaHora: p.Hora,
         AreasSet: new Set(),
       };
       personas.set(p.IdEmpleado, actual);

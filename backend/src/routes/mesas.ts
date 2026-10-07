@@ -137,7 +137,7 @@ router.get("/asignaciones", requireAuth, requirePerm("mesas", "ver"), async (req
       SELECT ma.AsignacionId, ma.Codigo, ma.MesaCodigo, ma.EsLider, ma.Motivo,
              DATE_FORMAT(ma.FechaInicio, '%Y-%m-%d') AS FechaInicio, DATE_FORMAT(ma.FechaFin, '%Y-%m-%d') AS FechaFin,
              CONCAT_WS(' ', e.PrimerNombre, e.SegundoNombre, e.PrimerApellido, e.SegundoApellido) AS Nombre,
-             e.PrimerNombre, e.PrimerApellido, e.SegundoApellido
+             e.PrimerNombre, e.SegundoNombre, e.PrimerApellido, e.SegundoApellido
       FROM MesaAsignacion ma
       JOIN Empleados e ON e.Codigo = ma.Codigo
       WHERE ma.FechaInicio <= ${fecha} AND (ma.FechaFin IS NULL OR ma.FechaFin >= ${fecha})
@@ -157,7 +157,7 @@ router.get("/sin-mesa", requireAuth, requirePerm("mesas", "ver"), async (req: Re
     const dias = Math.min(Math.max(Number(req.query.dias) || 14, 1), 60);
     const hoy = hoyGT();
     const rows: any[] = await prisma.$queryRawUnsafe(`
-      SELECT x.Codigo, e.PrimerNombre, e.PrimerApellido, e.SegundoApellido,
+      SELECT x.Codigo, e.PrimerNombre, e.SegundoNombre, e.PrimerApellido, e.SegundoApellido,
              CONCAT_WS(' ', e.PrimerNombre, e.SegundoNombre, e.PrimerApellido, e.SegundoApellido) AS Nombre,
              COUNT(*) AS Pesadas, DATE_FORMAT(MAX(x.FechaHora), '%Y-%m-%d') AS UltimoDia,
              SUM(x.FechaHora >= ?) AS PesadasHoy
@@ -287,7 +287,7 @@ async function pesadasDelDia(fecha: string) {
   // Reporte); se resuelve UNA vez por pesada (TrId) y se une afuera para sacar área y hora de entrada.
   // Las pesadas sin área (sin marcaje) se incluyen: suman libras pero no horas, y la vista lo avisa.
   const pesadas: any[] = await prisma.$queryRawUnsafe(`
-    SELECT x.Codigo AS IdEmpleado, e.PrimerNombre, e.PrimerApellido, e.SegundoApellido,
+    SELECT x.Codigo AS IdEmpleado, e.PrimerNombre, e.SegundoNombre, e.PrimerApellido, e.SegundoApellido,
            x.FechaHora, DATE_FORMAT(x.FechaHora, '%H:%i') AS Hora, x.Peso AS Kilos,
            a.Nombre AS Area, tr.FechaHora AS EntradaArea,
            tp.Talla, ta.Descripcion AS DescripcionTalla, cl.Descripcion AS Producto,
@@ -333,7 +333,7 @@ async function consultarHoy(fecha: string) {
     SELECT Codigo, Nombre, Tipo, Orden FROM Mesas WHERE Activa = 1 ORDER BY Orden, Codigo
   `;
   const integrantes: any[] = await prisma.$queryRaw`
-    SELECT ma.Codigo, ma.MesaCodigo, ma.EsLider, e.PrimerNombre, e.PrimerApellido, e.SegundoApellido
+    SELECT ma.Codigo, ma.MesaCodigo, ma.EsLider, e.PrimerNombre, e.SegundoNombre, e.PrimerApellido, e.SegundoApellido
     FROM MesaAsignacion ma JOIN Empleados e ON e.Codigo = ma.Codigo
     WHERE ma.FechaInicio <= ${fecha} AND (ma.FechaFin IS NULL OR ma.FechaFin >= ${fecha})
   `;

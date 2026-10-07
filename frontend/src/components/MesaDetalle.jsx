@@ -46,7 +46,7 @@ export default function MesaDetalle({ mesa, serie }) {
           {pesando.map(p => (
             <div key={p.Codigo} className="px-4 py-2.5">
               <div className="grid grid-cols-[1fr_auto_auto] gap-3 items-baseline">
-                <span className="min-w-0 truncate font-medium text-gray-900">
+                <span className="min-w-0 break-words leading-snug font-medium text-gray-900">
                   {p.NombreCorto}
                   {p.EsLider && <span className="ml-1.5 text-xs font-semibold text-amber-700">★ Líder</span>}
                 </span>
