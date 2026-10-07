@@ -9,12 +9,14 @@ import { fmtNum } from "../utils/numero.js";
 // tienen escalas distintas, y con dos ejes en el mismo cuadro los cruces de las líneas no significan
 // nada. Cada punto lleva su valor escrito (pedido del usuario: fijos, sin tener que tocar).
 //
-// SVG a mano (sin librería: en el celular no se descarga nada más). Naranja / violeta validados con
-// la guía de visualización sobre blanco (daltonismo ΔE 29.5, visión normal 37.6, contraste ≥ 3:1).
+// SVG a mano (sin librería: en el celular no se descarga nada más). Naranja / verde validados con
+// la guía de visualización sobre blanco (todas las pruebas pasan).
 // El texto nunca va del color de la serie: los colores solo marcan líneas y puntos.
 const COLOR = {
   lb: "#eb6834",
-  ritmo: "#4a3aa7",
+  // Mismo verde del tema "verde estero" pero más vivo: el #0F766E del texto, como línea, se lee
+  // gris (falla el piso de saturación del validador); #0d9488 pasa todo junto al naranja.
+  ritmo: "#0d9488",
   grid: "#e1e0d9",
   eje: "#c3c2b7",
   tinta: "#0b0b0b",
@@ -22,7 +24,7 @@ const COLOR = {
   apagado: "#898781",
   fondo: "#ffffff",
   // Fondo de la columna de HOY: verde muy suave, solo resalta el día en curso (no es un estado).
-  hoy: "#0ca30c",
+  hoy: "#0F766E",
 };
 
 const M = { izq: 56, der: 24, arr: 20, aba: 24 };

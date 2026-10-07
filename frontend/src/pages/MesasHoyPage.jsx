@@ -13,8 +13,13 @@ export function useMesasHoy() {
   const [datos, setDatos] = useState(null);
   const [error, setError] = useState("");
   const [cargando, setCargando] = useState(true);
+  // true mientras corre una recarga (botón ⟳ o refresco automático): el ícono gira para que se note
+  // que se pidió. Ojo: el servidor guarda el cálculo 1 min, así que la hora "Actualizado" puede no
+  // cambiar si se toca antes de ese minuto.
+  const [actualizando, setActualizando] = useState(false);
 
   const cargar = useCallback(async () => {
+    setActualizando(true);
     try {
       const res = await fetch("/api/mesas/hoy", { headers: authHeader() });
       const data = await res.json();
@@ -22,7 +27,7 @@ export function useMesasHoy() {
       setDatos(data); setError("");
     } catch (e) {
       setError(e.message);
-    } finally { setCargando(false); }
+    } finally { setCargando(false); setActualizando(false); }
   }, []);
 
   useEffect(() => {
@@ -32,7 +37,7 @@ export function useMesasHoy() {
   }, [cargar]);
 
   const mesas = useMemo(() => calcularProduccionMesas(datos), [datos]);
-  return { datos, mesas, error, cargando, recargar: cargar };
+  return { datos, mesas, error, cargando, actualizando, recargar: cargar };
 }
 
 // Días anteriores para la gráfica (GET /api/mesas/historial). Ya no cambian durante el día, así que
@@ -51,7 +56,7 @@ export function useHistorialMesas() {
 }
 
 export default function MesasHoyPage() {
-  const { datos, mesas, error, cargando, recargar } = useMesasHoy();
+  const { datos, mesas, error, cargando, actualizando, recargar } = useMesasHoy();
   const historial = useHistorialMesas();
   const [seleccion, setSeleccion] = useState(null);
   const mesa = mesas.find(m => m.Codigo === seleccion);
@@ -69,7 +74,10 @@ export default function MesasHoyPage() {
         <span className="text-sm text-gray-500 ml-auto">
           {datos ? `Actualizado ${horaDe(datos.generado)}` : ""}
         </span>
-        <button onClick={recargar} className="border border-gray-300 text-gray-700 text-sm font-semibold px-3 py-1.5 rounded-lg hover:bg-gray-50 transition">⟳ Actualizar</button>
+        <button onClick={recargar} disabled={actualizando}
+          className="border border-gray-300 text-gray-700 text-sm font-semibold px-3 py-1.5 rounded-lg hover:bg-gray-50 transition disabled:opacity-60 inline-flex items-center gap-1.5">
+          <span className={`inline-block ${actualizando ? "animate-spin" : ""}`}>⟳</span> {actualizando ? "Actualizando…" : "Actualizar"}
+        </button>
       </div>
       {error && <p className="text-sm text-red-600 mb-3">{error}</p>}
 
@@ -81,13 +89,13 @@ export default function MesasHoyPage() {
             const tipo = tipoMesa(m.Tipo);
             return (
               <button key={m.Codigo} onClick={() => setSeleccion(m.Codigo)}
-                className="text-left bg-white rounded-xl border border-gray-200 p-4 hover:border-blue-400 hover:shadow transition">
+                className="text-left bg-white rounded-xl border border-gray-200 p-4 hover:border-[#0F766E] hover:shadow transition">
                 <div className="flex items-center justify-between gap-2 mb-2">
                   <span className="font-bold text-gray-900 truncate">{m.Nombre}</span>
                   <span className={`shrink-0 px-2 py-0.5 rounded-full text-xs font-semibold ${tipo.clase}`}>{tipo.label}</span>
                 </div>
                 <p className="text-2xl font-bold text-gray-900 tabular-nums">{fmtNum(m.LbTotal, 1)} <span className="text-sm font-medium text-gray-500">lb</span></p>
-                <p className="text-sm text-blue-700 font-semibold tabular-nums">
+                <p className="text-sm text-[#0F766E] font-semibold tabular-nums">
                   {fmtNum(m.LbHoraPonderada, 1)} lb/hr
                 </p>
                 <p className="text-xs text-gray-500 mt-1">

@@ -24,7 +24,7 @@ export default function MesaDetalle({ mesa, serie }) {
           </div>
           <div>
             <p className="text-xs text-gray-500 uppercase tracking-wide">Lb/Hora ponderada</p>
-            <p className="text-3xl font-bold text-blue-700">{fmtNum(mesa.LbHoraPonderada, 1)}</p>
+            <p className="text-3xl font-bold text-[#0F766E]">{fmtNum(mesa.LbHoraPonderada, 1)}</p>
           </div>
         </div>
         <p className="text-sm text-gray-600 mt-2">
@@ -51,7 +51,7 @@ export default function MesaDetalle({ mesa, serie }) {
                   {p.EsLider && <span className="ml-1.5 text-xs font-semibold text-amber-700">★ Líder</span>}
                 </span>
                 <span className="text-right w-16 tabular-nums text-gray-900">{fmtNum(p.Lb, 1)}</span>
-                <span className="text-right w-16 tabular-nums font-semibold text-blue-700">{fmtNum(p.LbPorHora, 1)}</span>
+                <span className="text-right w-16 tabular-nums font-semibold text-[#0F766E]">{fmtNum(p.LbPorHora, 1)}</span>
               </div>
               <p className="text-xs text-gray-500">
                 {p.Areas && <span className="font-medium text-gray-700">{p.Areas} · </span>}

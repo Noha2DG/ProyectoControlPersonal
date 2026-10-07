@@ -16,30 +16,33 @@ function fechaCorta(ymd) {
 }
 
 export default function MesaMovilPage({ codigo }) {
-  const { datos, mesas, error, cargando, recargar } = useMesasHoy();
+  const { datos, mesas, error, cargando, actualizando, recargar } = useMesasHoy();
   const historial = useHistorialMesas();
   const mesa = useMemo(() => mesas.find(m => m.Codigo === codigo), [mesas, codigo]);
   const serie = useMemo(() => (mesa ? serieMesa(mesa.Codigo, mesas, historial, datos?.fecha) : []), [mesa, mesas, historial, datos]);
 
   return (
-    <div className="min-h-screen bg-gray-100">
-      <header className="sticky top-0 z-10 bg-blue-700 text-white px-4 py-3 shadow">
+    <div className="min-h-screen bg-[#eceeec]">
+      <header className="sticky top-0 z-10 bg-[#0F5E57] text-white px-4 py-3 shadow rounded-b-2xl">
         <div className="flex items-center gap-3">
           <select value={codigo} onChange={e => { window.location.hash = `#/mesa/${e.target.value}`; }}
-            className="min-w-0 flex-1 bg-blue-800 text-white text-lg font-bold rounded-lg px-2 py-1.5 border border-blue-500 focus:outline-none">
+            className="min-w-0 flex-1 bg-[#0b4a44] text-white text-lg font-bold rounded-xl px-3 py-2 border border-[#2a7a72] focus:outline-none">
             {!mesa && <option value={codigo}>{codigo}</option>}
             {mesas.map(m => <option key={m.Codigo} value={m.Codigo}>{m.Nombre}</option>)}
           </select>
-          <button onClick={recargar} aria-label="Actualizar" className="shrink-0 bg-blue-600 hover:bg-blue-500 rounded-lg px-3 py-1.5 text-lg">⟳</button>
+          <button onClick={recargar} disabled={actualizando} aria-label="Actualizar"
+            className="shrink-0 bg-[#0F766E] hover:bg-[#13887f] disabled:opacity-80 rounded-xl px-3 py-2 text-lg">
+            <span className={`inline-block ${actualizando ? "animate-spin" : ""}`}>⟳</span>
+          </button>
         </div>
-        <p className="text-xs text-blue-100 mt-1 capitalize">
+        <p className="text-xs text-[#cde7e2] mt-1 capitalize">
           Hoy {fechaCorta(datos?.fecha)}{datos ? ` · actualizado ${horaDe(datos.generado)}` : ""}
         </p>
       </header>
 
       <main className="px-4 py-4 max-w-xl mx-auto">
         {cargando ? (
-          <div className="flex justify-center py-16"><div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" /></div>
+          <div className="flex justify-center py-16"><div className="w-8 h-8 border-4 border-[#0F766E] border-t-transparent rounded-full animate-spin" /></div>
         ) : error ? (
           <p className="text-sm text-red-600">{error}</p>
         ) : !mesa ? (
@@ -47,7 +50,7 @@ export default function MesaMovilPage({ codigo }) {
         ) : (
           <MesaDetalle mesa={mesa} serie={serie} />
         )}
-        <a href="#/" className="block text-center text-sm text-blue-700 mt-6">Abrir el sistema</a>
+        <a href="#/" className="block text-center text-sm text-[#0F766E] mt-6">Abrir el sistema</a>
       </main>
     </div>
   );

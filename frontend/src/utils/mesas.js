@@ -12,7 +12,8 @@ export const URL_PUBLICA = "https://planta.esteromar.app";
 export const urlDeMesa = codigo => `${URL_PUBLICA}/#/mesa/${encodeURIComponent(codigo)}`;
 
 export const TIPOS_MESA = {
-  PELADORAS: { label: "Peladoras", clase: "bg-blue-100 text-blue-700" },
+  // Tema "verde estero" de la vista de mesas: encabezado #0F5E57, acento #0F766E.
+  PELADORAS: { label: "Peladoras", clase: "bg-[#d9f0ea] text-[#0F5E57]" },
   APRENDIZAJE: { label: "Aprendizaje", clase: "bg-amber-100 text-amber-700" },
   BANDA: { label: "Banda", clase: "bg-purple-100 text-purple-700" },
   TEMPORAL: { label: "Sin mesa", clase: "bg-gray-200 text-gray-700" },
