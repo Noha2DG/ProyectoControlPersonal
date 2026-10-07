@@ -202,10 +202,12 @@ export function exportarEficiencias(porPersona, desde, hasta) {
   XLSX.writeFile(wb, `Eficiencias_${desde}_a_${hasta}.xlsx`);
 }
 
-export function exportarLbHora(filas, desde, hasta) {
+// conMesa: solo quien tiene mesas.reporte recibe la columna (igual que en pantalla).
+export function exportarLbHora(filas, desde, hasta, conMesa = false) {
   const datos = filas.map(f => ({
     "Id Empleado":  f.IdEmpleado,
     "Nombre":       f.Nombre,
+    ...(conMesa ? { "Mesa": f.Mesa ?? "" } : {}),
     "Área":         f.Area ?? "",
     "Fecha":        f.Fecha ? f.Fecha.split("-").reverse().join("/") : "",
     "Clase":        f.Producto ?? "",

@@ -4,6 +4,7 @@ import LoginPage from "./pages/LoginPage.jsx";
 import KioscoPage from "./pages/KioscoPage.jsx";
 import MiProduccionPage from "./pages/MiProduccionPage.jsx";
 import RankingProduccionPage from "./pages/RankingProduccionPage.jsx";
+import MesaMovilPage from "./pages/MesaMovilPage.jsx";
 import TransferenciasPage from "./pages/TransferenciasPage.jsx";
 import UsuariosPage from "./pages/UsuariosPage.jsx";
 import AreasPage from "./pages/AreasPage.jsx";
@@ -203,7 +204,10 @@ function Dashboard() {
   if (perm("transferencias", "ver")) nav.push({ key: "transf",    label: "Transferencias",      icon: "transf"   });
   if (perm("planificacion",   "ver")) nav.push({ key: "planif",    label: "Planificación",       icon: "planif"   });
   if (perm("descongelado",   "ver")) nav.push({ key: "descongelado", label: "Descongelado",     icon: "destajo"  });
-  if (perm("destajo",        "ver")) nav.push({ key: "destajo",   label: "Destajo",             icon: "destajo"  });
+  // Destajo también aparece con solo `mesas.reporte` (supervisores que consultan la producción por
+  // mesa); adentro DestajoPage muestra solo las pestañas de cada permiso.
+  const verDestajo = perm("destajo", "ver") || perm("mesas", "reporte");
+  if (verDestajo)                    nav.push({ key: "destajo",   label: "Destajo",             icon: "destajo"  });
   if (perm("pedidos",        "ver")) nav.push({ key: "pedidos",   label: "Pedidos",             icon: "pedidos" });
   if (perm("etiquetado",     "ver")) nav.push({ key: "etiquetado", label: "Agrupación",          icon: "etiquetado" });
   if (perm("etiquetado",     "imprimir")) nav.push({ key: "imprimirEtiquetas", label: "Impresión de Etiquetas", icon: "imprimir" });
@@ -215,7 +219,9 @@ function Dashboard() {
   if (perm("permisos",       "ver")) nav.push({ key: "permisos",  label: "Permisos",            icon: "permisos" });
   if (perm("tipos_permiso",  "ver")) nav.push({ key: "tiposPermiso", label: "Tipos de Permiso", icon: "tiposPermiso" });
   if (perm("usuarios",       "ver")) nav.push({ key: "usuarios",  label: "Usuarios",            icon: "usuarios" });
-  if (perm("catalogos",      "ver")) nav.push({ key: "catalogos", label: "Catálogos",           icon: "catalogos" });
+  // Mesas de Pelado vive dentro de Catálogos con permiso propio: la supervisora entra con solo `mesas`.
+  const verCatalogos = perm("catalogos", "ver") || perm("mesas", "ver");
+  if (verCatalogos)                  nav.push({ key: "catalogos", label: "Catálogos",           icon: "catalogos" });
 
   const [seccion, setSeccion] = useState(nav[0]?.key ?? "empleados");
   // En escritorio el sidebar inicia expandido; en móvil inicia oculto (se abre como overlay)
@@ -385,7 +391,7 @@ function Dashboard() {
             {seccion === "transf"   && perm("transferencias", "ver") && <TransferenciasAdminPage />}
             {seccion === "planif"   && perm("planificacion",   "ver") && <PlanificacionPage />}
             {seccion === "descongelado" && perm("descongelado", "ver") && <DescongeladoPage />}
-            {seccion === "destajo"  && perm("destajo",         "ver") && <DestajoPage />}
+            {seccion === "destajo"  && verDestajo && <DestajoPage />}
             {seccion === "pedidos"   && perm("pedidos",       "ver") && <PedidosClientesPage />}
             {seccion === "etiquetado" && perm("etiquetado",    "ver") && <EtiquetadoPage />}
             {seccion === "imprimirEtiquetas" && perm("etiquetado", "imprimir") && <ImpresionEtiquetasPage />}
@@ -397,7 +403,7 @@ function Dashboard() {
             {seccion === "permisos" && perm("permisos",       "ver") && <PermisosPage />}
             {seccion === "tiposPermiso" && perm("tipos_permiso", "ver") && <TiposPermisoPage />}
             {seccion === "usuarios" && perm("usuarios",       "ver") && <UsuariosPage />}
-            {seccion === "catalogos" && perm("catalogos",     "ver") && <CatalogosPage />}
+            {seccion === "catalogos" && verCatalogos && <CatalogosPage />}
           </div>
         </main>
       </div>
@@ -431,6 +437,22 @@ export default function App() {
     "#/mi-produccion": { mod: "kiosco_destajo", Page: MiProduccionPage },
     "#/ranking-produccion": { mod: "kiosco_ranking", Page: RankingProduccionPage },
   };
+  // QR pegado en cada mesa de pelado: #/mesa/MESA03. Va aparte de KIOSCO_ROUTES porque lleva el
+  // código en la dirección (no es match exacto) y porque quien ya inició sesión sin el permiso debe
+  // ver "sin permiso", no la pantalla de login como si no hubiera entrado. Sin sesión cae a
+  // LoginPage y, como el hash se conserva, al entrar llega directo a la mesa.
+  if (hash.startsWith("#/mesa/")) {
+    if (!user) return <LoginPage />;
+    if (!hasPerm(user, "mesas", "reporte")) return (
+      <div className="min-h-screen flex flex-col items-center justify-center gap-3 bg-gray-100 px-6 text-center">
+        <p className="text-lg font-semibold text-gray-800">Sin permiso para ver la producción por mesa</p>
+        <p className="text-sm text-gray-600">Pide que te asignen "Ver reporte" en Mesas de Pelado.</p>
+        <a href="#/" className="text-sm text-blue-700">Abrir el sistema</a>
+      </div>
+    );
+    return <MesaMovilPage codigo={decodeURIComponent(hash.slice("#/mesa/".length)).toUpperCase()} />;
+  }
+
   const kioscoRoute = KIOSCO_ROUTES[hash];
   if (kioscoRoute) {
     if (!user || !hasPerm(user, kioscoRoute.mod, "ver")) return <LoginPage />;

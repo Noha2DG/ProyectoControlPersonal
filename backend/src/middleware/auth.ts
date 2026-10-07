@@ -34,6 +34,11 @@ export interface Permisos {
   // objetivo de TODOS los pedidos. Editarlo movía la meta de pedidos pasados y futuros sin que nadie
   // se enterara. `catalogos` queda para lo que casi nadie toca.
   pedidos?:        { ver?: boolean; crear?: boolean; editar?: boolean; eliminar?: boolean };
+  // Mesas de pelado: vive como pestaña de Catálogos, pero con permiso propio porque solo la
+  // supervisora de pelado la administra — tener `catalogos` no la muestra. `reporte` va aparte: la
+  // producción del día por mesa (pestaña de Destajo y QR de cada mesa) la consultan los supervisores,
+  // que no por eso deben poder mover personas de mesa.
+  mesas?:          { ver?: boolean; crear?: boolean; editar?: boolean; eliminar?: boolean; reporte?: boolean };
 }
 
 export interface AuthPayload {

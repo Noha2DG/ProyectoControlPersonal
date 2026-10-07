@@ -24,8 +24,17 @@ const TERMOS_COL_DEFAULTS = { expand: 24, termo: 110, detalle: 220, kg: 110 };
 const TERMOS_COLS = Object.keys(TERMOS_COL_DEFAULTS);
 const EFICIENCIAS_COL_DEFAULTS = { id: 100, nombre: 150, area: 110, fecha: 100, hora: 80, lote: 120, producto: 130, talla: 150, kilos: 100 };
 const EFICIENCIAS_COLS = Object.keys(EFICIENCIAS_COL_DEFAULTS);
-const LBHORA_COL_DEFAULTS = { id: 100, nombre: 150, area: 110, fecha: 130, clase: 160, talla: 190, lb: 90, horas: 90, lbhora: 90, pesadas: 90 };
+const LBHORA_COL_DEFAULTS = { id: 100, nombre: 150, mesa: 110, area: 110, fecha: 130, clase: 160, talla: 190, lb: 90, horas: 90, lbhora: 90, pesadas: 90 };
 const LBHORA_COLS = Object.keys(LBHORA_COL_DEFAULTS);
+// Áreas donde aplica mesa de pelado (quien pesa ahí sin mesa es Banda temporal) — mismo criterio que
+// backend/src/routes/mesas.ts. Se comparan por Nombre porque así llega el Área en porPersona.
+const AREAS_MESA = ["PELADO Y DEVENADO", "DESCABEZADO"];
+// agruparPorArea + la Mesa en la fila. La llave no cambia: la mesa es una por persona y día, y la
+// llave ya separa por día, así que no altera ningún bloque de tiempo ni ningún número.
+const agruparPorAreaConMesa = p => {
+  const g = agruparPorArea(p);
+  return { key: g.key, campos: { ...g.campos, Mesa: p.Mesa ?? null } };
+};
 const PORTALLA_COL_DEFAULTS = { expand: 24, productoTalla: 220, lbTotal: 100, lbHoraProm: 110, numPersonas: 100 };
 const PORTALLA_COLS = Object.keys(PORTALLA_COL_DEFAULTS);
 // Anchos pensados para que quepa el título completo de cada columna sin encimarse ("Pelado y
@@ -385,6 +394,7 @@ export default function ReporteProduccionPage() {
   // El backend es quien bloquea de verdad; esto solo evita que alguien sin permiso escriba una nota
   // para descubrir al salir del campo que no se guardó.
   const puedeEditarNotas = usePuede("destajo", "editar");
+  const verMesas = usePuede("mesas", "reporte");
   const [desde, setDesde] = useState(hoy());
   const [hasta, setHasta] = useState(hoy());
   const [finca, setFinca] = useState("");
@@ -559,10 +569,14 @@ export default function ReporteProduccionPage() {
   const areasLbHora = [...new Set((datos?.porPersona ?? []).map(p => p.Area).filter(Boolean))].sort();
   // El filtro de Área se aplica ANTES de calcular los bloques (no después) para que, si un
   // Producto+Talla llegara a venir de dos áreas distintas, quede acotado a una sola al elegirla.
-  const porPersonaLbHora = (datos?.porPersona ?? []).filter(p => !areaLbHora || p.Area === areaLbHora);
+  // Mesa de pelado del día de cada pesada (solo llega con el permiso mesas.reporte). Quien pesó en
+  // Pelado o Descabezado sin mesa asignada es Banda temporal; en las demás áreas no aplica mesa.
+  const porPersonaLbHora = (datos?.porPersona ?? []).filter(p => !areaLbHora || p.Area === areaLbHora)
+    .map(p => verMesas ? { ...p, Mesa: p.Mesa ?? (AREAS_MESA.includes(p.Area) ? "BANDA TEMPORAL" : null) } : p);
 
   const pausasNoPaga = datos?.pausasNoPaga ?? [];
-  const filasLbHora = calcularLbHora(porPersonaLbHora, agruparPorArea, pausasNoPaga).sort((a, b) => b.Lb - a.Lb);
+  const filasLbHora = calcularLbHora(porPersonaLbHora, agruparPorAreaConMesa, pausasNoPaga).sort((a, b) => b.Lb - a.Lb);
+  const lbHoraCols = verMesas ? LBHORA_COLS : LBHORA_COLS.filter(c => c !== "mesa");
   const filasPorTalla = calcularLbHora(porPersonaLbHora, agruparPorProductoTalla, pausasNoPaga);
   // Uno por pestaña, no uno compartido: Por Talla descarta además los bloques con cambio de grupo de
   // menos de 15 min, así que descarta más libras que Lb/Hora. Con un solo resumen la resta del aviso
@@ -603,7 +617,7 @@ export default function ReporteProduccionPage() {
     talla: t => t.Talla, kg: t => t.Procesado, pct: t => t.Procesado,
   });
   const lbHoraOrdenadas = ordenarFilas(filasLbHora, ordenLbHora, {
-    id: f => f.IdEmpleado, nombre: f => f.Nombre, area: f => f.Area,
+    id: f => f.IdEmpleado, nombre: f => f.Nombre, mesa: f => f.Mesa ?? "", area: f => f.Area,
     fecha: f => f.Fecha ?? "", clase: f => f.Producto ?? "", talla: f => f.Talla ?? "",
     lb: f => f.Lb, horas: f => f.Horas, lbhora: f => f.LbPorHora, pesadas: f => f.NumPesadas,
   });
@@ -687,7 +701,7 @@ export default function ReporteProduccionPage() {
     if (subTab === "general") exportarReporteGeneral(datos.porLote, datos.porTalla, desde, hasta);
     else if (subTab === "termos") exportarReporteTermos(datos.porTermo, desde, hasta);
     else if (subTab === "hojalote") { if (loteHoja) exportarHojaLote(termosHoja, loteHoja); }
-    else if (subTab === "lbhora") exportarLbHora(filasLbHora, desde, hasta);
+    else if (subTab === "lbhora") exportarLbHora(filasLbHora, desde, hasta, verMesas);
     else if (subTab === "portalla") exportarLbHoraPorTalla(filasPorTalla, desde, hasta);
     else if (subTab === "lbpersona") exportarLbPorPersona(filasLbPersona, desde, hasta, areasLbPersona);
     // pesajesVisibles y no reporte.porPersona: el Excel debe traer lo que se está viendo, con el
@@ -1137,11 +1151,12 @@ export default function ReporteProduccionPage() {
               </p>
               <div className="bg-white rounded-lg shadow overflow-hidden overflow-x-auto max-h-[600px] overflow-y-auto">
                 <table className="w-full text-xs table-fixed">
-                  <Colgroup columns={LBHORA_COLS} widths={widthsLbHora} />
+                  <Colgroup columns={lbHoraCols} widths={widthsLbHora} />
                   <thead>
                     <tr className="bg-gray-100 text-gray-600 uppercase text-[10px] tracking-wider">
                       <Th width={widthsLbHora.id} onResizeStart={startResizeLbHora("id")} sortKey="id" orden={ordenLbHora} onOrdenar={alternarOrdenLbHora} className="px-2 py-1.5 text-left whitespace-nowrap">Id Empleado</Th>
                       <Th width={widthsLbHora.nombre} onResizeStart={startResizeLbHora("nombre")} sortKey="nombre" orden={ordenLbHora} onOrdenar={alternarOrdenLbHora} className="px-2 py-1.5 text-left">Nombre</Th>
+                      {verMesas && <Th width={widthsLbHora.mesa} onResizeStart={startResizeLbHora("mesa")} sortKey="mesa" orden={ordenLbHora} onOrdenar={alternarOrdenLbHora} className="px-2 py-1.5 text-left whitespace-nowrap">Mesa</Th>}
                       <Th width={widthsLbHora.area} onResizeStart={startResizeLbHora("area")} sortKey="area" orden={ordenLbHora} onOrdenar={alternarOrdenLbHora} className="px-2 py-1.5 text-left whitespace-nowrap">Área</Th>
                       <Th width={widthsLbHora.fecha} onResizeStart={startResizeLbHora("fecha")} sortKey="fecha" orden={ordenLbHora} onOrdenar={alternarOrdenLbHora} className="px-2 py-1.5 text-left whitespace-nowrap">Fecha</Th>
                       <Th width={widthsLbHora.clase} onResizeStart={startResizeLbHora("clase")} sortKey="clase" orden={ordenLbHora} onOrdenar={alternarOrdenLbHora} className="px-2 py-1.5 text-left whitespace-nowrap">Clase</Th>
@@ -1157,6 +1172,7 @@ export default function ReporteProduccionPage() {
                       <tr key={`${f.IdEmpleado}-${f.Area}-${f.Fecha}-${f.Talla}-${f.Producto}`} className="hover:bg-gray-50 transition">
                         <td className="px-2 py-1.5 font-mono text-gray-700 whitespace-nowrap">{f.IdEmpleado}</td>
                         <td className="px-2 py-1.5 text-gray-700"><div className="max-w-[9rem] truncate" title={f.Nombre}>{f.Nombre}</div></td>
+                        {verMesas && <td className="px-2 py-1.5 text-gray-700"><div className="truncate">{f.Mesa || <span className="text-gray-300">—</span>}</div></td>}
                         <td className="px-2 py-1.5 text-gray-700 whitespace-nowrap">{f.Area || <span className="text-gray-300">—</span>}</td>
                         <td className="px-2 py-1.5 text-gray-600 whitespace-nowrap">{fechaCorta(f.Fecha)}</td>
                         <td className="px-2 py-1.5 text-gray-600"><div className="max-w-[10rem] truncate" title={f.Producto}>{f.Producto}</div></td>
@@ -1170,7 +1186,7 @@ export default function ReporteProduccionPage() {
                       </tr>
                     ))}
                     {filasLbHora.length === 0 && (
-                      <tr><td colSpan={10} className="px-3 py-6 text-center text-gray-400">Sin datos en este rango de fechas</td></tr>
+                      <tr><td colSpan={lbHoraCols.length} className="px-3 py-6 text-center text-gray-400">Sin datos en este rango de fechas</td></tr>
                     )}
                   </tbody>
                   {filasLbHora.length > 0 && (() => {
@@ -1178,7 +1194,7 @@ export default function ReporteProduccionPage() {
                     return (
                       <tfoot>
                         <tr className="bg-gray-200 font-bold border-t-2 border-gray-300">
-                          <td className="px-2 py-1.5" colSpan={6}>Total General</td>
+                          <td className="px-2 py-1.5" colSpan={verMesas ? 7 : 6}>Total General</td>
                           <td className="px-2 py-1.5 text-right text-gray-900">{fmtNum(total.TotalLb)}</td>
                           <td className="px-2 py-1.5"></td>
                           <td className="px-2 py-1.5 text-right text-blue-800">
@@ -1575,6 +1591,7 @@ export default function ReporteProduccionPage() {
                 <tr>
                   <th className="text-left font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Id</th>
                   <th className="text-left font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Nombre</th>
+                  {verMesas && <th className="text-left font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Mesa</th>}
                   <th className="text-left font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Área</th>
                   <th className="text-left font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Fecha</th>
                   <th className="text-left font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Clase</th>
@@ -1590,6 +1607,7 @@ export default function ReporteProduccionPage() {
                   <tr key={`${f.IdEmpleado}-${f.Area}-${f.Fecha}-${f.Talla}-${f.Producto}`} className="border-b border-gray-100">
                     <td className="py-0.5 px-1 font-mono">{f.IdEmpleado}</td>
                     <td className="py-0.5 px-1">{f.Nombre}</td>
+                    {verMesas && <td className="py-0.5 px-1">{f.Mesa || "—"}</td>}
                     <td className="py-0.5 px-1">{f.Area || "—"}</td>
                     <td className="py-0.5 px-1">{fechaCorta(f.Fecha)}</td>
                     <td className="py-0.5 px-1">{f.Producto}</td>
@@ -1603,7 +1621,7 @@ export default function ReporteProduccionPage() {
               </tbody>
               <tfoot>
                 <tr className="font-bold border-t-2 border-slate-900">
-                  <td className="py-1 px-1" colSpan={6}>Total General</td>
+                  <td className="py-1 px-1" colSpan={verMesas ? 7 : 6}>Total General</td>
                   <td className="py-1 px-1 text-right tabular-nums">{fmtNum(total.TotalLb)}</td>
                   <td className="py-1 px-1"></td>
                   <td className="py-1 px-1 text-right tabular-nums">{total.PromedioLbHora != null ? fmtNum(total.PromedioLbHora, 1) : "—"}</td>

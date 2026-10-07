@@ -1,6 +1,6 @@
 import { Router, Request, Response } from "express";
 import prisma from "../lib/prisma.ts";
-import { requireAuth, requirePerm } from "../middleware/auth.ts";
+import { requireAuth, requirePerm, tienePermiso, AuthRequest } from "../middleware/auth.ts";
 
 const router = Router();
 
@@ -46,6 +46,17 @@ router.get("/produccion", requireAuth, requirePerm("destajo", "ver"), async (req
 
     const filtroFinca = finca ? "AND f.Codigo = ?" : "";
     const argsFinca = finca ? [finca] : [];
+
+    // Mesa de pelado de la persona EL DÍA de cada pesada (MesaAsignacion por rango de fechas, así un
+    // reporte de días pasados no se mueve si después la cambian de mesa). Solo para quien tiene
+    // mesas.reporte: ver producción por mesa es de supervisores, no de todo el que ve el Reporte.
+    // FechaFin es DATE y FechaHora DATETIME: "< FechaFin + 1 día" incluye todo el último día.
+    const conMesa = tienePermiso(req as AuthRequest, "mesas", "reporte");
+    const colMesa = conMesa ? ", m.Nombre AS Mesa" : "";
+    const joinMesa = conMesa ? `
+      LEFT JOIN MesaAsignacion ma ON ma.Codigo = pd.Codigo AND ma.FechaInicio <= pd.FechaHora
+        AND (ma.FechaFin IS NULL OR pd.FechaHora < DATE_ADD(ma.FechaFin, INTERVAL 1 DAY))
+      LEFT JOIN Mesas m ON m.Codigo = ma.MesaCodigo` : "";
 
     // Las siete consultas son independientes entre sí, pero NO se lanzan todas juntas: el pool de
     // Prisma en kronos es de 3 conexiones y compartido con pesaje, etiquetas y kioscos. Siete a la
@@ -142,7 +153,7 @@ router.get("/produccion", requireAuth, requirePerm("destajo", "ver"), async (req
                 AND (tr.FechaSalida IS NULL OR tr.FechaSalida >= pd.FechaHora)
               ORDER BY tr.FechaHora DESC LIMIT 1) AS EntradaArea,
              tp.Lote, tp.ClaseOrigen, pd.FechaHora, tp.ClasePT, cl.Descripcion AS Producto, tp.Talla, ta.Descripcion AS DescripcionTalla,
-             pd.Peso AS Kilos
+             pd.Peso AS Kilos${colMesa}
       FROM PesajeDetalle pd
       JOIN Empleados e ON pd.Codigo = e.Codigo
       JOIN TransaccionesProduccion tp ON pd.TransaccionId = tp.TransaccionId
@@ -150,7 +161,7 @@ router.get("/produccion", requireAuth, requirePerm("destajo", "ver"), async (req
       JOIN Tallas ta ON tp.Talla = ta.Codigo
       JOIN Lotes l ON tp.Lote = l.Lote AND tp.ClaseOrigen = l.Clase
       JOIN Piscina p ON l.PiscinaId = p.PiscinaId
-      JOIN Finca f ON p.CodigoFinca = f.Codigo
+      JOIN Finca f ON p.CodigoFinca = f.Codigo${joinMesa}
       WHERE pd.FechaHora >= ? AND pd.FechaHora < DATE_ADD(?, INTERVAL 1 DAY) ${filtroFinca}
       ORDER BY pd.FechaHora DESC
     `, desde, hasta, ...argsFinca);

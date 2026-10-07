@@ -3,6 +3,8 @@ import CatalogoSimpleTable from "../components/CatalogoSimpleTable.jsx";
 import ClasePage from "./ClasePage.jsx";
 import PresentacionPage from "./PresentacionPage.jsx";
 import PiscinaCicloPage from "./PiscinaCicloPage.jsx";
+import MesasPage from "./MesasPage.jsx";
+import { usePuede } from "../context/AuthContext.jsx";
 
 // Catálogos de producción agrupados en una sola pantalla con sub-navegación,
 // para no llenar el menú principal de items sueltos a medida que se agreguen más.
@@ -21,15 +23,21 @@ const TABS = [
   { key: "piscina", label: "Piscinas y Ciclos" },
   { key: "origen", label: "Origen" },
   { key: "congelacion", label: "Congelación" },
+  // Mesas de pelado: permiso propio `mesas`, no `catalogos` — solo la supervisora de pelado la ve.
+  // Quien tenga solo `mesas` entra a Catálogos y ve únicamente esta pestaña.
+  { key: "mesas", label: "Mesas de Pelado", perm: "mesas" },
 ];
 
 export default function CatalogosPage() {
-  const [tab, setTab] = useState(TABS[0].key);
+  const verCatalogos = usePuede("catalogos", "ver");
+  const verMesas = usePuede("mesas", "ver");
+  const tabs = TABS.filter(t => (t.perm === "mesas" ? verMesas : verCatalogos));
+  const [tab, setTab] = useState(tabs[0]?.key);
 
   return (
     <div>
       <div className="flex gap-1 bg-gray-200 rounded-lg p-1 mb-5 w-fit overflow-x-auto">
-        {TABS.map(t => (
+        {tabs.map(t => (
           <button key={t.key} onClick={() => setTab(t.key)}
             className={`px-4 py-1.5 rounded-md text-sm font-medium whitespace-nowrap transition ${
               tab === t.key ? "bg-white shadow text-blue-700" : "text-gray-600 hover:text-gray-800"
@@ -68,6 +76,7 @@ export default function CatalogosPage() {
       {tab === "congelacion" && (
         <CatalogoSimpleTable api="/api/unidades-congelacion" pk="Codigo" pkLabel="Código" nuevoLabel="+ Nueva Unidad de Congelación" />
       )}
+      {tab === "mesas" && verMesas && <MesasPage />}
     </div>
   );
 }

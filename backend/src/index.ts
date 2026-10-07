@@ -38,6 +38,7 @@ import bodegaFisicaRouter from "./routes/bodegaFisica.ts";
 import remisionesRouter from "./routes/remisiones.ts";
 import reportesRouter from "./routes/reportes.ts";
 import descongeladoRouter from "./routes/descongelado.ts";
+import mesasRouter from "./routes/mesas.ts";
 import { requireAuth } from "./middleware/auth.ts";
 import { barridoCorteMedianoche } from "./lib/corteMedianoche.ts";
 import { barridoEtiquetasVencidas } from "./lib/etiquetasVencidas.ts";
@@ -116,6 +117,7 @@ app.use("/api/bodega-fisica", bodegaFisicaRouter);
 app.use("/api/remisiones", remisionesRouter);
 app.use("/api/reportes", reportesRouter);
 app.use("/api/descongelado", descongeladoRouter);
+app.use("/api/mesas", mesasRouter);
 
 // Sirve el frontend ya compilado (frontend/dist) desde este mismo proceso: así el despliegue es un
 // solo servicio, sin un servidor web aparte para los archivos estáticos.

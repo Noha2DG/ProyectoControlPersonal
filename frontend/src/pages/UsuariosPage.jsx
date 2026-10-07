@@ -49,6 +49,10 @@ const MODULOS = [
   { key: "tipos_permiso",  label: "Tipos de Permiso",                acciones: ["ver","crear","editar","eliminar"], grupo: "Config"   },
   { key: "usuarios",       label: "Usuarios",                       acciones: ["ver","crear","editar","eliminar"], grupo: "Config"   },
   { key: "catalogos",      label: "Catálogos de Producción",        acciones: ["ver","crear","editar","eliminar"], grupo: "Config"   },
+  // Pestaña dentro de Catálogos, pero aparte de `catalogos`: solo la supervisora de pelado administra
+  // mesas y personas (ver/crear/editar/eliminar). "reporte" es la producción del día por mesa
+  // (Destajo → Por Mesa y el QR de cada mesa), para supervisores que no mueven personas.
+  { key: "mesas",          label: "Mesas de Pelado",                acciones: ["ver","crear","editar","eliminar","reporte"], grupo: "Config"   },
 ];
 
 // Etiqueta de cada acción en la matriz de permisos — cualquier acción que un módulo
@@ -61,6 +65,7 @@ const ACCION_LABELS = {
   baja: "Dar de baja", escanear: "Escanear", imprimir: "Imprimir", anular: "Anular salida",
   // Sin entrada acá se pinta la clave cruda en minúscula, que se lee como algo a medio hacer.
   trasladar: "Trasladar cajas",
+  reporte: "Ver reporte",
 };
 
 // Deriva la matriz de permisos de MODULOS en vez de enumerarla a mano por rol:
