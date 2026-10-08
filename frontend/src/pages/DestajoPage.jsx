@@ -22,11 +22,13 @@ function fechaLarga() {
   return `${DIAS[d.getDay()]} ${d.getDate()} de ${MESES[d.getMonth()]} de ${d.getFullYear()}`;
 }
 
-export default function DestajoPage() {
+// `tabInicial` abre directo en una pestaña (ej. "porMesa" al entrar desde el QR de una mesa); si el
+// usuario no tiene esa pestaña, cae en la primera que sí tiene.
+export default function DestajoPage({ tabInicial }) {
   const verDestajo = usePuede("destajo", "ver");
   const verMesas = usePuede("mesas", "reporte");
   const tabs = TABS.filter(t => (t.perm ? verMesas : verDestajo));
-  const [tab, setTab] = useState(tabs[0]?.key);
+  const [tab, setTab] = useState(() => (tabs.some(t => t.key === tabInicial) ? tabInicial : tabs[0]?.key));
   const [fecha, setFecha] = useState(fechaLarga());
 
   useEffect(() => {

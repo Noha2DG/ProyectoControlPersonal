@@ -50,7 +50,7 @@ export default function MesaMovilPage({ codigo }) {
         ) : (
           <MesaDetalle mesa={mesa} serie={serie} />
         )}
-        <a href="#/" className="block text-center text-sm text-[#0F766E] mt-6">Abrir el sistema</a>
+        <a href="#/mesas" className="block text-center text-sm text-[#0F766E] mt-6">Abrir el sistema</a>
       </main>
     </div>
   );

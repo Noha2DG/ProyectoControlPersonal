@@ -194,7 +194,8 @@ function EmpleadosSection({ canCrear, canEditar, canBaja }) {
 }
 
 // ── Dashboard principal ────────────────────────────────────────────
-function Dashboard() {
+// `inicio` = { seccion, tab } para abrir directo en una sección; hoy solo lo usa #/mesas.
+function Dashboard({ inicio }) {
   const { user, logout } = useAuth();
   const perm = (mod, accion) => hasPerm(user, mod, accion);
 
@@ -223,7 +224,8 @@ function Dashboard() {
   const verCatalogos = perm("catalogos", "ver") || perm("mesas", "ver");
   if (verCatalogos)                  nav.push({ key: "catalogos", label: "Catálogos",           icon: "catalogos" });
 
-  const [seccion, setSeccion] = useState(nav[0]?.key ?? "empleados");
+  const [seccion, setSeccion] = useState(() =>
+    nav.some(n => n.key === inicio?.seccion) ? inicio.seccion : (nav[0]?.key ?? "empleados"));
   // En escritorio el sidebar inicia expandido; en móvil inicia oculto (se abre como overlay)
   // para no robarle ancho a la pantalla angosta.
   const [sidebarOpen, setSidebarOpen] = useState(() => window.matchMedia("(min-width: 768px)").matches);
@@ -391,7 +393,7 @@ function Dashboard() {
             {seccion === "transf"   && perm("transferencias", "ver") && <TransferenciasAdminPage />}
             {seccion === "planif"   && perm("planificacion",   "ver") && <PlanificacionPage />}
             {seccion === "descongelado" && perm("descongelado", "ver") && <DescongeladoPage />}
-            {seccion === "destajo"  && verDestajo && <DestajoPage />}
+            {seccion === "destajo"  && verDestajo && <DestajoPage tabInicial={inicio?.tab} />}
             {seccion === "pedidos"   && perm("pedidos",       "ver") && <PedidosClientesPage />}
             {seccion === "etiquetado" && perm("etiquetado",    "ver") && <EtiquetadoPage />}
             {seccion === "imprimirEtiquetas" && perm("etiquetado", "imprimir") && <ImpresionEtiquetasPage />}
@@ -472,5 +474,8 @@ export default function App() {
     if (hasPerm(user, "equipo", "ver"))       return <EquipoUniformesPage />;
   }
 
-  return <Dashboard />;
+  // "Abrir el sistema" desde el QR de una mesa: entra a Destajo → Por Mesa en vez de la primera
+  // sección del menú. Sin sesión, LoginPage conserva el hash y al entrar llega aquí igual.
+  const inicio = hash === "#/mesas" ? { seccion: "destajo", tab: "porMesa" } : undefined;
+  return <Dashboard inicio={inicio} />;
 }
