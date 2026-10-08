@@ -3,6 +3,7 @@ import { authHeader } from "../context/AuthContext.jsx";
 import { fmtNum } from "../utils/numero.js";
 import { calcularProduccionMesas, tipoMesa, horaDe, serieMesa } from "../utils/mesas.js";
 import MesaDetalle from "../components/MesaDetalle.jsx";
+import ResumenMesasDia from "../components/ResumenMesasDia.jsx";
 
 // Pestaña "Por Mesa" de Destajo: producción de HOY por mesa de pelado, en vivo. Una tarjeta por mesa
 // (peladoras, aprendizaje, Banda y Banda temporal) y, al tocarla, el mismo detalle que abre el QR de esa mesa.
@@ -84,21 +85,32 @@ export default function MesasHoyPage() {
       {mesa ? (
         <div className="max-w-xl"><MesaDetalle mesa={mesa} serie={serie} /></div>
       ) : (
-        <div className="grid gap-3 grid-cols-[repeat(auto-fill,minmax(210px,1fr))]">
+        <>
+        <ResumenMesasDia datos={datos} mesas={mesas} />
+        <div className="grid gap-3 grid-cols-[repeat(auto-fill,minmax(200px,1fr))]">
           {mesas.map(m => {
             const tipo = tipoMesa(m.Tipo);
             return (
               <button key={m.Codigo} onClick={() => setSeleccion(m.Codigo)}
-                className="text-left bg-white rounded-xl border border-gray-200 p-4 hover:border-[#0F766E] hover:shadow transition">
+                className="text-left rounded-2xl border border-gray-200 bg-gradient-to-b from-white to-gray-50 shadow-sm p-4 pt-3 hover:shadow-md transition relative overflow-hidden"
+                style={{ borderTop: `3px solid ${tipo.color}` }}>
                 <div className="flex items-center justify-between gap-2 mb-2">
                   <span className="font-bold text-gray-900 truncate">{m.Nombre}</span>
                   <span className={`shrink-0 px-2 py-0.5 rounded-full text-xs font-semibold ${tipo.clase}`}>{tipo.label}</span>
                 </div>
-                <p className="text-2xl font-bold text-gray-900 tabular-nums">{fmtNum(m.LbTotal, 1)} <span className="text-sm font-medium text-gray-500">lb</span></p>
-                <p className="text-sm text-[#0F766E] font-semibold tabular-nums">
+                <p className={`text-3xl font-bold tabular-nums ${m.LbTotal > 0 ? "text-gray-900" : "text-gray-400"}`}>
+                  {fmtNum(m.LbTotal, 1)} <span className="text-sm font-medium text-gray-400">lb</span>
+                </p>
+                <p className="text-sm font-semibold tabular-nums mt-1" style={{ color: tipo.color }}>
                   {fmtNum(m.LbHoraPonderada, 1)} lb/hr
                 </p>
-                <p className="text-xs text-gray-500 mt-1">
+                {/* Avance: cuántas de las asignadas están pesando (Banda temporal no tiene asignadas) */}
+                <div className="h-1.5 rounded-full bg-gray-200 mt-3 overflow-hidden">
+                  <div className="h-full rounded-full" style={{
+                    width: `${m.Asignados ? Math.min(100, (100 * m.Pesando) / m.Asignados) : 0}%`, background: tipo.color,
+                  }} />
+                </div>
+                <p className="text-xs text-gray-500 mt-2">
                   {m.Asignados == null ? `${m.Pesando} pesando` : `${m.Pesando} de ${m.Asignados} pesando`}
                   {` · ${m.Tallas.length} talla${m.Tallas.length !== 1 ? "s" : ""}`}
                 </p>
@@ -106,6 +118,7 @@ export default function MesasHoyPage() {
             );
           })}
         </div>
+        </>
       )}
     </div>
   );

@@ -13,10 +13,11 @@ export const urlDeMesa = codigo => `${URL_PUBLICA}/#/mesa/${encodeURIComponent(c
 
 export const TIPOS_MESA = {
   // Tema "verde estero" de la vista de mesas: encabezado #0F5E57, acento #0F766E.
-  PELADORAS: { label: "Peladoras", clase: "bg-[#d9f0ea] text-[#0F5E57]" },
-  APRENDIZAJE: { label: "Aprendizaje", clase: "bg-amber-100 text-amber-700" },
-  BANDA: { label: "Banda", clase: "bg-purple-100 text-purple-700" },
-  TEMPORAL: { label: "Sin mesa", clase: "bg-gray-200 text-gray-700" },
+  // `color` = acento del tipo: línea de arriba de la tarjeta, Lb/hr y barra de asistencia.
+  PELADORAS: { label: "Peladoras", clase: "bg-[#d9f0ea] text-[#0F5E57] border border-[#a9dccd]", color: "#0F766E" },
+  APRENDIZAJE: { label: "Aprendizaje", clase: "bg-amber-50 text-amber-800 border border-amber-300", color: "#a16207" },
+  BANDA: { label: "Banda", clase: "bg-violet-50 text-violet-700 border border-violet-200", color: "#6d28d9" },
+  TEMPORAL: { label: "Sin mesa", clase: "bg-gray-100 text-gray-600 border border-gray-300", color: "#6b7280" },
 };
 export const tipoMesa = tipo => TIPOS_MESA[tipo] ?? TIPOS_MESA.PELADORAS;
 
