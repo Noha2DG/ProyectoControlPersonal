@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { authHeader } from "../context/AuthContext.jsx";
 import { fmtNum } from "../utils/numero.js";
-import { calcularProduccionMesas, tipoMesa, horaDe, serieMesa } from "../utils/mesas.js";
+import { calcularProduccionMesas, tipoMesa, horaDe, serieHorasMesa } from "../utils/mesas.js";
 import MesaDetalle from "../components/MesaDetalle.jsx";
 import ResumenMesasDia from "../components/ResumenMesasDia.jsx";
 
@@ -41,27 +41,11 @@ export function useMesasHoy() {
   return { datos, mesas, error, cargando, actualizando, recargar: cargar };
 }
 
-// Días anteriores para la gráfica (GET /api/mesas/historial). Ya no cambian durante el día, así que
-// basta pedirlos cada 10 min; el punto de HOY sale de useMesasHoy y se mueve cada 2 min.
-const REFRESCO_HISTORIAL_MS = 10 * 60_000;
-export function useHistorialMesas() {
-  const [historial, setHistorial] = useState(null);
-  useEffect(() => {
-    const cargar = () => fetch("/api/mesas/historial", { headers: authHeader() })
-      .then(r => (r.ok ? r.json() : null)).then(d => { if (d) setHistorial(d); }).catch(() => {});
-    cargar();
-    const id = setInterval(cargar, REFRESCO_HISTORIAL_MS);
-    return () => clearInterval(id);
-  }, []);
-  return historial;
-}
-
 export default function MesasHoyPage() {
   const { datos, mesas, error, cargando, actualizando, recargar } = useMesasHoy();
-  const historial = useHistorialMesas();
   const [seleccion, setSeleccion] = useState(null);
   const mesa = mesas.find(m => m.Codigo === seleccion);
-  const serie = useMemo(() => (mesa ? serieMesa(mesa.Codigo, mesas, historial, datos?.fecha) : []), [mesa, mesas, historial, datos]);
+  const serie = useMemo(() => serieHorasMesa(mesa, datos), [mesa, datos]);
 
   if (cargando) return <div className="flex justify-center py-16"><div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" /></div>;
 

@@ -1,10 +1,12 @@
 import { useState, useRef, useEffect } from "react";
 import { fmtNum } from "../utils/numero.js";
 
-// Gráfica de la parte de abajo de la vista de mesa (QR y Destajo → Por Mesa): los 5 días anteriores
-// con producción y HOY. Dos franjas que comparten los días del eje de abajo:
-//   arriba  — libras del día (hoy va subiendo durante el día hasta alcanzar a los anteriores)
-//   abajo   — ritmo en Lb/hr (libra válida / hora válida, mismas reglas del Reporte)
+// Gráfica de la parte de abajo de la vista de mesa (QR y Destajo → Por Mesa): HOY hora por hora
+// (serieHorasMesa en utils/mesas.js; cada pesada va a la franja de su hora en punto). Dos franjas
+// que comparten las horas del eje de abajo, las dos ACUMULADAS hasta esa hora:
+//   arriba  — libras pesadas en el día hasta esa hora
+//   abajo   — ritmo en Lb/hr del día hasta esa hora (libra válida / hora válida, reglas del Reporte)
+// La columna verde marca la hora en curso, que sigue sumando hasta que se acabe.
 // Van en franjas separadas y no en un solo cuadro con dos ejes: libras (cientos) y Lb/hr (decenas)
 // tienen escalas distintas, y con dos ejes en el mismo cuadro los cruces de las líneas no significan
 // nada. Cada punto lleva su valor escrito (pedido del usuario: fijos, sin tener que tocar).
@@ -23,7 +25,7 @@ const COLOR = {
   tinta2: "#52514e",
   apagado: "#898781",
   fondo: "#ffffff",
-  // Fondo de la columna de HOY: verde muy suave, solo resalta el día en curso (no es un estado).
+  // Fondo de la columna de la hora en curso: verde muy suave, solo la resalta (no es un estado).
   hoy: "#0F766E",
 };
 
@@ -67,14 +69,18 @@ export default function GraficaMesa({ serie }) {
   const W = ancho;
   const top1 = M.arr, top2 = M.arr + ALTO_FRANJA + SEPARACION;
   const H = top2 + ALTO_FRANJA + M.aba;
-  // Los puntos se alejan 20 px de los bordes para que su valor no se encime con los números del eje.
-  const MARGEN_PUNTOS = 20;
+  // Los puntos se alejan de los bordes para que su valor no se encime con los números del eje.
+  const MARGEN_PUNTOS = 16;
   const anchoPlot = W - M.izq - M.der;
   const paso = serie.length > 1 ? (anchoPlot - 2 * MARGEN_PUNTOS) / (serie.length - 1) : 0;
   const x = i => M.izq + (serie.length > 1 ? MARGEN_PUNTOS + i * paso : anchoPlot / 2);
+  // Un día completo son 10-12 horas: en el celular no caben "13:00" ni valores de 11 px en cada
+  // punto. Con poco espacio la hora va sin ":00" y los valores un punto más chicos.
+  const angosto = paso > 0 && paso < 36;
+  const letraValor = paso > 0 && paso < 28 ? 10 : 11;
 
   const franjas = [
-    { campo: "Lb", color: COLOR.lb, titulo: "Libras", top: top1, dec: 0,
+    { campo: "Lb", color: COLOR.lb, titulo: "Lb acumuladas", top: top1, dec: 0,
       max: maximoRedondo(Math.max(...serie.map(s => s.Lb ?? 0))) },
     { campo: "LbHora", color: COLOR.ritmo, titulo: "Lb por hora", top: top2, dec: 1,
       max: maximoRedondo(Math.max(...serie.map(s => s.LbHora ?? 0))) },
@@ -86,21 +92,21 @@ export default function GraficaMesa({ serie }) {
 
   return (
     <div className="bg-white rounded-xl border border-gray-200 px-4 py-3">
-      <p className="text-sm font-semibold text-gray-900">Últimos 5 días y hoy</p>
-      <p className="text-xs text-gray-500">Hoy va en curso y se actualiza cada 2 minutos</p>
+      <p className="text-sm font-semibold text-gray-900">Hoy, hora por hora</p>
+      <p className="text-xs text-gray-500">Acumulado del día hasta cada hora (7:00 = hasta las 7:59) · se actualiza cada 2 minutos</p>
 
       <div ref={contRef} className="w-full mt-2">
         <svg viewBox={`0 0 ${W} ${H}`} width={W} height={H} className="block select-none" role="img"
-          aria-label={`Libras y Lb por hora: ${serie.map(s => `${s.etiqueta} ${s.Lb == null ? "sin dato" : `${Math.round(s.Lb)} lb, ${s.LbHora == null ? "—" : s.LbHora.toFixed(1)} lb/hr`}`).join("; ")}`}>
-          {/* Columna de HOY con fondo verde, de arriba abajo en las dos franjas */}
-          {serie[serie.length - 1].esHoy && (() => {
-            const ancho = Math.min(Math.max(paso * 0.7, 36), 64);
-            return <rect x={x(serie.length - 1) - ancho / 2} y={2} width={ancho} height={H - 2} rx={8} fill={COLOR.hoy} opacity={0.1} />;
-          })()}
+          aria-label={`Libras y Lb por hora: ${serie.map(s => `${s.etiqueta} ${Math.round(s.Lb)} lb, ${s.LbHora == null ? "—" : s.LbHora.toFixed(1)} lb/hr`).join("; ")}`}>
+          {/* Columna de la hora en curso con fondo verde, de arriba abajo en las dos franjas */}
+          {serie.map((s, i) => s.esActual && (() => {
+            const ancho = Math.min(Math.max(paso * 0.8, 24), 64);
+            return <rect key="actual" x={x(i) - ancho / 2} y={2} width={ancho} height={H - 2} rx={8} fill={COLOR.hoy} opacity={0.1} />;
+          })())}
 
           {franjas.map(f => {
             const segs = segmentos(f.pts);
-            const ultimo = f.pts[f.pts.length - 1];
+            const actual = f.pts.find(p => p.d.esActual);
             return (
               <g key={f.campo}>
                 {/* Título del eje, vertical */}
@@ -119,16 +125,16 @@ export default function GraficaMesa({ serie }) {
                 {segs.map((s, k) => s.length > 1 && (
                   <path key={k} d={ruta(s)} fill="none" stroke={f.color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
                 ))}
-                {ultimo.y != null && <circle cx={ultimo.x} cy={ultimo.y} r={10} fill={f.color} opacity={0.18} />}
+                {actual?.y != null && <circle cx={actual.x} cy={actual.y} r={10} fill={f.color} opacity={0.18} />}
                 {f.pts.map(p => p.y != null && (
-                  <circle key={p.i} cx={p.x} cy={p.y} r={p.d.esHoy ? 5 : 4}
+                  <circle key={p.i} cx={p.x} cy={p.y} r={p.d.esActual ? 5 : 4}
                     fill={f.campo === "LbHora" && p.d.pocoDato ? COLOR.fondo : f.color}
                     stroke={f.campo === "LbHora" && p.d.pocoDato ? f.color : COLOR.fondo} strokeWidth={2} />
                 ))}
-                {/* Valor fijo sobre cada punto; hoy en negrita */}
+                {/* Valor fijo sobre cada punto; la hora en curso en negrita */}
                 {f.pts.map(p => p.y != null && (
-                  <text key={`v${p.i}`} x={p.x} y={p.y - (p.d.esHoy ? 15 : 9)} textAnchor="middle" fontSize="11"
-                    fontWeight={p.d.esHoy ? 700 : 500} fill={p.d.esHoy ? COLOR.tinta : COLOR.tinta2}
+                  <text key={`v${p.i}`} x={p.x} y={p.y - (p.d.esActual ? 15 : 9)} textAnchor="middle" fontSize={letraValor}
+                    fontWeight={p.d.esActual ? 700 : 500} fill={p.d.esActual ? COLOR.tinta : COLOR.tinta2}
                     style={{ fontVariantNumeric: "tabular-nums" }}>{fmtNum(p.d[f.campo], f.dec)}</text>
                 ))}
               </g>
@@ -136,8 +142,9 @@ export default function GraficaMesa({ serie }) {
           })}
 
           {serie.map((s, i) => (
-            <text key={s.fecha ?? i} x={x(i)} y={H - 6} textAnchor="middle" fontSize="12"
-              fontWeight={s.esHoy ? 700 : 400} fill={s.esHoy ? COLOR.tinta : COLOR.tinta2}>{s.etiqueta}</text>
+            <text key={s.hora} x={x(i)} y={H - 6} textAnchor="middle" fontSize={angosto ? 11 : 12}
+              fontWeight={s.esActual ? 700 : 400} fill={s.esActual ? COLOR.tinta : COLOR.tinta2}
+              style={{ fontVariantNumeric: "tabular-nums" }}>{angosto ? s.hora : s.etiqueta}</text>
           ))}
 
         </svg>

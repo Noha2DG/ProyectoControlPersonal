@@ -3,11 +3,6 @@ import prisma from "../lib/prisma.ts";
 import { requireAuth, requirePerm, AuthRequest } from "../middleware/auth.ts";
 import { hoyGT, nowGT } from "../lib/dateGT.ts";
 import { asignarMesa, quitarDeMesa, deshacerAsignacion, validarFecha, ErrorMesa } from "../lib/mesaAsignacion.ts";
-// El cálculo de Lb/Hora vive en el frontend (utils/destajo.js es el ÚNICO
-// cálculo de Lb/Hora: lo usan el Reporte, el kiosco y la vista de mesas). El servidor importa ese
-// mismo archivo para los días anteriores de la gráfica en vez de copiarlo: dos copias terminarían
-// dando dos números distintos para la misma mesa. Son JS puro, sin nada del navegador.
-import { resumenDelDia } from "../../../frontend/src/utils/mesas.js";
 
 // Mesas de pelado: catálogo (backend/scripts/createMesas.ts), personas asignadas a cada mesa
 // (backend/scripts/createMesaAsignacion.ts) y la producción del día por mesa.
@@ -274,14 +269,9 @@ router.delete("/asignaciones/:id", requireAuth, requirePerm("mesas", "eliminar")
 // Se limpia al cambiar asignaciones o el catálogo para que la supervisora vea su cambio al instante.
 const CACHE_HOY_MS = 60_000;
 const cacheHoy = new Map<string, { en: number; datos?: any; vuelo?: Promise<any> }>();
-// Días anteriores de la gráfica: ya no cambian (salvo una corrección de pesaje o de mesa con fecha
-// pasada, que también limpia esta caché), así que se calculan una vez cada 30 min como mucho.
-const CACHE_DIA_MS = 30 * 60_000;
-const cacheDia = new Map<string, { en: number; datos: any }>();
-function limpiarCacheHoy() { cacheHoy.clear(); cacheDia.clear(); }
+function limpiarCacheHoy() { cacheHoy.clear(); }
 
-// Pesadas de un día en Pelado/Descabezado con la mesa de cada persona ESE día, y sus pausas. Lo
-// comparten el día de hoy (/hoy) y los días anteriores (/historial).
+// Pesadas de un día en Pelado/Descabezado con la mesa de cada persona ESE día, y sus pausas.
 async function pesadasDelDia(fecha: string) {
   // El área de cada pesada es la Transferencia vigente en ese momento (mismo criterio que el
   // Reporte); se resuelve UNA vez por pesada (TrId) y se une afuera para sacar área y hora de entrada.
@@ -360,35 +350,6 @@ router.get("/hoy", requireAuth, requirePerm("mesas", "reporte"), async (_req: Re
       vuelo.then(datos => cacheHoy.set(fecha, { en: Date.now(), datos }), () => cacheHoy.delete(fecha));
     }
     res.json(await hit.vuelo);
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// GET /api/mesas/historial — los 5 días ANTERIORES a hoy en que hubo pesaje, resumidos por mesa
-// (libras, libra y hora válidas). El día de hoy NO va aquí: la gráfica lo
-// toma de /hoy, el mismo cálculo de la parte de arriba, para que el punto de hoy y el % de arriba
-// sean siempre el mismo número. Se saltan los días sin producción (domingos) para no dibujar ceros.
-const DIAS_HISTORIAL = 5;
-router.get("/historial", requireAuth, requirePerm("mesas", "reporte"), async (_req: Request, res: Response) => {
-  try {
-    const hoy = hoyGT();
-    const fechas: any[] = await prisma.$queryRaw`
-      SELECT DISTINCT DATE_FORMAT(FechaHora, '%Y-%m-%d') AS Dia FROM PesajeDetalle
-      WHERE FechaHora >= DATE_SUB(${hoy}, INTERVAL 21 DAY) AND FechaHora < ${hoy}
-      ORDER BY Dia DESC LIMIT ${DIAS_HISTORIAL}
-    `;
-    const dias = [];
-    for (const { Dia } of fechas.reverse()) {
-      let hit = cacheDia.get(Dia);
-      if (!hit || Date.now() - hit.en > CACHE_DIA_MS) {
-        const { pesadas, pausas } = await pesadasDelDia(Dia);
-        hit = { en: Date.now(), datos: { fecha: Dia, mesas: resumenDelDia(pesadas, pausas) } };
-        cacheDia.set(Dia, hit);
-      }
-      dias.push(hit.datos);
-    }
-    res.json({ hoy, dias });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

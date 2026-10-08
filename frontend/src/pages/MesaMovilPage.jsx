@@ -1,11 +1,11 @@
 import { useMemo } from "react";
-import { useMesasHoy, useHistorialMesas } from "./MesasHoyPage.jsx";
+import { useMesasHoy } from "./MesasHoyPage.jsx";
 import MesaDetalle from "../components/MesaDetalle.jsx";
-import { horaDe, serieMesa } from "../utils/mesas.js";
+import { horaDe, serieHorasMesa } from "../utils/mesas.js";
 
 // Página que abre el QR pegado en cada mesa: https://planta.esteromar.app/#/mesa/MESA03.
 // Pensada para el celular del supervisor (requiere sesión y el permiso mesas.reporte; las peladoras
-// no usan la app). Arriba solo el día actual; abajo la gráfica de los 5 días anteriores + hoy. Se
+// no usan la app). Arriba solo el día actual; abajo la gráfica de hoy hora por hora. Se
 // refresca sola cada 2 min, y el selector deja pasar a otra mesa sin buscar su QR.
 const DIAS = ["domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado"];
 const MESES = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
@@ -17,9 +17,8 @@ function fechaCorta(ymd) {
 
 export default function MesaMovilPage({ codigo }) {
   const { datos, mesas, error, cargando, actualizando, recargar } = useMesasHoy();
-  const historial = useHistorialMesas();
   const mesa = useMemo(() => mesas.find(m => m.Codigo === codigo), [mesas, codigo]);
-  const serie = useMemo(() => (mesa ? serieMesa(mesa.Codigo, mesas, historial, datos?.fecha) : []), [mesa, mesas, historial, datos]);
+  const serie = useMemo(() => serieHorasMesa(mesa, datos), [mesa, datos]);
 
   return (
     <div className="min-h-screen bg-[#eceeec]">

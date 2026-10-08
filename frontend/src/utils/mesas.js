@@ -28,38 +28,16 @@ const inicial = s => (limpio(s).charAt(0) || "").toUpperCase();
 // Etiqueta corta del área para la línea de cada persona (las mesas solo cuentan estas dos).
 const AREA_CORTA = { "PELADO Y DEVENADO": "Pelado", "DESCABEZADO": "Descabezado" };
 
-// Con menos horas válidas que esto la Lb/hr de un día salta mucho (una sola persona, un rato): en la
-// gráfica ese punto va hueco.
-export const HORAS_MINIMAS_CONFIABLES = 4;
-
 // BANDA es una mesa más, con personal fijo. Quien pesa sin mesa asignada ese día cae en "BANDA
 // TEMPORAL": un grupo que no existe en el catálogo (no se asigna, se llena solo) — cambio del
 // 7 oct 2026; antes BANDA misma era el "sin mesa".
 export const TEMPORAL = "TEMPORAL";
 export const MESA_TEMPORAL = { Codigo: TEMPORAL, Nombre: "BANDA TEMPORAL", Tipo: "TEMPORAL", Orden: 100000 };
-const mesaDePesada = p => p.MesaCodigo ?? TEMPORAL;
 
-// Resumen de un día completo por mesa: { [mesa]: { Lb, LbValida, Horas } }. Lo usa el servidor para
-// los días anteriores de la gráfica (GET /api/mesas/historial), con la misma calcularLbHora que el
-// día de hoy en el navegador. Lb = todo lo pesado; LbValida/Horas = libra y hora válidas (Lb/hr).
-//
-// Hubo un "% ajustado por talla" (comparar contra la planta en la misma talla) y se quitó el 7 oct
+// Nota para quien agregue cálculos aquí: hubo un "% ajustado por talla" (comparar contra la planta en la misma talla) y se quitó el 7 oct
 // 2026 a pedido del usuario: confundía más de lo que ayudaba. También se quitó "Lb/hr de hoy vs
 // promedio de 5 días": la talla mueve tanto la Lb/hr que la comparación no deja evaluar. No volver a
 // meter comparaciones de Lb/hr entre días o mesas sin resolver lo de la talla.
-export function resumenDelDia(pesadas, pausas) {
-  const filas = calcularLbHora(pesadas, agruparPorArea, pausas);
-  const mesaDe = new Map(pesadas.map(p => [p.IdEmpleado, mesaDePesada(p)]));
-  const out = {};
-  const de = m => (out[m] ??= { Lb: 0, LbValida: 0, Horas: 0 });
-  for (const p of pesadas) de(mesaDePesada(p)).Lb += p.Kilos * LB_POR_KG;
-  for (const f of filas) {
-    if (!(f.Horas > 0)) continue;
-    const a = de(mesaDe.get(f.IdEmpleado));
-    a.LbValida += f.Lb; a.Horas += f.Horas;
-  }
-  return out;
-}
 
 // "Carmen Nohemi S." — primer nombre, segundo nombre completo (si tiene) e inicial del primer apellido. Si dos personas de la MISMA vista
 // quedan iguales se agrega la inicial del segundo apellido ("Rosa C. R." / "Rosa C. C."), y si aun
@@ -154,40 +132,51 @@ export function calcularProduccionMesas(datos) {
   });
 }
 
-// ── Serie de la gráfica: 5 días anteriores + hoy ────────────────────────────────────────────────
-const DIAS_CORTOS = ["dom", "lun", "mar", "mié", "jue", "vie", "sáb"];
-const etiquetaDia = ymd => {
-  const [y, m, d] = String(ymd).split("-").map(Number);
-  return `${DIAS_CORTOS[new Date(Date.UTC(y, m - 1, d)).getUTCDay()]} ${d}`;
-};
-
-// Puntos de la gráfica de una mesa: los días anteriores (GET /api/mesas/historial) y HOY, que sale
-// del mismo cálculo que la parte de arriba (mesasHoy = calcularProduccionMesas), así el punto de hoy
-// coincide con los totales de arriba. Cada punto: libras del día y Lb/hr (libra válida / hora válida).
-// Hoy va en curso: sus libras crecen durante el día hasta alcanzar a los días anteriores.
+// ── Serie de la gráfica: hoy, hora por hora ──────────────────────────────────────────────────────
+// (Antes eran los 5 días anteriores + hoy; el 8 oct 2026 el usuario la cambió a las horas del día.)
 //
-// Sin comparación contra otras mesas a propósito (se quitó el 7 oct 2026): cada mesa trabaja tallas
-// distintas y el 100% de cada talla depende de quién más la peló ese día, así que "mejor mesa" o
-// "promedio" mezclaban cosas que no son comparables.
-export function serieMesa(codigo, mesasHoy, historial, fechaHoy) {
-  const deHoy = mesasHoy.find(m => m.Codigo === codigo);
-  const hoy = {
-    fecha: fechaHoy, esHoy: true,
-    mesas: deHoy && deHoy.LbTotal > 0
-      ? { [codigo]: { Lb: deHoy.LbTotal, LbValida: deHoy.LbValida, Horas: deHoy.HorasValidas } } : {},
-  };
-  const dias = [...(historial?.dias ?? []).filter(d => d.fecha !== fechaHoy), hoy];
-  return dias.map(d => {
-    const propia = d.mesas[codigo];
-    return {
-      fecha: d.fecha,
-      etiqueta: d.esHoy ? "HOY" : etiquetaDia(d.fecha),
-      esHoy: !!d.esHoy,
-      Lb: propia?.Lb ?? null,
-      LbHora: propia && propia.Horas > 0 ? propia.LbValida / propia.Horas : null,
-      pocoDato: !!propia && propia.Horas < HORAS_MINIMAS_CONFIABLES,
-    };
-  });
+// Las pesadas no caen en horas exactas, así que cada una va a la FRANJA de su hora en punto:
+// 7:42 → "7:00", que cubre de 7:00 a 7:59. La hora se lee de los dígitos que manda el servidor
+// (`Hora` = "HH:MM", hora de Guatemala), sin pasar por Date.
+//
+// Cada punto es lo ACUMULADO del día hasta el final de esa hora, no lo de esa hora sola: las mesas
+// juntan producto y pesan por tandas, así que hora por hora salían ceros en horas trabajadas
+// (8 oct 2026: MESA 2 con 0 lb a las 8, 9 y 11) y la gráfica parecía decir "no trabajaron".
+//   Lb     → todo lo pesado hasta esa hora (mismo criterio que "Libras hoy" de arriba).
+//   LbHora → libra válida / hora válida hasta esa hora: el ritmo del día a esa altura. Sale de la
+//            misma calcularLbHora del Reporte corrida con las pesadas hasta el final de la hora. Un
+//            bloque nunca depende de pesadas posteriores, así que cortar el día en una hora no cambia
+//            los bloques ya cerrados, y el último punto es igual a la Lb/hr ponderada de la tarjeta.
+// Con menos de HORAS_MINIMAS_FRANJA horas válidas acumuladas (arranque del día, una o dos
+// personas) la Lb/hr salta mucho: el punto va hueco.
+export const HORAS_MINIMAS_FRANJA = 1;
+const horaEntera = hhmm => Number(String(hhmm ?? "").slice(0, 2));
+
+export function serieHorasMesa(mesa, datos) {
+  if (!mesa || !datos) return [];
+  const codigos = new Set(mesa.personas.map(p => p.Codigo));
+  const pesadas = (datos.pesadas ?? []).filter(p => codigos.has(p.IdEmpleado));
+  if (!pesadas.length) return [];
+
+  const horas = pesadas.map(p => horaEntera(p.Hora));
+  const desde = Math.min(...horas), hasta = Math.max(...horas);
+  const enCurso = horaEntera(horaDe(datos.generado));
+
+  const serie = [];
+  for (let h = desde; h <= hasta; h++) {
+    const hastaH = pesadas.filter((_, i) => horas[i] <= h);
+    const valida = calcularLbHora(hastaH, agruparPorArea, datos.pausas ?? [])
+      .reduce((a, f) => ({ lb: a.lb + f.Lb, h: a.h + f.Horas }), { lb: 0, h: 0 });
+    serie.push({
+      hora: h,
+      etiqueta: `${h}:00`,
+      esActual: h === enCurso,
+      Lb: hastaH.reduce((s, p) => s + p.Kilos * LB_POR_KG, 0),
+      LbHora: valida.h > 0 ? valida.lb / valida.h : null,
+      pocoDato: valida.h > 0 && valida.h < HORAS_MINIMAS_FRANJA,
+    });
+  }
+  return serie;
 }
 
 // "10:42" de la marca "YYYY-MM-DD HH:MM:SS" que manda el servidor (hora de Guatemala, sin pasar por Date).

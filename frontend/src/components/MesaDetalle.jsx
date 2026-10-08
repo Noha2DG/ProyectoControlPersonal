@@ -3,7 +3,7 @@ import { tipoMesa } from "../utils/mesas.js";
 import GraficaMesa from "./GraficaMesa.jsx";
 
 // Detalle de una mesa: ARRIBA solo el día de hoy (totales y cada persona con libras y Lb/Hora) y
-// ABAJO la gráfica de los 5 días anteriores + hoy. Lo comparten la página del QR (#/mesa/:codigo,
+// ABAJO la gráfica de hoy hora por hora. Lo comparten la página del QR (#/mesa/:codigo,
 // pensada para celular) y la pestaña "Por Mesa" de Destajo.
 export default function MesaDetalle({ mesa, serie }) {
   const tipo = tipoMesa(mesa.Tipo);
