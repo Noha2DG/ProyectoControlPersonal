@@ -1,0 +1,14 @@
+# Ajuste de MariaDB para kronos (BD de ~260 MB, medida el 29 sep 2026).
+# Instalar en el servidor:
+#   sudo cp mariadb-ajuste.cnf /etc/mysql/mariadb.conf.d/99-planta.cnf
+#   sudo systemctl restart mariadb        (corta las conexiones unos segundos; hacerlo fuera de turno)
+# Antes: free -m. Si la memoria libre es menor a 1 GB, deja el buffer pool en 256M.
+[mysqld]
+# Era 128M (valor de fábrica). La BD entera cabe en 512M, así que casi no lee de disco.
+innodb_buffer_pool_size = 512M
+# Era 16M: el 18% de las tablas temporales (4202 de 22895) caía a disco en los reportes.
+tmp_table_size          = 64M
+max_heap_table_size     = 64M
+# Deja constancia de lo que pase de 2 s (antes 10 s; solo se habían visto 3 en total).
+long_query_time         = 2
+slow_query_log          = 1
