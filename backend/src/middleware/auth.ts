@@ -39,6 +39,10 @@ export interface Permisos {
   // producción del día por mesa (pestaña de Destajo y QR de cada mesa) la consultan los supervisores,
   // que no por eso deben poder mover personas de mesa.
   mesas?:          { ver?: boolean; crear?: boolean; editar?: boolean; eliminar?: boolean; reporte?: boolean };
+  // Tarifas de destajo: pestaña de Catálogos con permiso propio porque es dinero (base de la
+  // planilla). `editar` prepara versiones en borrador; `aprobar` las pone en vigor o las anula y
+  // registra el salario mínimo — así quien carga los precios no es por fuerza quien los autoriza.
+  tarifas?:        { ver?: boolean; editar?: boolean; aprobar?: boolean };
 }
 
 export interface AuthPayload {

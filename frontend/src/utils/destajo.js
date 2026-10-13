@@ -71,7 +71,7 @@ export const diaLocal = diaDelBackend;
 // largo es el ritmo normal del trabajo (lote grande acumulado), no una pausa. Un bloque inválido no
 // aporta ni peso ni tiempo al total — igual que LIBRA VALIDA/HR VALIDA en la planilla de referencia.
 //
-// `pausas` son las Transferencias a áreas que "No Genera Paga" (cafetería, baño, permisos — ver
+// `pausas` son las Transferencias a áreas que no generan paga (Areas.GeneraPaga = 0: cafetería, baño, permisos — ver
 // GET /api/reportes/produccion en reportes.ts) que trae cada fila de porPersona. Sin esto, si alguien
 // sale a cafetería y vuelve a pesar en la misma área, el hueco quedaba dentro de un bloque normal
 // (mismo grupo, mismo día) y se contaba entero como tiempo trabajado, diluyendo su Lb/Hora real —

@@ -9,7 +9,6 @@ export function exportarTransferencias(registros, fecha, permisos = []) {
     "Nombre":         r.NombreCompleto,
     "Área":           r.CodigoArea,
     "Nombre del Área":r.NombreArea,
-    "Forma de Pago":  r.FormaPago ?? "",
     "H. Entrada":     r.HoraEntrada ?? "",
     "H. Salida":      r.HoraSalida  ?? (r.Minutos != null ? "En curso" : ""),
     "Minutos":        r.Minutos ?? "",

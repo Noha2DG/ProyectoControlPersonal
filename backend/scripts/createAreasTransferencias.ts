@@ -2,6 +2,9 @@ import "dotenv/config";
 import { PrismaClient } from "@prisma/client";
 const p = new PrismaClient();
 
+// Carga original de áreas (jun 2026). La columna FormaPago se reemplazó el 8 oct 2026 por GeneraPaga
+// (ver alterAreasGeneraPaga.ts): de la lista de abajo solo cuenta si es "No Genera Paga".
+
 const AREAS = [
   { Codigo: "AH", Nombre: "ADMINISTRACION COSTOS",         FormaPago: "Paga por Tiempo" },
   { Codigo: "AL", Nombre: "RECURSOS HUMANOS",               FormaPago: "Paga por Tiempo" },
@@ -64,7 +67,7 @@ async function main() {
     CREATE TABLE IF NOT EXISTS Areas (
       Codigo      VARCHAR(10)   NOT NULL PRIMARY KEY,
       Nombre      VARCHAR(100)  NOT NULL,
-      FormaPago   VARCHAR(50)   NULL,
+      GeneraPaga  TINYINT(1)    NOT NULL DEFAULT 1,
       Activa      TINYINT(1)    NOT NULL DEFAULT 1,
       CreadoEn    DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
@@ -86,8 +89,8 @@ async function main() {
 
   for (const area of AREAS) {
     await p.$executeRawUnsafe(
-      `INSERT IGNORE INTO Areas (Codigo, Nombre, FormaPago) VALUES (?, ?, ?)`,
-      area.Codigo, area.Nombre, area.FormaPago
+      `INSERT IGNORE INTO Areas (Codigo, Nombre, GeneraPaga) VALUES (?, ?, ?)`,
+      area.Codigo, area.Nombre, area.FormaPago === "No Genera Paga" ? 0 : 1
     );
   }
   console.log(`${AREAS.length} áreas insertadas (INSERT IGNORE).`);

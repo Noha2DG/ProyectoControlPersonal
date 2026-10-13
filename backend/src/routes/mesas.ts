@@ -306,7 +306,7 @@ async function pesadasDelDia(fecha: string) {
   const pausas: any[] = await prisma.$queryRaw`
     SELECT tr.Codigo AS IdEmpleado, tr.FechaHora, tr.FechaSalida
     FROM Transferencias tr JOIN Areas a ON tr.CodigoArea = a.Codigo
-    WHERE a.FormaPago = 'No Genera Paga'
+    WHERE a.GeneraPaga = 0
       AND tr.FechaHora < DATE_ADD(${fecha}, INTERVAL 1 DAY)
       AND (tr.FechaSalida IS NULL OR tr.FechaSalida >= ${fecha})
       AND tr.Codigo IN (SELECT DISTINCT Codigo FROM PesajeDetalle

@@ -7,11 +7,9 @@ import RankingProduccionPage from "./pages/RankingProduccionPage.jsx";
 import MesaMovilPage from "./pages/MesaMovilPage.jsx";
 import TransferenciasPage from "./pages/TransferenciasPage.jsx";
 import UsuariosPage from "./pages/UsuariosPage.jsx";
-import AreasPage from "./pages/AreasPage.jsx";
 import MovimientosAdminPage from "./pages/MovimientosAdminPage.jsx";
 import TransferenciasAdminPage from "./pages/TransferenciasAdminPage.jsx";
 import PlanificacionPage from "./pages/PlanificacionPage.jsx";
-import TiposPermisoPage from "./pages/TiposPermisoPage.jsx";
 import PermisosPage from "./pages/PermisosPage.jsx";
 import EquipoUniformesPage from "./pages/EquipoUniformesPage.jsx";
 import PedidosClientesPage from "./pages/PedidosClientesPage.jsx";
@@ -216,12 +214,12 @@ function Dashboard({ inicio }) {
   if (perm("bodega",        "ver")) nav.push({ key: "bodegaFisica", label: "Bodega — Ubicaciones", icon: "ubicaciones" });
   if (perm("bodega",        "ver")) nav.push({ key: "bodegaExistencias", label: "Bodega — Existencias", icon: "existencias" });
   if (perm("remisiones",    "ver")) nav.push({ key: "remisiones", label: "Bodega — Remisiones",   icon: "remisiones" });
-  if (perm("areas",          "ver")) nav.push({ key: "areas",     label: "Áreas",               icon: "areas"    });
   if (perm("permisos",       "ver")) nav.push({ key: "permisos",  label: "Permisos",            icon: "permisos" });
-  if (perm("tipos_permiso",  "ver")) nav.push({ key: "tiposPermiso", label: "Tipos de Permiso", icon: "tiposPermiso" });
   if (perm("usuarios",       "ver")) nav.push({ key: "usuarios",  label: "Usuarios",            icon: "usuarios" });
-  // Mesas de Pelado vive dentro de Catálogos con permiso propio: la supervisora entra con solo `mesas`.
-  const verCatalogos = perm("catalogos", "ver") || perm("mesas", "ver");
+  // Mesas de Pelado, Tarifas, Áreas y Tipos de Permiso viven dentro de Catálogos, cada una con su
+  // permiso propio: basta cualquiera de ellos para entrar (y adentro solo se ven sus pestañas).
+  const verCatalogos = perm("catalogos", "ver") || perm("mesas", "ver") || perm("tarifas", "ver")
+    || perm("areas", "ver") || perm("tipos_permiso", "ver");
   if (verCatalogos)                  nav.push({ key: "catalogos", label: "Catálogos",           icon: "catalogos" });
 
   const [seccion, setSeccion] = useState(() =>
@@ -248,9 +246,7 @@ function Dashboard({ inicio }) {
     bodegaFisica: "Bodega — Recepción y Ubicaciones",
     bodegaExistencias: "Bodega — Existencias",
     remisiones: "Bodega — Remisiones y Despacho",
-    areas:     "Áreas",
     permisos:  "Permisos",
-    tiposPermiso: "Tipos de Permiso",
     usuarios:  "Usuarios",
     pedidos: "Pedidos y Clientes",
     catalogos: "Catálogos de Producción",
@@ -401,9 +397,7 @@ function Dashboard({ inicio }) {
             {seccion === "bodegaFisica" && perm("bodega",      "ver") && <BodegaFisicaPage />}
             {seccion === "bodegaExistencias" && perm("bodega", "ver") && <ExistenciaBodegaPage />}
             {seccion === "remisiones" && perm("remisiones", "ver") && <RemisionesPage />}
-            {seccion === "areas"    && perm("areas",          "ver") && <AreasPage />}
             {seccion === "permisos" && perm("permisos",       "ver") && <PermisosPage />}
-            {seccion === "tiposPermiso" && perm("tipos_permiso", "ver") && <TiposPermisoPage />}
             {seccion === "usuarios" && perm("usuarios",       "ver") && <UsuariosPage />}
             {seccion === "catalogos" && verCatalogos && <CatalogosPage />}
           </div>

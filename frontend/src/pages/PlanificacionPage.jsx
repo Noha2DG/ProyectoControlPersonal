@@ -7,8 +7,8 @@ import { useColWidths, Th, Colgroup } from "../components/ResizableTh.jsx";
 const API = "/api/planificacion";
 const AREAS_LIBRES = ["TT"]; // exentas de planificación, siempre disponibles
 
-const PLAN_COL_DEFAULTS = { area: 100, nombre: 200, formaPago: 150, cupos: 130, ocupacion: 130, estado: 150 };
-const PLAN_COLS_BASE = ["area", "nombre", "formaPago", "cupos"];
+const PLAN_COL_DEFAULTS = { area: 100, nombre: 200, cupos: 130, ocupacion: 130, estado: 150 };
+const PLAN_COLS_BASE = ["area", "nombre", "cupos"];
 const RESUMEN_COL_DEFAULTS = { area: 260, planificado: 130, escaneado: 130, ver: 130 };
 const RESUMEN_COLS = Object.keys(RESUMEN_COL_DEFAULTS);
 
@@ -16,7 +16,7 @@ export default function PlanificacionPage() {
   const puedeEditar = usePuede("planificacion", "editar");
   const hoy = new Date().toLocaleDateString("sv-SE", { timeZone: "America/Guatemala" });
   const [fecha, setFecha]   = useState(hoy);
-  const [areas, setAreas]   = useState([]);  // [{ CodigoArea, Nombre, FormaPago, Cantidad, ocupacion, disponible }]
+  const [areas, setAreas]   = useState([]);  // [{ CodigoArea, Nombre, GeneraPaga, Cantidad, ocupacion, disponible }]
   const [loading, setLoading]   = useState(false);
   const [guardando, setGuardando] = useState(false);
   const [guardado, setGuardado]   = useState(false);
@@ -80,7 +80,7 @@ export default function PlanificacionPage() {
     } finally { setGuardando(false); }
   };
 
-  const generaPago       = a => a.FormaPago !== "No Genera Paga";
+  const generaPago       = a => a.GeneraPaga !== false;
   const areasConPago     = areas.filter(generaPago);
   const areasRegulares   = areasConPago.filter(a => !AREAS_LIBRES.includes(a.CodigoArea));
   const totalPlanificado = areasRegulares.reduce((s, a) => s + a.Cantidad, 0);
@@ -177,7 +177,6 @@ export default function PlanificacionPage() {
               <tr className="bg-gray-100 text-gray-600 uppercase text-xs tracking-wider">
                 <Th width={widths.area} onResizeStart={startResize("area")} className="px-5 py-3 text-left">Área</Th>
                 <Th width={widths.nombre} onResizeStart={startResize("nombre")} className="px-5 py-3 text-left">Nombre</Th>
-                <Th width={widths.formaPago} onResizeStart={startResize("formaPago")} className="px-5 py-3 text-left">Forma de Pago</Th>
                 <Th width={widths.cupos} onResizeStart={startResize("cupos")} className="px-5 py-3 text-center">Cupos</Th>
                 {fecha === hoy && <Th width={widths.ocupacion} onResizeStart={startResize("ocupacion")} className="px-5 py-3 text-center">Ocupación</Th>}
                 <Th width={widths.estado} onResizeStart={startResize("estado")} className="px-5 py-3 text-center">Estado</Th>
@@ -185,7 +184,7 @@ export default function PlanificacionPage() {
             </thead>
             <tbody className="divide-y divide-gray-100">
               {areasFiltradas.length === 0 && (
-                <tr><td colSpan={fecha === hoy ? 6 : 5} className="px-5 py-10 text-center text-gray-400">Sin áreas que coincidan</td></tr>
+                <tr><td colSpan={fecha === hoy ? 5 : 4} className="px-5 py-10 text-center text-gray-400">Sin áreas que coincidan</td></tr>
               )}
               {areasFiltradas.map(a => {
                 const libre   = AREAS_LIBRES.includes(a.CodigoArea);
@@ -198,7 +197,6 @@ export default function PlanificacionPage() {
                       {a.Nombre}
                       {libre && <span className="ml-2 text-xs font-semibold text-purple-600 bg-purple-100 px-1.5 py-0.5 rounded-full">Libre</span>}
                     </td>
-                    <td className="px-5 py-2.5 text-gray-500 text-xs">{a.FormaPago ?? "—"}</td>
                     <td className="px-5 py-2.5 text-center">
                       {libre ? (
                         <span className="text-xs text-purple-500 font-medium">Sin límite</span>

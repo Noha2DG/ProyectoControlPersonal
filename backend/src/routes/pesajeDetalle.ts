@@ -163,7 +163,7 @@ router.get("/mi-dia/:codigo", requireAuth, requirePerm("kiosco_destajo", "ver"),
     // Área donde está parada la persona ahora mismo (su transferencia abierta). Sirve para el
     // encabezado y para distinguir "todavía no has pesado hoy" de "tu área no trabaja por destajo".
     const areaActual: any[] = await prisma.$queryRaw`
-      SELECT t.CodigoArea, a.Nombre AS NombreArea, a.FormaPago,
+      SELECT t.CodigoArea, a.Nombre AS NombreArea,
              DATE_FORMAT(t.FechaHora, '%H:%i') AS HoraEntradaArea,
              DATE(t.FechaHora) = ${hoy} AS EntradaEsDeHoy
       FROM Transferencias t

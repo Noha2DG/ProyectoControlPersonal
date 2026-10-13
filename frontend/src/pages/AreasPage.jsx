@@ -3,17 +3,18 @@ import { authHeader, usePuede } from "../context/AuthContext.jsx";
 import { useColWidths, Th, Colgroup } from "../components/ResizableTh.jsx";
 
 const API = "/api/areas";
-const FORMAS_PAGO = ["Paga por Tiempo", "Paga por Obra", "No Genera Paga"];
-
-const COL_DEFAULTS = { codigo: 100, nombre: 220, grupo: 180, bodega: 180, forma: 170, estado: 110, acciones: 150 };
+const COL_DEFAULTS = { codigo: 100, nombre: 220, grupo: 180, bodega: 180, estado: 110, acciones: 150 };
 const COLS = Object.keys(COL_DEFAULTS);
 
-const EMPTY = { Codigo: "", Nombre: "", Grupo: "", FormaPago: "", BodegaVirtualCodigo: "" };
+// "Forma de pago" se quitó el 8 oct 2026: cómo se paga cada área vive en Catálogos → Tarifas. Lo único
+// que queda aquí es GeneraPaga: desmarcado = baño, cafetería, permisos… ese tiempo es PAUSA y se resta
+// del Lb/hr del destajo.
+const EMPTY = { Codigo: "", Nombre: "", Grupo: "", GeneraPaga: true, BodegaVirtualCodigo: "" };
 
 function AreaModal({ area, grupos, bodegas, onSave, onClose }) {
   const isEdit = !!area;
   const [form, setForm] = useState(isEdit
-    ? { ...area, Grupo: area.Grupo || "", FormaPago: area.FormaPago || "", BodegaVirtualCodigo: area.BodegaVirtualCodigo || "" }
+    ? { ...area, Grupo: area.Grupo || "", GeneraPaga: area.GeneraPaga !== false, BodegaVirtualCodigo: area.BodegaVirtualCodigo || "" }
     : EMPTY);
   const set = f => e => setForm(p => ({ ...p, [f]: e.target.value }));
 
@@ -85,15 +86,13 @@ function AreaModal({ area, grupos, bodegas, onSave, onClose }) {
             </p>
           </div>
           <div>
-            <label className="block text-xs font-medium text-gray-500 mb-1">Forma de Pago</label>
-            <select
-              value={form.FormaPago}
-              onChange={set("FormaPago")}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
-            >
-              <option value="">Sin especificar</option>
-              {FORMAS_PAGO.map(f => <option key={f} value={f}>{f}</option>)}
-            </select>
+            <label className="flex items-center gap-2 text-sm text-gray-700">
+              <input type="checkbox" checked={form.GeneraPaga} onChange={e => setForm(p => ({ ...p, GeneraPaga: e.target.checked }))} />
+              Genera paga
+            </label>
+            <p className="text-xs text-gray-400 mt-1">
+              Desmárcalo en baño, cafetería, permisos…: ese tiempo es pausa y se resta del Lb/hr del destajo.
+            </p>
           </div>
           <div className="flex justify-end gap-3 pt-1">
             <button type="button" onClick={onClose} className="px-4 py-2 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 transition">
@@ -108,12 +107,6 @@ function AreaModal({ area, grupos, bodegas, onSave, onClose }) {
     </div>
   );
 }
-
-const FORMA_BADGE = {
-  "Paga por Tiempo": "bg-blue-100 text-blue-700",
-  "Paga por Obra":   "bg-purple-100 text-purple-700",
-  "No Genera Paga":  "bg-gray-100 text-gray-500",
-};
 
 export default function AreasPage() {
   const puedeCrear = usePuede("areas", "crear");
@@ -211,7 +204,6 @@ export default function AreasPage() {
                 <Th width={widths.nombre} onResizeStart={startResize("nombre")} className="px-4 py-3 text-left">Nombre</Th>
                 <Th width={widths.grupo} onResizeStart={startResize("grupo")} className="px-4 py-3 text-left">Grupo</Th>
                 <Th width={widths.bodega} onResizeStart={startResize("bodega")} className="px-4 py-3 text-left">Bodega</Th>
-                <Th width={widths.forma} onResizeStart={startResize("forma")} className="px-4 py-3 text-left">Forma de Pago</Th>
                 <Th width={widths.estado} onResizeStart={startResize("estado")} className="px-4 py-3 text-center">Estado</Th>
                 <Th width={widths.acciones} onResizeStart={startResize("acciones")} className="px-4 py-3 text-center">Acciones</Th>
               </tr>
@@ -220,7 +212,10 @@ export default function AreasPage() {
               {areasFiltradas.map(area => (
                 <tr key={area.Codigo} className={`hover:bg-gray-50 transition ${!area.Activa ? "opacity-50" : ""}`}>
                   <td className="px-4 py-3 font-mono font-bold text-gray-700">{area.Codigo}</td>
-                  <td className="px-4 py-3 text-gray-900 truncate" title={area.Nombre}>{area.Nombre}</td>
+                  <td className="px-4 py-3 text-gray-900 truncate" title={area.Nombre}>
+                    {area.Nombre}
+                    {area.GeneraPaga === false && <span className="ml-2 px-1.5 py-0.5 rounded-full text-[11px] font-semibold bg-gray-100 text-gray-500">No genera paga</span>}
+                  </td>
                   <td className="px-4 py-3 truncate" title={area.Grupo || ""}>
                     {area.Grupo
                       ? <span className="text-gray-600">{area.Grupo}</span>
@@ -230,13 +225,6 @@ export default function AreasPage() {
                     {area.NombreBodega
                       ? <span className="text-gray-600">{area.NombreBodega}</span>
                       : <span className="text-gray-400">—</span>}
-                  </td>
-                  <td className="px-4 py-3">
-                    {area.FormaPago ? (
-                      <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-semibold ${FORMA_BADGE[area.FormaPago] || "bg-gray-100 text-gray-500"}`}>
-                        {area.FormaPago}
-                      </span>
-                    ) : <span className="text-gray-400">—</span>}
                   </td>
                   <td className="px-4 py-3 text-center">
                     <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-semibold ${area.Activa ? "bg-green-100 text-green-700" : "bg-red-100 text-red-600"}`}>

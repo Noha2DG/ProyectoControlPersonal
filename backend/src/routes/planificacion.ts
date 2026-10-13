@@ -17,7 +17,7 @@ router.get("/kiosco", requireAuth, async (_req: Request, res: Response) => {
       SELECT
         a.Codigo       AS CodigoArea,
         a.Nombre,
-        a.FormaPago,
+        a.GeneraPaga,
         COALESCE(p.Cantidad, 0) AS Cantidad,
         COUNT(t.id)             AS ocupacion
       FROM Areas a
@@ -28,7 +28,7 @@ router.get("/kiosco", requireAuth, async (_req: Request, res: Response) => {
             AND DATE(t.FechaHora) = ${hoy}
             AND t.FechaSalida IS NULL
       WHERE a.Activa = 1
-      GROUP BY a.Codigo, a.Nombre, a.FormaPago, p.Cantidad
+      GROUP BY a.Codigo, a.Nombre, a.GeneraPaga, p.Cantidad
       ORDER BY a.Nombre ASC
     `;
     res.json(rows.map(r => {
@@ -38,7 +38,7 @@ router.get("/kiosco", requireAuth, async (_req: Request, res: Response) => {
       return {
         CodigoArea: r.CodigoArea,
         Nombre:     r.Nombre,
-        FormaPago:  r.FormaPago,
+        GeneraPaga: Number(r.GeneraPaga) === 1,
         Cantidad:   cantidad,
         ocupacion,
         disponible: libre ? 999 : Math.max(0, cantidad - ocupacion),
@@ -61,7 +61,7 @@ router.get("/", requireAuth, requirePerm("planificacion", "ver"), async (req: Re
         a.Codigo        AS CodigoArea,
         a.Nombre,
         a.Grupo,
-        a.FormaPago,
+        a.GeneraPaga,
         a.Activa,
         COALESCE(p.Cantidad, 0) AS Cantidad,
         COUNT(t.id)             AS ocupacion
@@ -73,7 +73,7 @@ router.get("/", requireAuth, requirePerm("planificacion", "ver"), async (req: Re
             AND DATE(t.FechaHora) = ${fecha}
             AND t.FechaSalida IS NULL
       WHERE a.Activa = 1
-      GROUP BY a.Codigo, a.Nombre, a.Grupo, a.FormaPago, a.Activa, p.Cantidad
+      GROUP BY a.Codigo, a.Nombre, a.Grupo, a.GeneraPaga, a.Activa, p.Cantidad
       ORDER BY a.Nombre ASC
     `;
     res.json(rows.map(r => ({
@@ -82,7 +82,7 @@ router.get("/", requireAuth, requirePerm("planificacion", "ver"), async (req: Re
       // Grupo viaja para el reporte de asistencia diaria, que resume por grupo en vez de listar las
       // 72 áreas una por una. La pantalla de planificación sigue trabajando área por área.
       Grupo:      r.Grupo,
-      FormaPago:  r.FormaPago,
+      GeneraPaga: Number(r.GeneraPaga) === 1,
       Activa:     Number(r.Activa) === 1,
       Cantidad:   Number(r.Cantidad),
       ocupacion:  Number(r.ocupacion),

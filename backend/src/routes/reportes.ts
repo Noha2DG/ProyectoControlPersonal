@@ -166,8 +166,8 @@ router.get("/produccion", requireAuth, requirePerm("destajo", "ver"), async (req
       ORDER BY pd.FechaHora DESC
     `, desde, hasta, ...argsFinca);
 
-    // Transferencias a áreas que "No Genera Paga" (cafetería, baño, permisos, etc. — ver
-    // createAreasTransferencias.ts) que se solapan con el rango del reporte. calcularLbHora
+    // Transferencias a áreas que no generan paga (Areas.GeneraPaga = 0: cafetería, baño, permisos,
+    // etc.) que se solapan con el rango del reporte. calcularLbHora
     // (utils/destajo.js) las usa para restar del bloque de tiempo entre dos pesadas consecutivas de
     // la misma persona: sin esto, si alguien sale a cafetería y vuelve a pesar en la misma área, ese
     // hueco se contaba entero como horas trabajadas y diluía su Lb/Hora real.
@@ -175,7 +175,7 @@ router.get("/produccion", requireAuth, requirePerm("destajo", "ver"), async (req
       SELECT tr.Codigo AS IdEmpleado, tr.FechaHora, tr.FechaSalida
       FROM Transferencias tr
       JOIN Areas a ON tr.CodigoArea = a.Codigo
-      WHERE a.FormaPago = 'No Genera Paga'
+      WHERE a.GeneraPaga = 0
         AND tr.FechaHora < DATE_ADD(?, INTERVAL 1 DAY)
         AND (tr.FechaSalida IS NULL OR tr.FechaSalida >= ?)
     `, hasta, desde);

@@ -53,6 +53,9 @@ const MODULOS = [
   // mesas y personas (ver/crear/editar/eliminar). "reporte" es la producción del día por mesa
   // (Destajo → Por Mesa y el QR de cada mesa), para supervisores que no mueven personas.
   { key: "mesas",          label: "Mesas de Pelado",                acciones: ["ver","crear","editar","eliminar","reporte"], grupo: "Config"   },
+  // Pestaña dentro de Catálogos con permiso propio porque es dinero (base de la planilla): "editar"
+  // prepara versiones en borrador; "aprobar" las pone en vigor o las anula y registra el salario mínimo.
+  { key: "tarifas",        label: "Tarifas de Destajo",             acciones: ["ver","editar","aprobar"], grupo: "Config"   },
 ];
 
 // Etiqueta de cada acción en la matriz de permisos — cualquier acción que un módulo
