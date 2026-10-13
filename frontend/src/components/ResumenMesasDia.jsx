@@ -1,5 +1,7 @@
 import { fmtNum } from "../utils/numero.js";
 import { LB_POR_KG, calcularLbHora, agruparPorArea } from "../utils/destajo.js";
+import { metaDeArea, estadoMeta, COLOR_META } from "../utils/mesas.js";
+import { VsMeta } from "./MesaDetalle.jsx";
 
 // Números del día arriba de las tarjetas de Destajo → Por Mesa: libras totales, Lb/hr por proceso,
 // libras y personas por proceso, y tallas del día. Cifras sueltas, no gráficas. Sin comparar mesas
@@ -29,6 +31,10 @@ export default function ResumenMesasDia({ datos, mesas }) {
   }
   const tasa = r => (r.h > 0 ? r.lb / r.h : null);
 
+  // Aviso de meta SOLO en Pelado: es la única área con tarifas por talla (Descabezado no tiene).
+  // Mismo cálculo de la vista de mesa: libras acumuladas contra las esperadas por el tiempo marcado.
+  const metaPelado = metaDeArea(datos, "DS", PELADO);
+
   // Tallas por CÓDIGO (hay descripciones repetidas entre las dos escalas), de grande a chica.
   const tallas = new Map();
   for (const p of datos.pesadas ?? []) if (p.Talla != null) tallas.set(p.Talla, p.DescripcionTalla);
@@ -46,7 +52,17 @@ export default function ResumenMesasDia({ datos, mesas }) {
         <Linea nombre="Descabezado" valor={fmtNum(tasa(ritmo[DESCABEZADO]), 1)} unidad="lb/hr" />
       </Cuadro>
       <Cuadro titulo="Libras por proceso">
-        <Linea nombre="Pelado" extra={`${areas[PELADO].gente.size} pers.`} valor={fmtNum(areas[PELADO].lb, 0)} unidad="lb" />
+        {/* Meta en la MISMA línea (pastilla antes de las libras) para no agrandar el cuadro; el detalle va en el title */}
+        <Linea nombre="Pelado" extra={`${areas[PELADO].gente.size} pers.`} valor={fmtNum(areas[PELADO].lb, 0)} unidad="lb"
+          antes={metaPelado?.VsMeta != null && (
+            <span title={`${metaPelado.VsMeta >= 0 ? "Sobre" : "Bajo"} la meta ${fmtNum(metaPelado.LbMeta, 0)} `}
+              className={`mr-2 px-1.5 py-0.5 rounded-md border text-xs align-middle ${COLOR_META[estadoMeta(metaPelado.VsMeta)].fondo}`}>
+              <VsMeta valor={metaPelado.VsMeta} />
+              {/* Según el ancho: angosto solo el %, mediano "+6% meta", ancho "+6% · meta 10,350 lb" */}
+              <span className="hidden xl:inline 2xl:hidden text-gray-500 font-normal"> meta</span>
+              <span className="hidden 2xl:inline text-gray-600 font-normal"> · meta <span className="tabular-nums font-semibold text-gray-800">{fmtNum(metaPelado.LbMeta, 0)}</span> lb</span>
+            </span>
+          )} />
         <Linea nombre="Descabezado" extra={`${areas[DESCABEZADO].gente.size} pers.`} valor={fmtNum(areas[DESCABEZADO].lb, 0)} unidad="lb" />
         {areas.otra.lb > 0.05 && <p className="text-xs text-gray-500 mt-1">+ {fmtNum(areas.otra.lb, 0)} lb sin área (sin marcaje)</p>}
       </Cuadro>
@@ -77,11 +93,11 @@ function Cuadro({ titulo, junto, children }) {
   );
 }
 
-function Linea({ nombre, extra, valor, unidad }) {
+function Linea({ nombre, extra, valor, unidad, antes }) {
   return (
     <div className="flex items-baseline justify-between gap-2 mt-3">
-      <span className="text-sm text-gray-800">{nombre}{extra && <span className="text-xs text-gray-500"> · {extra}</span>}</span>
-      <span className="tabular-nums"><span className="text-xl font-bold text-gray-900">{valor}</span><span className="text-xs text-gray-500"> {unidad}</span></span>
+      <span className="text-sm text-gray-800 whitespace-nowrap">{nombre}{extra && <span className="text-xs text-gray-500"> · {extra}</span>}</span>
+      <span className="tabular-nums whitespace-nowrap">{antes}<span className="text-xl font-bold text-gray-900">{valor}</span><span className="text-xs text-gray-500"> {unidad}</span></span>
     </div>
   );
 }

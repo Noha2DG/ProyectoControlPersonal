@@ -3,6 +3,7 @@ import prisma from "../lib/prisma.ts";
 import { requireAuth, requirePerm, AuthRequest } from "../middleware/auth.ts";
 import { hoyGT, nowGT } from "../lib/dateGT.ts";
 import { asignarMesa, quitarDeMesa, deshacerAsignacion, validarFecha, ErrorMesa } from "../lib/mesaAsignacion.ts";
+import { metasObraDelDia } from "../lib/tarifas.ts";
 
 // Mesas de pelado: catálogo (backend/scripts/createMesas.ts), personas asignadas a cada mesa
 // (backend/scripts/createMesaAsignacion.ts) y la producción del día por mesa.
@@ -258,7 +259,8 @@ router.delete("/asignaciones/:id", requireAuth, requirePerm("mesas", "eliminar")
 
 // GET /api/mesas/hoy — todo lo necesario para la pestaña "Por Mesa" de Destajo y la página del QR
 // (#/mesa/:codigo): mesas, integrantes del día, pesadas de hoy en Pelado/Descabezado con la mesa de
-// cada persona (null = Banda temporal) y las pausas que no generan paga. La Lb/Hora la calcula el navegador
+// cada persona (null = Banda temporal), las pausas que no generan paga y la meta Lb/hr de cada
+// clase + talla según las tarifas. La Lb/Hora la calcula el navegador
 // con calcularLbHora (utils/destajo.js), la misma función del Reporte de Producción y del kiosco.
 //
 // Solo el día actual y la fecha la pone el servidor: no hay parámetro, así que nadie consulta otro
@@ -280,7 +282,7 @@ async function pesadasDelDia(fecha: string) {
     SELECT x.Codigo AS IdEmpleado, e.PrimerNombre, e.SegundoNombre, e.PrimerApellido, e.SegundoApellido,
            x.FechaHora, DATE_FORMAT(x.FechaHora, '%H:%i') AS Hora, x.Peso AS Kilos,
            a.Nombre AS Area, tr.FechaHora AS EntradaArea,
-           tp.Talla, ta.Descripcion AS DescripcionTalla, cl.Descripcion AS Producto,
+           tp.Talla, ta.Descripcion AS DescripcionTalla, cl.Descripcion AS Producto, tp.ClasePT AS Clase,
            ma.MesaCodigo, ma.EsLider
     FROM (
       SELECT pd.Codigo, pd.FechaHora, pd.Peso, pd.TransaccionId,
@@ -328,6 +330,24 @@ async function consultarHoy(fecha: string) {
     WHERE ma.FechaInicio <= ${fecha} AND (ma.FechaFin IS NULL OR ma.FechaFin >= ${fecha})
   `;
   const { pesadas, pausas } = await pesadasDelDia(fecha);
+  // Meta Lb/hr por clase + talla, sacada de las tarifas aprobadas del día (ver metasObraDelDia).
+  const metas = await metasObraDelDia(prisma, fecha);
+  // Tiempo en Pelado/Descabezado de hoy de quienes están en una mesa o pesaron: con esto la meta
+  // (libras esperadas) avanza con el reloj y no solo cuando hay pesada (utils/mesas.js). Fechas como
+  // texto (hora de Guatemala) para no pasar por la "Z" de Prisma. Automatica = la reabrió el corte
+  // de medianoche a las 00:00: no dice a qué hora empezó a trabajar.
+  const tiempos: any[] = await prisma.$queryRawUnsafe(`
+    SELECT tr.Codigo AS IdEmpleado, tr.CodigoArea,
+           DATE_FORMAT(tr.FechaHora, '%Y-%m-%d %H:%i:%s') AS Desde,
+           DATE_FORMAT(tr.FechaSalida, '%Y-%m-%d %H:%i:%s') AS Hasta,
+           (tr.FechaHora < ? OR tr.RegistradoPor = 'Sistema') AS Automatica
+    FROM Transferencias tr
+    WHERE tr.CodigoArea IN (${AREAS_MESA.map(() => "?").join(",")})
+      AND tr.FechaHora < DATE_ADD(?, INTERVAL 1 DAY)
+      AND (tr.FechaSalida IS NULL OR tr.FechaSalida >= ?)
+      AND (tr.Codigo IN (SELECT Codigo FROM PesajeDetalle WHERE FechaHora >= ? AND FechaHora < DATE_ADD(?, INTERVAL 1 DAY))
+           OR tr.Codigo IN (SELECT Codigo FROM MesaAsignacion WHERE FechaInicio <= ? AND (FechaFin IS NULL OR FechaFin >= ?)))
+  `, fecha, ...AREAS_MESA, fecha, fecha, fecha, fecha, fecha, fecha);
   return {
     fecha,
     generado: nowGT(),
@@ -335,6 +355,8 @@ async function consultarHoy(fecha: string) {
     integrantes: integrantes.map(i => ({ ...i, EsLider: Number(i.EsLider) === 1 })),
     pesadas,
     pausas,
+    metas,
+    tiempos: tiempos.map(t => ({ ...t, Automatica: Number(t.Automatica) === 1 })),
   };
 }
 

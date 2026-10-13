@@ -359,3 +359,24 @@ export async function tarifaDeArea(tx: Tx, area: string, fecha: string) {
   return { ...base, VersionId: Number(t[0].VersionId), Tarifa: Number(t[0].Tarifa), BaseMinimo: false };
 }
 
+// Metas de OBRA de un día, para las vistas en vivo (mesas): una por clase + talla con tarifa
+// vigente. Mismas reglas que tarifaAplicable, pero de un golpe para todas las combinaciones.
+// La meta no se guarda: Lb/hr = salario mínimo del día ÷ tarifa de la talla ÷ horas de jornada
+// (lo que hay que pelar para ganar el mínimo). Una clase o talla sin tarifa no sale = "sin meta".
+export async function metasObraDelDia(tx: Tx, fecha: string) {
+  const s: any[] = await tx.$queryRaw`
+    SELECT ValorDia, HorasJornada FROM SalarioMinimo
+    WHERE VigenteDesde <= ${fecha} AND (VigenteHasta IS NULL OR VigenteHasta >= ${fecha})
+    ORDER BY Categoria = 'PLANTA' DESC LIMIT 1`;
+  if (!s.length) return [];
+  const porHora = Number(s[0].ValorDia) / Number(s[0].HorasJornada);
+  const r: any[] = await tx.$queryRaw`
+    SELECT gc.Clase, t.Talla, t.Tarifa
+    FROM TarifaGrupoClase gc
+    JOIN TarifaGrupo g ON g.Grupo = gc.Grupo AND g.Modalidad = 'OBRA'
+    JOIN TarifaVersion v ON v.Grupo = gc.Grupo AND v.Estado = 'APROBADO'
+         AND v.VigenteDesde <= ${fecha} AND (v.VigenteHasta IS NULL OR v.VigenteHasta >= ${fecha})
+    JOIN Tarifas t ON t.VersionId = v.VersionId AND t.Talla IS NOT NULL
+    WHERE gc.VigenteDesde <= ${fecha} AND (gc.VigenteHasta IS NULL OR gc.VigenteHasta >= ${fecha})`;
+  return r.map(x => ({ Clase: x.Clase as string, Talla: Number(x.Talla), MetaLbHora: porHora / Number(x.Tarifa) }));
+}

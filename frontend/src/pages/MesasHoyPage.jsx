@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { authHeader } from "../context/AuthContext.jsx";
 import { fmtNum } from "../utils/numero.js";
-import { calcularProduccionMesas, tipoMesa, horaDe, serieHorasMesa } from "../utils/mesas.js";
-import MesaDetalle from "../components/MesaDetalle.jsx";
+import { calcularProduccionMesas, tipoMesa, horaDe, serieHorasMesa, estadoMeta, COLOR_META } from "../utils/mesas.js";
+import MesaDetalle, { VsMeta } from "../components/MesaDetalle.jsx";
 import ResumenMesasDia from "../components/ResumenMesasDia.jsx";
 
 // Pestaña "Por Mesa" de Destajo: producción de HOY por mesa de pelado, en vivo. Una tarjeta por mesa
@@ -84,15 +84,21 @@ export default function MesasHoyPage() {
                 </div>
                 <p className={`text-3xl font-bold tabular-nums ${m.LbTotal > 0 ? "text-gray-900" : "text-gray-400"}`}>
                   {fmtNum(m.LbTotal, 1)} <span className="text-sm font-medium text-gray-400">lb</span>
+                  {m.VsMeta != null && <VsMeta valor={m.VsMeta} className="text-sm ml-1.5" />}
                 </p>
                 <p className="text-sm font-semibold tabular-nums mt-1" style={{ color: tipo.color }}>
                   {fmtNum(m.LbHoraPonderada, 1)} lb/hr
                 </p>
-                {/* Avance: cuántas de las asignadas están pesando (Banda temporal no tiene asignadas) */}
-                <div className="h-1.5 rounded-full bg-gray-200 mt-3 overflow-hidden">
-                  <div className="h-full rounded-full" style={{
-                    width: `${m.Asignados ? Math.min(100, (100 * m.Pesando) / m.Asignados) : 0}%`, background: tipo.color,
-                  }} />
+                {/* Avance contra la meta: libras acumuladas ÷ libras esperadas a esta hora (llena = en la meta
+                    o arriba), del color del % (verde/ámbar/rojo). Antes medía cuántas personas pesaban; eso ya
+                    lo dice el texto de abajo. Sin meta (sin tarifa) queda vacía. */}
+                <div className="h-1.5 rounded-full bg-gray-200 mt-3 overflow-hidden"
+                  title={m.LbMeta ? `${fmtNum(m.LbTotal, 0)} de ${fmtNum(m.LbMeta, 0)} lb esperadas a esta hora` : "Sin meta"}>
+                  {m.LbMeta > 0 && (
+                    <div className="h-full rounded-full" style={{
+                      width: `${Math.min(100, (100 * m.LbTotal) / m.LbMeta)}%`, background: COLOR_META[estadoMeta(m.VsMeta)].hex,
+                    }} />
+                  )}
                 </div>
                 <p className="text-xs text-gray-500 mt-2">
                   {m.Asignados == null ? `${m.Pesando} pesando` : `${m.Pesando} de ${m.Asignados} pesando`}
