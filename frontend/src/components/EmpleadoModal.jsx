@@ -30,9 +30,6 @@ export default function EmpleadoModal({ empleado, onSave, onClose }) {
   const isEdit = !!empleado;
   const [form, setForm] = useState(EMPTY);
   const [detalle, setDetalle] = useState(EMPTY_DETALLE);
-  const [fotoKey, setFotoKey] = useState(Date.now());
-  const [fotoError, setFotoError] = useState(false);
-  const fileRef = useRef(null);
   const codigoTocado = useRef(false);
 
   useEffect(() => {
@@ -81,20 +78,6 @@ export default function EmpleadoModal({ empleado, onSave, onClose }) {
     onSave({ ...form, ...detalle });
   };
 
-  const handleFotoChange = async (e) => {
-    const file = e.target.files?.[0];
-    if (!file || !empleado?.Codigo) return;
-    const fd = new FormData();
-    fd.append("foto", file);
-    await fetch(`/api/fotos/${empleado.Codigo}`, {
-      method: "POST",
-      headers: authHeader(),
-      body: fd,
-    });
-    setFotoKey(Date.now());
-    setFotoError(false);
-  };
-
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
       <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl mx-4 max-h-[90vh] flex flex-col">
@@ -106,44 +89,6 @@ export default function EmpleadoModal({ empleado, onSave, onClose }) {
         </div>
 
         <form onSubmit={handleSubmit} className="px-6 py-5 grid grid-cols-2 gap-4 overflow-y-auto flex-1">
-
-          {/* Foto — solo en edición */}
-          {isEdit && (
-            <div className="col-span-2 flex items-center gap-4">
-              <div
-                className="w-20 h-24 rounded-lg overflow-hidden bg-gray-100 border border-gray-200 flex items-center justify-center cursor-pointer flex-shrink-0"
-                onClick={() => fileRef.current?.click()}
-                title="Clic para cambiar foto"
-              >
-                {!fotoError ? (
-                  <img
-                    key={fotoKey}
-                    src={`/uploads/fotos/${empleado.Codigo}.jpg?t=${fotoKey}`}
-                    alt="Foto"
-                    className="w-full h-full object-cover"
-                    onError={() => setFotoError(true)}
-                  />
-                ) : (
-                  <svg className="w-10 h-10 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
-                      d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-                  </svg>
-                )}
-              </div>
-              <div>
-                <p className="text-xs font-medium text-gray-500 mb-1">Fotografía</p>
-                <button
-                  type="button"
-                  onClick={() => fileRef.current?.click()}
-                  className="text-xs text-blue-600 hover:text-blue-800 font-medium border border-blue-200 px-3 py-1 rounded-lg hover:bg-blue-50 transition"
-                >
-                  {fotoError ? "Subir foto" : "Cambiar foto"}
-                </button>
-                <p className="text-xs text-gray-400 mt-1">JPG, PNG · máx. 5 MB</p>
-              </div>
-              <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={handleFotoChange} />
-            </div>
-          )}
 
           <div className="col-span-1">
             <label className="block text-xs font-medium text-gray-500 mb-1">Código *</label>
