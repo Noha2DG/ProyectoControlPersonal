@@ -15,6 +15,7 @@ import jwt from "jsonwebtoken";
 import prisma from "../lib/prisma.ts";
 import { requireAuth, requirePerm, AuthRequest } from "../middleware/auth.ts";
 import { hoyGT } from "../lib/dateGT.ts";
+import { alimentarDestajo, quitarDeDestajo } from "../lib/destajoDesdePiso.ts";
 
 const router = Router();
 
@@ -752,15 +753,22 @@ router.post("/hojas/:id/salida", requireAuth, requirePerm("descongelado", "crear
     const um = UM === "LB" ? "LB" : "KG";
     // El peso real NO se valida contra el declarado: que salga menos es lo normal (faltó un master,
     // o el glaseo). El control está en el cierre, que rechaza que el total salido supere al entrado.
-    await prisma.$executeRaw`
-      INSERT INTO MovimientoPiso (Tipo, FechaProduccion, HojaOrigenId, BodegaDestino, AreaDeclarada,
-                                  Lote, Clase, Talla, FechaLote,
-                                  Peso, UM, PesoKg, NumeroTermo, RemisionId, RegistradoPor)
-      VALUES ('TRASLADO', ${fechaDeHoja(chk.hoja)}, ${id}, ${BodegaDestino}, ${AreaDeclarada || null},
-              ${Lote}, ${Clase}, ${talla},
-              ${enHoja.FechaLote}, ${peso}, ${um}, ${aKg(peso, um)},
-              ${NumeroTermo || null}, ${remId}, ${getOperador(req)})
-    `;
+    // En transacción por Destajo: el TRASLADO y el lote que alimenta (lib/destajoDesdePiso.ts) se
+    // escriben juntos, y LAST_INSERT_ID solo es confiable en la misma conexión.
+    const operador = getOperador(req);
+    await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`
+        INSERT INTO MovimientoPiso (Tipo, FechaProduccion, HojaOrigenId, BodegaDestino, AreaDeclarada,
+                                    Lote, Clase, Talla, FechaLote,
+                                    Peso, UM, PesoKg, NumeroTermo, RemisionId, RegistradoPor)
+        VALUES ('TRASLADO', ${fechaDeHoja(chk.hoja)}, ${id}, ${BodegaDestino}, ${AreaDeclarada || null},
+                ${Lote}, ${Clase}, ${talla},
+                ${enHoja.FechaLote}, ${peso}, ${um}, ${aKg(peso, um)},
+                ${NumeroTermo || null}, ${remId}, ${operador})
+      `;
+      const [nuevo]: any[] = await tx.$queryRaw`SELECT LAST_INSERT_ID() AS id`;
+      await alimentarDestajo(tx, [Number(nuevo.id)], fechaDeHoja(chk.hoja), operador);
+    }, { timeout: 30000, maxWait: 15000 });
     res.status(201).json({ ok: true });
   } catch (err: any) {
     if (err.message?.includes("foreign key")) res.status(400).json({ error: "Clase, talla, bodega o área declarada no existen" });
@@ -780,6 +788,9 @@ type LineaPiso = {
   Lote: string; Clase: string; um: string; talla: number; remId: number | null;
   masters: number | null; kgxm: number | null;
   declarado: number; kgDecl: number; fechaLote: any;
+  // La fila de la pantalla ya viene separada por fecha de lote; si la manda, se descuenta solo de
+  // esa fecha. Sin ella se descuenta PEPS entre las fechas del lote.
+  fechaPedida?: string | null;
   destino?: string | null; pesado?: number; kgReal?: number; termo?: string | null;
   motivo?: string | null;
 };
@@ -806,6 +817,7 @@ function normalizarLineas(crudas: any[], pideDestino: boolean, termoGeneral: str
       remId: l.RemisionId ? Number(l.RemisionId) : null,
       kgDecl: aKg(declarado, um),
       fechaLote: null,
+      fechaPedida: /^\d{4}-\d{2}-\d{2}$/.test(String(l.FechaLote ?? "")) ? String(l.FechaLote) : null,
     };
 
     if (!pideDestino) {
@@ -837,6 +849,54 @@ function normalizarLineas(crudas: any[], pideDestino: boolean, termoGeneral: str
 const claveDeLinea = (r: any) => `${r.remId ?? ""}|${r.Lote}|${r.Clase}|${r.talla}`;
 
 /**
+ * Descuenta una línea de los montones de su lote, del de fecha más vieja al más nuevo (PEPS), y la
+ * devuelve partida en tantos renglones como fechas tocó — cada uno con su FechaLote. Resta de
+ * `montones` lo que usa, para que la siguiente línea del mismo lote mida contra lo que quedó.
+ *
+ * Cuenta en masters si la línea viene en masters, y en kilos si no. El declarado y el peso de
+ * báscula se reparten en proporción a los kilos de cada partida; la última se lleva el residuo del
+ * redondeo, para que la suma de las partidas sea exactamente lo que se capturó.
+ */
+function repartirPorFecha(l: LineaPiso, montones: { fecha: string | null; kg: number; m: number }[]): LineaPiso[] {
+  const porMasters = !!l.masters;
+  let falta = porMasters ? l.masters! : l.kgDecl;
+  const tomas: { fecha: string | null; m: number | null; kg: number }[] = [];
+  for (const b of montones) {
+    if (falta <= 0.0001) break;
+    const hayAqui = porMasters ? b.m : b.kg;
+    if (hayAqui <= 0.0001) continue;
+    const toma = Math.min(falta, hayAqui);
+    const kg = porMasters ? (l.kgxm ? toma * l.kgxm : l.kgDecl * toma / l.masters!) : toma;
+    tomas.push({ fecha: b.fecha, m: porMasters ? toma : null, kg });
+    b.m -= porMasters ? toma : (b.kg > 0 ? b.m * toma / b.kg : 0);
+    b.kg -= kg;
+    falta -= toma;
+  }
+  // Ya se validó la disponibilidad. Si por redondeo de kilos quedara un residuo sin montón, lo absorbe
+  // la última partida (abajo reparte el TOTAL capturado, no la suma de las tomas).
+  if (!tomas.length) return [{ ...l, fechaLote: l.fechaPedida ?? null }];
+  if (tomas.length === 1) return [{ ...l, fechaLote: tomas[0].fecha }];
+
+  const r2 = (n: number) => Number(n.toFixed(2));
+  const total = tomas.reduce((s, t) => s + t.kg, 0) || 1;
+  const acum = { declarado: 0, kgDecl: 0, pesado: 0, kgReal: 0 };
+  return tomas.map((t, i) => {
+    const ultima = i === tomas.length - 1;
+    const parte = (campo: keyof typeof acum, valor: number | undefined) => {
+      if (valor == null) return undefined;
+      const v = ultima ? r2(valor - acum[campo]) : r2(valor * t.kg / total);
+      acum[campo] += v;
+      return v;
+    };
+    return {
+      ...l, fechaLote: t.fecha, masters: t.m,
+      declarado: parte("declarado", l.declarado)!, kgDecl: parte("kgDecl", l.kgDecl)!,
+      pesado: parte("pesado", l.pesado), kgReal: parte("kgReal", l.kgReal),
+    };
+  });
+}
+
+/**
  * Valida contra el saldo al piso y escribe los CONSUMO. Devuelve sus MovimientoId en el mismo
  * orden que `lineas`, para que quien llama pueda atarles la fila que sigue.
  *
@@ -844,7 +904,7 @@ const claveDeLinea = (r: any) => `${r.remId ?? ""}|${r.Lote}|${r.Clase}|${r.tall
  * viajes por renglón, y un despacho de diecinueve lotes pasaba de los cinco segundos con que Prisma
  * corta una transacción interactiva.
  */
-async function consumirDelPiso(
+export async function consumirDelPiso(
   tx: any, hoja: any, hojaId: number, lineas: LineaPiso[], operador: string, fecha: string
 ): Promise<number[]> {
   // La disponibilidad, acotada a los LOTES del despacho. Sin ese filtro la consulta agrega todo el
@@ -852,31 +912,41 @@ async function consumirDelPiso(
   // el área desde que existe el módulo; con él depende del tamaño del despacho, que no crece.
   const lotes = [...new Set(lineas.map(l => l.Lote))];
   const enLotes = `Lote IN (${lotes.map(() => "?").join(",")})`;
+  // El saldo va POR FECHA DE LOTE, igual que lo muestra la pantalla (saldoAlPiso). El mismo texto de
+  // lote puede entrar con dos fechas de producción; si aquí se sumaran juntas, todas las salidas
+  // heredaban una sola fecha (la más reciente) y la pantalla, que sí las separa, mostraba una fecha
+  // con saldo negativo y la otra con producto que ya no estaba. Pasó con RS-0037 y RS-0039.
   const saldo: any[] = await tx.$queryRawUnsafe(`
-    SELECT RemisionId, Lote, Clase, Talla,
-           ROUND(SUM(Delta), 2) AS Kg, COALESCE(SUM(DeltaM), 0) AS Masters, MAX(FL) AS FechaLote
+    SELECT RemisionId, Lote, Clase, Talla, DATE_FORMAT(FechaLote, '%Y-%m-%d') AS FechaLote,
+           ROUND(SUM(Delta), 2) AS Kg, COALESCE(SUM(DeltaM), 0) AS Masters
       FROM (
-        SELECT RemisionId, Lote, Clase, Talla, PesoKg AS Delta, Masters AS DeltaM, FechaLote AS FL
+        SELECT RemisionId, Lote, Clase, Talla, FechaLote, PesoKg AS Delta, Masters AS DeltaM
           FROM MovimientoPiso WHERE BodegaDestino = ? AND ${enLotes}
         UNION ALL
-        SELECT RemisionId, Lote, Clase, Talla, -PesoKg, -Masters, NULL
+        SELECT RemisionId, Lote, Clase, Talla, FechaLote, -PesoKg, -Masters
           FROM MovimientoPiso WHERE BodegaOrigen = ? AND ${enLotes}
       ) t
-     GROUP BY RemisionId, Lote, Clase, Talla`,
+     GROUP BY RemisionId, Lote, Clase, Talla, FechaLote
+     ORDER BY FechaLote IS NULL, FechaLote`,
     hoja.BodegaCodigo, ...lotes, hoja.BodegaCodigo, ...lotes);
-  const hay = new Map<string, any>(saldo.map((s: any) => [
-    `${s.RemisionId == null ? "" : Number(s.RemisionId)}|${s.Lote}|${s.Clase}|${Number(s.Talla)}`, s]));
+  // Por clave, las fechas de la más vieja a la más nueva: ese es el orden PEPS en que se descuentan.
+  const hay = new Map<string, { fecha: string | null; kg: number; m: number }[]>();
+  for (const s of saldo) {
+    const k = `${s.RemisionId == null ? "" : Number(s.RemisionId)}|${s.Lote}|${s.Clase}|${Number(s.Talla)}`;
+    if (!hay.has(k)) hay.set(k, []);
+    hay.get(k)!.push({ fecha: s.FechaLote ?? null, kg: Number(s.Kg), m: Number(s.Masters) });
+  }
 
-  // Se descuenta línea por línea contra un saldo que va bajando: si el mismo lote viene dos veces
-  // en la misma petición, la segunda mide contra lo que dejó la primera. Sin esto, dos renglones de
-  // cien masters pasarían los dos aunque al piso solo hubiera cien.
-  const usadoKg = new Map<string, number>(), usadoM = new Map<string, number>();
+  // Se descuenta línea por línea contra un saldo que va bajando (los montones de `hay` se restan
+  // conforme se usan): si el mismo lote viene dos veces en la misma petición, la segunda mide contra
+  // lo que dejó la primera. Sin esto, dos renglones de cien masters pasarían los dos aunque al piso
+  // solo hubiera cien.
+  const partidas: LineaPiso[] = [];
   for (const l of lineas) {
-    const k = claveDeLinea(l);
-    const d = hay.get(k);
-    l.fechaLote = d?.FechaLote ?? null;
-    const kgHay = (d ? Number(d.Kg) : 0) - (usadoKg.get(k) ?? 0);
-    const mHay  = (d ? Number(d.Masters) : 0) - (usadoM.get(k) ?? 0);
+    const montones = (hay.get(claveDeLinea(l)) ?? [])
+      .filter(b => !l.fechaPedida || b.fecha === l.fechaPedida);
+    const kgHay = montones.reduce((s, b) => s + b.kg, 0);
+    const mHay  = montones.reduce((s, b) => s + b.m, 0);
 
     // Se controla por MASTERS cuando el renglón viene contado en masters, que es como el área
     // declara: los kilos salen de la presentación y no se teclean, así el control habla el mismo
@@ -887,9 +957,12 @@ async function consumirDelPiso(
     if (l.kgDecl > kgHay + 0.001) {
       throw new ErrorNegocio(400, `De esa remisión solo quedan ${kgHay.toFixed(2)} kg de ${l.Lote} ${l.Clase} al piso; está bajando ${l.kgDecl.toFixed(2)} kg.`);
     }
-    usadoKg.set(k, (usadoKg.get(k) ?? 0) + l.kgDecl);
-    usadoM.set(k, (usadoM.get(k) ?? 0) + (l.masters ?? 0));
+    partidas.push(...repartirPorFecha(l, montones));
   }
+  // Una línea que abarcó dos fechas sale partida en dos renglones. Se reemplaza el arreglo EN SU
+  // LUGAR porque quien llama escribe la fila siguiente (TRASLADO o DEVOLUCION) recorriendo `lineas`
+  // y la ata a consumos[i]: así cada partida lleva su propio consumo y su propia fecha.
+  lineas.splice(0, lineas.length, ...partidas);
 
   const args: any[] = [];
   const filas = lineas.map(l => {
@@ -988,9 +1061,19 @@ router.post("/hojas/:id/descongelar", requireAuth, requirePerm("descongelado", "
                                      FechaLote, Peso, UM, PesoKg, NumeroTermo, RemisionId, ConsumoId, RegistradoPor)
          VALUES ${filas}`, ...args);
 
+      // Lo que va a Pelado/Descabezado entra solo a Destajo, en esta misma transacción: el lote
+      // aparece en Materia Prima con el peso de báscula, o no aparece si esto falla (lib/destajoDesdePiso.ts).
+      // Los TRASLADO se ubican por su consumo, que es único y ya se conoce.
+      const traslados: any[] = await tx.$queryRawUnsafe(
+        `SELECT MovimientoId FROM MovimientoPiso WHERE Tipo = 'TRASLADO' AND ConsumoId IN (${consumos.map(() => "?").join(",")})`,
+        ...consumos);
+      const destajo = await alimentarDestajo(tx, traslados.map((t: any) => Number(t.MovimientoId)), fecha, operador);
+
       return { ok: true, lineas: lineas.length,
                KgDeclarado: Number(lineas.reduce((s, l) => s + l.kgDecl, 0).toFixed(2)),
-               KgPesado: Number(lineas.reduce((s, l) => s + (l.kgReal ?? 0), 0).toFixed(2)) };
+               KgPesado: Number(lineas.reduce((s, l) => s + (l.kgReal ?? 0), 0).toFixed(2)),
+               Destajo: destajo.lotes.map(d => ({ Lote: d.Lote, Clase: d.Clase, Kg: d.Kg })),
+               PorAsignarDestajo: destajo.porAsignar.length };
     // Siete viajes a la base para cualquier cantidad de líneas, pero el margen se deja holgado: la
     // base está al otro lado de la red y un despacho grande no puede morirse por medio segundo de
     // latencia. El valor por omisión de Prisma (5 s) es para transacciones de una o dos escrituras.
@@ -1327,6 +1410,17 @@ router.delete("/renglon/:id", requireAuth, requirePerm("descongelado", "eliminar
         SELECT Estatus FROM HojaProceso WHERE HojaId = ${Number(m.HojaId)} LIMIT 1 FOR UPDATE`;
       if (h?.Estatus !== "Abierta") return { error: "La hoja ya está cerrada", status: 400 };
 
+      // Si el TRASLADO alimentó un lote de Destajo, se le resta ANTES de borrar. Si ese lote ya tiene
+      // pesado más de lo que le quedaría, se lanza —  no se devuelve—  para que la transacción revierta
+      // entera: devolver un {error} aquí haría commit de lo ya escrito.
+      const traslados: any[] = await tx.$queryRaw`
+        SELECT MovimientoId FROM MovimientoPiso
+         WHERE Tipo = 'TRASLADO' AND (MovimientoId = ${id} OR ConsumoId = ${id})`;
+      for (const t of traslados) {
+        const q = await quitarDeDestajo(tx, Number(t.MovimientoId));
+        if (q.error) throw new ErrorNegocio(400, q.error);
+      }
+
       // El traslado apunta al consumo, así que el traslado se borra primero o la llave se queja.
       // Los renglones del flujo viejo no tienen par: ConsumoId en NULL y nadie apuntándoles, con lo
       // que las dos consultas no encuentran nada y se borra una sola fila, como siempre.
@@ -1338,12 +1432,13 @@ router.delete("/renglon/:id", requireAuth, requirePerm("descongelado", "eliminar
         await tx.$executeRaw`DELETE FROM MovimientoPiso WHERE MovimientoId = ${id}`;
       }
       return { ok: true };
-    });
+    }, { timeout: 30000, maxWait: 15000 });
 
     if (!("ok" in out)) { res.status((out as any).status).json({ error: (out as any).error }); return; }
     res.json({ ok: true });
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    // responderError y no un 500 a secas: el rechazo de Destajo (ErrorNegocio) es un 400 con motivo.
+    responderError(res, err);
   }
 });
 
@@ -1364,6 +1459,15 @@ router.post("/hojas/:id/cerrar", requireAuth, requirePerm("descongelado", "cerra
     // tarde. Sin ella el cierre usa la que ya tiene la hoja.
     const horaInicio = /^\d{2}:\d{2}$/.test(String(req.body.HoraInicio ?? "")) ? String(req.body.HoraInicio) : null;
 
+    // Las personas son las del marcaje dentro de la ventana de ESTA hoja. Nadie las teclea: son un
+    // dato que el sistema ya tiene, y teclearlas daba dos números para la misma pregunta.
+    //
+    // Se cuentan ANTES de abrir la transacción: solo leen marcajes, no tocan nada de la hoja, y
+    // adentro alargaban el tiempo que el cierre retiene una de las TRES conexiones del servidor
+    // con la hoja bloqueada. Con un pool tan chico, cada consulta que sale de la transacción es
+    // una conexión que otro usuario de la planta puede usar mientras tanto.
+    const gente = await auxiliaresDeHoja(prisma, id, /^\d{2}:\d{2}$/.test(horaFin) ? horaFin : null, horaInicio);
+
     const out = await prisma.$transaction(async (tx) => {
       const [h]: any[] = await tx.$queryRaw`
         SELECT HojaId, BodegaCodigo, FechaProduccion, Estatus FROM HojaProceso WHERE HojaId = ${id} LIMIT 1 FOR UPDATE`;
@@ -1383,10 +1487,6 @@ router.post("/hojas/:id/cerrar", requireAuth, requirePerm("descongelado", "cerra
       if (fin && fin < ini.Ini) {
         return { error: "La hora de fin queda antes del inicio de la hoja", status: 400 };
       }
-
-      // Las personas son las del marcaje dentro de la ventana de ESTA hoja. Nadie las teclea: son
-      // un dato que el sistema ya tiene, y teclearlas daba dos números para la misma pregunta.
-      const gente = await auxiliaresDeHoja(tx, id, /^\d{2}:\d{2}$/.test(horaFin) ? horaFin : null);
 
       const [c]: any[] = await tx.$queryRaw`
         SELECT ROUND(COALESCE(SUM(CASE WHEN HojaDestinoId = ${id} THEN PesoKg ELSE 0 END), 0), 2) AS Entro,
@@ -1425,7 +1525,12 @@ router.post("/hojas/:id/cerrar", requireAuth, requirePerm("descongelado", "cerra
       `;
       return { ok: true, Entro: entro, Salio: salio, Merma: merma,
                Rendimiento: rendimiento(entro, Number(dv.Kg), salio - Number(dv.Kg)) };
-    });
+    // maxWait: el pool de kronos es de TRES conexiones para toda la planta. Con los 2 s por omisión
+    // de Prisma, bastaba que otro usuario estuviera corriendo un reporte para que el cierre ni
+    // siquiera arrancara ("Unable to start a transaction in the given time"). Esperar su turno es lo
+    // correcto: el cierre no tiene prisa, y fallar obliga a repetirlo. timeout: diez viajes a la base
+    // desde una estación de trabajo pasaban de los 5 s por omisión ("Transaction not found").
+    }, { timeout: 30000, maxWait: 15000 });
 
     if (!("ok" in out)) { res.status((out as any).status).json({ error: (out as any).error }); return; }
     res.json(out);
@@ -1451,7 +1556,7 @@ router.post("/hojas/:id/reabrir", requireAuth, requirePerm("descongelado", "cerr
         UPDATE HojaProceso SET Estatus = 'Abierta', HoraFin = NULL, Personas = NULL,
                                CerradaPor = NULL, CerradaEn = NULL WHERE HojaId = ${id}`;
       return { ok: true };
-    });
+    }, { timeout: 30000, maxWait: 15000 });
     if (!("ok" in out)) { res.status((out as any).status).json({ error: (out as any).error }); return; }
     res.json({ ok: true });
   } catch (err: any) {

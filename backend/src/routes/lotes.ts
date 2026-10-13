@@ -3,6 +3,7 @@ import jwt from "jsonwebtoken";
 import prisma from "../lib/prisma.ts";
 import { requireAuth, requirePerm } from "../middleware/auth.ts";
 import { componerCodigoLote, piscinaRequiereCiclo } from "../lib/codigoLote.ts";
+import { asignarPendiente, BODEGAS_CON_DESTAJO } from "../lib/destajoDesdePiso.ts";
 
 const router = Router();
 
@@ -60,6 +61,9 @@ function formatear(rows: any[]) {
     Procesado: Number(r.Procesado),
     Pendiente: Number(r.PesoIngreso) - Number(r.Procesado),
     Activo: Number(r.Activo) === 1,
+    DelPiso: Number(r.DelPiso ?? 0),
+    PorCorroborar: Number(r.PorCorroborar ?? 0),
+    ConDiferencia: Number(r.ConDiferencia ?? 0),
   }));
 }
 
@@ -67,12 +71,23 @@ const SELECT_LOTES = `
   SELECT l.Lote, l.CicloId, l.PiscinaId, l.Clase, c.Descripcion AS DescripcionClase,
          l.TallaReferencia, t.Descripcion AS DescripcionTallaReferencia,
          l.Fecha, COALESCE(l.FechaProduccion, l.Fecha) AS FechaProduccion, l.PesoIngreso, l.UM, l.AlmacenCodigo, l.Activo, l.RegistradoPor, l.Notas,
+         l.Origen,
          f.Codigo AS CodigoFinca, f.Descripcion AS NombreFinca, p.Nombre AS NombrePiscina,
          ci.Anio, ci.Ciclo,
          COALESCE((SELECT SUM(pd.Peso) FROM PesajeDetalle pd
                    JOIN TransaccionesProduccion tp ON pd.TransaccionId = tp.TransaccionId
-                   WHERE tp.Lote = l.Lote AND tp.ClaseOrigen = l.Clase), 0) AS Procesado
+                   WHERE tp.Lote = l.Lote AND tp.ClaseOrigen = l.Clase), 0) AS Procesado,
+         -- Lo que llegó de Descongelado (lib/destajoDesdePiso.ts) y cuánto falta que Pelado corrobore.
+         -- Tres conteos en una pasada por el índice idx_movpiso_loteproceso.
+         mp.DelPiso, mp.PorCorroborar, mp.ConDiferencia
   FROM Lotes l
+  LEFT JOIN (
+    SELECT LoteProceso, ClaseProceso, COUNT(*) AS DelPiso,
+           SUM(RecibidoEn IS NULL) AS PorCorroborar,
+           SUM(KgRecibido IS NOT NULL AND ABS(KgRecibido - PesoKg) > 0.01) AS ConDiferencia
+      FROM MovimientoPiso WHERE LoteProceso IS NOT NULL
+     GROUP BY LoteProceso, ClaseProceso
+  ) mp ON mp.LoteProceso = l.Lote AND mp.ClaseProceso = l.Clase
   JOIN Clase c ON l.Clase = c.Clase
   JOIN Piscina p ON l.PiscinaId = p.PiscinaId
   JOIN Finca f ON p.CodigoFinca = f.Codigo
@@ -110,6 +125,7 @@ router.get("/", requireAuth, requirePerm("destajo", "ver"), async (req: Request,
 // que es el que entra al código del lote. Se aceptan pedidos sin FechaProduccion tratándola como
 // igual a Fecha para no romper llamadas viejas a la API, que es exactamente lo que hacían antes.
 router.post("/", requireAuth, requirePerm("destajo", "crear"), async (req: Request, res: Response) => {
+  let loteGenerado: string | null = null;
   try {
     const { PiscinaId, CicloNumero, Clase, TallaReferencia, Fecha, FechaProduccion, PesoIngreso, UM } = req.body;
     if (!PiscinaId || !Clase || !Fecha || !PesoIngreso) {
@@ -132,6 +148,7 @@ router.post("/", requireAuth, requirePerm("destajo", "crear"), async (req: Reque
     const cicloNum = (requiereCiclo && CicloNumero) ? Number(CicloNumero) : undefined;
     const lote = await generarCodigoLote(Number(PiscinaId), fechaProduccion, cicloNum);
     if (!lote) { res.status(404).json({ error: "Piscina no encontrada" }); return; }
+    loteGenerado = lote;
 
     let resolvedCicloId: number | null = null;
     if (cicloNum) {
@@ -160,7 +177,18 @@ router.post("/", requireAuth, requirePerm("destajo", "crear"), async (req: Reque
     // Con la fecha de producción dentro del código, el mismo lote recibido en dos días distintos cae
     // aquí: el código no cambia porque es el mismo lote físico. Lo correcto es sumarle el peso a la
     // fila que ya existe, no crear una segunda.
-    if (err.message?.includes("Duplicate")) res.status(400).json({ error: "Ya existe este lote para esa clase — edítalo para sumarle el peso de ingreso que está recibiendo" });
+    if (err.message?.includes("Duplicate")) {
+      // Si el que ya existe llegó de Descongelado, sumarle a mano es contar dos veces el mismo
+      // camarón: su peso es el de báscula y ya está completo.
+      const [ya]: any[] = loteGenerado
+        ? await prisma.$queryRaw`SELECT Origen FROM Lotes WHERE Lote = ${loteGenerado} AND Clase = ${req.body.Clase} LIMIT 1`
+        : [];
+      if (ya && ya.Origen !== "MANUAL") {
+        res.status(400).json({ error: `El lote ${loteGenerado} ya llegó de Descongelado con su peso de báscula y está en la lista — no se crea a mano` });
+      } else {
+        res.status(400).json({ error: "Ya existe este lote para esa clase — edítalo para sumarle el peso de ingreso que está recibiendo" });
+      }
+    }
     else if (err.message?.includes("foreign key")) res.status(400).json({ error: "Piscina, Clase o Talla no válidos" });
     else res.status(500).json({ error: err.message });
   }
@@ -198,7 +226,8 @@ router.put("/:lote/:clase", requireAuth, requirePerm("destajo", "editar"), async
     let loteFinal = lote;
     let cicloIdFinal: number | null | undefined = undefined;
     const actual: any[] = await prisma.$queryRaw`
-      SELECT l.PiscinaId, l.CicloId, COALESCE(l.FechaProduccion, l.Fecha) AS FechaProduccion, p.Nombre AS NombrePiscina, p.CodigoFinca
+      SELECT l.PiscinaId, l.CicloId, COALESCE(l.FechaProduccion, l.Fecha) AS FechaProduccion, p.Nombre AS NombrePiscina, p.CodigoFinca,
+             l.PesoIngreso, l.UM, l.Origen
       FROM Lotes l JOIN Piscina p ON l.PiscinaId = p.PiscinaId
       WHERE l.Lote = ${lote} AND l.Clase = ${clase} LIMIT 1
     `;
@@ -223,6 +252,33 @@ router.put("/:lote/:clase", requireAuth, requirePerm("destajo", "editar"), async
     const cicloActual = cicloActualRows[0]?.Ciclo ?? null;
     const cambiaCiclo = requiereCiclo && !!CicloNumero && Number(CicloNumero) !== Number(cicloActual);
     const cambiaFechaProduccion = fechaProduccion !== fechaProduccionActual;
+
+    // Un lote que llegó de Descongelado (lib/destajoDesdePiso.ts) tiene el código armado de la
+    // piscina y el ciclo del lote de origen, y su peso es el de báscula: corregirlo aquí dejaría a
+    // Destajo diciendo una cosa y a Descongelado otra. Se corrige allá, borrando o recapturando el
+    // renglón. Un MIXTO (tenía peso manual antes de recibir del piso) sí deja mover el peso, pero no
+    // por debajo de lo que le llegó del piso.
+    const origen = String(actual[0].Origen ?? "MANUAL");
+    if (origen !== "MANUAL") {
+      if (cambiaCiclo || cambiaFechaProduccion) {
+        res.status(400).json({ error: "Este lote llegó de Descongelado: su ciclo y su fecha salen del lote de origen y no se corrigen aquí" });
+        return;
+      }
+      const cambiaPeso = Math.abs(Number(PesoIngreso) - Number(actual[0].PesoIngreso)) > 0.001;
+      if (cambiaPeso && origen === "PISO") {
+        res.status(400).json({ error: "El peso de este lote es el de báscula de Descongelado — si está mal, se corrige el renglón en Descongelado" });
+        return;
+      }
+      if (cambiaPeso) {
+        const [pis]: any[] = await prisma.$queryRaw`
+          SELECT COALESCE(SUM(PesoKg), 0) AS Kg FROM MovimientoPiso WHERE LoteProceso = ${lote} AND ClaseProceso = ${clase}`;
+        const delPiso = Number(pis.Kg) * (String(actual[0].UM) === "LB" ? 2.20462 : 1);
+        if (Number(PesoIngreso) < delPiso - 0.001) {
+          res.status(400).json({ error: `No puede quedar por debajo de lo que llegó de Descongelado (${delPiso.toFixed(2)} ${actual[0].UM})` });
+          return;
+        }
+      }
+    }
 
     if (cambiaCiclo || cambiaFechaProduccion) {
       const trans: any[] = await prisma.$queryRaw`SELECT COUNT(*) AS n FROM TransaccionesProduccion WHERE Lote = ${lote} AND ClaseOrigen = ${clase}`;
@@ -312,8 +368,104 @@ router.delete("/:lote/:clase", requireAuth, requirePerm("destajo", "eliminar"), 
       res.status(400).json({ error: "No se puede eliminar: este lote ya tiene transacciones de producción registradas" });
       return;
     }
+    const [pis]: any[] = await prisma.$queryRaw`
+      SELECT COUNT(*) AS n FROM MovimientoPiso WHERE LoteProceso = ${lote} AND ClaseProceso = ${clase}`;
+    if (Number(pis.n) > 0) {
+      res.status(400).json({ error: "Este lote llegó de Descongelado — se quita borrando sus renglones en Descongelado" });
+      return;
+    }
     await prisma.$executeRaw`DELETE FROM Lotes WHERE Lote = ${lote} AND Clase = ${clase}`;
     res.json({ ok: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Lo que llega de Descongelado ─────────────────────────────────────────────────────────────
+// El lote lo crea lib/destajoDesdePiso.ts al descongelar; aquí Pelado ve de dónde salió su peso y lo
+// corrobora. Corroborar NO bloquea el pesaje ni cambia el peso: es constancia de quién contó qué, y
+// una diferencia la corrige quien pesó (Descongelado).
+
+// GET /api/lotes/por-asignar — TRASLADO que llegaron a Pelado con un código de lote que no se pudo
+// leer (piscina desconocida). Hasta que alguien escoja la piscina, ese producto no está en Destajo.
+router.get("/por-asignar", requireAuth, requirePerm("destajo", "ver"), async (_req: Request, res: Response) => {
+  try {
+    const rows: any[] = await prisma.$queryRawUnsafe(`
+      SELECT mp.MovimientoId, mp.Lote AS LoteOrigen, mp.Clase, cl.Descripcion AS DescripcionClase,
+             mp.Talla, ta.Descripcion AS DescripcionTalla, mp.PesoKg,
+             DATE_FORMAT(mp.FechaProduccion, '%Y-%m-%d') AS Fecha, DATE_FORMAT(mp.FechaHora, '%H:%i') AS Hora,
+             rm.Folio AS FolioRemision, mp.RegistradoPor
+        FROM MovimientoPiso mp
+        JOIN Clase cl ON cl.Clase = mp.Clase
+        LEFT JOIN Tallas ta ON ta.Codigo = mp.Talla
+        LEFT JOIN Remisiones rm ON rm.RemisionId = mp.RemisionId
+       WHERE mp.DestajoPendiente = 1 AND mp.LoteProceso IS NULL
+         AND mp.BodegaDestino IN (${BODEGAS_CON_DESTAJO.map(() => "?").join(",")})
+       ORDER BY mp.MovimientoId`, ...BODEGAS_CON_DESTAJO);
+    res.json(rows.map(r => ({ ...r, MovimientoId: Number(r.MovimientoId), Talla: Number(r.Talla), PesoKg: Number(r.PesoKg) })));
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/lotes/por-asignar/:movimientoId  { PiscinaId, CicloNumero? }
+router.post("/por-asignar/:movimientoId", requireAuth, requirePerm("destajo", "crear"), async (req: Request, res: Response) => {
+  try {
+    const { PiscinaId, CicloNumero } = req.body;
+    if (!PiscinaId) { res.status(400).json({ error: "Escoja la piscina" }); return; }
+    const out = await prisma.$transaction(tx => asignarPendiente(
+      tx, Number(req.params.movimientoId), Number(PiscinaId), CicloNumero ? Number(CicloNumero) : null, getOperador(req)),
+      { timeout: 30000, maxWait: 15000 });
+    if ("error" in out) { res.status(400).json({ error: out.error }); return; }
+    res.json({ ok: true, Lote: out.Lote, Clase: out.Clase });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/lotes/:lote/:clase/ingresos — cada TRASLADO de Descongelado que alimentó este lote.
+router.get("/:lote/:clase/ingresos", requireAuth, requirePerm("destajo", "ver"), async (req: Request, res: Response) => {
+  try {
+    const rows: any[] = await prisma.$queryRaw`
+      SELECT mp.MovimientoId, mp.Lote AS LoteOrigen, DATE_FORMAT(mp.FechaLote, '%Y-%m-%d') AS FechaLote,
+             mp.Talla, ta.Descripcion AS DescripcionTalla, mp.PesoKg, mp.NumeroTermo,
+             DATE_FORMAT(mp.FechaHora, '%Y-%m-%d %H:%i') AS FechaHora, mp.RegistradoPor,
+             rm.Folio AS FolioRemision, mp.HojaOrigenId,
+             mp.RecibidoPor, DATE_FORMAT(mp.RecibidoEn, '%Y-%m-%d %H:%i') AS RecibidoEn,
+             mp.KgRecibido, mp.NotaRecepcion
+        FROM MovimientoPiso mp
+        LEFT JOIN Tallas ta ON ta.Codigo = mp.Talla
+        LEFT JOIN Remisiones rm ON rm.RemisionId = mp.RemisionId
+       WHERE mp.LoteProceso = ${req.params.lote} AND mp.ClaseProceso = ${req.params.clase}
+       ORDER BY mp.MovimientoId`;
+    res.json(rows.map(r => ({
+      ...r, MovimientoId: Number(r.MovimientoId), Talla: Number(r.Talla), PesoKg: Number(r.PesoKg),
+      KgRecibido: r.KgRecibido == null ? null : Number(r.KgRecibido),
+    })));
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/lotes/:lote/:clase/recepcion  { MovimientoIds?, KgRecibido?, Nota? }
+// Sin MovimientoIds corrobora todo lo pendiente del lote. KgRecibido (lo que Pelado contó) solo se
+// acepta renglón por renglón: una diferencia repartida entre varios no dice cuál llegó mal.
+router.post("/:lote/:clase/recepcion", requireAuth, requirePerm("destajo", "crear"), async (req: Request, res: Response) => {
+  try {
+    const { lote, clase } = req.params;
+    const ids: number[] = Array.isArray(req.body.MovimientoIds) ? req.body.MovimientoIds.map(Number).filter(Boolean) : [];
+    const kg = req.body.KgRecibido === "" || req.body.KgRecibido == null ? null : Number(req.body.KgRecibido);
+    const nota = req.body.Nota ? String(req.body.Nota).trim().slice(0, 200) : null;
+    if (kg != null && (ids.length !== 1 || !(kg >= 0))) {
+      res.status(400).json({ error: "La diferencia se reporta en un solo renglón, con kilos válidos" });
+      return;
+    }
+    const filtro = ids.length ? `AND MovimientoId IN (${ids.map(() => "?").join(",")})` : "AND RecibidoEn IS NULL";
+    const n = await prisma.$executeRawUnsafe(`
+      UPDATE MovimientoPiso SET RecibidoPor = ?, RecibidoEn = NOW(), KgRecibido = ?, NotaRecepcion = ?
+       WHERE LoteProceso = ? AND ClaseProceso = ? ${filtro}`,
+      getOperador(req), kg, nota, lote, clase, ...ids);
+    res.json({ ok: true, renglones: Number(n) });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

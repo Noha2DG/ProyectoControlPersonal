@@ -214,8 +214,25 @@ function LoteModal({ item, fincas, clases, tallas, onSave, onClose }) {
           </div>
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1">Peso de Ingreso *</label>
-            <input required type="number" step="0.01" value={form.PesoIngreso} onChange={set("PesoIngreso")}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
+            {/* Un lote que llegó de Descongelado trae el peso de báscula: se corrige allá, no aquí
+                (lib/destajoDesdePiso.ts). Un MIXTO sí se mueve, pero el servidor no lo deja bajar de
+                lo que llegó del piso. */}
+            {item?.Origen === "PISO" ? (
+              <>
+                <div className="w-full border border-gray-200 bg-gray-50 rounded-lg px-3 py-2 text-sm text-gray-600">
+                  {fmtNum(form.PesoIngreso)} {item.UM}
+                </div>
+                <p className="text-xs text-gray-400 mt-1">Peso de báscula de Descongelado — si está mal, se corrige el renglón en Descongelado</p>
+              </>
+            ) : (
+              <>
+                <input required type="number" step="0.01" value={form.PesoIngreso} onChange={set("PesoIngreso")}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
+                {item?.Origen === "MIXTO" && (
+                  <p className="text-xs text-amber-600 mt-1">Parte de este peso llegó de Descongelado; no puede quedar por debajo de eso</p>
+                )}
+              </>
+            )}
           </div>
           <div className="flex justify-end gap-3 pt-1">
             <button type="button" onClick={onClose} className="px-4 py-2 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 transition">Cancelar</button>
@@ -312,6 +329,209 @@ function TransaccionModal({ lote, procesos, clases, tallas, almacenes, onSave, o
   );
 }
 
+// Lo que Descongelado despachó y alimentó este lote (backend lib/destajoDesdePiso.ts). Pelado no
+// teclea nada: corrobora. Confirmar no cambia el peso ni frena el pesaje —  deja constancia de quién
+// contó qué; una diferencia la corrige quien pesó, en Descongelado.
+function IngresosPiso({ lote, puedeCorroborar, onCambio }) {
+  const [filas, setFilas] = useState([]);
+  const [cargando, setCargando] = useState(true);
+  const [dif, setDif] = useState(null);   // { MovimientoId, KgRecibido, Nota } mientras se reporta
+  const [enviando, setEnviando] = useState(false);
+  const base = `/api/lotes/${encodeURIComponent(lote.Lote)}/${encodeURIComponent(lote.Clase)}`;
+
+  const cargar = useCallback(async () => {
+    try {
+      const res = await fetch(`${base}/ingresos`, { headers: authHeader() });
+      const data = await res.json();
+      if (Array.isArray(data)) setFilas(data);
+    } finally { setCargando(false); }
+  }, [base]);
+  // Se recarga cuando el refresco de la lista trae otro conteo: llegó otro renglón o alguien corroboró.
+  useEffect(() => { cargar(); }, [cargar, lote.DelPiso, lote.PorCorroborar]);
+
+  const recepcion = async (body) => {
+    if (enviando) return;
+    setEnviando(true);
+    try {
+      const res = await fetch(`${base}/recepcion`, {
+        method: "POST", headers: { "Content-Type": "application/json", ...authHeader() }, body: JSON.stringify(body),
+      });
+      if (!res.ok) { const e = await res.json().catch(() => ({})); alert("Error: " + (e.error || res.statusText)); return; }
+      setDif(null);
+      await cargar();
+      onCambio();
+    } finally { setEnviando(false); }
+  };
+
+  const pendientes = filas.filter(f => !f.RecibidoEn).length;
+  const totalKg = filas.reduce((s, f) => s + f.PesoKg, 0);
+
+  return (
+    <div className="bg-white rounded-xl shadow mb-4">
+      <div className="px-3 py-2 border-b flex items-center gap-2">
+        <p className="text-xs font-semibold uppercase tracking-wider text-gray-500">Llegó de Descongelado</p>
+        <span className="text-xs text-gray-400">{filas.length} renglón{filas.length !== 1 ? "es" : ""} · {fmtNum(totalKg)} kg de báscula</span>
+        {puedeCorroborar && pendientes > 1 && (
+          <button onClick={() => recepcion({})} disabled={enviando}
+            className="ml-auto text-xs font-semibold text-green-700 hover:text-green-800 px-2 py-1 rounded hover:bg-green-50 transition disabled:opacity-50">
+            Confirmar todo ({pendientes})
+          </button>
+        )}
+      </div>
+      {cargando ? (
+        <div className="flex justify-center py-4"><div className="w-5 h-5 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" /></div>
+      ) : (
+        <div className="divide-y divide-gray-100 max-h-64 overflow-y-auto">
+          {filas.map(f => {
+            const conDif = f.KgRecibido != null && Math.abs(f.KgRecibido - f.PesoKg) > 0.01;
+            return (
+              <div key={f.MovimientoId} className="px-3 py-2 text-xs">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="font-mono font-semibold text-gray-700 truncate" title={`Lote de origen ${f.LoteOrigen}`}>{f.LoteOrigen}</span>
+                  <span className="text-gray-400 shrink-0">{f.DescripcionTalla || f.Talla}</span>
+                  <span className="ml-auto font-semibold text-gray-800 shrink-0">{fmtNum(f.PesoKg)} kg</span>
+                </div>
+                <div className="flex items-center gap-2 mt-0.5 min-w-0 text-gray-400">
+                  <span className="truncate">{f.FolioRemision || "sin remisión"} · {f.FechaHora?.slice(11)} · {f.RegistradoPor}{f.NumeroTermo ? ` · termo ${f.NumeroTermo}` : ""}</span>
+                  <span className="ml-auto shrink-0">
+                    {f.RecibidoEn ? (
+                      <span className={conDif ? "text-red-600 font-semibold" : "text-green-700"}
+                        title={f.NotaRecepcion || ""}>
+                        {conDif ? `Contó ${fmtNum(f.KgRecibido)} kg` : "Corroborado"} · {f.RecibidoPor} {f.RecibidoEn.slice(11)}
+                      </span>
+                    ) : puedeCorroborar ? (
+                      <>
+                        <button onClick={() => recepcion({ MovimientoIds: [f.MovimientoId] })} disabled={enviando}
+                          className="font-semibold text-green-700 hover:text-green-800 px-1.5 py-0.5 rounded hover:bg-green-50 transition disabled:opacity-50">Confirmar</button>
+                        <button onClick={() => setDif({ MovimientoId: f.MovimientoId, KgRecibido: "", Nota: "" })}
+                          className="font-semibold text-amber-600 hover:text-amber-700 px-1.5 py-0.5 rounded hover:bg-amber-50 transition">Diferencia</button>
+                      </>
+                    ) : <span className="text-amber-600">Por corroborar</span>}
+                  </span>
+                </div>
+                {dif?.MovimientoId === f.MovimientoId && (
+                  <div className="flex items-center gap-2 mt-2">
+                    <input type="number" step="0.01" min="0" placeholder="Kg contados" value={dif.KgRecibido}
+                      onChange={e => setDif(d => ({ ...d, KgRecibido: e.target.value }))}
+                      className="w-24 border border-gray-300 rounded px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-amber-400" />
+                    <input type="text" maxLength={200} placeholder="Nota (qué se encontró)" value={dif.Nota}
+                      onChange={e => setDif(d => ({ ...d, Nota: e.target.value }))}
+                      className="flex-1 min-w-0 border border-gray-300 rounded px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-amber-400" />
+                    <button disabled={enviando || dif.KgRecibido === ""}
+                      onClick={() => recepcion({ MovimientoIds: [f.MovimientoId], KgRecibido: dif.KgRecibido, Nota: dif.Nota })}
+                      className="font-semibold text-white bg-amber-600 hover:bg-amber-700 px-2 py-1 rounded transition disabled:opacity-50">Guardar</button>
+                    <button onClick={() => setDif(null)} className="text-gray-500 hover:text-gray-700 px-1">Cancelar</button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+      <p className="px-3 py-2 border-t text-[11px] text-gray-400">
+        El peso de ingreso es la suma de estos renglones. Si alguno está mal, se corrige en Descongelado.
+      </p>
+    </div>
+  );
+}
+
+// Renglones que Descongelado mandó a Pelado con un código de lote que el sistema no reconoció (una
+// piscina que no está en el catálogo). Hasta que alguien escoja la piscina, ese producto no está en
+// ningún lote de Destajo.
+function PorAsignarModal({ filas, fincas, onAsignado, onClose }) {
+  const [sel, setSel] = useState(filas[0]?.MovimientoId ?? null);
+  const [finca, setFinca] = useState("");
+  const [piscinas, setPiscinas] = useState([]);
+  const [piscinaId, setPiscinaId] = useState("");
+  const [ciclo, setCiclo] = useState("");
+  const [enviando, setEnviando] = useState(false);
+
+  useEffect(() => {
+    if (!finca) return;
+    fetch(`/api/piscina?finca=${finca}`, { headers: authHeader() })
+      .then(r => r.json()).then(d => { if (Array.isArray(d)) setPiscinas(d.filter(p => p.Activo)); });
+  }, [finca]);
+  // Otra finca invalida la piscina y el ciclo escogidos: se limpian en el mismo cambio, no en un efecto.
+  const cambiarFinca = (codigo) => { setFinca(codigo); setPiscinas([]); setPiscinaId(""); setCiclo(""); };
+
+  const piscina = piscinas.find(p => String(p.PiscinaId) === String(piscinaId));
+  const requiereCiclo = piscina ? piscinaRequiereCiclo(piscina.Nombre, finca) : false;
+
+  const asignar = async () => {
+    if (!sel || !piscinaId || (requiereCiclo && !ciclo) || enviando) return;
+    setEnviando(true);
+    try {
+      const res = await fetch(`/api/lotes/por-asignar/${sel}`, {
+        method: "POST", headers: { "Content-Type": "application/json", ...authHeader() },
+        body: JSON.stringify({ PiscinaId: piscinaId, CicloNumero: requiereCiclo ? ciclo : null }),
+      });
+      const out = await res.json().catch(() => ({}));
+      if (!res.ok) { alert("Error: " + (out.error || res.statusText)); return; }
+      setSel(null);
+      onAsignado(out);
+    } finally { setEnviando(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg mx-4 max-h-[90vh] overflow-y-auto">
+        <div className="px-6 py-4 border-b flex items-center justify-between">
+          <h2 className="text-base font-semibold text-gray-800">Por asignar — llegó de Descongelado</h2>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl leading-none">&times;</button>
+        </div>
+        <div className="px-6 py-4 space-y-4">
+          <p className="text-xs text-gray-500">
+            No se reconoció la piscina en el código de estos lotes. Escoja de qué piscina son y el sistema los suma
+            al lote del día en Destajo.
+          </p>
+          <div className="border border-gray-200 rounded-lg divide-y divide-gray-100 max-h-48 overflow-y-auto">
+            {filas.map(f => (
+              <label key={f.MovimientoId} className={`flex items-center gap-2 px-3 py-2 text-xs cursor-pointer ${sel === f.MovimientoId ? "bg-blue-50" : "hover:bg-gray-50"}`}>
+                <input type="radio" checked={sel === f.MovimientoId} onChange={() => setSel(f.MovimientoId)} />
+                <span className="font-mono font-semibold text-gray-700 truncate">{f.LoteOrigen}</span>
+                <span className="text-gray-500 shrink-0">{f.Clase} · {f.DescripcionTalla || f.Talla}</span>
+                <span className="ml-auto font-semibold text-gray-800 shrink-0">{fmtNum(f.PesoKg)} kg</span>
+                <span className="text-gray-400 shrink-0">{f.Fecha?.slice(5)} {f.Hora}</span>
+              </label>
+            ))}
+          </div>
+          <div className="grid grid-cols-3 gap-3">
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">Finca</label>
+              <select value={finca} onChange={e => cambiarFinca(e.target.value)}
+                className="w-full border border-gray-300 rounded-lg px-2 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400">
+                <option value="">—</option>
+                {fincas.map(f => <option key={f.Codigo} value={f.Codigo}>{f.Descripcion}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">Piscina</label>
+              <select value={piscinaId} onChange={e => setPiscinaId(e.target.value)} disabled={!finca}
+                className="w-full border border-gray-300 rounded-lg px-2 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 disabled:bg-gray-100">
+                <option value="">—</option>
+                {piscinas.map(p => <option key={p.PiscinaId} value={p.PiscinaId}>{p.Nombre}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">Ciclo</label>
+              <input type="number" min="1" value={ciclo} onChange={e => setCiclo(e.target.value)} disabled={!requiereCiclo}
+                placeholder={requiereCiclo ? "" : "no lleva"}
+                className="w-full border border-gray-300 rounded-lg px-2 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 disabled:bg-gray-100" />
+            </div>
+          </div>
+          <div className="flex justify-end gap-3">
+            <button type="button" onClick={onClose} className="px-4 py-2 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 transition">Cerrar</button>
+            <button onClick={asignar} disabled={!sel || !piscinaId || (requiereCiclo && !ciclo) || enviando}
+              className="px-5 py-2 text-sm bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 transition disabled:opacity-50 disabled:cursor-not-allowed">
+              {enviando ? "Asignando…" : "Asignar a Destajo"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function MateriaPrimaPage() {
   const puedeCrear = usePuede("destajo", "crear");
   const puedeEditar = usePuede("destajo", "editar");
@@ -330,6 +550,8 @@ export default function MateriaPrimaPage() {
   const [modalLote, setModalLote] = useState({ open: false, item: null });
   const [modalTrans, setModalTrans] = useState(false);
   const [busqueda, setBusqueda] = useState("");
+  const [porAsignar, setPorAsignar] = useState([]);
+  const [modalAsignar, setModalAsignar] = useState(false);
   const [widthsLote, startResizeLote] = useColWidths("materiaprima_lotes", LOTE_COL_DEFAULTS);
   const [widthsTrans, startResizeTrans] = useColWidths("materiaprima_trans", TRANS_COL_DEFAULTS);
 
@@ -337,18 +559,44 @@ export default function MateriaPrimaPage() {
   // la respuesta no era un arreglo, el `if` la descartaba callado y la tabla decía "Sin lotes
   // registrados" con los lotes del día intactos en la base — que es exactamente lo que pasó al
   // desplegar el código de FechaProduccion antes de crear la columna.
-  const fetchLotes = useCallback(async () => {
-    setLoading(true);
+  //
+  // `silencioso` es el refresco de fondo: sin spinner, y si falla deja la lista como estaba en vez de
+  // vaciarla —  un tropiezo de red cada 30 s no puede borrarle la pantalla al encargado.
+  const fetchLotes = useCallback(async (silencioso = false) => {
+    if (!silencioso) setLoading(true);
     try {
       const res = await fetch(`/api/lotes?fecha=${hoy()}`, { headers: authHeader() });
       const data = await res.json();
-      if (Array.isArray(data)) { setLotes(data); setErrorLotes(""); }
-      else { setLotes([]); setErrorLotes(data?.error || "No se pudo leer la lista de lotes"); }
+      if (Array.isArray(data)) {
+        setLotes(data); setErrorLotes("");
+        // El lote seleccionado se reemplaza por su versión fresca: el peso de un lote del piso sube
+        // solo cuando Descongelado despacha otra tanda.
+        setLoteSel(sel => sel ? (data.find(l => l.Lote === sel.Lote && l.Clase === sel.Clase) ?? sel) : sel);
+      }
+      else if (!silencioso) { setLotes([]); setErrorLotes(data?.error || "No se pudo leer la lista de lotes"); }
     } catch (err) {
-      setLotes([]);
-      setErrorLotes(err.message || "No se pudo conectar con el servidor");
-    } finally { setLoading(false); }
+      if (!silencioso) {
+        setLotes([]);
+        setErrorLotes(err.message || "No se pudo conectar con el servidor");
+      }
+    } finally { if (!silencioso) setLoading(false); }
   }, []);
+
+  const fetchPorAsignar = useCallback(async () => {
+    try {
+      const res = await fetch("/api/lotes/por-asignar", { headers: authHeader() });
+      const data = await res.json();
+      if (Array.isArray(data)) setPorAsignar(data);
+    } catch { /* el aviso es secundario: si falla, la lista de lotes sigue funcionando */ }
+  }, []);
+
+  // Lo que despacha Descongelado aparece solo (backend lib/destajoDesdePiso.ts): sin este refresco el
+  // encargado de Pelado no lo vería hasta recargar. Mismo intervalo que Transferencias.
+  useEffect(() => {
+    fetchPorAsignar();
+    const id = setInterval(() => { fetchLotes(true); fetchPorAsignar(); }, 30000);
+    return () => clearInterval(id);
+  }, [fetchLotes, fetchPorAsignar]);
 
   useEffect(() => {
     fetchLotes();
@@ -474,6 +722,19 @@ export default function MateriaPrimaPage() {
           )}
         </div>
 
+        {porAsignar.length > 0 && (
+          <div className="mb-3 flex items-center gap-3 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-800">
+            <span>
+              <b>{porAsignar.length}</b> renglón{porAsignar.length !== 1 ? "es" : ""} de Descongelado sin lote en Destajo
+              ({fmtNum(porAsignar.reduce((s, f) => s + f.PesoKg, 0))} kg): no se reconoció la piscina.
+            </span>
+            {puedeCrear && (
+              <button onClick={() => setModalAsignar(true)}
+                className="ml-auto shrink-0 font-semibold text-amber-800 hover:text-amber-900 px-2 py-1 rounded hover:bg-amber-100 transition">Asignar</button>
+            )}
+          </div>
+        )}
+
         {loading ? (
           <div className="flex justify-center py-10"><div className="w-6 h-6 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" /></div>
         ) : errorLotes ? (
@@ -481,7 +742,7 @@ export default function MateriaPrimaPage() {
             <p className="text-sm font-semibold text-red-600">No se pudieron cargar los lotes del día</p>
             <p className="text-xs text-gray-500 mt-1">{errorLotes}</p>
             <p className="text-xs text-gray-400 mt-2">Los lotes siguen registrados — esto es una falla al consultarlos, no datos perdidos.</p>
-            <button onClick={fetchLotes} className="mt-3 text-xs font-semibold text-blue-600 hover:text-blue-800 px-3 py-1.5 rounded hover:bg-blue-50 transition">Reintentar</button>
+            <button onClick={() => fetchLotes()} className="mt-3 text-xs font-semibold text-blue-600 hover:text-blue-800 px-3 py-1.5 rounded hover:bg-blue-50 transition">Reintentar</button>
           </div>
         ) : (
           <div className="bg-white rounded-xl shadow overflow-x-auto max-h-[600px] overflow-y-auto">
@@ -502,7 +763,23 @@ export default function MateriaPrimaPage() {
                 {lotesFiltrados.map(l => (
                   <tr key={`${l.Lote}-${l.Clase}`} onClick={() => seleccionarLote(l)}
                     className={`cursor-pointer transition ${loteSel?.Lote === l.Lote && loteSel?.Clase === l.Clase ? "bg-blue-50" : "hover:bg-gray-50"} ${!l.Activo ? "opacity-50" : ""}`}>
-                    <td className="px-3 py-3 font-mono font-bold text-gray-700 whitespace-nowrap">{l.Lote}</td>
+                    <td className="px-3 py-3 whitespace-nowrap">
+                      <div className="font-mono font-bold text-gray-700 truncate" title={l.Lote}>{l.Lote}</div>
+                      {l.Origen && l.Origen !== "MANUAL" && (
+                        <div className="flex flex-wrap gap-1 mt-0.5">
+                          <span className={`px-1.5 rounded text-[10px] font-semibold ${l.Origen === "PISO" ? "bg-teal-50 text-teal-700" : "bg-purple-50 text-purple-700"}`}
+                            title={l.Origen === "PISO" ? "Llegó de Descongelado con su peso de báscula" : "Tenía peso manual y además le llegó de Descongelado — revíselo"}>
+                            {l.Origen === "PISO" ? "Del piso" : "Mixto"}
+                          </span>
+                          {l.PorCorroborar > 0 && (
+                            <span className="px-1.5 rounded text-[10px] font-semibold bg-amber-50 text-amber-700">por corroborar ({l.PorCorroborar})</span>
+                          )}
+                          {l.ConDiferencia > 0 && (
+                            <span className="px-1.5 rounded text-[10px] font-semibold bg-red-50 text-red-700">diferencia</span>
+                          )}
+                        </div>
+                      )}
+                    </td>
                     <td className="px-3 py-3 text-gray-900 whitespace-nowrap">{l.NombreFinca}</td>
                     <td className="px-3 py-3 text-center font-mono text-gray-600 whitespace-nowrap">
                       {l.Ciclo != null ? <span className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded text-xs font-semibold">{l.Anio}/{l.Ciclo}</span> : <span className="text-gray-300">—</span>}
@@ -516,7 +793,7 @@ export default function MateriaPrimaPage() {
                           <button onClick={() => setModalLote({ open: true, item: l })}
                             className="text-blue-600 hover:text-blue-800 text-xs font-medium px-2 py-1 rounded hover:bg-blue-50 transition">Editar</button>
                         )}
-                        {l.Procesado === 0 && puedeEliminar && (
+                        {l.Procesado === 0 && !l.DelPiso && puedeEliminar && (
                           <button onClick={() => handleEliminarLote(l)}
                             className="text-red-500 hover:text-red-700 text-xs font-medium px-2 py-1 rounded hover:bg-red-50 transition">Eliminar</button>
                         )}
@@ -551,6 +828,10 @@ export default function MateriaPrimaPage() {
           <div className="bg-white rounded-xl shadow px-4 py-8 text-center text-gray-400 text-sm">Seleccione un lote para ver sus transacciones</div>
         ) : (
           <>
+            {loteSel.DelPiso > 0 && (
+              <IngresosPiso key={`${loteSel.Lote}-${loteSel.Clase}`} lote={loteSel} puedeCorroborar={puedeCrear}
+                onCambio={() => fetchLotes(true)} />
+            )}
             <div className="grid grid-cols-3 gap-2 mb-4">
               <div className="bg-white rounded-lg shadow px-3 py-2 text-center">
                 <p className="text-xs text-gray-400">Ingreso</p>
@@ -631,6 +912,11 @@ export default function MateriaPrimaPage() {
       {modalLote.open && (
         <LoteModal item={modalLote.item} fincas={fincas} clases={clases} tallas={tallas}
           onSave={handleSaveLote} onClose={() => setModalLote({ open: false, item: null })} />
+      )}
+      {modalAsignar && porAsignar.length > 0 && (
+        <PorAsignarModal filas={porAsignar} fincas={fincas}
+          onAsignado={async () => { await fetchPorAsignar(); fetchLotes(true); }}
+          onClose={() => setModalAsignar(false)} />
       )}
       {modalTrans && loteSel && (
         <TransaccionModal lote={loteSel} procesos={procesos} clases={clases} tallas={tallas} almacenes={almacenes}
