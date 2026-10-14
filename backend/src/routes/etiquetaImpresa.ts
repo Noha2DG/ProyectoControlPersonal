@@ -5,6 +5,7 @@ import { requireAuth, requirePerm, requireAnyPerm, tienePermiso } from "../middl
 import { resolverDiseno, resolverDisenos } from "./disenoEtiquetaCliente.ts";
 import { normalizarCorrelativo, parseCorrelativoSecuencial } from "../lib/correlativo.ts";
 import { buscarMasterPorEtiqueta, calcularTechoLinea } from "../lib/masters.ts";
+import { HORAS_VIGENCIA_ETIQUETA } from "../lib/etiquetasVencidas.ts";
 
 const router = Router();
 
@@ -709,6 +710,12 @@ router.put("/:id/reactivar", requireAuth, requirePerm("etiquetado", "editar"), a
 // esperado, no una alerta. También excluye las de una captura Cancelada — esas tampoco van a
 // escanearse nunca (no es que estén "perdidas", su captura ya no es válida); la corrección ahí es
 // anularlas desde el historial, no investigarlas como si fueran un extravío real.
+//
+// Solo la ventana de N a HORAS_VIGENCIA_ETIQUETA (48 h): a las 48 h el barrido las anula solo
+// (lib/etiquetasVencidas.ts), así que pasado ese plazo ya no hay nada que buscar en planta. Las que
+// siguen activas más allá son las que alguna vez entraron a bodega (migradas, o bajadas con "Quitar
+// masters"), que el barrido respeta a propósito; listarlas con 800+ h no ayudaba a nadie (pedido del
+// usuario, 13 oct 2026).
 router.get("/atascadas", requireAuth, requirePerm("etiquetado", "imprimir"), async (req: Request, res: Response) => {
   try {
     const horas = Number(req.query.horas) > 0 ? Number(req.query.horas) : 24;
@@ -728,9 +735,10 @@ router.get("/atascadas", requireAuth, requirePerm("etiquetado", "imprimir"), asy
       LEFT JOIN Subcliente sub ON ped.CodigoCliente = sub.CodigoCliente AND ped.CodigoSubcliente = sub.CodigoSubcliente
       LEFT JOIN Masters m ON ei.EtiquetaId = m.EtiquetaId
       WHERE ei.Estatus = 'Activa' AND oe.Estatus != 'Cancelada' AND m.MasterId IS NULL AND ei.CreadoEn < (NOW() - INTERVAL ? HOUR)
+        AND ei.CreadoEn >= (NOW() - INTERVAL ? HOUR)
       ORDER BY ei.CreadoEn ASC
       LIMIT 500
-    `, horas);
+    `, horas, HORAS_VIGENCIA_ETIQUETA);
     res.json(rows.map(r => ({
       ...r,
       EtiquetaId: Number(r.EtiquetaId),

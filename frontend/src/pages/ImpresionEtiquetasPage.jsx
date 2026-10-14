@@ -47,7 +47,7 @@ function lanzarProtocolo(url) {
   enlace.remove();
 }
 
-// Lista de etiquetas impresas hace más de 24h sin master correspondiente en bodega — la señal más
+// Lista de etiquetas impresas hace 24 a 48 h (después se anulan solas) sin master correspondiente en bodega — la señal más
 // temprana de una etiqueta perdida, pegada a la caja equivocada, o simplemente olvidada en algún
 // rincón de planta. Solo lectura: la corrección real (anular, o investigar y escanearla) se hace
 // desde el historial de la captura o desde Bodega.
@@ -58,8 +58,8 @@ function AtascadasModal({ atascadas, onCerrar }) {
       <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl flex flex-col max-h-full">
         <div className="px-6 py-4 border-b flex items-center justify-between shrink-0">
           <div>
-            <h2 className="text-base font-semibold text-gray-800">Etiquetas impresas sin escanear (+24h)</h2>
-            <p className="text-xs text-gray-400 mt-0.5">Puede ser una etiqueta perdida, mal pegada, o el master sigue en planta — vale la pena revisarlo.</p>
+            <h2 className="text-base font-semibold text-gray-800">Etiquetas impresas sin escanear (24 a 48 h)</h2>
+            <p className="text-xs text-gray-400 mt-0.5">Puede ser una etiqueta perdida, mal pegada, o el master sigue en planta — vale la pena revisarlo. A las 48 h se dan de baja solas.</p>
           </div>
           <button onClick={onCerrar} className="text-gray-400 hover:text-gray-600 text-xl leading-none">&times;</button>
         </div>
