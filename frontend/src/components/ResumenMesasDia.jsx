@@ -31,9 +31,11 @@ export default function ResumenMesasDia({ datos, mesas }) {
   }
   const tasa = r => (r.h > 0 ? r.lb / r.h : null);
 
-  // Aviso de meta SOLO en Pelado: es la única área con tarifas por talla (Descabezado no tiene).
-  // Mismo cálculo de la vista de mesa: libras acumuladas contra las esperadas por el tiempo marcado.
+  // Aviso de meta por proceso: Pelado (tarifas PD_TON/PD_TOFF) y Descabezado (DESC_, desde el 14 oct
+  // 2026). Mismo cálculo de la vista de mesa: libras acumuladas contra las esperadas por el tiempo
+  // marcado en esa área. Sin tarifa aprobada no sale la pastilla.
   const metaPelado = metaDeArea(datos, "DS", PELADO);
+  const metaDescabezado = metaDeArea(datos, "DU", DESCABEZADO);
 
   // Tallas por CÓDIGO (hay descripciones repetidas entre las dos escalas), de grande a chica.
   const tallas = new Map();
@@ -54,16 +56,9 @@ export default function ResumenMesasDia({ datos, mesas }) {
       <Cuadro titulo="Libras por proceso">
         {/* Meta en la MISMA línea (pastilla antes de las libras) para no agrandar el cuadro; el detalle va en el title */}
         <Linea nombre="Pelado" extra={`${areas[PELADO].gente.size} pers.`} valor={fmtNum(areas[PELADO].lb, 0)} unidad="lb"
-          antes={metaPelado?.VsMeta != null && (
-            <span title={`${metaPelado.VsMeta >= 0 ? "Sobre" : "Bajo"} la meta ${fmtNum(metaPelado.LbMeta, 0)} `}
-              className={`mr-2 px-1.5 py-0.5 rounded-md border text-xs align-middle ${COLOR_META[estadoMeta(metaPelado.VsMeta)].fondo}`}>
-              <VsMeta valor={metaPelado.VsMeta} />
-              {/* Según el ancho: angosto solo el %, mediano "+6% meta", ancho "+6% · meta 10,350 lb" */}
-              <span className="hidden xl:inline 2xl:hidden text-gray-500 font-normal"> meta</span>
-              <span className="hidden 2xl:inline text-gray-600 font-normal"> · meta <span className="tabular-nums font-semibold text-gray-800">{fmtNum(metaPelado.LbMeta, 0)}</span> lb</span>
-            </span>
-          )} />
-        <Linea nombre="Descabezado" extra={`${areas[DESCABEZADO].gente.size} pers.`} valor={fmtNum(areas[DESCABEZADO].lb, 0)} unidad="lb" />
+          antes={<PastillaMeta meta={metaPelado} />} />
+        <Linea nombre="Descabezado" extra={`${areas[DESCABEZADO].gente.size} pers.`} valor={fmtNum(areas[DESCABEZADO].lb, 0)} unidad="lb"
+          antes={<PastillaMeta meta={metaDescabezado} />} />
         {areas.otra.lb > 0.05 && <p className="text-xs text-gray-500 mt-1">+ {fmtNum(areas.otra.lb, 0)} lb sin área (sin marcaje)</p>}
       </Cuadro>
       <Cuadro titulo="Tallas hoy" junto={<span className="text-lg font-bold text-gray-900">{listaTallas.length}</span>}>
@@ -90,6 +85,20 @@ function Cuadro({ titulo, junto, children }) {
         {children}
       </div>
     </div>
+  );
+}
+
+// % contra la meta del proceso, en la misma línea de sus libras (no agranda el cuadro).
+function PastillaMeta({ meta }) {
+  if (meta?.VsMeta == null) return null;
+  return (
+    <span title={`${meta.VsMeta >= 0 ? "Sobre" : "Bajo"} la meta ${fmtNum(meta.LbMeta, 0)} `}
+      className={`mr-2 px-1.5 py-0.5 rounded-md border text-xs align-middle ${COLOR_META[estadoMeta(meta.VsMeta)].fondo}`}>
+      <VsMeta valor={meta.VsMeta} />
+      {/* Según el ancho: angosto solo el %, mediano "+6% meta", ancho "+6% · meta 10,350 lb" */}
+      <span className="hidden xl:inline 2xl:hidden text-gray-500 font-normal"> meta</span>
+      <span className="hidden 2xl:inline text-gray-600 font-normal"> · meta <span className="tabular-nums font-semibold text-gray-800">{fmtNum(meta.LbMeta, 0)}</span> lb</span>
+    </span>
   );
 }
 

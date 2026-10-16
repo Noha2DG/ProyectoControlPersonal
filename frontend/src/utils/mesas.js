@@ -149,8 +149,8 @@ const sumarMetas = lista => lista.reduce((acc, x) => {
 }, { Lb: 0, LbEsperada: 0, LbNoMedible: 0, HorasSinMeta: 0 });
 const ahoraMin = datos => minutoDelDia(datos.generado, datos.fecha);
 
-// Meta de TODA la planta en un área, hasta ahora (aviso del resumen de Por Mesa). Solo tiene sentido
-// en Pelado, que es donde hay tarifas por talla; Descabezado (D16) no tiene. Mismo cálculo que una
+// Meta de TODA la planta en un área, hasta ahora (aviso del resumen de Por Mesa): Pelado y, desde el
+// 14 oct 2026, Descabezado (grupo DESC_, tallas 850/851/852). Un área sin tarifa da VsMeta null. Mismo cálculo que una
 // mesa, pero con las pesadas hechas en esa área y el tiempo marcado en ella (sin importar la mesa).
 // `nombreArea` = Areas.Nombre (así llegan las pesadas); `codigoArea` = así llegan los tiempos.
 export function metaDeArea(datos, codigoArea, nombreArea) {
