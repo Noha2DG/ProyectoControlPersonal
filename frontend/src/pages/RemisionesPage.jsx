@@ -33,7 +33,7 @@ const TIPO_BADGE = {
   VentaLocal:   "bg-blue-100 text-blue-700",
   Exportacion:  "bg-purple-100 text-purple-700",
   Maquila:      "bg-teal-100 text-teal-700",
-  RetornoMaquila: "bg-cyan-100 text-cyan-700",
+  DespachoMaquila: "bg-cyan-100 text-cyan-700",
   Reempaque:    "bg-amber-100 text-amber-700",
   Reetiquetado: "bg-orange-100 text-orange-700",
   Reproceso:    "bg-rose-100 text-rose-700",

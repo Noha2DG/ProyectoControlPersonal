@@ -41,10 +41,10 @@ const SERIES = [
   { Tipo: "VentaLocal",   Prefijo: "VL", Nombre: "Venta local",   Destino: "Cliente", Orden: 1, PideEmbarque: 0, PidePedido: 0, PideLinea: 0, TipoCliente: "Local" },
   { Tipo: "Exportacion",  Prefijo: "EX", Nombre: "Exportación",   Destino: "Cliente", Orden: 2, PideEmbarque: 1, PidePedido: 1, PideLinea: 1, TipoCliente: "Exportacion" },
   { Tipo: "Maquila",      Prefijo: "MQ", Nombre: "Maquila",       Destino: "Cliente", Orden: 3, PideEmbarque: 0, PidePedido: 0, PideLinea: 0, TipoCliente: null },
-  // Oct 2026: la maquila tiene dos salidas al cliente maquilador — Maquila (MQ) y la devolución del
-  // producto terminado a su dueño. Se llama "Retorno" y no "Devolución" porque en bodega "devolución"
+  // Oct 2026: la maquila tiene dos salidas al cliente maquilador — Maquila (MQ) y el despacho del
+  // producto terminado a su dueño. Se llama "Despacho" y no "Devolución" porque en bodega "devolución"
   // ya es lo contrario: producto que REGRESA a la planta (Pallets.Origen = DEVOLUCION).
-  { Tipo: "RetornoMaquila", Prefijo: "RM", Nombre: "Retorno maquila", Destino: "Cliente", Orden: 4, PideEmbarque: 0, PidePedido: 0, PideLinea: 0, TipoCliente: null },
+  { Tipo: "DespachoMaquila", Prefijo: "DM", Nombre: "Despacho Maquila", Destino: "Cliente", Orden: 4, PideEmbarque: 0, PidePedido: 0, PideLinea: 0, TipoCliente: null },
   { Tipo: "Reempaque",    Prefijo: "RP", Nombre: "Reempaque",     Destino: "Area",    Orden: 5, PideEmbarque: 0, PidePedido: 0, PideLinea: 0, TipoCliente: null },
   { Tipo: "Reetiquetado", Prefijo: "RE", Nombre: "Reetiquetado",  Destino: "Area",    Orden: 6, PideEmbarque: 0, PidePedido: 0, PideLinea: 0, TipoCliente: null },
   { Tipo: "Reproceso",    Prefijo: "RS", Nombre: "Reproceso",     Destino: "Area",    Orden: 7, PideEmbarque: 0, PidePedido: 0, PideLinea: 0, TipoCliente: null },
