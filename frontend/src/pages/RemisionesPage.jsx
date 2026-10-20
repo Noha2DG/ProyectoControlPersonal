@@ -27,12 +27,13 @@ const ESTATUS_BADGE = {
   Anulada:    "bg-red-100 text-red-700",
 };
 
-// Los tres primeros (producto que SALE de la planta) en tonos fríos; los tres de traslado interno en
+// Los cuatro primeros (producto que SALE de la planta) en tonos fríos; los tres de traslado interno en
 // tonos cálidos — así se distinguen de un vistazo en la lista sin tener que leer el nombre.
 const TIPO_BADGE = {
   VentaLocal:   "bg-blue-100 text-blue-700",
   Exportacion:  "bg-purple-100 text-purple-700",
   Maquila:      "bg-teal-100 text-teal-700",
+  RetornoMaquila: "bg-cyan-100 text-cyan-700",
   Reempaque:    "bg-amber-100 text-amber-700",
   Reetiquetado: "bg-orange-100 text-orange-700",
   Reproceso:    "bg-rose-100 text-rose-700",
