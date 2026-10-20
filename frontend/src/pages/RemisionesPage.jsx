@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { fmtNum } from "../utils/numero.js";
 import { authHeader, usePuede, useAuth } from "../context/AuthContext.jsx";
 import { useColWidths, useOrden, ordenarFilas, Th, Colgroup } from "../components/ResizableTh.jsx";
@@ -55,22 +55,23 @@ async function leerJSON(res) {
 }
 
 function destinoDe(r) {
-  if (r.AreaDestino) {
-    const area = r.NombreAreaDestino || r.AreaDestino;
-    return r.NombreRecibidoPor ? `${area} — recibe ${r.NombreRecibidoPor}` : area;
+  if (r.BodegaDestino || r.AreaDestino) {
+    // La bodega a la que se cargó; las remisiones de antes de oct 2026 sin bodega muestran su área.
+    const lugar = r.NombreBodegaDestino || r.NombreAreaDestino || r.BodegaDestino || r.AreaDestino;
+    return r.NombreRecibidoPor ? `${lugar} — recibe ${r.NombreRecibidoPor}` : lugar;
   }
   if (!r.NombreCliente) return "-";
   return r.NombreCliente + (r.NombreSubcliente ? ` — ${r.NombreSubcliente}` : "");
 }
 
 // ── Formulario de cabecera (crear y editar) ───────────────────────────────────────────────────────
-function ModalRemision({ remision, series, clientes, areas, empleados, onGuardar, onClose }) {
+function ModalRemision({ remision, series, clientes, bodegas, empleados, onGuardar, onClose }) {
   const editando = !!remision;
   const [tipo, setTipo] = useState(remision?.Tipo ?? "");
   const [fecha, setFecha] = useState(remision?.Fecha ?? new Date().toISOString().slice(0, 10));
   const [codigoCliente, setCodigoCliente] = useState(remision?.CodigoCliente != null ? String(remision.CodigoCliente) : "");
   const [codigoSubcliente, setCodigoSubcliente] = useState(remision?.CodigoSubcliente ?? "");
-  const [areaDestino, setAreaDestino] = useState(remision?.AreaDestino ?? "");
+  const [bodegaDestino, setBodegaDestino] = useState(remision?.BodegaDestino ?? "");
   const [recibidoPor, setRecibidoPor] = useState(remision?.RecibidoPor ?? "");
   const [codigoPedido, setCodigoPedido] = useState(remision?.CodigoPedido ?? "");
   const [esMixta, setEsMixta] = useState(remision?.EsMixta ?? false);
@@ -81,21 +82,6 @@ function ModalRemision({ remision, series, clientes, areas, empleados, onGuardar
   const [subclientes, setSubclientes] = useState([]);
   const [error, setError] = useState("");
   const [guardando, setGuardando] = useState(false);
-
-  // Las áreas que pueden recibir producto, agrupadas por su bodega y en el orden del flujo de
-  // planta (Recepción, Descongelado, Pelado/Descabezado...), no alfabético: así el operador busca
-  // el destino por dónde va el camarón y no por la letra con que empieza.
-  const areasPorBodega = useMemo(() => {
-    const porBodega = new Map();
-    for (const a of areas) {
-      if (!a.BodegaVirtualCodigo) continue;   // baño, cafetería, RRHH: el producto no pasa por ahí
-      if (!porBodega.has(a.NombreBodega)) porBodega.set(a.NombreBodega, { orden: a.OrdenBodega ?? 99, lista: [] });
-      porBodega.get(a.NombreBodega).lista.push(a);
-    }
-    return [...porBodega.entries()]
-      .sort((x, y) => x[1].orden - y[1].orden)
-      .map(([nombre, v]) => [nombre, v.lista]);
-  }, [areas]);
 
   const serie = series.find(s => s.Tipo === tipo);
   const aCliente = serie?.Destino === "Cliente";
@@ -145,7 +131,7 @@ function ModalRemision({ remision, series, clientes, areas, empleados, onGuardar
         // claridad del payload, pero la fuente de verdad es CodigoPedido.
         CodigoCliente: aCliente ? Number(codigoCliente) : null,
         CodigoSubcliente: aCliente ? codigoSubcliente : null,
-        AreaDestino: aCliente ? null : areaDestino,
+        BodegaDestino: aCliente ? null : bodegaDestino,
         RecibidoPor: aCliente ? null : recibidoPor,
         CodigoPedido: pidePedido ? codigoPedido : null,
         EsMixta: pidePedido ? esMixta : false,
@@ -256,26 +242,21 @@ function ModalRemision({ remision, series, clientes, areas, empleados, onGuardar
             </div>
           ) : (
             <div>
-              <label className="block text-xs font-medium text-gray-500 mb-1">Área de destino *</label>
-              {/* Agrupado por bodega, y solo las áreas que tienen una: sin este filtro la lista trae
-                  las 74 — Baño, Cafetería, RRHH — y se puede despachar producto a un lugar donde no
-                  hay dónde ponerlo. Se sigue eligiendo el ÁREA, no la bodega, porque el papel
-                  distingue "Pelado" de "Descabezado" aunque sean el mismo piso: eso no es dónde va
-                  el producto sino qué se le va a hacer. */}
-              <select required value={areaDestino} onChange={e => setAreaDestino(e.target.value)}
+              <label className="block text-xs font-medium text-gray-500 mb-1">Bodega de destino *</label>
+              {/* Se elige la BODEGA a la que se carga el producto, no el área: el área es dónde
+                  marca la gente (Encargado, QC, Soporte…), la bodega es dónde queda el producto.
+                  Solo las que llevan inventario al piso, en el orden del flujo de planta — así lo
+                  que sale de bodega siempre aparece en el piso de alguien. */}
+              <select required value={bodegaDestino} onChange={e => setBodegaDestino(e.target.value)}
                 className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400">
                 <option value="">Selecciona...</option>
-                {areasPorBodega.map(([bodega, lista]) => (
-                  <optgroup key={bodega} label={bodega}>
-                    {lista.map(a => <option key={a.Codigo} value={a.Codigo}>{a.Nombre}</option>)}
-                  </optgroup>
-                ))}
+                {bodegas.map(b => <option key={b.Codigo} value={b.Codigo}>{b.Nombre}</option>)}
               </select>
-              <p className="text-xs text-gray-400 mt-1">El producto no sale de la planta: se traslada a esta área y vuelve a ingresar como producto nuevo, con etiqueta nueva.</p>
+              <p className="text-xs text-gray-400 mt-1">Traslado interno: el producto no sale de la planta, se carga al piso de esta bodega.</p>
               <div className="mt-4">
                 <label className="block text-xs font-medium text-gray-500 mb-1">Recibido por *</label>
                 <EmpleadoAutocomplete empleados={empleados} value={recibidoPor} onSelect={setRecibidoPor} />
-                <p className="text-xs text-gray-400 mt-1">Quién recibe el producto en esa área.</p>
+                <p className="text-xs text-gray-400 mt-1">Quién recibe el producto en esa bodega.</p>
               </div>
             </div>
           ))}
@@ -854,7 +835,7 @@ export default function RemisionesPage() {
   const [filtroFecha, setFiltroFecha] = useState("");
   const [series, setSeries] = useState([]);
   const [clientes, setClientes] = useState([]);
-  const [areas, setAreas] = useState([]);
+  const [bodegas, setBodegas] = useState([]);
   const [empleados, setEmpleados] = useState([]);
   const [modal, setModal] = useState(null); // { remision } — null = cerrado
   const [panelId, setPanelId] = useState(null);
@@ -872,8 +853,10 @@ export default function RemisionesPage() {
       .then(data => { if (Array.isArray(data)) setSeries(data); });
     fetch("/api/clientes", { headers: authHeader() }).then(r => r.json())
       .then(data => { if (Array.isArray(data)) setClientes(data.filter(c => c.Activo)); });
-    fetch("/api/areas", { headers: authHeader() }).then(r => r.json())
-      .then(data => { if (Array.isArray(data)) setAreas(data.filter(a => a.Activa)); });
+    // Destinos de un traslado interno: las bodegas que llevan inventario al piso (ya vienen en el
+    // orden del flujo de planta).
+    fetch("/api/bodegas", { headers: authHeader() }).then(r => r.json())
+      .then(data => { if (Array.isArray(data)) setBodegas(data.filter(b => b.Activo && b.LlevaPiso)); });
     fetch("/api/empleados", { headers: authHeader() }).then(r => r.json())
       .then(data => { if (Array.isArray(data)) setEmpleados(data.filter(e => e.Estado === "Activo")); });
   }, []);
@@ -1001,7 +984,7 @@ export default function RemisionesPage() {
       </div>
 
       {modal && (
-        <ModalRemision remision={modal.remision} series={series} clientes={clientes} areas={areas} empleados={empleados}
+        <ModalRemision remision={modal.remision} series={series} clientes={clientes} bodegas={bodegas} empleados={empleados}
           onGuardar={handleGuardar} onClose={() => setModal(null)} />
       )}
       {panelId != null && (

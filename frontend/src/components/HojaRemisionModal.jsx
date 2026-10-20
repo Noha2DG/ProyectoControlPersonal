@@ -44,7 +44,7 @@ function ContenidoHoja({ remision }) {
   }, {})).sort((a, b) => (a.Linea ?? 0) - (b.Linea ?? 0));
 
   const destino = interno
-    ? (remision.NombreAreaDestino || remision.AreaDestino)
+    ? (remision.NombreBodegaDestino || remision.NombreAreaDestino || remision.BodegaDestino || remision.AreaDestino)
     : (remision.NombreCliente || "-") + (remision.NombreSubcliente ? ` — ${remision.NombreSubcliente}` : "");
 
   return (
@@ -67,7 +67,7 @@ function ContenidoHoja({ remision }) {
 
       <div className="border-y-2 border-gray-800 py-3 mb-5 grid grid-cols-2 gap-x-8 gap-y-2 text-base">
         <div>
-          <span className="text-gray-400">{interno ? "Área de destino:" : "Cliente:"}</span>{" "}
+          <span className="text-gray-400">{interno ? "Bodega de destino:" : "Cliente:"}</span>{" "}
           <span className="font-semibold">{destino}</span>
         </div>
         {remision.CodigoPedido && (

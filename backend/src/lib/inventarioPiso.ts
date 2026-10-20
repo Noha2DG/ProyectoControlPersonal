@@ -42,21 +42,25 @@ const SQL_LINEAS = `
  * en absoluto si la confirmación falla.
  */
 export async function registrarIngresoDesdeRemision(
-  tx: any, remisionId: number, areaDestino: string, fechaJornada: string, operador: string
+  tx: any, remisionId: number, destino: { BodegaDestino?: string | null; AreaDestino?: string | null },
+  fechaJornada: string, operador: string
 ): Promise<{ lineas: number; kg: number }> {
-  // La remisión trae el ÁREA de destino (Remisiones.AreaDestino), pero el inventario al piso vive
-  // por BODEGA: Pelado/Descabezado son siete áreas que comparten el mismo piso. Se traduce acá.
+  // Desde oct 2026 la remisión trae la BODEGA a la que se carga (Remisiones.BodegaDestino). Las de
+  // antes solo traen el ÁREA (AreaDestino) y se traduce por su bodega —  Pelado son seis áreas que
+  // comparten el mismo piso.
   //
   // LlevaPiso = 1 es parte de la condición, no un adorno: hay bodegas que existen en el catálogo
-  // sin llevar inventario al piso — las cinco todavía sin decidir (Empaque IQF, Reempaque…) y las
-  // que solo son origen de polín (Bodega, Devoluciones). Sin este filtro, una remisión a cualquiera
-  // de ellas abriría un saldo al piso que nadie va a cuadrar nunca.
-  const [ar]: any[] = await tx.$queryRawUnsafe(
-    `SELECT a.BodegaVirtualCodigo AS Bodega FROM Areas a
-       JOIN BodegaVirtual b ON b.Codigo = a.BodegaVirtualCodigo AND b.LlevaPiso = 1
-      WHERE a.Codigo = ?`, areaDestino);
-  const bodega = ar?.Bodega;
-  if (!bodega) return { lineas: 0, kg: 0 };   // área que no lleva inventario al piso (baño, RRHH…)
+  // sin llevar inventario al piso —  las que solo son origen de polín (Bodega, Devoluciones). Sin
+  // este filtro, una remisión a cualquiera de ellas abriría un saldo al piso que nadie va a cuadrar.
+  const [b]: any[] = destino.BodegaDestino
+    ? await tx.$queryRawUnsafe(
+        `SELECT Codigo AS Bodega FROM BodegaVirtual WHERE Codigo = ? AND LlevaPiso = 1`, destino.BodegaDestino)
+    : await tx.$queryRawUnsafe(
+        `SELECT a.BodegaVirtualCodigo AS Bodega FROM Areas a
+           JOIN BodegaVirtual b ON b.Codigo = a.BodegaVirtualCodigo AND b.LlevaPiso = 1
+          WHERE a.Codigo = ?`, destino.AreaDestino ?? null);
+  const bodega = b?.Bodega;
+  if (!bodega) return { lineas: 0, kg: 0 };   // bodega sin inventario al piso, o área sin bodega
   const lineas: any[] = await tx.$queryRawUnsafe(SQL_LINEAS, remisionId);
   if (!lineas.length) return { lineas: 0, kg: 0 };
 

@@ -66,7 +66,7 @@ async function main() {
   let lineas = 0, kg = 0;
   for (const r of remisiones) {
     const out = await prisma.$transaction(async (tx) =>
-      registrarIngresoDesdeRemision(tx, r.RemisionId, area, fecha, "Carga desde remisión"));
+      registrarIngresoDesdeRemision(tx, r.RemisionId, { AreaDestino: area }, fecha, "Carga desde remisión"));
     lineas += out.lineas; kg += out.kg;
     console.log(`  ${r.Folio}: ${out.lineas} líneas, ${out.kg.toFixed(2)} kg`);
   }
