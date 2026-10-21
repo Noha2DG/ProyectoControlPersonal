@@ -12,14 +12,16 @@
 //
 // Todo vive en el kardex del piso (MovimientoPiso), enlazado al lote con LoteProceso/ClaseProceso:
 //   DESTAJO   piso de la bodega → lote de Destajo   (BodegaOrigen = la bodega)
-//   BAJADO    mesa → piso de la bodega              (BodegaDestino = la bodega; se retoma otro día)
+//   BAJADO    mesa → piso de la bodega              (BodegaDestino = la bodega; se retoma otro día).
+//             Motivo "Sobrante" (no se terminó) o "Rojo" (se separa y se vuelve a revisar).
 //   DESCARTE  mesa → nada                           (sin bodega: es merma, no inventario)
 // UNIFICAR junta varias líneas de la misma finca en el lote de una de ellas (la de más kilos por
 // omisión); cada línea sigue diciendo en el kardex de qué lote de origen vino.
 // No hace falta ninguna columna nueva: las de enlace quedaron puestas con el esquema de 41c50a2.
 //
-// RENDIMIENTO del lote = Procesado ÷ (Ingreso − Bajado). Lo bajado no se trabajó, así que no cuenta;
-// el descarte (rojo incluido) sí se trabajó y se perdió, así que se queda dentro como merma.
+// RENDIMIENTO del lote = Procesado ÷ (Ingreso − Bajado). Lo bajado (sobrante o rojo) no se trabajó,
+// así que no cuenta; el descarte sí se trabajó y se perdió, así que se queda dentro como merma.
+// El rojo NO es descarte: se separa, vuelve al piso y se revisa otra vez.
 import { componerCodigoLote, descomponerCodigoLote, piscinaRequiereCiclo, FINCAS_SIN_CICLO } from "./codigoLote.ts";
 
 // Bodegas cuyo piso alimenta Destajo. Pelado y Descabezado son dos áreas con piso propio desde el
@@ -101,13 +103,13 @@ async function saldoLineas(client: any, bodega: string, lotes?: string[]) {
            t.Talla, ta.Descripcion AS DescripcionTalla, DATE_FORMAT(t.FechaLote, '%Y-%m-%d') AS FechaLote,
            DATE_FORMAT(MIN(CASE WHEN t.Delta > 0 THEN t.FechaProduccion END), '%Y-%m-%d') AS FechaIngreso,
            ROUND(SUM(t.Delta), 2) AS Kg, SUM(t.Masters) AS Masters, MAX(t.KgPorMaster) AS KgPorMaster,
-           MAX(t.EsBajado) AS EsBajado
+           MAX(t.EsBajado) AS EsBajado, MAX(t.EsRojo) AS EsRojo
       FROM (
         SELECT RemisionId, Lote, Clase, Talla, FechaLote, FechaProduccion,  PesoKg AS Delta,  Masters, KgPorMaster,
-               Tipo = 'BAJADO' AS EsBajado
+               Tipo = 'BAJADO' AS EsBajado, Tipo = 'BAJADO' AND Motivo LIKE 'Rojo%' AS EsRojo
           FROM MovimientoPiso WHERE BodegaDestino = ? ${filtro}
         UNION ALL
-        SELECT RemisionId, Lote, Clase, Talla, FechaLote, FechaProduccion, -PesoKg, -Masters, KgPorMaster, 0
+        SELECT RemisionId, Lote, Clase, Talla, FechaLote, FechaProduccion, -PesoKg, -Masters, KgPorMaster, 0, 0
           FROM MovimientoPiso WHERE BodegaOrigen = ? ${filtro}
       ) t
       JOIN Clase cl ON cl.Clase = t.Clase
@@ -123,6 +125,7 @@ async function saldoLineas(client: any, bodega: string, lotes?: string[]) {
     Masters: r.Masters == null ? null : Number(r.Masters),
     KgPorMaster: r.KgPorMaster == null ? null : Number(r.KgPorMaster),
     EsBajado: Number(r.EsBajado) === 1,
+    EsRojo: Number(r.EsRojo) === 1,
   }));
 }
 
@@ -166,11 +169,15 @@ export async function saldoParaDestajo(client: any, bodega: string, fecha: strin
       CodigoFinca: d?.piscina.CodigoFinca ?? null,
       NombreFinca: d ? nombreFinca.get(d.piscina.CodigoFinca) ?? d.piscina.CodigoFinca : null,
       Ciclo: d?.ciclo ?? null,
+      NoUnificable: !!d && noSeUnifica(d.piscina),
       LoteDestajo: loteDestajo,
       ExisteHoy: loteDestajo ? existentes.get(`${loteDestajo}|${l.Clase}`) ?? null : null,
     };
   });
 }
+
+// Sifones y lotes genéricos (EM00-E00, TM00-E00) van siempre solos: no entran a una unificación.
+const noSeUnifica = (p: { Nombre: string }) => /SIFON|00-E00/i.test(p.Nombre);
 
 // ── Tomar del piso ──────────────────────────────────────────────────────────────────────────────
 type LineaToma = {
@@ -252,6 +259,10 @@ export async function tomarDelPiso(
     }
     if (FINCAS_SIN_CICLO.includes(fincas[0])) {
       throw new ErrorNegocio(400, `Los lotes de ${fincas[0]} no se unifican: cada lote es un contenedor y su merma se calcula por separado`);
+    }
+    const solos = [...new Set(destinos.filter(d => noSeUnifica(d.piscina)).map(d => d.l.Lote))];
+    if (solos.length) {
+      throw new ErrorNegocio(400, `${solos.join(", ")} no se unifica: sifón y lotes genéricos (00-E00) van solos`);
     }
     // El lote que da el código: siempre el que escogió el encargado entre los marcados.
     if (!p.baseLote) throw new ErrorNegocio(400, "Escoja con cuál lote se unifica");
@@ -344,6 +355,11 @@ export async function tomarDelPiso(
 type Ajuste = { lote: string; clase: string; peso: number; talla?: number | null; nota?: string | null;
                 bodega?: string | null; motivo?: string | null; fecha: string; operador: string };
 
+// "Rojo: se ve oscuro" — el motivo va primero para que el saldo reconozca el rojo (Motivo LIKE 'Rojo%').
+const textoMotivo = (a: Ajuste) =>
+  [a.motivo, a.nota].map(x => (x ? String(x).trim() : "")).filter(Boolean).join(": ").slice(0, 200) || null;
+const MOTIVOS_BAJADO = ["Sobrante", "Rojo"];
+
 // El techo de un ajuste: no se puede bajar ni descartar más de lo que queda sin pesar en el lote.
 function validarAjuste(c: Awaited<ReturnType<typeof cuadreLote>>, peso: number, que: string) {
   if (!(peso > 0)) throw new ErrorNegocio(400, "El peso debe ser mayor que cero");
@@ -352,11 +368,16 @@ function validarAjuste(c: Awaited<ReturnType<typeof cuadreLote>>, peso: number, 
   }
 }
 
-/** Lo que no se terminó en la mesa vuelve al piso de la bodega; se retoma otro día desde "Tomar del piso". */
+/**
+ * Lo que no se terminó en la mesa (Sobrante) o lo que se separa para revisarlo otra vez (Rojo) vuelve
+ * al piso de la bodega; se retoma otro día desde "Tomar del piso".
+ */
 export async function bajarAlPiso(tx: any, a: Ajuste) {
   const c = await cuadreLote(tx, a.lote, a.clase);
   const peso = r2(Number(a.peso));
   validarAjuste(c, peso, "bajar");
+  const motivo = a.motivo ? String(a.motivo) : "Sobrante";
+  if (!MOTIVOS_BAJADO.includes(motivo)) throw new ErrorNegocio(400, `Motivo de bajado no válido: ${motivo}`);
 
   // Por omisión, al piso del que salió el lote; un lote manual (fresco) no tiene, y va a Pelado.
   let bodega = a.bodega ? String(a.bodega) : null;
@@ -373,16 +394,19 @@ export async function bajarAlPiso(tx: any, a: Ajuste) {
                                 Peso, UM, PesoKg, Motivo, LoteProceso, ClaseProceso, RegistradoPor)
     VALUES ('BAJADO', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     a.fecha, bodega, c.Lote, c.Clase, Number(a.talla) || 900, c.FechaProduccion,
-    peso, c.UM, aKg(peso, c.UM), a.nota ? String(a.nota).trim().slice(0, 200) : null, c.Lote, c.Clase, a.operador);
+    peso, c.UM, aKg(peso, c.UM), textoMotivo({ ...a, motivo }), c.Lote, c.Clase, a.operador);
   return { ok: true, Bodega: bodega };
 }
 
-/** Descarte (rojo incluido): merma del lote. No va al piso y SÍ cuenta en el rendimiento. */
+/** Descarte: merma del lote. No va al piso y SÍ cuenta en el rendimiento. El rojo no es descarte. */
 export async function registrarDescarte(tx: any, a: Ajuste) {
   const c = await cuadreLote(tx, a.lote, a.clase);
   const peso = r2(Number(a.peso));
   validarAjuste(c, peso, "descartar");
-  const motivo = [a.motivo, a.nota].map(x => (x ? String(x).trim() : "")).filter(Boolean).join(": ").slice(0, 200) || null;
+  if (/^rojo/i.test(String(a.motivo ?? ""))) {
+    throw new ErrorNegocio(400, "El rojo no es descarte: se separa y se baja al piso para revisarlo otra vez");
+  }
+  const motivo = textoMotivo(a);
   await tx.$executeRawUnsafe(`
     INSERT INTO MovimientoPiso (Tipo, FechaProduccion, Lote, Clase, Talla, FechaLote,
                                 Peso, UM, PesoKg, Motivo, LoteProceso, ClaseProceso, RegistradoPor)

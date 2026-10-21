@@ -88,7 +88,9 @@ export function TomarDelPisoModal({ onHecho, onClose }) {
     }
     return [...m.values()].sort((a, b) => b.kg - a.kg);
   })();
-  const puedeUnificar = candidatos.length >= 2 && fincas.size === 1;
+  // Sifones y lotes genéricos (EM00-E00, TM00-E00) van siempre solos.
+  const solos = [...new Set(elegidas.filter(l => l.NoUnificable).map(l => l.Lote))];
+  const puedeUnificar = candidatos.length >= 2 && fincas.size === 1 && solos.length === 0;
   const clasesMarcadas = [...new Set(elegidas.map(l => l.Clase))];
 
   // Qué lotes saldrían sin unificar: uno por código + clase.
@@ -249,7 +251,7 @@ export function TomarDelPisoModal({ onHecho, onClose }) {
                     <td className="px-3 py-2 font-mono text-gray-700">{l.Clase}</td>
                     <td className="px-3 py-2 text-gray-700 whitespace-nowrap">{l.Talla === 900 ? <span className="text-gray-300">—</span> : l.DescripcionTalla}</td>
                     <td className="px-3 py-2 text-gray-600 whitespace-nowrap">
-                      {l.EsBajado ? <span className="text-amber-700">Bajado de la mesa</span> : (l.FolioRemision || "—")}
+                      {l.EsBajado ? <span className="text-amber-700">Bajado de la mesa{l.EsRojo ? " · rojo a revisar" : ""}</span> : (l.FolioRemision || "—")}
                       <span className="block text-[11px] text-gray-400">{l.DiasAlPiso === 0 ? "hoy" : `${l.DiasAlPiso} día${l.DiasAlPiso !== 1 ? "s" : ""} al piso`}</span>
                     </td>
                     <td className="px-3 py-2 text-right font-semibold text-gray-800 whitespace-nowrap">{fmtNum(l.Kg)}</td>
@@ -298,6 +300,9 @@ export function TomarDelPisoModal({ onHecho, onClose }) {
         {fincas.size > 1 && (
           <p className="text-xs text-amber-700">Para unificar, todas las líneas tienen que ser de la misma finca.</p>
         )}
+        {solos.length > 0 && candidatos.length >= 2 && (
+          <p className="text-xs text-amber-700">{solos.join(", ")}: sifón y lotes genéricos (00-E00) no se unifican, van solos.</p>
+        )}
         {error && <p className="text-sm text-red-600">{error}</p>}
         <div className="flex flex-wrap justify-end gap-2">
           <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 transition">Cancelar</button>
@@ -318,7 +323,9 @@ export function TomarDelPisoModal({ onHecho, onClose }) {
 }
 
 // ── Bajar al piso / Descarte ────────────────────────────────────────────────────────────────────
-const MOTIVOS_DESCARTE = ["Rojo", "Descarte", "Otro"];
+// El rojo NO es descarte: se separa y se vuelve a revisar, así que se BAJA al piso.
+const MOTIVOS_DESCARTE = ["Descarte", "Otro"];
+const MOTIVOS_BAJADO = [{ valor: "Sobrante", texto: "Sobrante" }, { valor: "Rojo", texto: "Rojo (a revisar)" }];
 
 export function AjusteLoteModal({ tipo, lote, tallas, onHecho, onClose }) {
   const bajar = tipo === "bajar";
@@ -326,7 +333,7 @@ export function AjusteLoteModal({ tipo, lote, tallas, onHecho, onClose }) {
   const [talla, setTalla] = useState("");
   const [bodega, setBodega] = useState("");
   const [bodegas, setBodegas] = useState([]);
-  const [motivo, setMotivo] = useState(MOTIVOS_DESCARTE[0]);
+  const [motivo, setMotivo] = useState(bajar ? MOTIVOS_BAJADO[0].valor : MOTIVOS_DESCARTE[0]);
   const [nota, setNota] = useState("");
   const [error, setError] = useState("");
   const [guardando, setGuardando] = useState(false);
@@ -343,7 +350,7 @@ export function AjusteLoteModal({ tipo, lote, tallas, onHecho, onClose }) {
       const res = await fetch(`${API}/lote/${enc(lote.Lote)}/${enc(lote.Clase)}/${bajar ? "bajar" : "descarte"}`, {
         method: "POST", headers: { "Content-Type": "application/json", ...authHeader() },
         body: JSON.stringify({ Peso: Number(peso), Talla: talla || null, Nota: nota || null,
-                               ...(bajar ? { Bodega: bodega || null } : { Motivo: motivo }) }),
+                               Motivo: motivo, ...(bajar ? { Bodega: bodega || null } : {}) }),
       });
       const d = await leerJSON(res);
       if (!res.ok) { setError(d.error || "No se pudo guardar"); return; }
@@ -358,8 +365,8 @@ export function AjusteLoteModal({ tipo, lote, tallas, onHecho, onClose }) {
       <form onSubmit={guardar} className="px-5 py-4 space-y-4">
         <p className="text-xs text-gray-500">
           {bajar
-            ? "Lo que no se terminó en la mesa vuelve al inventario al piso y se toma otro día desde \"Tomar del piso\". No cuenta en el rendimiento de este lote."
-            : "Merma del lote (rojo incluido). No va al piso y sí cuenta en el rendimiento."}
+            ? "Lo que no se terminó en la mesa, o el rojo que se separa para revisarlo otra vez, vuelve al inventario al piso y se toma otro día desde \"Tomar del piso\". No cuenta en el rendimiento de este lote."
+            : "Merma del lote. No va al piso y sí cuenta en el rendimiento. El rojo no es descarte: se baja al piso."}
           {" "}Quedan <b>{fmtNum(Math.max(lote.Pendiente, 0))} {lote.UM}</b> sin pesar.
         </p>
         <div className="grid grid-cols-2 gap-4">
@@ -377,6 +384,19 @@ export function AjusteLoteModal({ tipo, lote, tallas, onHecho, onClose }) {
             </select>
           </div>
         </div>
+        {bajar && (
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Motivo *</label>
+            <div className="flex gap-2">
+              {MOTIVOS_BAJADO.map(m => (
+                <button type="button" key={m.valor} onClick={() => setMotivo(m.valor)}
+                  className={`px-3 py-1.5 text-sm rounded-lg border transition ${motivo === m.valor ? "bg-blue-600 text-white border-blue-600" : "border-gray-300 text-gray-600 hover:bg-gray-50"}`}>
+                  {m.texto}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
         {bajar ? (
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1">A qué piso</label>
@@ -461,7 +481,7 @@ export function MovimientosPisoLote({ lote, recarga, puedeEditar, onCambio }) {
               <div key={m.MovimientoId} className="flex items-center gap-3 text-sm py-1">
                 <span className="flex-1 min-w-0 truncate text-gray-700">
                   {tipo === "DESTAJO" && <><span className="font-mono">{m.LoteOrigen}</span>{m.FolioRemision ? ` · ${m.FolioRemision}` : ""}</>}
-                  {tipo === "BAJADO" && <>{m.NombreBodega} · {m.Fecha}</>}
+                  {tipo === "BAJADO" && <>{m.Motivo ? `${m.Motivo} · ` : ""}{m.NombreBodega} · {m.Fecha}</>}
                   {tipo === "DESCARTE" && <>{m.Motivo || "Descarte"}</>}
                   {m.Talla !== 900 && <span className="text-gray-400"> · {m.DescripcionTalla}</span>}
                 </span>

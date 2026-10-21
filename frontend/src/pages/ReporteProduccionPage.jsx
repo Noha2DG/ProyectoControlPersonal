@@ -1079,8 +1079,8 @@ export default function ReporteProduccionPage() {
                     <p className="text-xs text-gray-500">Materia Prima Ingresada</p>
                     <p className="text-lg font-bold text-gray-800">{fmtNum(loteHoja.PesoIngreso)}</p>
                   </div>
-                  {/* Lo bajado al piso no se trabajó en este lote y sale del rendimiento; el descarte
-                      (rojo incluido) es merma y se queda dentro. */}
+                  {/* Lo bajado al piso (sobrante o rojo a revisar) no se trabajó en este lote y sale del
+                      rendimiento; el descarte es merma y se queda dentro. */}
                   <div className="border-2 border-gray-800 rounded px-3 py-2 text-center">
                     <p className="text-xs text-gray-500">Bajado al piso</p>
                     <p className="text-lg font-bold text-gray-700">{fmtNum(loteHoja.Bajado || 0)}</p>

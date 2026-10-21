@@ -30,6 +30,8 @@ const PISO = [
   { Lote: "G719EM03-E05-7", Clase: "C20", Talla: 233, Kg: 5.45,  FechaLote: "2026-06-17" },
   { Lote: "G220EM00-E00",   Clase: "C20", Talla: 237, Kg: 18.14, FechaLote: "2026-05-11" },
   { Lote: "G324TM05-E04-7", Clase: "C20", Talla: 237, Kg: 5.4,   FechaLote: "2026-06-10" },
+  { Lote: "G120EM03-E04-5", Clase: "C20", Talla: 229, Kg: 20,    FechaLote: "2026-08-07" },
+  { Lote: "G321SIFON-E",    Clase: "C26", Talla: 237, Kg: 9.07,  FechaLote: "2026-03-17" },
   { Lote: "ZZ9NOEXISTE",    Clase: "C20", Talla: 237, Kg: 3,     FechaLote: null },
 ];
 
@@ -86,22 +88,30 @@ const PISO = [
         { RemisionId: null, Lote: "G324TM05-E04-7", Clase: "C20", Talla: 237, FechaLote: "2026-06-10", Kg: 5.4 },
       ] }), /misma finca/, "no se unifican dos fincas");
       const em719 = { RemisionId: null, Lote: "G719EM03-E05-7", Clase: "C20", Talla: 237, FechaLote: "2026-06-17" };
+      const em120 = { RemisionId: null, Lote: "G120EM03-E04-5", Clase: "C20", Talla: 229, FechaLote: "2026-08-07" };
       const em220 = { RemisionId: null, Lote: "G220EM00-E00", Clase: "C20", Talla: 237, FechaLote: "2026-05-11" };
+      const sifon = { RemisionId: null, Lote: "G321SIFON-E", Clase: "C26", Talla: 237, FechaLote: "2026-03-17" };
       await falla(() => tomarDelPiso(tx, { bodega: "PELADO", unificar: true, fecha: HOY, operador: OP,
-        lineas: [{ ...em719, Kg: 10 }, { ...em220, Kg: 5 }] }), /Escoja con cuál lote/, "unificar sin escoger el lote se rechaza (no es automático)");
+        lineas: [{ ...em719, Kg: 10 }, { ...em120, Kg: 5 }] }), /Escoja con cuál lote/, "unificar sin escoger el lote se rechaza (no es automático)");
       const r3 = await tomarDelPiso(tx, { bodega: "PELADO", unificar: true, baseLote: "G719EM03-E05-7", fecha: HOY, operador: OP,
-        lineas: [{ ...em719, Kg: 10 }, { ...em220, Kg: 5 }] });
+        lineas: [{ ...em719, Kg: 10 }, { ...em120, Kg: 5 }] });
       const lote719 = componerCodigoLote("EM03-E05", HOY, "7");
       check(r3.lotes.length === 1 && r3.lotes[0].Lote === lote719 && r3.lotes[0].Kg === 15,
         `escogido el de más kilos (G719EM03-E05-7 → ${r3.lotes[0].Lote}), entran los 15 kg`);
       check((await cuadreLote(tx, lote719, "C20")).Ingreso === 40.45, "y se suma al lote de ese código que ya existía hoy (25.45 + 15)");
-      const r3b = await tomarDelPiso(tx, { bodega: "PELADO", unificar: true, baseLote: "G220EM00-E00", fecha: HOY, operador: OP,
-        lineas: [{ ...em719, Kg: 13.58 }, { ...em220, Kg: 13.14 }] });
+      const r3b = await tomarDelPiso(tx, { bodega: "PELADO", unificar: true, baseLote: "G120EM03-E04-5", fecha: HOY, operador: OP,
+        lineas: [{ ...em719, Kg: 13.58 }, { ...em120, Kg: 5 }] });
       const uni = r3b.lotes[0];
-      check(r3b.lotes.length === 1 && uni.Lote === componerCodigoLote("EM00-E00", HOY, "") && uni.Kg === 26.72,
+      check(r3b.lotes.length === 1 && uni.Lote === componerCodigoLote("EM03-E04", HOY, "5") && uni.Kg === 18.58,
         `con el lote escogido (el de menos kilos) va a ese: ${uni.Lote} ${uni.Kg} kg`);
       const origenes = (await movimientosDeLote(tx, uni.Lote, "C20")).filter(m => m.Tipo === "DESTAJO").map(m => m.LoteOrigen);
-      check(origenes.includes("G719EM03-E05-7") && origenes.includes("G220EM00-E00"), `el unificado guarda de qué lotes vino: ${origenes.join(", ")}`);
+      check(origenes.includes("G719EM03-E05-7") && origenes.includes("G120EM03-E04-5"), `el unificado guarda de qué lotes vino: ${origenes.join(", ")}`);
+      check((await linea("G220EM00-E00", 237))?.NoUnificable === true && (await linea("G321SIFON-E", 237))?.NoUnificable === true,
+        "la pantalla sabe que el genérico y el sifón no se unifican");
+      await falla(() => tomarDelPiso(tx, { bodega: "PELADO", unificar: true, baseLote: "G120EM03-E04-5", fecha: HOY, operador: OP,
+        lineas: [{ ...em220, Kg: 1 }, { ...em120, Kg: 1 }] }), /van solos/, "un lote genérico (EM00-E00) no se unifica");
+      await falla(() => tomarDelPiso(tx, { bodega: "PELADO", unificar: true, baseLote: "G120EM03-E04-5", fecha: HOY, operador: OP,
+        lineas: [{ ...sifon, Kg: 1 }, { ...em120, Kg: 1 }] }), /van solos/, "un sifón no se unifica");
       await falla(() => tomarDelPiso(tx, { bodega: "PELADO", unificar: true, baseLote: "G999XX", fecha: HOY, operador: OP,
         lineas: [{ RemisionId: null, Lote: "G324TM05-E04-7", Clase: "C20", Talla: 237, FechaLote: "2026-06-10", Kg: 1 }] }),
         /no está entre los que escogió/, "el lote escogido tiene que estar entre los marcados");
@@ -133,7 +143,9 @@ const PISO = [
 
       console.log("6. Bajar al piso y descarte");
       await bajarAlPiso(tx, { lote: loteK, clase: "D30", peso: 100, talla: 217, fecha: HOY, operador: OP });
-      await registrarDescarte(tx, { lote: loteK, clase: "D30", peso: 28.4, motivo: "Rojo", nota: "prueba", fecha: HOY, operador: OP });
+      await falla(() => registrarDescarte(tx, { lote: loteK, clase: "D30", peso: 1, motivo: "Rojo", fecha: HOY, operador: OP }),
+        /no es descarte/, "el rojo no se registra como descarte");
+      await registrarDescarte(tx, { lote: loteK, clase: "D30", peso: 28.4, motivo: "Descarte", nota: "prueba", fecha: HOY, operador: OP });
       c = await cuadreLote(tx, loteK, "D30");
       check(c.Bajado === 100 && c.Descarte === 28.4 && c.Pendiente === 847.7,
         `cuadre: ingreso 976.1, bajado 100, descarte 28.4, pendiente ${c.Pendiente}`);
@@ -145,7 +157,7 @@ const PISO = [
         /solo le quedan 847\.70/, "no se baja más de lo que queda sin pesar");
       const [desc]: any[] = await tx.$queryRawUnsafe(
         `SELECT BodegaOrigen, BodegaDestino, Motivo FROM MovimientoPiso WHERE LoteProceso = ? AND Tipo = 'DESCARTE'`, loteK);
-      check(desc.BodegaOrigen == null && desc.BodegaDestino == null && desc.Motivo === "Rojo: prueba", "el descarte no toca ningún piso");
+      check(desc.BodegaOrigen == null && desc.BodegaDestino == null && desc.Motivo === "Descarte: prueba", "el descarte no toca ningún piso");
 
       console.log("7. Al día siguiente se retoma lo bajado");
       const retoma = await tomarDelPiso(tx, { bodega: "PELADO", unificar: false, fecha: MANANA, operador: OP, lineas: [
@@ -179,8 +191,11 @@ const PISO = [
       const lin = { RemisionId: null, Lote: "G521EM05-E01-8", Clase: "C20", Talla: 237, FechaLote: "2026-07-01" };
       const rd = await tomarDelPiso(tx, { bodega: "PELADO", unificar: false, fecha: HOY, operador: OP, lineas: [{ ...lin, Kg: 50 }] });
       const ld = rd.lotes[0].Lote;
-      await bajarAlPiso(tx, { lote: ld, clase: "C20", peso: 10, fecha: HOY, operador: OP });
-      await registrarDescarte(tx, { lote: ld, clase: "C20", peso: 2, motivo: "Rojo", fecha: HOY, operador: OP });
+      await bajarAlPiso(tx, { lote: ld, clase: "C20", peso: 10, motivo: "Rojo", nota: "oscuro", talla: 233, fecha: HOY, operador: OP });
+      const rojo = await linea(ld, 233);
+      check(!!rojo && rojo.Kg === 10 && rojo.EsBajado && rojo.EsRojo, "el rojo se baja al piso marcado para revisarlo otra vez");
+      check((await cuadreLote(tx, ld, "C20")).Bajado === 10, "y cuenta como bajado (fuera del rendimiento), no como descarte");
+      await registrarDescarte(tx, { lote: ld, clase: "C20", peso: 2, motivo: "Descarte", fecha: HOY, operador: OP });
       const [tp]: any[] = await tx.$queryRawUnsafe(`SELECT Proceso, ClasePT FROM TransaccionesProduccion ORDER BY TransaccionId DESC LIMIT 1`);
       await tx.$executeRawUnsafe(`INSERT INTO TransaccionesProduccion (Lote, ClaseOrigen, Proceso, ClasePT, Talla, AlmacenOrigen, AlmacenDestino, RegistradoPor)
         VALUES (?, 'C20', ?, ?, 237, 'PISO', 'PISO', ?)`, ld, tp.Proceso, tp.ClasePT, OP);
