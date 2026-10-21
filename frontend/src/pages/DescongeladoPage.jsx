@@ -329,8 +329,17 @@ function ModalCerrarHoja({ hoja, onConfirmar, onCerrar }) {
 // Sirve para una remisión entera o para una línea suelta. En el primer caso el destino se pone una
 // vez arriba y baja a todas las líneas, porque lo normal es que una remisión entera vaya al mismo
 // lado; la que no, se corrige en su propia fila.
+// "2026-08-13" → "13-08-26": la fecha de producción del lote, para distinguir dos líneas del mismo lote.
+function fechaCorta(f) {
+  const [a, m, d] = String(f).slice(0, 10).split("-");
+  return `${d}-${m}-${a.slice(2)}`;
+}
+
 function ModalDescongelar({ titulo, lineas, hojaAbierta, destinos, empleados, auxiliares, inicioSugerido, onConfirmar, onCerrar }) {
-  const clave = l => `${l.RemisionId ?? "-"}|${l.Lote}|${l.Clase}|${l.Talla}`;
+  // La fecha del lote es parte de la llave: el mismo lote, clase y talla puede venir de dos fechas de
+  // producción (G433TM04-E04-6 del 13-ago y del 1-sep en RS-0077). Sin ella las dos filas compartían
+  // la misma casilla de masters.
+  const clave = l => `${l.RemisionId ?? "-"}|${l.Lote}|${l.Clase}|${l.Talla}|${l.FechaLote ?? ""}`;
 
   const [fila, setFila] = useState(() => Object.fromEntries(lineas.map(l =>
     [clave(l), { masters: String(l.Masters ?? 0), destino: "", peso: "" }])));
@@ -430,7 +439,10 @@ function ModalDescongelar({ titulo, lineas, hojaAbierta, destinos, empleados, au
                 const falta = (l.Masters ?? 0) - m;
                 return (
                   <tr key={clave(l)} className={m === 0 ? "opacity-40" : ""}>
-                    <td className="py-1.5 font-mono text-xs">{l.Lote}</td>
+                    <td className="py-1.5 font-mono text-xs">
+                      {l.Lote}
+                      {l.FechaLote && <span className="block font-sans text-[11px] text-gray-400">prod. {fechaCorta(l.FechaLote)}</span>}
+                    </td>
                     <td className="py-1.5 text-xs">
                       <span className="font-mono text-gray-500">{l.Clase}</span> {l.DescripcionClase}
                     </td>
@@ -775,7 +787,7 @@ function InventarioPiso({ saldo, resumen, puedeCrear, onDescongelar, onDevolver 
                     </td>
                   </tr>
                   {g.lineas.map(r => (
-                    <tr key={`${g.clave}|${r.Lote}|${r.Clase}|${r.Talla}`} className="hover:bg-gray-50">
+                    <tr key={`${g.clave}|${r.Lote}|${r.Clase}|${r.Talla}|${r.FechaLote ?? ""}`} className="hover:bg-gray-50">
                       <td className="px-3 py-1.5 pl-6 font-mono text-xs">{r.Lote}</td>
                       <td className="px-3 py-1.5 text-xs"><span className="font-mono text-gray-500">{r.Clase}</span> {r.DescripcionClase}</td>
                       <td className="px-3 py-1.5 text-xs">{r.DescripcionTalla}</td>
@@ -1174,7 +1186,7 @@ export default function DescongeladoPage() {
       ...extra,
       lineas: seleccion.map(s => ({
         Lote: s.linea.Lote, Clase: s.linea.Clase, Talla: s.linea.Talla, RemisionId: s.linea.RemisionId,
-        Masters: s.Masters, KgPorMaster: s.linea.KgPorMaster, UM: "KG",
+        FechaLote: s.linea.FechaLote, Masters: s.Masters, KgPorMaster: s.linea.KgPorMaster, UM: "KG",
         PesoReal: s.Peso, ...s.destino,
       })),
     });

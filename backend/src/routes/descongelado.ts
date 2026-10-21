@@ -779,14 +779,17 @@ router.post("/hojas/:id/salida", requireAuth, requirePerm("descongelado", "crear
 type LineaPiso = {
   Lote: string; Clase: string; um: string; talla: number; remId: number | null;
   masters: number | null; kgxm: number | null;
-  declarado: number; kgDecl: number; fechaLote: any;
+  declarado: number; kgDecl: number; fechaLote: string | null;
+  // La fecha del lote que escogió la pantalla. Null en una petición vieja que no la manda: ahí
+  // consumirDelPiso reparte por PEPS entre las fechas que haya.
+  fechaPedida: string | null;
   destino?: string | null; pesado?: number; kgReal?: number; termo?: string | null;
   motivo?: string | null;
 };
 
 // Normaliza lo que llegó por HTTP sin tocar la base. Todo lo que se pueda resolver acá afuera se
 // resuelve acá: dentro de la transacción cada viaje a la base cuesta latencia de red.
-function normalizarLineas(crudas: any[], pideDestino: boolean, termoGeneral: string | null): LineaPiso[] {
+export function normalizarLineas(crudas: any[], pideDestino: boolean, termoGeneral: string | null): LineaPiso[] {
   return crudas.map(l => {
     const Lote = String(l.Lote ?? "").trim();
     const Clase = String(l.Clase ?? "").trim();
@@ -800,12 +803,13 @@ function normalizarLineas(crudas: any[], pideDestino: boolean, termoGeneral: str
       throw new ErrorNegocio(400, `${Lote} ${Clase}: el peso declarado debe ser mayor que cero`);
     }
 
+    const fechaPedida = /^\d{4}-\d{2}-\d{2}/.test(String(l.FechaLote ?? "")) ? String(l.FechaLote).slice(0, 10) : null;
     const base: LineaPiso = {
       Lote, Clase, um, masters, kgxm, declarado,
       talla: l.Talla ? Number(l.Talla) : 900,
       remId: l.RemisionId ? Number(l.RemisionId) : null,
       kgDecl: aKg(declarado, um),
-      fechaLote: null,
+      fechaLote: fechaPedida, fechaPedida,
     };
 
     if (!pideDestino) {
@@ -834,7 +838,10 @@ function normalizarLineas(crudas: any[], pideDestino: boolean, termoGeneral: str
 
 // El saldo al piso se lleva POR REMISIÓN: la misma talla del mismo lote entrada en dos remisiones
 // son dos saldos distintos y no se pueden mezclar.
+// Y POR FECHA DEL LOTE: el mismo texto de lote puede traer dos fechas de producción (G433TM04-E04-6
+// vino del 13-ago y del 1-sep en RS-0077) y cada una es su propio saldo, con su propio lugar en el PEPS.
 const claveDeLinea = (r: any) => `${r.remId ?? ""}|${r.Lote}|${r.Clase}|${r.talla}`;
+const claveConFecha = (r: any) => `${claveDeLinea(r)}|${r.fechaLote ?? ""}`;
 
 /**
  * Valida contra el saldo al piso y escribe los CONSUMO. Devuelve sus MovimientoId en el mismo
@@ -844,7 +851,7 @@ const claveDeLinea = (r: any) => `${r.remId ?? ""}|${r.Lote}|${r.Clase}|${r.tall
  * viajes por renglón, y un despacho de diecinueve lotes pasaba de los cinco segundos con que Prisma
  * corta una transacción interactiva.
  */
-async function consumirDelPiso(
+export async function consumirDelPiso(
   tx: any, hoja: any, hojaId: number, lineas: LineaPiso[], operador: string, fecha: string
 ): Promise<number[]> {
   // La disponibilidad, acotada a los LOTES del despacho. Sin ese filtro la consulta agrega todo el
@@ -852,44 +859,98 @@ async function consumirDelPiso(
   // el área desde que existe el módulo; con él depende del tamaño del despacho, que no crece.
   const lotes = [...new Set(lineas.map(l => l.Lote))];
   const enLotes = `Lote IN (${lotes.map(() => "?").join(",")})`;
+  // Agrupado TAMBIÉN por fecha del lote. Antes se agrupaba sin ella y al consumo se le ponía
+  // MAX(FechaLote): bajar masters del 13-ago los anotaba como del 1-sep, y el piso quedaba con la
+  // línea del 13-ago intacta y la del 1-sep en negativo.
   const saldo: any[] = await tx.$queryRawUnsafe(`
-    SELECT RemisionId, Lote, Clase, Talla,
-           ROUND(SUM(Delta), 2) AS Kg, COALESCE(SUM(DeltaM), 0) AS Masters, MAX(FL) AS FechaLote
+    SELECT RemisionId, Lote, Clase, Talla, DATE_FORMAT(FechaLote, '%Y-%m-%d') AS FechaLote,
+           ROUND(SUM(Delta), 2) AS Kg, COALESCE(SUM(DeltaM), 0) AS Masters
       FROM (
-        SELECT RemisionId, Lote, Clase, Talla, PesoKg AS Delta, Masters AS DeltaM, FechaLote AS FL
+        SELECT RemisionId, Lote, Clase, Talla, FechaLote, PesoKg AS Delta, Masters AS DeltaM
           FROM MovimientoPiso WHERE BodegaDestino = ? AND ${enLotes}
         UNION ALL
-        SELECT RemisionId, Lote, Clase, Talla, -PesoKg, -Masters, NULL
+        SELECT RemisionId, Lote, Clase, Talla, FechaLote, -PesoKg, -Masters
           FROM MovimientoPiso WHERE BodegaOrigen = ? AND ${enLotes}
       ) t
-     GROUP BY RemisionId, Lote, Clase, Talla`,
+     GROUP BY RemisionId, Lote, Clase, Talla, FechaLote
+     ORDER BY FechaLote IS NULL, FechaLote`,
     hoja.BodegaCodigo, ...lotes, hoja.BodegaCodigo, ...lotes);
-  const hay = new Map<string, any>(saldo.map((s: any) => [
-    `${s.RemisionId == null ? "" : Number(s.RemisionId)}|${s.Lote}|${s.Clase}|${Number(s.Talla)}`, s]));
+  const claveSaldo = (s: any) => ({
+    remId: s.RemisionId == null ? null : Number(s.RemisionId), Lote: s.Lote, Clase: s.Clase,
+    talla: Number(s.Talla), fechaLote: s.FechaLote ?? null });
+  const hay = new Map<string, any>(saldo.map((s: any) => [claveConFecha(claveSaldo(s)), s]));
+  // Las fechas de cada lote, de la más vieja a la más nueva: el orden en que se reparte (PEPS) una
+  // línea que llega sin fecha.
+  const fechasDe = new Map<string, (string | null)[]>();
+  for (const s of saldo) {
+    const k = claveDeLinea(claveSaldo(s));
+    fechasDe.set(k, [...(fechasDe.get(k) ?? []), s.FechaLote ?? null]);
+  }
 
   // Se descuenta línea por línea contra un saldo que va bajando: si el mismo lote viene dos veces
   // en la misma petición, la segunda mide contra lo que dejó la primera. Sin esto, dos renglones de
   // cien masters pasarían los dos aunque al piso solo hubiera cien.
   const usadoKg = new Map<string, number>(), usadoM = new Map<string, number>();
-  for (const l of lineas) {
-    const k = claveDeLinea(l);
-    const d = hay.get(k);
-    l.fechaLote = d?.FechaLote ?? null;
-    const kgHay = (d ? Number(d.Kg) : 0) - (usadoKg.get(k) ?? 0);
-    const mHay  = (d ? Number(d.Masters) : 0) - (usadoM.get(k) ?? 0);
-
-    // Se controla por MASTERS cuando el renglón viene contado en masters, que es como el área
-    // declara: los kilos salen de la presentación y no se teclean, así el control habla el mismo
-    // idioma que el conteo del andén y no compara decimales.
-    if (l.masters && l.masters > mHay) {
-      throw new ErrorNegocio(400, `De esa remisión solo quedan ${mHay} masters de ${l.Lote} ${l.Clase} al piso; está bajando ${l.masters}.`);
-    }
-    if (l.kgDecl > kgHay + 0.001) {
-      throw new ErrorNegocio(400, `De esa remisión solo quedan ${kgHay.toFixed(2)} kg de ${l.Lote} ${l.Clase} al piso; está bajando ${l.kgDecl.toFixed(2)} kg.`);
-    }
+  const quedaKg = (k: string) => (hay.has(k) ? Number(hay.get(k).Kg) : 0) - (usadoKg.get(k) ?? 0);
+  const quedaM  = (k: string) => (hay.has(k) ? Number(hay.get(k).Masters) : 0) - (usadoM.get(k) ?? 0);
+  const usar = (k: string, l: LineaPiso) => {
     usadoKg.set(k, (usadoKg.get(k) ?? 0) + l.kgDecl);
     usadoM.set(k, (usadoM.get(k) ?? 0) + (l.masters ?? 0));
+  };
+  const salida: LineaPiso[] = [];
+  for (const l of lineas) {
+    // Con fecha: contra el saldo de esa fecha exacta.
+    if (l.fechaPedida || !(fechasDe.get(claveDeLinea(l))?.length)) {
+      const k = claveConFecha(l);
+      // Se controla por MASTERS cuando el renglón viene contado en masters, que es como el área
+      // declara: los kilos salen de la presentación y no se teclean, así el control habla el mismo
+      // idioma que el conteo del andén y no compara decimales.
+      if (l.masters && l.masters > quedaM(k)) {
+        throw new ErrorNegocio(400, `De esa remisión solo quedan ${quedaM(k)} masters de ${l.Lote} ${l.Clase} al piso; está bajando ${l.masters}.`);
+      }
+      if (l.kgDecl > quedaKg(k) + 0.001) {
+        throw new ErrorNegocio(400, `De esa remisión solo quedan ${Math.max(quedaKg(k), 0).toFixed(2)} kg de ${l.Lote} ${l.Clase} al piso; está bajando ${l.kgDecl.toFixed(2)} kg.`);
+      }
+      usar(k, l);
+      salida.push(l);
+      continue;
+    }
+
+    // Sin fecha (una pantalla vieja): se reparte del lote más viejo al más nuevo, en masters si
+    // viene en masters y en kilos si no. Cada pedazo es su propio renglón con su fecha.
+    const fechas = fechasDe.get(claveDeLinea(l))!;
+    const total = l.masters ?? l.kgDecl;
+    const disponible = fechas.reduce((t, f) => {
+      const k = claveConFecha({ ...l, fechaLote: f });
+      return t + Math.max(l.masters ? quedaM(k) : quedaKg(k), 0);
+    }, 0);
+    if (total > disponible + 0.001) {
+      throw new ErrorNegocio(400, l.masters
+        ? `De esa remisión solo quedan ${disponible} masters de ${l.Lote} ${l.Clase} al piso; está bajando ${l.masters}.`
+        : `De esa remisión solo quedan ${disponible.toFixed(2)} kg de ${l.Lote} ${l.Clase} al piso; está bajando ${l.kgDecl.toFixed(2)} kg.`);
+    }
+    let falta = total;
+    for (const f of fechas) {
+      if (falta <= 0.001) break;
+      const k = claveConFecha({ ...l, fechaLote: f });
+      const toma = Math.min(falta, Math.max(l.masters ? quedaM(k) : quedaKg(k), 0));
+      if (toma <= 0.001) continue;
+      const parte = toma / total;
+      const pedazo: LineaPiso = {
+        ...l, fechaLote: f,
+        masters: l.masters ? toma : null,
+        declarado: Number((l.declarado * parte).toFixed(2)),
+        kgDecl: Number((l.kgDecl * parte).toFixed(2)),
+        ...(l.pesado != null ? { pesado: Number((l.pesado * parte).toFixed(2)), kgReal: Number((l.kgReal! * parte).toFixed(2)) } : {}),
+      };
+      usar(k, pedazo);
+      salida.push(pedazo);
+      falta -= toma;
+    }
   }
+  // Quien llama ata la fila siguiente (TRASLADO, DEVOLUCION) a cada renglón: se le devuelven los
+  // pedazos en el mismo arreglo.
+  lineas.splice(0, lineas.length, ...salida);
 
   const args: any[] = [];
   const filas = lineas.map(l => {
@@ -1155,7 +1216,7 @@ export async function devolverDelPiso(
       const filas: any[] = await tx.$queryRawUnsafe(`
         SELECT m.MasterId, rd.RemisionId, r.Folio, r.Estatus AS EstatusRemision,
                DATEDIFF(CURDATE(), DATE(r.ConfirmadaEn)) AS Dias,
-               oe.Lote, dp.Clase, dp.Talla,
+               oe.Lote, dp.Clase, dp.Talla, DATE_FORMAT(oe.FechaProduccion, '%Y-%m-%d') AS FechaLote,
                ROUND(pre.PesoKG * pre.CajasXMaster, 3) AS KgPorMaster
           FROM Masters m
           JOIN RemisionDetalle rd ON rd.MasterId = m.MasterId AND rd.Vigente = 1
@@ -1184,10 +1245,11 @@ export async function devolverDelPiso(
       // devolver y conviene enterarse ANTES de haber creado un polín que quedaría vacío.
       const grupos = new Map<string, any>();
       for (const f of filas) {
-        const k = `${Number(f.RemisionId)}|${f.Lote}|${f.Clase}|${Number(f.Talla)}`;
+        // Por fecha del lote también: cada master sale del saldo de SU fecha de producción.
+        const k = `${Number(f.RemisionId)}|${f.Lote}|${f.Clase}|${Number(f.Talla)}|${f.FechaLote ?? ""}`;
         const g = grupos.get(k) ?? {
           Lote: f.Lote, Clase: f.Clase, Talla: Number(f.Talla), RemisionId: Number(f.RemisionId),
-          KgPorMaster: Number(f.KgPorMaster), Masters: 0, UM: "KG", Motivo: motivo,
+          FechaLote: f.FechaLote, KgPorMaster: Number(f.KgPorMaster), Masters: 0, UM: "KG", Motivo: motivo,
         };
         g.Masters += 1;
         grupos.set(k, g);
