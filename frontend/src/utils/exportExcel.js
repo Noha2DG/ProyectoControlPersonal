@@ -163,16 +163,29 @@ export function exportarEnteroCola(lotes, desde, hasta) {
   XLSX.writeFile(wb, `EnteroACola_${desde}_a_${hasta}.xlsx`);
 }
 
-export function exportarReporteTermos(porTermo, desde, hasta) {
+// Los termos de cola (Descabezado) van en las mismas filas, marcados en "Tipo", con su destino.
+export function exportarReporteTermos(porTermo, desde, hasta, porTermoCola = []) {
   const termos = porTermo.map(t => ({
+    "Tipo":           "Pesaje",
     "Termo":          t.NumeroTermo,
     "Lote":           t.Lote,
     "Talla":          t.Talla,
     "Descripción Talla": t.DescripcionTalla,
     "Proceso":        t.DescripcionProceso,
     "Fecha Proceso":  t.FechaProduccion?.slice(0, 10),
+    "Destino":        "",
     "Kg Procesados":  +t.Procesado.toFixed(2),
-  }));
+  })).concat(porTermoCola.map(t => ({
+    "Tipo":           "COLA",
+    "Termo":          t.NumeroTermo,
+    "Lote":           t.Lote,
+    "Talla":          t.Talla,
+    "Descripción Talla": t.DescripcionTalla,
+    "Proceso":        t.DescripcionClaseCola,
+    "Fecha Proceso":  t.FechaProduccion?.slice(0, 10),
+    "Destino":        t.NombreDestino || "por trasladar",
+    "Kg Procesados":  +t.Procesado.toFixed(2),
+  })));
 
   const wb = XLSX.utils.book_new();
   const wsTermos = XLSX.utils.json_to_sheet(termos);

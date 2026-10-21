@@ -3,7 +3,7 @@ import { fmtNum } from "../utils/numero.js";
 import { authHeader, usePuede } from "../context/AuthContext.jsx";
 import { componerCodigoLote, piscinaRequiereCiclo } from "../utils/codigoLote.js";
 import { useColWidths, Th, Colgroup } from "../components/ResizableTh.jsx";
-import { TomarDelPisoModal, AjusteLoteModal, MovimientosPisoLote, ColaModal } from "../components/MateriaPrimaPiso.jsx";
+import { TomarDelPisoModal, AjusteLoteModal, MovimientosPisoLote, ColaModal, CerrarTransaccionModal } from "../components/MateriaPrimaPiso.jsx";
 
 const LOTE_COL_DEFAULTS = { lote: 130, finca: 140, ciclo: 90, clase: 90, talla: 130, peso: 130, acciones: 130 };
 const LOTE_COLS = Object.keys(LOTE_COL_DEFAULTS);
@@ -337,6 +337,7 @@ export default function MateriaPrimaPage() {
   const [modalPiso, setModalPiso] = useState(false);
   const [ajuste, setAjuste] = useState(null);          // "bajar" | "descarte" | "cola"
   const [recargaMov, setRecargaMov] = useState(0);
+  const [cerrando, setCerrando] = useState(null);      // la transacción que se está cerrando
   const [widthsLote, startResizeLote] = useColWidths("materiaprima_lotes", LOTE_COL_DEFAULTS);
   const [widthsTrans, startResizeTrans] = useColWidths("materiaprima_trans", TRANS_COL_DEFAULTS);
 
@@ -465,13 +466,12 @@ export default function MateriaPrimaPage() {
     }
   };
 
-  const handleCerrarTransaccion = async (t) => {
-    if (!confirm("¿Cerrar esta transacción de producción?")) return;
-    await fetch(`/api/transacciones-produccion/${t.TransaccionId}`, {
-      method: "PUT", headers: { "Content-Type": "application/json", ...authHeader() },
-      body: JSON.stringify({ Estado: "Cerrada" }),
-    });
-    fetchTransacciones(loteSel.Lote, loteSel.Clase);
+  // Cerrar traslada lo producido al piso del siguiente proceso: el cuadro pregunta a dónde.
+  const handleCerrarTransaccion = (t) => setCerrando(t);
+  const trasCerrar = () => {
+    setCerrando(null);
+    if (loteSel) fetchTransacciones(loteSel.Lote, loteSel.Clase);
+    trasMovimientoPiso();
   };
 
   const handleEliminarTransaccion = async (t) => {
@@ -680,6 +680,7 @@ export default function MateriaPrimaPage() {
                           <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-semibold ${t.Estado === "Abierta" ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-600"}`}>
                             {t.Estado}
                           </span>
+                          {t.Destino && <span className="block text-[11px] text-emerald-700 truncate" title={`Trasladado a ${t.Destino}`}>→ {t.Destino}</span>}
                         </td>
                         <td className="px-3 py-3 text-center whitespace-nowrap">
                           <div className="flex justify-center gap-2">
@@ -749,6 +750,9 @@ export default function MateriaPrimaPage() {
       {(ajuste === "bajar" || ajuste === "descarte") && loteSel && (
         <AjusteLoteModal tipo={ajuste} lote={loteSel} tallas={tallas} onClose={() => setAjuste(null)}
           onHecho={() => { setAjuste(null); trasMovimientoPiso(); }} />
+      )}
+      {cerrando && (
+        <CerrarTransaccionModal transaccionId={cerrando.TransaccionId} onClose={() => setCerrando(null)} onHecho={trasCerrar} />
       )}
       {ajuste === "cola" && loteSel && (
         <ColaModal lote={loteSel} tallas={tallas} clases={clases} onRegistrado={trasMovimientoPiso} onClose={() => setAjuste(null)} />

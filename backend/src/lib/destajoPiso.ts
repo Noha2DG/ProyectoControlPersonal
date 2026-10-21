@@ -15,7 +15,9 @@
 //   BAJADO    mesa → piso de la bodega              (BodegaDestino = la bodega; se retoma otro día).
 //             Motivo "Sobrante" (no se terminó) o "Rojo" (se separa y se vuelve a revisar).
 //   DESCARTE  mesa → nada                           (sin bodega: es merma, no inventario)
-//   COLA      lote entero → piso de Pelado           (un renglón por termo; ver registrarCola)
+//   COLA      lote entero → por trasladar → piso de Pelado o Clasificado Cola al cerrar la
+//             transacción de Descabezado (un renglón por termo; ver registrarCola y cerrarTransaccion)
+//   PROCESADO lote → piso del siguiente proceso      (lo pelado, al cerrar la transacción)
 // UNIFICAR junta varias líneas de la misma finca en el lote de una de ellas (la de más kilos por
 // omisión); cada línea sigue diciendo en el kardex de qué lote de origen vino.
 // No hace falta ninguna columna nueva: las de enlace quedaron puestas con el esquema de 41c50a2.
@@ -38,7 +40,18 @@ export const BODEGAS_CON_DESTAJO = ["PELADO", "DESCABEZADO"];
 // 21 oct 2026; C26 —entero IQF— se agregó el mismo día). La cola va siempre al piso de Pelado.
 export const CLASES_ENTERO = ["C20", "C23", "C24", "C25", "C26", "L20", "L21", "L22"];
 export const CLASES_COLA = ["D30", "D33", "D34", "D35"];
-const BODEGA_COLA = "PELADO";
+
+// ── Al cerrar una transacción, lo producido pasa al piso del siguiente proceso ──────────────────
+// Descabezado: la cola de sus termos va a Pelado o a Clasificado Cola. Pelado: lo pelado va a
+// Tratamiento casi siempre, pero depende del cliente, así que se escoge entre cualquier bodega con
+// piso que siga en el flujo (nunca hacia atrás). Las pantallas de Tratamiento y Clasificado se hacen
+// después; mientras, lo que reciben queda en su inventario al piso.
+export const DESTINOS_COLA = ["PELADO", "CLASIFICADO_COLA"];
+const DESTINO_PELADO_SUGERIDO = "TRATAMIENTO";
+const NO_SON_DESTINO_DE_PELADO = ["RECEPCION", "DESCONGELADO", "PELADO", "DESCABEZADO"];
+// La transacción de un descabezado produce una clase de cola (D, o M en gambón): lo pesado ahí es
+// CABEZA, que no se traslada. Lo que pasa al siguiente proceso es la cola de los termos.
+const FAMILIAS_DE_COLA = ["D", "M"];
 /**
  * La cola que le corresponde a un entero por omisión: sifón → cola sifón (D35), entero-R → cola-R
  * (D33), el resto D30. Un lote de piscina sifón (G343EM-SIFON) es sifón aunque su clase sea otra,
@@ -457,8 +470,10 @@ export async function registrarDescarte(tx: any, a: Ajuste) {
 // ── Cola de un lote entero ──────────────────────────────────────────────────────────────────────
 /**
  * Un termo de cola que sale de un lote entero en Descabezado. No va a ninguna persona —  lo que se
- * paga es la cabeza, que ya está en el pesaje— : se pesa el termo lleno y entra al piso de Pelado,
- * que lo toma desde "Tomar del piso" (antes creaba el D30 a mano con el mismo código).
+ * paga es la cabeza, que ya está en el pesaje— : se pesa el termo lleno y queda POR TRASLADAR (sin
+ * bodega) hasta que se cierra la transacción de Descabezado; ahí se escoge si va al piso de Pelado o
+ * al de Clasificado Cola (cerrarTransaccion). Pelado la toma desde "Tomar del piso" (antes creaba el
+ * D30 a mano con el mismo código).
  *
  * El número de termo se teclea: no es el mismo que se anota en el pesaje de cabeza.
  *
@@ -488,20 +503,22 @@ export async function registrarCola(
   }
 
   await tx.$executeRawUnsafe(`
-    INSERT INTO MovimientoPiso (Tipo, FechaProduccion, BodegaDestino, Lote, Clase, Talla, FechaLote,
+    INSERT INTO MovimientoPiso (Tipo, FechaProduccion, Lote, Clase, Talla, FechaLote,
                                 Peso, UM, PesoKg, NumeroTermo, LoteProceso, ClaseProceso, RegistradoPor)
-    VALUES ('COLA', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    a.fecha, BODEGA_COLA, c.Lote, a.claseCola, Number(a.talla) || 900, c.FechaProduccion,
+    VALUES ('COLA', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    a.fecha, c.Lote, a.claseCola, Number(a.talla) || 900, c.FechaProduccion,
     peso, c.UM, aKg(peso, c.UM), termo, c.Lote, c.Clase, a.operador);
-  return { ok: true, Bodega: BODEGA_COLA };
+  return { ok: true, PorTrasladar: true };
 }
 
-// Lo que un lote mandó a un piso (bajado o cola) tiene que seguir ahí para poder deshacerlo: si ya lo
-// tomó otro lote, borrarlo dejaría ese saldo en negativo.
+// Lo que un lote mandó a un piso (bajado, cola, procesado) tiene que seguir ahí para poder
+// deshacerlo: si ya lo tomó otro lote, borrarlo dejaría ese saldo en negativo. La cola que todavía
+// está por trasladar no está en ningún piso, así que siempre se puede quitar.
 async function sigueAlPiso(tx: any, movimientoId: number) {
   const [b]: any[] = await tx.$queryRawUnsafe(`
     SELECT BodegaDestino, RemisionId, Lote, Clase, Talla, DATE_FORMAT(FechaLote, '%Y-%m-%d') AS FechaLote, PesoKg
       FROM MovimientoPiso WHERE MovimientoId = ?`, movimientoId);
+  if (!b?.BodegaDestino) return true;
   const s = (await saldoLineas(tx, String(b.BodegaDestino), [String(b.Lote)])).find(x => claveLinea(x) === claveLinea(b));
   return (s?.Kg ?? 0) >= Number(b.PesoKg) - 0.001;
 }
@@ -534,7 +551,8 @@ export async function devolverLoteAlPiso(tx: any, lote: string, clase: string) {
   }
 
   // Transacciones sin pesaje (Procesado en cero ya lo garantiza): se van con sus termos, igual que
-  // al eliminarlas a mano.
+  // al eliminarlas a mano. Los movimientos se borran ANTES: la cola trasladada al cerrar una
+  // transacción apunta a ella (MovimientoPiso.TransaccionId).
   const trans: any[] = await tx.$queryRawUnsafe(
     `SELECT TransaccionId FROM TransaccionesProduccion WHERE Lote = ? AND ClaseOrigen = ? FOR UPDATE`, lote, clase);
   const ids = trans.map(t => Number(t.TransaccionId));
@@ -542,14 +560,16 @@ export async function devolverLoteAlPiso(tx: any, lote: string, clase: string) {
     const [p]: any[] = await tx.$queryRawUnsafe(
       `SELECT COUNT(*) AS n FROM PesajeDetalle WHERE TransaccionId IN (${enLista(ids)})`, ...ids);
     if (Number(p.n) > 0) throw new ErrorNegocio(400, `${lote} ${clase} tiene pesajes registrados: no se puede devolver completo.`);
-    await tx.$executeRawUnsafe(`DELETE FROM Termos WHERE TransaccionId IN (${enLista(ids)})`, ...ids);
-    await tx.$executeRawUnsafe(`DELETE FROM TransaccionesProduccion WHERE TransaccionId IN (${enLista(ids)})`, ...ids);
   }
 
   const kgAlPiso = r2(movs.filter(m => m.Tipo === "DESTAJO").reduce((t, m) => t + m.PesoKg, 0));
   await tx.$executeRawUnsafe(
-    `DELETE FROM MovimientoPiso WHERE LoteProceso = ? AND ClaseProceso = ? AND Tipo IN ('DESTAJO', 'BAJADO', 'DESCARTE', 'COLA')`,
+    `DELETE FROM MovimientoPiso WHERE LoteProceso = ? AND ClaseProceso = ? AND Tipo IN ('DESTAJO', 'BAJADO', 'DESCARTE', 'COLA', 'PROCESADO')`,
     lote, clase);
+  if (ids.length) {
+    await tx.$executeRawUnsafe(`DELETE FROM Termos WHERE TransaccionId IN (${enLista(ids)})`, ...ids);
+    await tx.$executeRawUnsafe(`DELETE FROM TransaccionesProduccion WHERE TransaccionId IN (${enLista(ids)})`, ...ids);
+  }
   await tx.$executeRawUnsafe(`DELETE FROM Lotes WHERE Lote = ? AND Clase = ?`, lote, clase);
   return { ok: true, KgAlPiso: kgAlPiso, Transacciones: ids.length,
            Bajados: movs.filter(m => m.Tipo === "BAJADO").length, Descartes: movs.filter(m => m.Tipo === "DESCARTE").length };
@@ -561,14 +581,14 @@ export async function movimientosDeLote(client: any, lote: string, clase: string
     SELECT m.MovimientoId, m.Tipo, DATE_FORMAT(m.FechaHora, '%Y-%m-%d %H:%i') AS FechaHora,
            DATE_FORMAT(m.FechaProduccion, '%Y-%m-%d') AS Fecha,
            m.Lote AS LoteOrigen, m.Clase, cl.Descripcion AS DescripcionClase, m.Talla, ta.Descripcion AS DescripcionTalla,
-           m.Peso, m.UM, m.PesoKg, m.Motivo, m.NumeroTermo, rm.Folio AS FolioRemision,
+           m.Peso, m.UM, m.PesoKg, m.Motivo, m.NumeroTermo, m.TransaccionId, rm.Folio AS FolioRemision,
            COALESCE(m.BodegaOrigen, m.BodegaDestino) AS Bodega, b.Nombre AS NombreBodega, m.RegistradoPor
       FROM MovimientoPiso m
       JOIN Tallas ta ON ta.Codigo = m.Talla
       JOIN Clase cl ON cl.Clase = m.Clase
       LEFT JOIN Remisiones rm ON rm.RemisionId = m.RemisionId
       LEFT JOIN BodegaVirtual b ON b.Codigo = COALESCE(m.BodegaOrigen, m.BodegaDestino)
-     WHERE m.LoteProceso = ? AND m.ClaseProceso = ? AND m.Tipo IN ('DESTAJO', 'BAJADO', 'DESCARTE', 'COLA')
+     WHERE m.LoteProceso = ? AND m.ClaseProceso = ? AND m.Tipo IN ('DESTAJO', 'BAJADO', 'DESCARTE', 'COLA', 'PROCESADO')
      ORDER BY m.MovimientoId`, lote, clase);
   return rows.map(r => ({ ...r, MovimientoId: Number(r.MovimientoId), Talla: Number(r.Talla),
                           Peso: Number(r.Peso), PesoKg: Number(r.PesoKg) }));
@@ -620,4 +640,129 @@ export async function deshacerMovimiento(tx: any, movimientoId: number) {
   }
   await tx.$executeRawUnsafe(`DELETE FROM MovimientoPiso WHERE MovimientoId = ?`, movimientoId);
   return { ok: true };
+}
+
+// ── Cerrar y reabrir una transacción ────────────────────────────────────────────────────────────
+/**
+ * Qué se traslada al cerrar una transacción y a dónde puede ir. Pelado: lo pelado de ESTA transacción
+ * (su clase de producto, su talla y lo pesado). Descabezado: la cola por trasladar del lote —  lo
+ * pesado ahí es cabeza y no se traslada.
+ */
+export async function infoCierre(client: any, transaccionId: number) {
+  const [t]: any[] = await client.$queryRawUnsafe(`
+    SELECT tp.TransaccionId, tp.Lote, tp.ClaseOrigen, tp.ClasePT, cp.Descripcion AS DescripcionClasePT, cp.Familia AS FamiliaPT,
+           tp.Talla, ta.Descripcion AS DescripcionTalla, pr.Descripcion AS DescripcionProceso, tp.Estado, l.UM,
+           DATE_FORMAT(COALESCE(l.FechaProduccion, l.Fecha), '%Y-%m-%d') AS FechaLote,
+           COALESCE((SELECT SUM(pd.Peso) FROM PesajeDetalle pd WHERE pd.TransaccionId = tp.TransaccionId), 0) AS Procesado
+      FROM TransaccionesProduccion tp
+      JOIN Clase cp ON cp.Clase = tp.ClasePT
+      JOIN Tallas ta ON ta.Codigo = tp.Talla
+      JOIN Procesos pr ON pr.Proceso = tp.Proceso
+      JOIN Lotes l ON l.Lote = tp.Lote AND l.Clase = tp.ClaseOrigen
+     WHERE tp.TransaccionId = ?`, transaccionId);
+  if (!t) throw new ErrorNegocio(404, "Transacción no encontrada");
+  const modo = FAMILIAS_DE_COLA.includes(String(t.FamiliaPT)) ? "DESCABEZADO" : "PELADO";
+
+  const destinos: any[] = modo === "DESCABEZADO"
+    ? await client.$queryRawUnsafe(
+        `SELECT Codigo, Nombre FROM BodegaVirtual WHERE Activo = 1 AND LlevaPiso = 1 AND Codigo IN (${enLista(DESTINOS_COLA)})
+          ORDER BY FIELD(Codigo, ${enLista(DESTINOS_COLA)})`, ...DESTINOS_COLA, ...DESTINOS_COLA)
+    : await client.$queryRawUnsafe(
+        `SELECT Codigo, Nombre FROM BodegaVirtual WHERE Activo = 1 AND LlevaPiso = 1 AND Codigo NOT IN (${enLista(NO_SON_DESTINO_DE_PELADO)})
+          ORDER BY Codigo <> ?, Orden, Nombre`, ...NO_SON_DESTINO_DE_PELADO, DESTINO_PELADO_SUGERIDO);
+
+  const colaPendiente: any[] = modo === "DESCABEZADO"
+    ? (await client.$queryRawUnsafe(`
+        SELECT m.MovimientoId, m.NumeroTermo, m.Clase, cl.Descripcion AS DescripcionClase, m.Talla, ta.Descripcion AS DescripcionTalla,
+               m.Peso, m.UM, DATE_FORMAT(m.FechaHora, '%Y-%m-%d %H:%i') AS FechaHora
+          FROM MovimientoPiso m
+          JOIN Clase cl ON cl.Clase = m.Clase
+          JOIN Tallas ta ON ta.Codigo = m.Talla
+         WHERE m.Tipo = 'COLA' AND m.LoteProceso = ? AND m.ClaseProceso = ? AND m.BodegaDestino IS NULL
+         ORDER BY m.MovimientoId`, t.Lote, t.ClaseOrigen) as any[])
+        .map(c => ({ ...c, MovimientoId: Number(c.MovimientoId), Talla: Number(c.Talla), Peso: Number(c.Peso) }))
+    : [];
+
+  return {
+    TransaccionId: Number(t.TransaccionId), Lote: String(t.Lote), ClaseOrigen: String(t.ClaseOrigen),
+    ClasePT: String(t.ClasePT), DescripcionClasePT: t.DescripcionClasePT, Talla: Number(t.Talla),
+    DescripcionTalla: t.DescripcionTalla, DescripcionProceso: t.DescripcionProceso, Estado: String(t.Estado),
+    UM: String(t.UM), FechaLote: String(t.FechaLote), Procesado: r2(Number(t.Procesado)), Modo: modo,
+    Destinos: destinos.map(d => ({ Codigo: String(d.Codigo), Nombre: String(d.Nombre) })),
+    DestinoSugerido: modo === "DESCABEZADO" ? DESTINOS_COLA[0] : DESTINO_PELADO_SUGERIDO,
+    ColaPendiente: colaPendiente,
+  };
+}
+
+/**
+ * Cierra la transacción y traslada lo producido al piso del siguiente proceso, en la misma
+ * transacción de base de datos: o se cierra con su traslado, o no se cierra.
+ *   Pelado      → un renglón PROCESADO con lo pesado de la transacción (su clase y talla) al destino.
+ *   Descabezado → cada termo de cola por trasladar del lote va a Pelado o a Clasificado Cola.
+ * El piso del que salió la materia prima ya se descontó al tomarla para el lote; lo que sale aquí es
+ * lo que el lote produjo. Cerrar dos veces no traslada dos veces.
+ */
+export async function cerrarTransaccion(
+  tx: any, transaccionId: number,
+  o: { destino?: string | null; destinoCola?: string | null; destinosCola?: Record<string, string> | null },
+  fecha: string, operador: string
+) {
+  const [bloq]: any[] = await tx.$queryRawUnsafe(
+    `SELECT Estado FROM TransaccionesProduccion WHERE TransaccionId = ? FOR UPDATE`, transaccionId);
+  if (!bloq) throw new ErrorNegocio(404, "Transacción no encontrada");
+  if (String(bloq.Estado) === "Cerrada") return { ok: true, YaCerrada: true, Trasladado: [] as any[] };
+
+  const info = await infoCierre(tx, transaccionId);
+  const validos = new Map(info.Destinos.map(d => [d.Codigo, d.Nombre]));
+  const trasladado: { Destino: string; NombreDestino: string; Kg: number; Termo?: string }[] = [];
+
+  if (info.Modo === "PELADO") {
+    if (info.Procesado > 0.001) {
+      const destino = String(o.destino || info.DestinoSugerido);
+      if (!validos.has(destino)) throw new ErrorNegocio(400, `${destino} no es un destino válido para lo pelado`);
+      await tx.$executeRawUnsafe(`
+        INSERT INTO MovimientoPiso (Tipo, FechaProduccion, BodegaDestino, Lote, Clase, Talla, FechaLote,
+                                    Peso, UM, PesoKg, LoteProceso, ClaseProceso, TransaccionId, RegistradoPor)
+        VALUES ('PROCESADO', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        fecha, destino, info.Lote, info.ClasePT, info.Talla, info.FechaLote,
+        info.Procesado, info.UM, aKg(info.Procesado, info.UM), info.Lote, info.ClaseOrigen, transaccionId, operador);
+      trasladado.push({ Destino: destino, NombreDestino: validos.get(destino)!, Kg: aKg(info.Procesado, info.UM) });
+    }
+  } else {
+    for (const c of info.ColaPendiente) {
+      const destino = String(o.destinosCola?.[String(c.MovimientoId)] || o.destinoCola || info.DestinoSugerido);
+      if (!validos.has(destino)) throw new ErrorNegocio(400, `La cola solo va a ${[...validos.values()].join(" o ")} (llegó ${destino})`);
+      // La jornada del movimiento es la del cierre: es cuando la cola llega al piso del destino.
+      await tx.$executeRawUnsafe(`
+        UPDATE MovimientoPiso SET BodegaDestino = ?, TransaccionId = ?, FechaProduccion = ?
+         WHERE MovimientoId = ? AND Tipo = 'COLA' AND BodegaDestino IS NULL`, destino, transaccionId, fecha, c.MovimientoId);
+      trasladado.push({ Destino: destino, NombreDestino: validos.get(destino)!, Kg: aKg(c.Peso, c.UM), Termo: c.NumeroTermo });
+    }
+  }
+
+  await tx.$executeRawUnsafe(`UPDATE TransaccionesProduccion SET Estado = 'Cerrada' WHERE TransaccionId = ?`, transaccionId);
+  return { ok: true, Modo: info.Modo, Trasladado: trasladado };
+}
+
+/**
+ * Reabre la transacción y deshace lo que se trasladó al cerrarla: lo pelado sale del piso del
+ * destino y la cola vuelve a quedar por trasladar. Solo mientras el siguiente proceso no lo haya
+ * tomado de su piso.
+ */
+export async function reabrirTransaccion(tx: any, transaccionId: number) {
+  const [bloq]: any[] = await tx.$queryRawUnsafe(
+    `SELECT Estado FROM TransaccionesProduccion WHERE TransaccionId = ? FOR UPDATE`, transaccionId);
+  if (!bloq) throw new ErrorNegocio(404, "Transacción no encontrada");
+  const movs: any[] = await tx.$queryRawUnsafe(
+    `SELECT MovimientoId, Tipo FROM MovimientoPiso WHERE TransaccionId = ? FOR UPDATE`, transaccionId);
+  for (const m of movs) {
+    if (!(await sigueAlPiso(tx, Number(m.MovimientoId)))) {
+      throw new ErrorNegocio(400, "Lo que se trasladó al cerrar esta transacción ya lo tomó el siguiente proceso: no se puede reabrir.");
+    }
+  }
+  await tx.$executeRawUnsafe(`DELETE FROM MovimientoPiso WHERE TransaccionId = ? AND Tipo = 'PROCESADO'`, transaccionId);
+  await tx.$executeRawUnsafe(
+    `UPDATE MovimientoPiso SET BodegaDestino = NULL, TransaccionId = NULL WHERE TransaccionId = ? AND Tipo = 'COLA'`, transaccionId);
+  await tx.$executeRawUnsafe(`UPDATE TransaccionesProduccion SET Estado = 'Abierta' WHERE TransaccionId = ?`, transaccionId);
+  return { ok: true, Deshecho: movs.length };
 }

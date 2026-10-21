@@ -2,6 +2,8 @@ import { Router, Request, Response } from "express";
 import jwt from "jsonwebtoken";
 import prisma from "../lib/prisma.ts";
 import { requireAuth, requirePerm } from "../middleware/auth.ts";
+import { hoyGT } from "../lib/dateGT.ts";
+import { ErrorNegocio, cerrarTransaccion, reabrirTransaccion } from "../lib/destajoPiso.ts";
 
 const router = Router();
 
@@ -30,7 +32,11 @@ const SELECT_TRANS = `
          tp.ClasePT, cl.Descripcion AS DescripcionClasePT, tp.Talla, ta.Descripcion AS DescripcionTalla,
          tp.AlmacenOrigen, tp.AlmacenDestino, tp.Estado, tp.FechaHora, tp.FechaProduccion, tp.RegistradoPor,
          p.Nombre AS NombrePiscina,
-         COALESCE((SELECT SUM(pd.Peso) FROM PesajeDetalle pd WHERE pd.TransaccionId = tp.TransaccionId), 0) AS Procesado
+         COALESCE((SELECT SUM(pd.Peso) FROM PesajeDetalle pd WHERE pd.TransaccionId = tp.TransaccionId), 0) AS Procesado,
+         -- A dónde se trasladó lo producido al cerrarla (lib/destajoPiso.ts, cerrarTransaccion).
+         (SELECT GROUP_CONCAT(DISTINCT b.Nombre ORDER BY b.Nombre SEPARATOR ', ')
+            FROM MovimientoPiso m JOIN BodegaVirtual b ON b.Codigo = m.BodegaDestino
+           WHERE m.TransaccionId = tp.TransaccionId) AS Destino
   FROM TransaccionesProduccion tp
   JOIN Procesos pr ON tp.Proceso = pr.Proceso
   JOIN Clase cl ON tp.ClasePT = cl.Clase
@@ -93,16 +99,26 @@ router.post("/", requireAuth, requirePerm("destajo", "crear"), async (req: Reque
   }
 });
 
-// PUT /api/transacciones-produccion/:id  { Estado }
+// PUT /api/transacciones-produccion/:id  { Estado, Destino?, DestinoCola?, DestinosCola? }
+// Cerrar traslada lo producido al piso del siguiente proceso: lo pelado a `Destino` (Tratamiento por
+// omisión), la cola de Descabezado a `DestinosCola[MovimientoId]` o `DestinoCola` (Pelado por
+// omisión). Reabrir lo deshace mientras el siguiente proceso no lo haya tomado. Ver
+// lib/destajoPiso.ts (cerrarTransaccion / reabrirTransaccion).
 router.put("/:id", requireAuth, requirePerm("destajo", "editar"), async (req: Request, res: Response) => {
   try {
     const id = Number(req.params.id);
     const { Estado } = req.body;
     if (!["Abierta", "Cerrada"].includes(Estado)) { res.status(400).json({ error: "Estado inválido" }); return; }
-    await prisma.$executeRaw`UPDATE TransaccionesProduccion SET Estado = ${Estado} WHERE TransaccionId = ${id}`;
-    res.json({ ok: true });
+    const out = await prisma.$transaction((tx): Promise<any> => Estado === "Cerrada"
+      ? cerrarTransaccion(tx, id, {
+          destino: req.body.Destino || null, destinoCola: req.body.DestinoCola || null,
+          destinosCola: req.body.DestinosCola && typeof req.body.DestinosCola === "object" ? req.body.DestinosCola : null,
+        }, hoyGT(), getOperador(req))
+      : reabrirTransaccion(tx, id), { timeout: 30000, maxWait: 15000 });
+    res.json(out);
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    if (err instanceof ErrorNegocio) res.status(err.status).json({ error: err.message });
+    else res.status(500).json({ error: err.message });
   }
 });
 
@@ -123,6 +139,11 @@ router.delete("/:id", requireAuth, requirePerm("destajo", "eliminar"), async (re
         return { error: "No se puede eliminar: esta transacción ya tiene pesajes registrados", status: 400 };
       }
 
+      // Una transacción de Descabezado cerrada sin pesajes pudo haber trasladado cola: esa cola vuelve
+      // a quedar por trasladar (no se pierde) antes de borrar la transacción a la que apunta.
+      const ligados: any[] = await tx.$queryRaw`SELECT COUNT(*) AS n FROM MovimientoPiso WHERE TransaccionId = ${id}`;
+      if (Number(ligados[0].n) > 0) await reabrirTransaccion(tx, id);
+
       await tx.$executeRaw`DELETE FROM Termos WHERE TransaccionId = ${id}`;
       await tx.$executeRaw`DELETE FROM TransaccionesProduccion WHERE TransaccionId = ${id}`;
       return { ok: true };
@@ -134,7 +155,8 @@ router.delete("/:id", requireAuth, requirePerm("destajo", "eliminar"), async (re
     }
     res.json({ ok: true });
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    if (err instanceof ErrorNegocio) res.status(err.status).json({ error: err.message });
+    else res.status(500).json({ error: err.message });
   }
 });
 

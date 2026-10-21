@@ -7,7 +7,7 @@ import { requireAuth, requirePerm } from "../middleware/auth.ts";
 import { hoyGT } from "../lib/dateGT.ts";
 import {
   BODEGAS_CON_DESTAJO, ErrorNegocio, saldoParaDestajo, tomarDelPiso, bajarAlPiso, registrarDescarte,
-  movimientosDeLote, deshacerMovimiento, cuadreLote, devolverLoteAlPiso, registrarCola,
+  movimientosDeLote, deshacerMovimiento, cuadreLote, devolverLoteAlPiso, registrarCola, infoCierre,
 } from "../lib/destajoPiso.ts";
 
 const router = Router();
@@ -129,6 +129,15 @@ router.post("/lote/:lote/:clase/cola", requireAuth, requirePerm("destajo", "edit
 router.post("/lote/:lote/:clase/devolver", requireAuth, requirePerm("destajo", "editar"), async (req: Request, res: Response) => {
   try {
     res.json(await prisma.$transaction(tx => devolverLoteAlPiso(tx, String(req.params.lote), String(req.params.clase)), TX));
+  } catch (err: any) {
+    responderError(res, err);
+  }
+});
+
+// GET /api/destajo-piso/transaccion/:id/cierre — qué se traslada al cerrarla y a qué pisos puede ir.
+router.get("/transaccion/:id/cierre", requireAuth, requirePerm("destajo", "ver"), async (req: Request, res: Response) => {
+  try {
+    res.json(await infoCierre(prisma, Number(req.params.id)));
   } catch (err: any) {
     responderError(res, err);
   }

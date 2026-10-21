@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { fmtNum } from "../utils/numero.js";
 import { authHeader, usePuede } from "../context/AuthContext.jsx";
 import { useColWidths, Th, Colgroup } from "../components/ResizableTh.jsx";
+import { CerrarTransaccionModal } from "../components/MateriaPrimaPiso.jsx";
 
 const COL_DEFAULTS = { empleado: 110, nombre: 190, termo: 90, peso: 100, hora: 90, acciones: 110 };
 const COLS = Object.keys(COL_DEFAULTS);
@@ -239,24 +240,19 @@ export default function PesajePage() {
     }
   };
 
-  const handleCerrarTransaccion = async (t) => {
-    if (!confirm(`¿Cerrar la transacción del lote ${t.Lote} (${t.ClasePT})? Ya no podrá registrar pesajes en ella.`)) return;
-    try {
-      const res = await fetch(`/api/transacciones-produccion/${t.TransaccionId}`, {
-        method: "PUT", headers: { "Content-Type": "application/json", ...authHeader() },
-        body: JSON.stringify({ Estado: "Cerrada" }),
-      });
-      if (!res.ok) { const data = await res.json(); alert("Error: " + data.error); return; }
-      if (transSel?.TransaccionId === t.TransaccionId) {
-        setTransSel(null);
-        setLote(null);
-        setNumeroTermo("");
-      }
-      await fetchTransaccionesAbiertas();
-    } catch (err) {
-      console.error("Error al cerrar la transacción:", err);
-      alert("No se pudo conectar con el servidor.");
+  // Cerrar traslada lo producido al piso del siguiente proceso: el cuadro pregunta a dónde (ver
+  // CerrarTransaccionModal). Aquí solo se limpia la pantalla cuando quedó cerrada.
+  const [cerrando, setCerrando] = useState(null);
+  const handleCerrarTransaccion = (t) => setCerrando(t);
+  const trasCerrar = async () => {
+    const t = cerrando;
+    setCerrando(null);
+    if (transSel?.TransaccionId === t?.TransaccionId) {
+      setTransSel(null);
+      setLote(null);
+      setNumeroTermo("");
     }
+    await fetchTransaccionesAbiertas();
   };
 
   const codigoEscaneado = codigoInput.trim().toUpperCase();
@@ -443,6 +439,9 @@ export default function PesajePage() {
 
       {modalEditar && (
         <EditarPesajeModal item={modalEditar} onSave={handleGuardarEdicionPesaje} onClose={() => setModalEditar(null)} />
+      )}
+      {cerrando && (
+        <CerrarTransaccionModal transaccionId={cerrando.TransaccionId} onClose={() => setCerrando(null)} onHecho={trasCerrar} />
       )}
 
 

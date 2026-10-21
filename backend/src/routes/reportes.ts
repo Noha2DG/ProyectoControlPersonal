@@ -105,6 +105,24 @@ router.get("/produccion", requireAuth, requirePerm("destajo", "ver"), async (req
       ORDER BY tp.FechaProduccion DESC, tp.Lote DESC, t.NumeroTermo ASC
     `, desde, hasta, ...argsFinca);
 
+    // Los termos de COLA (Descabezado), aparte de porTermo: esos son los del pesaje y también suman el
+    // "Total Pelado/Cabeza" de la Hoja de Lote, donde la cola no debe entrar. Solo el Reporte Termos
+    // los muestra, marcados como cola.
+    const pTermoCola = () => prisma.$queryRawUnsafe(`
+      SELECT m.MovimientoId, m.NumeroTermo, m.Lote, m.ClaseProceso AS ClaseOrigen, m.Clase AS ClaseCola,
+             cc.Descripcion AS DescripcionClaseCola, m.Talla, ta.Descripcion AS DescripcionTalla,
+             DATE_FORMAT(m.FechaHora, '%Y-%m-%d') AS FechaProduccion, m.Peso AS Procesado, m.UM, bd.Nombre AS NombreDestino
+        FROM MovimientoPiso m
+        JOIN Lotes l ON l.Lote = m.LoteProceso AND l.Clase = m.ClaseProceso
+        JOIN Piscina p ON l.PiscinaId = p.PiscinaId
+        JOIN Finca f ON p.CodigoFinca = f.Codigo
+        JOIN Clase cc ON cc.Clase = m.Clase
+        JOIN Tallas ta ON ta.Codigo = m.Talla
+        LEFT JOIN BodegaVirtual bd ON bd.Codigo = m.BodegaDestino
+       WHERE m.Tipo = 'COLA' AND l.Fecha BETWEEN ? AND ? ${filtroFinca}
+       ORDER BY m.FechaHora DESC, m.Lote DESC, m.NumeroTermo
+    `, desde, hasta, ...argsFinca);
+
     const pLoteTalla = () => prisma.$queryRawUnsafe(`
       SELECT tp.Lote, tp.ClaseOrigen, tp.Talla, ta.Descripcion AS DescripcionTalla, tp.ClasePT, cl.Descripcion AS DescripcionClasePT,
              tp.Estado, COALESCE(SUM(pd.Peso), 0) AS Procesado, COUNT(pd.PesajeId) AS NumPesajes
@@ -198,23 +216,26 @@ router.get("/produccion", requireAuth, requirePerm("destajo", "ver"), async (req
     // Y los termos de cola de los lotes entero (Tipo COLA): su clase es la de la cola (D30…).
     const pAjustes = () => prisma.$queryRawUnsafe(`
       SELECT m.LoteProceso AS Lote, m.ClaseProceso AS Clase, m.Tipo, m.Motivo, m.Talla, ta.Descripcion AS DescripcionTalla,
-             m.Peso, m.UM, m.NumeroTermo, m.Clase AS ClaseCola, cc.Descripcion AS DescripcionClaseCola
+             m.Peso, m.UM, m.NumeroTermo, m.Clase AS ClaseCola, cc.Descripcion AS DescripcionClaseCola,
+             bd.Nombre AS NombreDestino
         FROM MovimientoPiso m
         JOIN Lotes l ON l.Lote = m.LoteProceso AND l.Clase = m.ClaseProceso
         JOIN Tallas ta ON ta.Codigo = m.Talla
         JOIN Clase cc ON cc.Clase = m.Clase
+        LEFT JOIN BodegaVirtual bd ON bd.Codigo = m.BodegaDestino
        WHERE m.Tipo IN ('BAJADO', 'DESCARTE', 'COLA') AND l.Fecha BETWEEN ? AND ?
        ORDER BY m.MovimientoId
     `, desde, hasta);
 
-    const [porPersona, porLote, porTermo, porLoteTalla, porTalla, pausasNoPaga, fincasConLotes, ajustes] =
-      await conLimite([pPersona, pLote, pTermo, pLoteTalla, pTalla, pPausas, pFincas, pAjustes], MAX_CONSULTAS_REPORTE) as any[][];
+    const [porPersona, porLote, porTermo, porLoteTalla, porTalla, pausasNoPaga, fincasConLotes, ajustes, termosCola] =
+      await conLimite([pPersona, pLote, pTermo, pLoteTalla, pTalla, pPausas, pFincas, pAjustes, pTermoCola], MAX_CONSULTAS_REPORTE) as any[][];
     const ajustesDe = new Map<string, any[]>();
     for (const a of ajustes) {
       const k = `${a.Lote}|${a.Clase}`;
       ajustesDe.set(k, [...(ajustesDe.get(k) ?? []),
         { Tipo: a.Tipo, Motivo: a.Motivo, Talla: Number(a.Talla), DescripcionTalla: a.DescripcionTalla, Peso: Number(a.Peso), UM: a.UM,
-          NumeroTermo: a.NumeroTermo, ClaseCola: a.ClaseCola, DescripcionClaseCola: a.DescripcionClaseCola }]);
+          NumeroTermo: a.NumeroTermo, ClaseCola: a.ClaseCola, DescripcionClaseCola: a.DescripcionClaseCola,
+          NombreDestino: a.NombreDestino }]);
     }
 
     // Rendimiento sobre lo TRABAJADO: lo bajado al piso no se trabajó en este lote (se retoma en el
@@ -262,6 +283,7 @@ router.get("/produccion", requireAuth, requirePerm("destajo", "ver"), async (req
       porLoteTalla: detalleFmt,
       porTalla: tallaFmt,
       porTermo: termoFmt,
+      porTermoCola: numerizar(termosCola, ["MovimientoId", "Talla", "Procesado"]),
       porPersona: personaFmt,
       pausasNoPaga,
       fincasConLotes,

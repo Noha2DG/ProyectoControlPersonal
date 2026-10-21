@@ -491,8 +491,9 @@ export function ColaModal({ lote, tallas, clases = [], onRegistrado, onClose }) 
     <Marco titulo={`Cola — ${lote.Lote} ${lote.Clase}`} onClose={onClose}>
       <form onSubmit={guardar} className="px-5 py-4 space-y-4">
         <p className="text-xs text-gray-500">
-          Un registro por termo lleno. La cola entra al inventario al piso de <b>Pelado</b>; lo pesado por persona
-          es la cabeza (el pago) y no cambia.
+          Un registro por termo lleno. La cola queda <b>por trasladar</b>: al cerrar la transacción de Descabezado
+          se escoge si va al piso de Pelado o al de Clasificado Cola. Lo pesado por persona es la cabeza (el pago)
+          y no cambia.
         </p>
         <div className="grid grid-cols-2 gap-4">
           <div>
@@ -547,9 +548,131 @@ export function ColaModal({ lote, tallas, clases = [], onRegistrado, onClose }) 
   );
 }
 
+// ── Cerrar una transacción: lo producido pasa al piso del siguiente proceso ─────────────────────
+// Pelado: lo pesado de la transacción va al proceso que se escoja (Tratamiento casi siempre; depende
+// del cliente). Descabezado: lo pesado es cabeza y no se traslada; lo que sale es la cola de los
+// termos, cada uno a Pelado o a Clasificado Cola. Ver backend/src/lib/destajoPiso.ts.
+export function CerrarTransaccionModal({ transaccionId, onHecho, onClose }) {
+  const [info, setInfo] = useState(null);
+  const [error, setError] = useState("");
+  const [destino, setDestino] = useState("");
+  const [porTermo, setPorTermo] = useState({});   // MovimientoId → bodega
+  const [guardando, setGuardando] = useState(false);
+
+  useEffect(() => {
+    let vigente = true;
+    fetch(`${API}/transaccion/${transaccionId}/cierre`, { headers: authHeader() }).then(leerJSON).then(d => {
+      if (!vigente) return;
+      if (!d.Modo) { setError(d.error || "No se pudo leer la transacción"); return; }
+      setInfo(d);
+      setDestino(d.DestinoSugerido);
+      setPorTermo(Object.fromEntries(d.ColaPendiente.map(c => [c.MovimientoId, d.DestinoSugerido])));
+    });
+    return () => { vigente = false; };
+  }, [transaccionId]);
+
+  const cerrar = async () => {
+    setGuardando(true); setError("");
+    try {
+      const res = await fetch(`/api/transacciones-produccion/${transaccionId}`, {
+        method: "PUT", headers: { "Content-Type": "application/json", ...authHeader() },
+        body: JSON.stringify({ Estado: "Cerrada", ...(info.Modo === "PELADO" ? { Destino: destino } : { DestinosCola: porTermo }) }),
+      });
+      const d = await leerJSON(res);
+      if (!res.ok) { setError(d.error || "No se pudo cerrar"); return; }
+      onHecho(d);
+    } catch (e) {
+      setError(e.message || "No se pudo conectar con el servidor");
+    } finally { setGuardando(false); }
+  };
+
+  const nombre = c => info?.Destinos.find(d => d.Codigo === c)?.Nombre ?? c;
+  const kgCola = (info?.ColaPendiente ?? []).reduce((s, c) => s + c.Peso, 0);
+  const todosA = c => setPorTermo(Object.fromEntries(info.ColaPendiente.map(x => [x.MovimientoId, c])));
+
+  return (
+    <Marco titulo="Cerrar transacción" onClose={onClose}>
+      <div className="px-5 py-4 space-y-4 overflow-y-auto">
+        {!info ? (
+          error ? <p className="text-sm text-red-600">{error}</p>
+                : <div className="flex justify-center py-6"><div className="w-6 h-6 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" /></div>
+        ) : (
+          <>
+            <div className="text-sm text-gray-700">
+              <p><span className="font-mono font-bold">{info.Lote}</span> · {info.DescripcionProceso}</p>
+              <p className="text-gray-500">{info.DescripcionClasePT}{info.Talla !== 900 ? ` · ${info.DescripcionTalla}` : ""}</p>
+            </div>
+
+            {info.Modo === "PELADO" ? (
+              info.Procesado > 0 ? (
+                <div className="space-y-2">
+                  <p className="text-sm">Lo pelado, <b>{fmtNum(info.Procesado)} {info.UM}</b>, pasa al inventario al piso de:</p>
+                  <select value={destino} onChange={e => setDestino(e.target.value)}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400">
+                    {info.Destinos.map(d => <option key={d.Codigo} value={d.Codigo}>{d.Nombre}</option>)}
+                  </select>
+                </div>
+              ) : (
+                <p className="text-sm text-gray-500">No hay nada pesado en esta transacción: se cierra sin trasladar nada.</p>
+              )
+            ) : (
+              <div className="space-y-2">
+                <p className="text-xs text-gray-500">Lo pesado aquí es cabeza y no se traslada. Lo que pasa al siguiente proceso es la cola de los termos.</p>
+                {info.ColaPendiente.length === 0 ? (
+                  <p className="text-sm text-amber-700">No hay cola por trasladar en este lote. Si faltan termos, regístrelos antes de cerrar (botón "Cola (termo)" del lote).</p>
+                ) : (
+                  <>
+                    <div className="flex flex-wrap items-center gap-2 text-xs text-gray-600">
+                      <span>Cola por trasladar: <b>{info.ColaPendiente.length}</b> termo{info.ColaPendiente.length !== 1 ? "s" : ""} · <b>{fmtNum(kgCola)} {info.UM}</b></span>
+                      <span className="ml-auto">Todos a:</span>
+                      {info.Destinos.map(d => (
+                        <button key={d.Codigo} type="button" onClick={() => todosA(d.Codigo)}
+                          className="px-2 py-1 rounded border border-emerald-300 text-emerald-700 hover:bg-emerald-50 transition">{d.Nombre}</button>
+                      ))}
+                    </div>
+                    <div className="border border-gray-200 rounded-lg divide-y divide-gray-100">
+                      {info.ColaPendiente.map(c => (
+                        <div key={c.MovimientoId} className="flex items-center gap-3 px-3 py-2 text-sm">
+                          <span className="flex-1 min-w-0 truncate">
+                            Termo <b className="font-mono">{c.NumeroTermo}</b> · {c.DescripcionClase}{c.Talla !== 900 ? ` · ${c.DescripcionTalla}` : ""}
+                          </span>
+                          <span className="whitespace-nowrap font-semibold">{fmtNum(c.Peso)} {c.UM}</span>
+                          <select value={porTermo[c.MovimientoId] ?? ""} onChange={e => setPorTermo(p => ({ ...p, [c.MovimientoId]: e.target.value }))}
+                            className="border border-gray-300 rounded px-2 py-1 text-sm">
+                            {info.Destinos.map(d => <option key={d.Codigo} value={d.Codigo}>{d.Nombre}</option>)}
+                          </select>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+
+            <p className="text-xs text-gray-400">Al cerrar ya no se pueden registrar pesajes en esta transacción.</p>
+            {error && <p className="text-sm text-red-600">{error}</p>}
+            <div className="flex justify-end gap-3 pt-1">
+              <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 transition">Cancelar</button>
+              <button onClick={cerrar} disabled={guardando}
+                className="px-5 py-2 text-sm bg-amber-600 hover:bg-amber-700 text-white font-semibold rounded-lg transition disabled:opacity-50">
+                {guardando ? "Cerrando…"
+                  : info.Modo === "PELADO" && info.Procesado > 0 ? `Cerrar y trasladar a ${nombre(destino)}`
+                  : info.Modo === "DESCABEZADO" && info.ColaPendiente.length ? "Cerrar y trasladar la cola"
+                  : "Cerrar"}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </Marco>
+  );
+}
+
 // ── Movimientos del piso de un lote ─────────────────────────────────────────────────────────────
-const TITULO = { DESTAJO: "Tomado del piso", COLA: "Cola (termos) → piso de Pelado", BAJADO: "Bajado al piso", DESCARTE: "Descarte" };
-const DESHACER = { DESTAJO: "Devolver al piso", COLA: "Deshacer", BAJADO: "Deshacer", DESCARTE: "Deshacer" };
+const TITULO = { DESTAJO: "Tomado del piso", COLA: "Cola (termos)", PROCESADO: "Trasladado al cerrar transacciones",
+                 BAJADO: "Bajado al piso", DESCARTE: "Descarte" };
+// Lo trasladado al cerrar no se deshace aquí: se deshace reabriendo la transacción.
+const DESHACER = { DESTAJO: "Devolver al piso", COLA: "Deshacer", PROCESADO: null, BAJADO: "Deshacer", DESCARTE: "Deshacer" };
 
 export function MovimientosPisoLote({ lote, recarga, puedeEditar, onCambio }) {
   const [movs, setMovs] = useState([]);
@@ -583,7 +706,7 @@ export function MovimientosPisoLote({ lote, recarga, puedeEditar, onCambio }) {
 
   return (
     <div className="bg-white rounded-xl shadow mb-4 divide-y divide-gray-100">
-      {["DESTAJO", "COLA", "BAJADO", "DESCARTE"].map(tipo => {
+      {["DESTAJO", "COLA", "PROCESADO", "BAJADO", "DESCARTE"].map(tipo => {
         const lista = movs.filter(m => m.Tipo === tipo);
         if (!lista.length) return null;
         return (
@@ -595,13 +718,16 @@ export function MovimientosPisoLote({ lote, recarga, puedeEditar, onCambio }) {
                   {tipo === "DESTAJO" && <><span className="font-mono">{m.LoteOrigen}</span>{m.FolioRemision ? ` · ${m.FolioRemision}` : ""}</>}
                   {tipo === "BAJADO" && <>{m.Motivo ? `${m.Motivo} · ` : ""}{m.NombreBodega} · {m.Fecha}</>}
                   {tipo === "DESCARTE" && <>{m.Motivo || "Descarte"}</>}
-                  {tipo === "COLA" && <>Termo <span className="font-mono font-semibold">{m.NumeroTermo}</span> · {m.DescripcionClase || m.Clase} · {m.Fecha}</>}
+                  {tipo === "COLA" && <>Termo <span className="font-mono font-semibold">{m.NumeroTermo}</span> · {m.DescripcionClase || m.Clase} · {m.NombreBodega
+                    ? <span className="text-emerald-700">→ {m.NombreBodega}</span>
+                    : <span className="text-amber-700">por trasladar</span>}</>}
+                  {tipo === "PROCESADO" && <>{m.DescripcionClase || m.Clase} · <span className="text-emerald-700">→ {m.NombreBodega}</span> · {m.Fecha}</>}
                   {m.Talla !== 900 && <span className="text-gray-400"> · {m.DescripcionTalla}</span>}
                 </span>
                 <span className="font-semibold text-gray-800 whitespace-nowrap">
                   {tipo === "DESTAJO" ? `${fmtNum(m.PesoKg)} kg` : `${fmtNum(m.Peso)} ${m.UM}`}
                 </span>
-                {puedeEditar && (
+                {puedeEditar && DESHACER[tipo] && (
                   <button onClick={() => deshacer(m)}
                     className="text-xs text-gray-500 hover:text-red-600 px-2 py-0.5 rounded hover:bg-red-50 transition whitespace-nowrap">
                     {DESHACER[tipo]}
