@@ -234,11 +234,11 @@ function LoteModal({ item, fincas, clases, tallas, onSave, onClose }) {
   );
 }
 
-function TransaccionModal({ lote, procesos, clases, tallas, almacenes, onSave, onClose }) {
+// Sin almacén de origen/destino desde el 21 oct 2026: era el catálogo Almacenes, que nadie leía; de
+// dónde viene y a dónde va el producto lo dice el inventario al piso (ver transaccionesProduccion.ts).
+function TransaccionModal({ lote, procesos, clases, tallas, onSave, onClose }) {
   const [form, setForm] = useState({
     ClasePT: "", Talla: "",
-    AlmacenOrigen: lote.AlmacenCodigo || (almacenes[0]?.Codigo ?? ""),
-    AlmacenDestino: almacenes[0]?.Codigo ?? "",
     FechaProduccion: hoy(),
   });
   const set = f => e => setForm(p => ({ ...p, [f]: e.target.value }));
@@ -290,22 +290,6 @@ function TransaccionModal({ lote, procesos, clases, tallas, almacenes, onSave, o
             <input required type="date" value={form.FechaProduccion} onChange={set("FechaProduccion")}
               className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
           </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-medium text-gray-500 mb-1">Almacén Origen *</label>
-              <select required value={form.AlmacenOrigen} onChange={set("AlmacenOrigen")}
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400">
-                {almacenes.map(a => <option key={a.Codigo} value={a.Codigo}>{a.Codigo}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-gray-500 mb-1">Almacén Destino *</label>
-              <select required value={form.AlmacenDestino} onChange={set("AlmacenDestino")}
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400">
-                {almacenes.map(a => <option key={a.Codigo} value={a.Codigo}>{a.Codigo}</option>)}
-              </select>
-            </div>
-          </div>
           <div className="flex justify-end gap-3 pt-1">
             <button type="button" onClick={onClose} className="px-4 py-2 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 transition">Cancelar</button>
             <button type="submit" className="px-5 py-2 text-sm bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 transition">Crear</button>
@@ -325,7 +309,6 @@ export default function MateriaPrimaPage() {
   const [clases, setClases] = useState([]);
   const [procesos, setProcesos] = useState([]);
   const [tallas, setTallas] = useState([]);
-  const [almacenes, setAlmacenes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [errorLotes, setErrorLotes] = useState("");
   const [loteSel, setLoteSel] = useState(null);
@@ -365,13 +348,11 @@ export default function MateriaPrimaPage() {
       fetch("/api/clase", { headers: authHeader() }).then(r => r.json()),
       fetch("/api/procesos", { headers: authHeader() }).then(r => r.json()),
       fetch("/api/tallas", { headers: authHeader() }).then(r => r.json()),
-      fetch("/api/almacenes", { headers: authHeader() }).then(r => r.json()),
-    ]).then(([f, c, pr, t, a]) => {
+    ]).then(([f, c, pr, t]) => {
       if (Array.isArray(f)) setFincas(f.filter(x => x.Activo));
       if (Array.isArray(c)) setClases(c.filter(x => x.Activo));
       if (Array.isArray(pr)) setProcesos(pr.filter(x => x.Activo));
       if (Array.isArray(t)) setTallas(t.filter(x => x.Activo));
-      if (Array.isArray(a)) setAlmacenes(a.filter(x => x.Activo));
     });
   }, [fetchLotes]);
 
@@ -758,7 +739,7 @@ export default function MateriaPrimaPage() {
         <ColaModal lote={loteSel} tallas={tallas} clases={clases} onRegistrado={trasMovimientoPiso} onClose={() => setAjuste(null)} />
       )}
       {modalTrans && loteSel && (
-        <TransaccionModal lote={loteSel} procesos={procesos} clases={clases} tallas={tallas} almacenes={almacenes}
+        <TransaccionModal lote={loteSel} procesos={procesos} clases={clases} tallas={tallas}
           onSave={handleSaveTransaccion} onClose={() => setModalTrans(false)} />
       )}
     </div>
