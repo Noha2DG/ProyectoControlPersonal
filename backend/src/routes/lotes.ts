@@ -66,7 +66,7 @@ function formatear(rows: any[]) {
     // Lote entero (C20 → cola): lo pesado es cabeza y la cola se registra por termo.
     Cola: Number(r.Cola),
     EsEntero: esEntero(r.Clase),
-    ClaseCola: esEntero(r.Clase) ? claseColaSugerida(r.Clase) : null,
+    ClaseCola: esEntero(r.Clase) ? claseColaSugerida(r.Clase, r.Lote) : null,
     Pendiente: Number(r.PesoIngreso) - Number(r.Bajado) - Number(r.Descarte) - Number(r.Procesado),
     Activo: Number(r.Activo) === 1,
   }));

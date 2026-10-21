@@ -10,6 +10,7 @@ import prisma from "../src/lib/prisma.ts";
 import {
   saldoParaDestajo, tomarDelPiso, bajarAlPiso, registrarDescarte, deshacerMovimiento, cuadreLote,
   movimientosDeLote, rendimientoLote, devolverLoteAlPiso, registrarCola, rendimientosEntero,
+  esEntero, claseColaSugerida,
 } from "../src/lib/destajoPiso.ts";
 import { componerCodigoLote } from "../src/lib/codigoLote.ts";
 
@@ -221,6 +222,11 @@ const PISO = [
         "no se devuelve un lote cuyo bajado ya tomó otro lote");
 
       console.log("10. Cola de un lote entero (Descabezado → piso de Pelado)");
+      check(esEntero("C26") && esEntero("C20") && !esEntero("D30") && !esEntero("C10"),
+        "C26 (entero IQF) también se descabeza; D30 y C10 no");
+      check(claseColaSugerida("C26", "G343EM-SIFON") === "D35" && claseColaSugerida("C26", "G343TM04-E04-6") === "D30"
+        && claseColaSugerida("C24") === "D35" && claseColaSugerida("C25") === "D33",
+        "la cola sugerida: sifón (por clase o por piscina) → D35, entero-R → D33, el resto D30");
       await tx.$executeRawUnsafe(`
         INSERT INTO MovimientoPiso (Tipo, FechaProduccion, BodegaDestino, Lote, Clase, Talla, FechaLote, Peso, UM, PesoKg, RegistradoPor)
         VALUES ('TRASLADO', ?, 'DESCABEZADO', 'G433TM04-E04-6', 'C20', 237, '2026-08-13', 100, 'KG', 100, ?)`, HOY, OP);

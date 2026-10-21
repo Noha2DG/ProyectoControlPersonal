@@ -35,13 +35,18 @@ import { componerCodigoLote, descomponerCodigoLote, piscinaRequiereCiclo, FINCAS
 export const BODEGAS_CON_DESTAJO = ["PELADO", "DESCABEZADO"];
 
 // Lotes entero que se descabezan, y las clases de cola que salen de ellos (decisión del usuario,
-// 21 oct 2026). La cola va siempre al piso de Pelado.
-export const CLASES_ENTERO = ["C20", "C23", "C24", "C25", "L20", "L21", "L22"];
+// 21 oct 2026; C26 —entero IQF— se agregó el mismo día). La cola va siempre al piso de Pelado.
+export const CLASES_ENTERO = ["C20", "C23", "C24", "C25", "C26", "L20", "L21", "L22"];
 export const CLASES_COLA = ["D30", "D33", "D34", "D35"];
 const BODEGA_COLA = "PELADO";
-/** La cola que le corresponde a cada entero por omisión: sifón → cola sifón, entero-R → cola-R. */
-export function claseColaSugerida(claseEntero: string) {
-  return ({ C24: "D35", C25: "D33" } as Record<string, string>)[claseEntero] ?? "D30";
+/**
+ * La cola que le corresponde a un entero por omisión: sifón → cola sifón (D35), entero-R → cola-R
+ * (D33), el resto D30. Un lote de piscina sifón (G343EM-SIFON) es sifón aunque su clase sea otra,
+ * como el C26 —entero IQF—. Es solo la sugerencia: el encargado escoge la clase al registrar.
+ */
+export function claseColaSugerida(claseEntero: string, lote = "") {
+  if (claseEntero === "C24" || /SIFON/i.test(lote)) return "D35";
+  return claseEntero === "C25" ? "D33" : "D30";
 }
 export const esEntero = (clase: string) => CLASES_ENTERO.includes(String(clase));
 
