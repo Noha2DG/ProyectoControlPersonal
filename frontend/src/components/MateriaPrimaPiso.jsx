@@ -3,6 +3,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { fmtNum } from "../utils/numero.js";
 import { authHeader } from "../context/AuthContext.jsx";
+import InventarioPisoModal from "./InventarioPisoModal.jsx";
 
 const API = "/api/destajo-piso";
 const enc = encodeURIComponent;
@@ -40,6 +41,7 @@ export function TomarDelPisoModal({ onHecho, onClose }) {
   const [piscinas, setPiscinas] = useState([]);
   const [guardando, setGuardando] = useState(false);
   const [hecho, setHecho] = useState(null);
+  const [imprimir, setImprimir] = useState(false);   // vista previa del inventario al piso
   const [unificando, setUnificando] = useState(false);   // paso de escoger el lote al unificar
   const [base, setBase] = useState("");                   // el lote de origen que da el código
 
@@ -215,6 +217,11 @@ export function TomarDelPisoModal({ onHecho, onClose }) {
           {bodegas.map(b => <option key={b.Codigo} value={b.Codigo}>{b.Nombre}</option>)}
         </select>
         <span className="text-xs text-gray-400">El peso es el de la báscula de Descongelado: no se teclea.</span>
+        <button onClick={() => setImprimir(true)} disabled={cargando || lineas.length === 0}
+          title="Lo que hay al piso de esta bodega, agrupado por clase"
+          className="ml-auto px-3 py-1.5 text-sm font-medium rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50 transition disabled:opacity-40 disabled:cursor-not-allowed">
+          Imprimir inventario
+        </button>
       </div>
 
       <div className="overflow-auto flex-1 min-h-0">
@@ -320,6 +327,11 @@ export function TomarDelPisoModal({ onHecho, onClose }) {
           </button>
         </div>
       </div>
+
+      {imprimir && (
+        <InventarioPisoModal nombreBodega={bodegas.find(b => b.Codigo === bodega)?.Nombre ?? bodega}
+          lineas={lineas} onCerrar={() => setImprimir(false)} />
+      )}
     </Marco>
   );
 }
