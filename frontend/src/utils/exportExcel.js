@@ -108,6 +108,8 @@ export function exportarReporteGeneral(porLote, porTalla, desde, hasta) {
     "Peso Ingreso":    l.PesoIngreso,
     "UM":              l.UM,
     "Procesado":       +l.Procesado.toFixed(2),
+    "Bajado al piso":  +(l.Bajado || 0).toFixed(2),
+    "Descarte":        +(l.Descarte || 0).toFixed(2),
     "Pendiente":       +l.Pendiente.toFixed(2),
     "Rendimiento %":   +l.Rendimiento.toFixed(1),
     "Transacciones":   l.NumTransacciones,
@@ -161,6 +163,8 @@ export function exportarHojaLote(termos, lote) {
   const totalPelado = termos.reduce((s, t) => s + t.Procesado, 0);
   filas.push({ "Termo": "", "Talla": "", "Producto": "Total Pelado", "Kilos": +totalPelado.toFixed(2) });
   filas.push({ "Termo": "", "Talla": "", "Producto": "Materia Prima Ingresada", "Kilos": +lote.PesoIngreso.toFixed(2) });
+  if (lote.Bajado) filas.push({ "Termo": "", "Talla": "", "Producto": "Bajado al piso", "Kilos": +lote.Bajado.toFixed(2) });
+  if (lote.Descarte) filas.push({ "Termo": "", "Talla": "", "Producto": "Descarte", "Kilos": +lote.Descarte.toFixed(2) });
   filas.push({ "Termo": "", "Talla": "", "Producto": "Rendimiento", "Kilos": `${lote.Rendimiento.toFixed(0)}%` });
 
   const wb = XLSX.utils.book_new();

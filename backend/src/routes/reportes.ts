@@ -1,6 +1,7 @@
 import { Router, Request, Response } from "express";
 import prisma from "../lib/prisma.ts";
 import { requireAuth, requirePerm, tienePermiso, AuthRequest } from "../middleware/auth.ts";
+import { sqlAjustesLote, rendimientoLote } from "../lib/destajoPiso.ts";
 
 const router = Router();
 
@@ -65,7 +66,7 @@ router.get("/produccion", requireAuth, requirePerm("destajo", "ver"), async (req
     // MAX_CONSULTAS_REPORTE, lo que siempre deja al menos una conexión libre para el resto.
     const pLote = () => prisma.$queryRawUnsafe(`
       SELECT l.Lote, f.Codigo AS CodigoFinca, f.Descripcion AS NombreFinca, l.Clase, c.Descripcion AS DescripcionClase,
-             l.Fecha, l.PesoIngreso, l.UM, l.Notas,
+             l.Fecha, l.PesoIngreso, l.UM, l.Notas, ${sqlAjustesLote("l")},
              COALESCE((SELECT SUM(pd.Peso) FROM PesajeDetalle pd
                        JOIN TransaccionesProduccion tp ON pd.TransaccionId = tp.TransaccionId
                        WHERE tp.Lote = l.Lote AND tp.ClaseOrigen = l.Clase), 0) AS Procesado,
@@ -195,8 +196,12 @@ router.get("/produccion", requireAuth, requirePerm("destajo", "ver"), async (req
     const [porPersona, porLote, porTermo, porLoteTalla, porTalla, pausasNoPaga, fincasConLotes] =
       await conLimite([pPersona, pLote, pTermo, pLoteTalla, pTalla, pPausas, pFincas], MAX_CONSULTAS_REPORTE) as any[][];
 
-    const lotesFmt = numerizar(porLote, ["PesoIngreso", "Procesado", "NumTransacciones"])
-      .map(l => ({ ...l, Pendiente: l.PesoIngreso - l.Procesado, Rendimiento: l.PesoIngreso > 0 ? (l.Procesado / l.PesoIngreso * 100) : 0 }));
+    // Rendimiento sobre lo TRABAJADO: lo bajado al piso no se trabajó en este lote (se retoma en el
+    // del día siguiente), y el descarte sí, así que se queda dentro como merma. Ver lib/destajoPiso.ts.
+    const lotesFmt = numerizar(porLote, ["PesoIngreso", "Procesado", "NumTransacciones", "Bajado", "Descarte"])
+      .map(l => ({ ...l,
+        Pendiente: l.PesoIngreso - l.Bajado - l.Descarte - l.Procesado,
+        Rendimiento: rendimientoLote(l.PesoIngreso, l.Bajado, l.Procesado) }));
     const detalleFmt = numerizar(porLoteTalla, ["Talla", "Procesado", "NumPesajes"]);
     const tallaFmt = numerizar(porTalla, ["Talla", "Procesado", "NumPesajes"]);
     const termoFmt = numerizar(porTermo, ["TermoId", "Talla", "Proceso", "Procesado"]);
@@ -205,7 +210,9 @@ router.get("/produccion", requireAuth, requirePerm("destajo", "ver"), async (req
     const totales = lotesFmt.reduce((acc, l) => ({
       PesoIngreso: acc.PesoIngreso + l.PesoIngreso,
       Procesado: acc.Procesado + l.Procesado,
-    }), { PesoIngreso: 0, Procesado: 0 });
+      Bajado: acc.Bajado + l.Bajado,
+      Descarte: acc.Descarte + l.Descarte,
+    }), { PesoIngreso: 0, Procesado: 0, Bajado: 0, Descarte: 0 });
 
     res.json({
       desde, hasta,
@@ -216,7 +223,8 @@ router.get("/produccion", requireAuth, requirePerm("destajo", "ver"), async (req
       porPersona: personaFmt,
       pausasNoPaga,
       fincasConLotes,
-      totales: { ...totales, Pendiente: totales.PesoIngreso - totales.Procesado, Rendimiento: totales.PesoIngreso > 0 ? (totales.Procesado / totales.PesoIngreso * 100) : 0 },
+      totales: { ...totales, Pendiente: totales.PesoIngreso - totales.Bajado - totales.Descarte - totales.Procesado,
+                 Rendimiento: rendimientoLote(totales.PesoIngreso, totales.Bajado, totales.Procesado) },
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message });

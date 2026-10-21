@@ -263,7 +263,9 @@ export default function PesajePage() {
   const empleadoEscaneado = codigoEscaneado ? empleados.find(e => e.Codigo === codigoEscaneado) : null;
 
   const termoActual = termos.find(t => t.NumeroTermo === numeroTermo);
-  const rendimiento = lote && lote.PesoIngreso > 0 ? (lote.Procesado / lote.PesoIngreso * 100) : 0;
+  // Sobre lo trabajado: lo bajado al piso no se trabajó en este lote (ver backend/src/lib/destajoPiso.ts).
+  const trabajado = lote ? lote.PesoIngreso - (lote.Bajado || 0) : 0;
+  const rendimiento = trabajado > 0 ? (lote.Procesado / trabajado * 100) : 0;
 
   return (
     <div>

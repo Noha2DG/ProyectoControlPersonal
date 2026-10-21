@@ -3,6 +3,7 @@ import { fmtNum } from "../utils/numero.js";
 import { authHeader, usePuede } from "../context/AuthContext.jsx";
 import { componerCodigoLote, piscinaRequiereCiclo } from "../utils/codigoLote.js";
 import { useColWidths, Th, Colgroup } from "../components/ResizableTh.jsx";
+import { TomarDelPisoModal, AjusteLoteModal, MovimientosPisoLote } from "../components/MateriaPrimaPiso.jsx";
 
 const LOTE_COL_DEFAULTS = { lote: 130, finca: 140, ciclo: 90, clase: 90, talla: 130, peso: 130, acciones: 130 };
 const LOTE_COLS = Object.keys(LOTE_COL_DEFAULTS);
@@ -52,6 +53,8 @@ function ComboBuscable({ options, value, onChange, placeholder, required, disabl
 
 function LoteModal({ item, fincas, clases, tallas, onSave, onClose }) {
   const isEdit = !!item;
+  // El peso de un lote tomado del piso es el de la báscula de Descongelado: no se teclea.
+  const pesoDelPiso = isEdit && !!item?.Origen && item.Origen !== "MANUAL";
   const [form, setForm] = useState({
     CodigoFinca: item?.CodigoFinca || (fincas[0]?.Codigo ?? ""),
     PiscinaId: item?.PiscinaId || "",
@@ -214,8 +217,9 @@ function LoteModal({ item, fincas, clases, tallas, onSave, onClose }) {
           </div>
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1">Peso de Ingreso *</label>
-            <input required type="number" step="0.01" value={form.PesoIngreso} onChange={set("PesoIngreso")}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
+            <input required type="number" step="0.01" value={form.PesoIngreso} onChange={set("PesoIngreso")} readOnly={pesoDelPiso}
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 read-only:bg-gray-100 read-only:text-gray-500" />
+            {pesoDelPiso && <p className="text-xs text-gray-400 mt-1">Viene del piso. Para corregirlo, devuelva la toma al piso desde el detalle del lote.</p>}
           </div>
           <div className="flex justify-end gap-3 pt-1">
             <button type="button" onClick={onClose} className="px-4 py-2 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 transition">Cancelar</button>
@@ -330,6 +334,9 @@ export default function MateriaPrimaPage() {
   const [modalLote, setModalLote] = useState({ open: false, item: null });
   const [modalTrans, setModalTrans] = useState(false);
   const [busqueda, setBusqueda] = useState("");
+  const [modalPiso, setModalPiso] = useState(false);
+  const [ajuste, setAjuste] = useState(null);          // "bajar" | "descarte"
+  const [recargaMov, setRecargaMov] = useState(0);
   const [widthsLote, startResizeLote] = useColWidths("materiaprima_lotes", LOTE_COL_DEFAULTS);
   const [widthsTrans, startResizeTrans] = useColWidths("materiaprima_trans", TRANS_COL_DEFAULTS);
 
@@ -380,6 +387,15 @@ export default function MateriaPrimaPage() {
   }, []);
 
   const seleccionarLote = (l) => { setLoteSel(l); fetchTransacciones(l.Lote, l.Clase); };
+
+  // Tomar, bajar o descartar cambian los números del lote seleccionado: se vuelve a leer de la lista
+  // recién cargada para que las tarjetas no muestren lo de antes. Si el lote ya no está (se devolvió
+  // todo al piso), se suelta.
+  useEffect(() => {
+    setLoteSel(sel => sel ? (lotes.find(l => l.Lote === sel.Lote && l.Clase === sel.Clase) ?? null) : sel);
+  }, [lotes]);
+
+  const trasMovimientoPiso = () => { setRecargaMov(n => n + 1); fetchLotes(); };
 
   const handleSaveLote = async (form) => {
     try {
@@ -467,7 +483,15 @@ export default function MateriaPrimaPage() {
             className="border border-gray-300 rounded-lg px-3 py-2 text-sm w-52 focus:outline-none focus:ring-2 focus:ring-blue-400" />
           <span className="text-sm text-gray-500 ml-auto">{lotesFiltrados.length} lote{lotesFiltrados.length !== 1 ? "s" : ""}</span>
           {puedeCrear && (
+            <button onClick={() => setModalPiso(true)}
+              title="Escoger de lo que Descongelado dejó al piso de Pelado o Descabezado"
+              className="border border-blue-600 text-blue-700 text-sm font-semibold px-4 py-2 rounded-lg hover:bg-blue-50 transition">
+              Tomar del piso
+            </button>
+          )}
+          {puedeCrear && (
             <button onClick={() => setModalLote({ open: true, item: null })}
+              title="Producto fresco: lo que no viene de bodega"
               className="bg-blue-600 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-blue-700 transition">
               + Nuevo Lote
             </button>
@@ -502,7 +526,10 @@ export default function MateriaPrimaPage() {
                 {lotesFiltrados.map(l => (
                   <tr key={`${l.Lote}-${l.Clase}`} onClick={() => seleccionarLote(l)}
                     className={`cursor-pointer transition ${loteSel?.Lote === l.Lote && loteSel?.Clase === l.Clase ? "bg-blue-50" : "hover:bg-gray-50"} ${!l.Activo ? "opacity-50" : ""}`}>
-                    <td className="px-3 py-3 font-mono font-bold text-gray-700 whitespace-nowrap">{l.Lote}</td>
+                    <td className="px-3 py-3 font-mono font-bold text-gray-700 whitespace-nowrap truncate" title={l.Origen && l.Origen !== "MANUAL" ? "Tomado del piso" : undefined}>
+                      {l.Origen && l.Origen !== "MANUAL" && <span className="inline-block w-2 h-2 rounded-full bg-emerald-500 mr-1.5 align-middle" />}
+                      {l.Lote}
+                    </td>
                     <td className="px-3 py-3 text-gray-900 whitespace-nowrap">{l.NombreFinca}</td>
                     <td className="px-3 py-3 text-center font-mono text-gray-600 whitespace-nowrap">
                       {l.Ciclo != null ? <span className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded text-xs font-semibold">{l.Anio}/{l.Ciclo}</span> : <span className="text-gray-300">—</span>}
@@ -516,7 +543,7 @@ export default function MateriaPrimaPage() {
                           <button onClick={() => setModalLote({ open: true, item: l })}
                             className="text-blue-600 hover:text-blue-800 text-xs font-medium px-2 py-1 rounded hover:bg-blue-50 transition">Editar</button>
                         )}
-                        {l.Procesado === 0 && puedeEliminar && (
+                        {l.Procesado === 0 && puedeEliminar && (!l.Origen || l.Origen === "MANUAL") && (
                           <button onClick={() => handleEliminarLote(l)}
                             className="text-red-500 hover:text-red-700 text-xs font-medium px-2 py-1 rounded hover:bg-red-50 transition">Eliminar</button>
                         )}
@@ -551,10 +578,18 @@ export default function MateriaPrimaPage() {
           <div className="bg-white rounded-xl shadow px-4 py-8 text-center text-gray-400 text-sm">Seleccione un lote para ver sus transacciones</div>
         ) : (
           <>
-            <div className="grid grid-cols-3 gap-2 mb-4">
+            <div className="grid grid-cols-3 sm:grid-cols-5 gap-2 mb-3">
               <div className="bg-white rounded-lg shadow px-3 py-2 text-center">
                 <p className="text-xs text-gray-400">Ingreso</p>
                 <p className="text-sm font-bold text-gray-800">{fmtNum(loteSel.PesoIngreso)} {loteSel.UM}</p>
+              </div>
+              <div className="bg-white rounded-lg shadow px-3 py-2 text-center" title="No se trabajó: no cuenta en el rendimiento">
+                <p className="text-xs text-gray-400">Bajado al piso</p>
+                <p className="text-sm font-bold text-gray-700">{fmtNum(loteSel.Bajado || 0)} {loteSel.UM}</p>
+              </div>
+              <div className="bg-white rounded-lg shadow px-3 py-2 text-center" title="Merma: sí cuenta en el rendimiento">
+                <p className="text-xs text-gray-400">Descarte</p>
+                <p className="text-sm font-bold text-red-600">{fmtNum(loteSel.Descarte || 0)} {loteSel.UM}</p>
               </div>
               <div className="bg-white rounded-lg shadow px-3 py-2 text-center">
                 <p className="text-xs text-gray-400">Procesado</p>
@@ -565,6 +600,22 @@ export default function MateriaPrimaPage() {
                 <p className="text-sm font-bold text-amber-600">{fmtNum(loteSel.Pendiente)} {loteSel.UM}</p>
               </div>
             </div>
+
+            {puedeEditar && (
+              <div className="flex flex-wrap gap-2 mb-3">
+                <button onClick={() => setAjuste("bajar")}
+                  className="text-sm font-medium px-3 py-1.5 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50 transition">
+                  Bajar al piso
+                </button>
+                <button onClick={() => setAjuste("descarte")}
+                  className="text-sm font-medium px-3 py-1.5 rounded-lg border border-red-200 text-red-600 hover:bg-red-50 transition">
+                  Descarte
+                </button>
+              </div>
+            )}
+
+            <MovimientosPisoLote lote={loteSel} recarga={recargaMov} puedeEditar={puedeEditar}
+              onCambio={trasMovimientoPiso} />
 
             {loadingTrans ? (
               <div className="flex justify-center py-10"><div className="w-6 h-6 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" /></div>
@@ -631,6 +682,14 @@ export default function MateriaPrimaPage() {
       {modalLote.open && (
         <LoteModal item={modalLote.item} fincas={fincas} clases={clases} tallas={tallas}
           onSave={handleSaveLote} onClose={() => setModalLote({ open: false, item: null })} />
+      )}
+      {modalPiso && (
+        <TomarDelPisoModal onClose={() => setModalPiso(false)}
+          onHecho={() => { setModalPiso(false); trasMovimientoPiso(); }} />
+      )}
+      {ajuste && loteSel && (
+        <AjusteLoteModal tipo={ajuste} lote={loteSel} tallas={tallas} onClose={() => setAjuste(null)}
+          onHecho={() => { setAjuste(null); trasMovimientoPiso(); }} />
       )}
       {modalTrans && loteSel && (
         <TransaccionModal lote={loteSel} procesos={procesos} clases={clases} tallas={tallas} almacenes={almacenes}

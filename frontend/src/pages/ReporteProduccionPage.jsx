@@ -16,7 +16,14 @@ const TERMO_DET_COLS = Object.keys(TERMO_DET_COL_DEFAULTS);
 const TALLA_DET_COL_DEFAULTS = { id: 100, nombre: 150, lb: 90, horas: 90, lbhora: 90, pesadas: 90 };
 const TALLA_DET_COLS = Object.keys(TALLA_DET_COL_DEFAULTS);
 
-const POR_LOTE_COL_DEFAULTS = { expand: 30, lote: 130, finca: 130, clase: 150, fecha: 100, ingreso: 100, procesado: 100, pendiente: 100, rend: 90, transac: 90 };
+const POR_LOTE_COL_DEFAULTS = { expand: 30, lote: 130, finca: 130, clase: 150, fecha: 100, ingreso: 100, procesado: 100, bajado: 90, descarte: 90, pendiente: 100, rend: 90, transac: 90 };
+
+// Rendimiento sobre lo TRABAJADO: lo bajado al piso no se trabajó en ese lote (se retoma en el del día
+// siguiente); el descarte sí, así que se queda dentro como merma. Igual que backend/src/lib/destajoPiso.ts.
+function rendimientoTrabajado(ingreso, bajado, procesado) {
+  const trabajado = ingreso - (bajado || 0);
+  return trabajado > 0 ? (procesado / trabajado * 100) : 0;
+}
 const POR_LOTE_COLS = Object.keys(POR_LOTE_COL_DEFAULTS);
 const POR_TALLA_GEN_COL_DEFAULTS = { talla: 220, kg: 100, pct: 90 };
 const POR_TALLA_GEN_COLS = Object.keys(POR_TALLA_GEN_COL_DEFAULTS);
@@ -231,6 +238,8 @@ function FilaLote({ l, detalle, abierta, onToggle }) {
         <td className="px-3 py-2.5 text-center text-gray-600">{l.Fecha?.slice(0, 10)}</td>
         <td className="px-3 py-2.5 text-right font-semibold text-gray-800">{fmtNum(l.PesoIngreso)} {l.UM}</td>
         <td className="px-3 py-2.5 text-right font-semibold text-blue-700">{fmtNum(l.Procesado)}</td>
+        <td className="px-3 py-2.5 text-right text-gray-600">{l.Bajado ? fmtNum(l.Bajado) : <span className="text-gray-300">—</span>}</td>
+        <td className="px-3 py-2.5 text-right text-red-600">{l.Descarte ? fmtNum(l.Descarte) : <span className="text-gray-300">—</span>}</td>
         <td className="px-3 py-2.5 text-right font-semibold text-amber-600">{fmtNum(l.Pendiente)}</td>
         <td className="px-3 py-2.5 text-right">
           <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${l.Rendimiento >= 50 ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-600"}`}>
@@ -241,7 +250,7 @@ function FilaLote({ l, detalle, abierta, onToggle }) {
       </tr>
       {abierta && (
         <tr>
-          <td colSpan={10} className="bg-gray-50 px-6 py-3">
+          <td colSpan={12} className="bg-gray-50 px-6 py-3">
             {detalle.length === 0 ? (
               <p className="text-sm text-gray-400">Sin transacciones para este lote</p>
             ) : (
@@ -492,10 +501,13 @@ export default function ReporteProduccionPage() {
     const totales = porLote.reduce((acc, l) => ({
       PesoIngreso: acc.PesoIngreso + l.PesoIngreso,
       Procesado: acc.Procesado + l.Procesado,
-    }), { PesoIngreso: 0, Procesado: 0 });
+      Bajado: acc.Bajado + (l.Bajado || 0),
+      Descarte: acc.Descarte + (l.Descarte || 0),
+    }), { PesoIngreso: 0, Procesado: 0, Bajado: 0, Descarte: 0 });
     return {
       ...reporte, porLote, porLoteTalla, porTermo, porPersona, porTalla,
-      totales: { ...totales, Pendiente: totales.PesoIngreso - totales.Procesado, Rendimiento: totales.PesoIngreso > 0 ? (totales.Procesado / totales.PesoIngreso * 100) : 0 },
+      totales: { ...totales, Pendiente: totales.PesoIngreso - totales.Bajado - totales.Descarte - totales.Procesado,
+                 Rendimiento: rendimientoTrabajado(totales.PesoIngreso, totales.Bajado, totales.Procesado) },
     };
   })();
 
@@ -684,8 +696,10 @@ export default function ReporteProduccionPage() {
   const sumar = (lotes) => lotes.reduce((acc, l) => ({
     PesoIngreso: acc.PesoIngreso + l.PesoIngreso,
     Procesado: acc.Procesado + l.Procesado,
+    Bajado: acc.Bajado + (l.Bajado || 0),
+    Descarte: acc.Descarte + (l.Descarte || 0),
     Pendiente: acc.Pendiente + l.Pendiente,
-  }), { PesoIngreso: 0, Procesado: 0, Pendiente: 0 });
+  }), { PesoIngreso: 0, Procesado: 0, Bajado: 0, Descarte: 0, Pendiente: 0 });
 
   const gruposPorTermo = () => {
     const mapa = new Map();
@@ -801,7 +815,7 @@ export default function ReporteProduccionPage() {
         <>
           {/* Totales */}
           {!SUB_TABS_SIN_TOTALES.includes(subTab) && (
-            <div className="grid grid-cols-4 gap-2 mb-3">
+            <div className="grid grid-cols-3 lg:grid-cols-6 gap-2 mb-3">
               <div className="bg-white rounded-lg shadow px-3 py-2 text-center">
                 <p className="text-xs text-gray-400">Materia Prima Recibida</p>
                 <p className="text-base font-bold text-gray-800">{fmtNum(datos.totales.PesoIngreso)} kg</p>
@@ -809,6 +823,14 @@ export default function ReporteProduccionPage() {
               <div className="bg-white rounded-lg shadow px-3 py-2 text-center">
                 <p className="text-xs text-gray-400">Procesado</p>
                 <p className="text-base font-bold text-blue-700">{fmtNum(datos.totales.Procesado)} kg</p>
+              </div>
+              <div className="bg-white rounded-lg shadow px-3 py-2 text-center" title="No se trabajó: no cuenta en el rendimiento">
+                <p className="text-xs text-gray-400">Bajado al piso</p>
+                <p className="text-base font-bold text-gray-700">{fmtNum(datos.totales.Bajado || 0)} kg</p>
+              </div>
+              <div className="bg-white rounded-lg shadow px-3 py-2 text-center" title="Merma: sí cuenta en el rendimiento">
+                <p className="text-xs text-gray-400">Descarte</p>
+                <p className="text-base font-bold text-red-600">{fmtNum(datos.totales.Descarte || 0)} kg</p>
               </div>
               <div className="bg-white rounded-lg shadow px-3 py-2 text-center">
                 <p className="text-xs text-gray-400">Pendiente</p>
@@ -839,6 +861,8 @@ export default function ReporteProduccionPage() {
                         <Th width={widthsPorLote.fecha} onResizeStart={startResizePorLote("fecha")} className="px-3 py-3 text-center">Fecha</Th>
                         <Th width={widthsPorLote.ingreso} onResizeStart={startResizePorLote("ingreso")} className="px-3 py-3 text-right">Ingreso</Th>
                         <Th width={widthsPorLote.procesado} onResizeStart={startResizePorLote("procesado")} className="px-3 py-3 text-right">Procesado</Th>
+                        <Th width={widthsPorLote.bajado} onResizeStart={startResizePorLote("bajado")} className="px-3 py-3 text-right">Bajado</Th>
+                        <Th width={widthsPorLote.descarte} onResizeStart={startResizePorLote("descarte")} className="px-3 py-3 text-right">Descarte</Th>
                         <Th width={widthsPorLote.pendiente} onResizeStart={startResizePorLote("pendiente")} className="px-3 py-3 text-right">Pendiente</Th>
                         <Th width={widthsPorLote.rend} onResizeStart={startResizePorLote("rend")} className="px-3 py-3 text-right">Rend.</Th>
                         <Th width={widthsPorLote.transac} onResizeStart={startResizePorLote("transac")} className="px-3 py-3 text-center">Transac.</Th>
@@ -847,7 +871,7 @@ export default function ReporteProduccionPage() {
                     <tbody className="divide-y divide-gray-100">
                       {gruposPorFinca().map(([nombreFinca, lotes]) => {
                         const sub = sumar(lotes);
-                        const rendSub = sub.PesoIngreso > 0 ? (sub.Procesado / sub.PesoIngreso * 100) : 0;
+                        const rendSub = rendimientoTrabajado(sub.PesoIngreso, sub.Bajado, sub.Procesado);
                         return (
                           <Fragment key={nombreFinca}>
                             {lotes.map(l => (
@@ -859,6 +883,8 @@ export default function ReporteProduccionPage() {
                               <td className="px-3 py-2" colSpan={5}>Subtotal — {nombreFinca}</td>
                               <td className="px-3 py-2 text-right text-gray-800">{fmtNum(sub.PesoIngreso)}</td>
                               <td className="px-3 py-2 text-right text-blue-700">{fmtNum(sub.Procesado)}</td>
+                              <td className="px-3 py-2 text-right text-gray-600">{fmtNum(sub.Bajado)}</td>
+                              <td className="px-3 py-2 text-right text-red-600">{fmtNum(sub.Descarte)}</td>
                               <td className="px-3 py-2 text-right text-amber-600">{fmtNum(sub.Pendiente)}</td>
                               <td className="px-3 py-2 text-right text-gray-600">{fmtNum(rendSub, 1)}%</td>
                               <td className="px-3 py-2"></td>
@@ -867,7 +893,7 @@ export default function ReporteProduccionPage() {
                         );
                       })}
                       {datos.porLote.length === 0 && (
-                        <tr><td colSpan={10} className="px-4 py-8 text-center text-gray-400">Sin lotes en este rango de fechas</td></tr>
+                        <tr><td colSpan={12} className="px-4 py-8 text-center text-gray-400">Sin lotes en este rango de fechas</td></tr>
                       )}
                     </tbody>
                     {datos.porLote.length > 0 && (
@@ -876,6 +902,8 @@ export default function ReporteProduccionPage() {
                           <td className="px-3 py-2.5" colSpan={5}>Total General</td>
                           <td className="px-3 py-2.5 text-right text-gray-900">{fmtNum(datos.totales.PesoIngreso)}</td>
                           <td className="px-3 py-2.5 text-right text-blue-800">{fmtNum(datos.totales.Procesado)}</td>
+                          <td className="px-3 py-2.5 text-right text-gray-700">{fmtNum(datos.totales.Bajado)}</td>
+                          <td className="px-3 py-2.5 text-right text-red-700">{fmtNum(datos.totales.Descarte)}</td>
                           <td className="px-3 py-2.5 text-right text-amber-700">{fmtNum(datos.totales.Pendiente)}</td>
                           <td className="px-3 py-2.5 text-right text-gray-800">{fmtNum(datos.totales.Rendimiento, 1)}%</td>
                           <td className="px-3 py-2.5"></td>
@@ -1046,10 +1074,20 @@ export default function ReporteProduccionPage() {
 
                 {/* Comparación contra la Materia Prima Ingresada del lote (loteHoja.PesoIngreso ya
                     viene del mismo endpoint que Materia Prima, así que siempre cuadra con esa pantalla). */}
-                <div className="grid grid-cols-3 gap-3 mb-4">
+                <div className="grid grid-cols-5 gap-3 mb-4">
                   <div className="border-2 border-gray-800 rounded px-3 py-2 text-center">
                     <p className="text-xs text-gray-500">Materia Prima Ingresada</p>
                     <p className="text-lg font-bold text-gray-800">{fmtNum(loteHoja.PesoIngreso)}</p>
+                  </div>
+                  {/* Lo bajado al piso no se trabajó en este lote y sale del rendimiento; el descarte
+                      (rojo incluido) es merma y se queda dentro. */}
+                  <div className="border-2 border-gray-800 rounded px-3 py-2 text-center">
+                    <p className="text-xs text-gray-500">Bajado al piso</p>
+                    <p className="text-lg font-bold text-gray-700">{fmtNum(loteHoja.Bajado || 0)}</p>
+                  </div>
+                  <div className="border-2 border-gray-800 rounded px-3 py-2 text-center">
+                    <p className="text-xs text-gray-500">Descarte</p>
+                    <p className="text-lg font-bold text-red-600">{fmtNum(loteHoja.Descarte || 0)}</p>
                   </div>
                   <div className="border-2 border-gray-800 rounded px-3 py-2 text-center">
                     <p className="text-xs text-gray-500">Total Pelado</p>
