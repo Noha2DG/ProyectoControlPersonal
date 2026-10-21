@@ -57,9 +57,37 @@ const LBPERSONA_AREA_COL = { DU: "descabezado", DS: "pelado", DT: "pinchado", RD
 function hoy() { return new Date().toLocaleDateString("sv-SE", { timeZone: "America/Guatemala" }); }
 const fechaCorta = (f) => f ? f.split("-").reverse().join("/") : "";
 
-// Debe coincidir con MAX_NOTAS en backend/src/routes/lotes.ts, que es quien rechaza de verdad.
-// El límite es de espacio: más que esto no cabe en el recuadro de la hoja impresa.
-const MAX_NOTAS = 500;
+// Lo bajado al piso y lo descartado de un lote, renglón por renglón — reemplaza a las notas que se
+// escribían a mano ("se bajó 22 kg de 51/60…"). Una nota vieja se sigue mostrando, solo para leer.
+function AjustesLote({ l, compacto = false }) {
+  const ajustes = l.Ajustes ?? [];
+  const tam = compacto ? "text-[11px]" : "text-sm";
+  return (
+    <div className={compacto ? "border border-slate-400 rounded" : "border border-gray-400 rounded"}>
+      <p className={compacto ? "text-[9px] font-bold text-gray-500 px-2 pt-1" : "text-xs font-semibold text-gray-500 px-2 pt-1.5"}>
+        Bajado al piso y descarte
+      </p>
+      <div className={`px-2 py-1.5 ${compacto ? "min-h-[3rem]" : "min-h-[4rem]"}`}>
+        {ajustes.length === 0 ? (
+          <p className={`${tam} text-gray-400`}>Sin bajados ni descartes</p>
+        ) : ajustes.map((a, i) => (
+          <p key={i} className={`${tam} flex justify-between gap-3`}>
+            <span className="truncate">
+              <span className={a.Tipo === "DESCARTE" ? "text-red-700 font-semibold" : "font-semibold"}>
+                {a.Tipo === "DESCARTE" ? "Descarte" : "Bajado al piso"}
+              </span>
+              {a.Motivo ? ` · ${a.Motivo}` : ""}{a.Talla !== 900 ? ` · ${a.DescripcionTalla}` : ""}
+            </span>
+            <span className="tabular-nums whitespace-nowrap">{fmtNum(a.Peso)} {a.UM}</span>
+          </p>
+        ))}
+        {l.Notas && (
+          <p className={`${compacto ? "text-[10px]" : "text-xs"} text-gray-500 italic whitespace-pre-wrap mt-1`}>Nota anterior: {l.Notas}</p>
+        )}
+      </div>
+    </div>
+  );
+}
 
 const SUB_TABS = [
   { key: "general",     label: "Reporte General" },
@@ -402,7 +430,6 @@ export default function ReporteProduccionPage() {
   const { user } = useAuth();
   // El backend es quien bloquea de verdad; esto solo evita que alguien sin permiso escriba una nota
   // para descubrir al salir del campo que no se guardó.
-  const puedeEditarNotas = usePuede("destajo", "editar");
   const verMesas = usePuede("mesas", "reporte");
   const [desde, setDesde] = useState(hoy());
   const [hasta, setHasta] = useState(hoy());
@@ -411,8 +438,6 @@ export default function ReporteProduccionPage() {
   // texto de Lote puede repetirse entre Clases del mismo Piscina+Ciclo+Fecha.
   const [loteFiltro, setLoteFiltro] = useState("");
   const [areaLbHora, setAreaLbHora] = useState("");
-  const [notasHoja, setNotasHoja] = useState("");
-  const [guardandoNotas, setGuardandoNotas] = useState(false);
   const [reporte, setReporte] = useState(null);
   const [loading, setLoading] = useState(false);
   const [subTab, setSubTab] = useState("general");
@@ -539,44 +564,11 @@ export default function ReporteProduccionPage() {
   const totalPeladoHoja = termosHoja.reduce((s, t) => s + t.Procesado, 0);
 
   // Para el PDF: TODOS los lotes con producción en el rango Desde/Hasta, sin importar el Lote elegido
-  // en el selector (ese selector es solo para la vista/edición de notas en pantalla, ver más abajo).
+  // en el selector (ese selector es solo para la vista en pantalla, ver más abajo).
   // Se arma sobre `reporte` (sin recortar por loteFiltroObj) para que el botón imprima el lote
   // elegido y también todos los demás.
   const lotesParaImprimir = (reporte?.porLote ?? []).filter(l => l.Procesado > 0);
   const termosDeLote = (lote, clase) => (reporte?.porTermo ?? []).filter(t => t.Lote === lote && t.ClaseOrigen === clase);
-
-  // El textarea de Notas es local mientras se escribe (se guarda al salir del campo, no en cada
-  // tecla) — se resincroniza con lo que trae el Lote cada vez que cambia el Lote elegido, para no
-  // arrastrar la nota de un Lote hacia otro.
-  useEffect(() => { setNotasHoja(loteHoja?.Notas ?? ""); }, [loteHoja?.Lote, loteHoja?.Clase]);
-
-  const guardarNotasHoja = async () => {
-    if (!loteHoja || notasHoja === (loteHoja.Notas ?? "")) return;
-    setGuardandoNotas(true);
-    try {
-      const res = await fetch(`/api/lotes/${encodeURIComponent(loteHoja.Lote)}/${encodeURIComponent(loteHoja.Clase)}/notas`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json", ...authHeader() },
-        body: JSON.stringify({ Notas: notasHoja }),
-      });
-      // Si el servidor rechaza (sin permiso, nota muy larga), se devuelve el texto al valor guardado:
-      // dejarlo escrito en pantalla haría creer que quedó grabado cuando no fue así.
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        alert("No se pudo guardar la nota: " + (data.error || res.status));
-        setNotasHoja(loteHoja.Notas ?? "");
-        return;
-      }
-      // Refleja el guardado en `reporte` para que loteHoja.Notas quede al día sin recargar el
-      // reporte completo (evita que useEffect de arriba dispare otra vuelta al comparar contra sí mismo).
-      setReporte(r => r && {
-        ...r,
-        porLote: r.porLote.map(l => l.Lote === loteHoja.Lote && l.Clase === loteHoja.Clase ? { ...l, Notas: notasHoja } : l),
-      });
-    } finally {
-      setGuardandoNotas(false);
-    }
-  };
 
   const areasLbHora = [...new Set((datos?.porPersona ?? []).map(p => p.Area).filter(Boolean))].sort();
   // El filtro de Área se aplica ANTES de calcular los bloques (no después) para que, si un
@@ -1105,21 +1097,7 @@ export default function ReporteProduccionPage() {
                   </p>
                 )}
 
-                <div className="border border-gray-400 rounded">
-                  <p className="text-xs font-semibold text-gray-500 px-2 pt-1.5">Notas</p>
-                  <textarea value={notasHoja} onChange={e => setNotasHoja(e.target.value)}
-                    onBlur={guardarNotasHoja}
-                    maxLength={MAX_NOTAS}
-                    disabled={!puedeEditarNotas}
-                    placeholder={puedeEditarNotas ? "Observaciones..." : "Sin permiso para editar la nota"}
-                    className="w-full h-20 px-2 py-1 text-sm text-gray-700 resize-none focus:outline-none disabled:bg-gray-50 disabled:text-gray-500" />
-                  <p className="text-[10px] text-gray-400 px-2 pb-1 flex justify-between">
-                    <span>{guardandoNotas ? "Guardando…" : puedeEditarNotas ? "Se guarda al salir del campo" : ""}</span>
-                    <span className={notasHoja.length >= MAX_NOTAS ? "text-amber-600 font-semibold" : ""}>
-                      {notasHoja.length}/{MAX_NOTAS}
-                    </span>
-                  </p>
-                </div>
+                <AjustesLote l={loteHoja} />
               </div>
             )}
             </>
@@ -1579,10 +1557,7 @@ export default function ReporteProduccionPage() {
                   </div>
                 </div>
 
-                <div className="border border-slate-400 rounded">
-                  <p className="text-[9px] font-bold text-gray-500 px-2 pt-1">Notas</p>
-                  <p className="px-2 py-1.5 text-[11px] whitespace-pre-wrap min-h-[3rem]">{l.Notas || " "}</p>
-                </div>
+                <AjustesLote l={l} compacto />
               </div>
             );
           })

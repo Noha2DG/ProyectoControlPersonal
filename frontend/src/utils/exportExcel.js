@@ -176,7 +176,10 @@ export function exportarHojaLote(termos, lote) {
     [],
   ]);
   XLSX.utils.sheet_add_json(ws, filas, { origin: -1 });
-  if (lote.Notas) XLSX.utils.sheet_add_aoa(ws, [[], ["Notas", lote.Notas]], { origin: -1 });
+  const ajustes = (lote.Ajustes ?? []).map(a => [
+    a.Tipo === "DESCARTE" ? "Descarte" : "Bajado al piso", a.Motivo ?? "", a.Talla !== 900 ? a.DescripcionTalla : "", a.Peso, a.UM]);
+  if (ajustes.length) XLSX.utils.sheet_add_aoa(ws, [[], ["Bajado al piso y descarte"], ...ajustes], { origin: -1 });
+  if (lote.Notas) XLSX.utils.sheet_add_aoa(ws, [[], ["Nota anterior", lote.Notas]], { origin: -1 });
   autoWidth(ws, filas);
   XLSX.utils.book_append_sheet(wb, ws, "Camaron Pelado");
 
