@@ -397,6 +397,26 @@ export default function MateriaPrimaPage() {
 
   const trasMovimientoPiso = () => { setRecargaMov(n => n + 1); fetchLotes(); };
 
+  // Un lote tomado del piso no se elimina: se devuelve, y todo regresa como estaba (sus tomas al
+  // piso; sus bajados, descartes y transacciones vacías se anulan). Ver lib/destajoPiso.ts.
+  const handleDevolverLote = async (l) => {
+    const extra = [l.Bajado ? `el bajado de ${fmtNum(l.Bajado)} ${l.UM}` : "", l.Descarte ? `el descarte de ${fmtNum(l.Descarte)} ${l.UM}` : ""]
+      .filter(Boolean).join(" y ");
+    if (!confirm(`¿Devolver al piso el lote ${l.Lote} (${l.Clase})?\n\nRegresan ${fmtNum(l.PesoIngreso)} ${l.UM} al piso` +
+                 `${extra ? `, se anula ${extra}` : ""} y se borran sus transacciones sin pesar. El lote desaparece de Materia Prima.`)) return;
+    try {
+      const res = await fetch(`/api/destajo-piso/lote/${encodeURIComponent(l.Lote)}/${encodeURIComponent(l.Clase)}/devolver`,
+        { method: "POST", headers: authHeader() });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) { alert("Error: " + (d.error || "no se pudo devolver al piso")); return; }
+      if (loteSel?.Lote === l.Lote && loteSel?.Clase === l.Clase) setLoteSel(null);
+      trasMovimientoPiso();
+    } catch (err) {
+      console.error("Error al devolver el lote al piso:", err);
+      alert("No se pudo conectar con el servidor. Revisa tu conexión e intenta de nuevo.");
+    }
+  };
+
   const handleSaveLote = async (form) => {
     try {
       const isEdit = !!modalLote.item;
@@ -542,6 +562,11 @@ export default function MateriaPrimaPage() {
                         {puedeEditar && (
                           <button onClick={() => setModalLote({ open: true, item: l })}
                             className="text-blue-600 hover:text-blue-800 text-xs font-medium px-2 py-1 rounded hover:bg-blue-50 transition">Editar</button>
+                        )}
+                        {l.Procesado === 0 && puedeEditar && l.Origen && l.Origen !== "MANUAL" && (
+                          <button onClick={() => handleDevolverLote(l)}
+                            title="Todo regresa al piso y el lote desaparece"
+                            className="text-red-500 hover:text-red-700 text-xs font-medium px-2 py-1 rounded hover:bg-red-50 transition whitespace-nowrap">Devolver al piso</button>
                         )}
                         {l.Procesado === 0 && puedeEliminar && (!l.Origen || l.Origen === "MANUAL") && (
                           <button onClick={() => handleEliminarLote(l)}

@@ -40,7 +40,8 @@ export function TomarDelPisoModal({ onHecho, onClose }) {
   const [piscinas, setPiscinas] = useState([]);
   const [guardando, setGuardando] = useState(false);
   const [hecho, setHecho] = useState(null);
-  const [base, setBase] = useState("");   // al unificar: el lote de origen que da el código
+  const [unificando, setUnificando] = useState(false);   // paso de escoger el lote al unificar
+  const [base, setBase] = useState("");                   // el lote de origen que da el código
 
   useEffect(() => {
     fetch(`${API}/bodegas`, { headers: authHeader() }).then(leerJSON).then(d => {
@@ -77,8 +78,8 @@ export function TomarDelPisoModal({ onHecho, onClose }) {
   const fincas = new Set(elegidas.map(fincaDe).filter(Boolean));
   const totalKg = elegidas.reduce((s, l) => s + kgDe(l), 0);
 
-  // Candidatos a dar el código al unificar: los lotes de origen marcados, el de más kilos primero.
-  // Por omisión se usa ese (es lo que hace la planta); el encargado puede escoger otro.
+  // Candidatos a dar el código al unificar: los lotes de origen marcados, el de más kilos primero
+  // (casi siempre es el que se usa). Ninguno viene escogido: lo decide el encargado.
   const candidatos = (() => {
     const m = new Map();
     for (const l of elegidas) {
@@ -87,8 +88,8 @@ export function TomarDelPisoModal({ onHecho, onClose }) {
     }
     return [...m.values()].sort((a, b) => b.kg - a.kg);
   })();
-  const baseEfectiva = candidatos.some(c => c.Lote === base) ? base : (candidatos[0]?.Lote ?? "");
   const puedeUnificar = candidatos.length >= 2 && fincas.size === 1;
+  const clasesMarcadas = [...new Set(elegidas.map(l => l.Clase))];
 
   // Qué lotes saldrían sin unificar: uno por código + clase.
   const vista = useMemo(() => {
@@ -128,7 +129,7 @@ export function TomarDelPisoModal({ onHecho, onClose }) {
       const res = await fetch(`${API}/tomar`, {
         method: "POST", headers: { "Content-Type": "application/json", ...authHeader() },
         body: JSON.stringify({
-          Bodega: bodega, Unificar: unificar, ...(unificar ? { BaseLote: baseEfectiva } : {}),
+          Bodega: bodega, Unificar: unificar, ...(unificar ? { BaseLote: base } : {}),
           Lineas: elegidas.map(l => ({
             RemisionId: l.RemisionId, Lote: l.Lote, Clase: l.Clase, Talla: l.Talla, FechaLote: l.FechaLote,
             Kg: kgDe(l),
@@ -159,6 +160,44 @@ export function TomarDelPisoModal({ onHecho, onClose }) {
           </ul>
           <div className="flex justify-end pt-1">
             <button onClick={() => onHecho()} className="px-5 py-2 text-sm bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 transition">Listo</button>
+          </div>
+        </div>
+      </Marco>
+    );
+  }
+
+  if (unificando) {
+    const escogido = candidatos.find(c => c.Lote === base);
+    return (
+      <Marco titulo="Unificar en un lote" onClose={onClose}>
+        <div className="px-5 py-4 space-y-3 overflow-y-auto">
+          <p className="text-sm text-gray-600">
+            ¿Con cuál lote se unifica? Todo lo marcado — <b>{elegidas.length}</b> líneas, <b>{fmtNum(totalKg)}</b> kg — entra a ese lote.
+          </p>
+          <div className="space-y-2">
+            {candidatos.map(c => (
+              <label key={c.Lote}
+                className={`flex items-center gap-3 border rounded-lg px-3 py-2.5 cursor-pointer transition ${base === c.Lote ? "border-blue-600 bg-blue-50" : "border-gray-200 hover:bg-gray-50"}`}>
+                <input type="radio" name="base" checked={base === c.Lote} onChange={() => setBase(c.Lote)} className="w-4 h-4" />
+                <span className="flex-1 min-w-0">
+                  <span className="block font-mono font-bold text-gray-800">{c.codigo || c.Lote}</span>
+                  <span className="block text-xs text-gray-500">de {c.Lote}</span>
+                </span>
+                <span className="text-sm font-semibold text-gray-700 whitespace-nowrap">{fmtNum(c.kg)} kg</span>
+              </label>
+            ))}
+          </div>
+          {clasesMarcadas.length > 1 && (
+            <p className="text-xs text-amber-700">Hay {clasesMarcadas.length} clases ({clasesMarcadas.join(", ")}): se crea un lote por clase con ese mismo código.</p>
+          )}
+          {error && <p className="text-sm text-red-600">{error}</p>}
+          <div className="flex justify-end gap-2 pt-1">
+            <button onClick={() => { setUnificando(false); setError(""); }}
+              className="px-4 py-2 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 transition">Volver</button>
+            <button onClick={() => tomar(true)} disabled={guardando || !escogido}
+              className="px-5 py-2 text-sm bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 transition disabled:opacity-40 disabled:cursor-not-allowed">
+              {guardando ? "Guardando…" : escogido ? `Unificar en ${escogido.codigo || escogido.Lote}` : "Escoja un lote"}
+            </button>
           </div>
         </div>
       </Marco>
@@ -259,23 +298,12 @@ export function TomarDelPisoModal({ onHecho, onClose }) {
         {fincas.size > 1 && (
           <p className="text-xs text-amber-700">Para unificar, todas las líneas tienen que ser de la misma finca.</p>
         )}
-        {puedeUnificar && (
-          <div className="flex flex-wrap items-center gap-2 text-xs text-gray-600">
-            <span>Al unificar, usar el lote</span>
-            <select value={baseEfectiva} onChange={e => setBase(e.target.value)}
-              className="border border-gray-300 rounded px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-blue-400">
-              {candidatos.map(c => (
-                <option key={c.Lote} value={c.Lote}>{c.codigo || c.Lote} — de {c.Lote} ({fmtNum(c.kg)} kg)</option>
-              ))}
-            </select>
-            <span className="text-gray-400">y todo lo marcado entra a ese lote ({fmtNum(totalKg)} kg).</span>
-          </div>
-        )}
         {error && <p className="text-sm text-red-600">{error}</p>}
         <div className="flex flex-wrap justify-end gap-2">
           <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 transition">Cancelar</button>
-          <button onClick={() => tomar(true)} disabled={guardando || !puedeUnificar}
-            title="Todo lo marcado en un solo lote por clase: el que se escoja arriba (por omisión, el de más kilos)"
+          <button onClick={() => { if (problema) { setError(problema); return; } setBase(""); setError(""); setUnificando(true); }}
+            disabled={guardando || !puedeUnificar}
+            title="Todo lo marcado en un solo lote: en el paso siguiente se escoge cuál"
             className="px-4 py-2 text-sm font-semibold rounded-lg border border-blue-600 text-blue-700 hover:bg-blue-50 transition disabled:opacity-40 disabled:cursor-not-allowed">
             Unificar en un lote
           </button>

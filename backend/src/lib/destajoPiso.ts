@@ -184,8 +184,8 @@ type LineaToma = {
  *
  * Con `unificar`, todas las líneas van a UN lote por clase: el de la línea `baseLote` que escoge el
  * encargado entre las marcadas —  en la planta se usa uno de los que se están trabajando, casi siempre
- * el de más libras, que es el que queda por omisión. Es para las tandas de pocas libras de muchos
- * lotes. Lo absorbido no se pierde: cada línea guarda en el kardex de qué lote de origen vino.
+ * el de más libras. Lo escoge siempre él: no hay valor por omisión. Es para las tandas de pocas
+ * libras de muchos lotes. Lo absorbido no se pierde: cada línea guarda de qué lote de origen vino.
  */
 export async function tomarDelPiso(
   tx: any, p: { bodega: string; lineas: LineaToma[]; unificar: boolean; baseLote?: string | null;
@@ -253,13 +253,11 @@ export async function tomarDelPiso(
     if (FINCAS_SIN_CICLO.includes(fincas[0])) {
       throw new ErrorNegocio(400, `Los lotes de ${fincas[0]} no se unifican: cada lote es un contenedor y su merma se calcula por separado`);
     }
-    // El lote que da el código: el que escogió el encargado, o el de más kilos entre los marcados.
-    const kgPorLote = new Map<string, number>();
-    for (const d of destinos) kgPorLote.set(d.l.Lote, (kgPorLote.get(d.l.Lote) ?? 0) + d.l.Kg);
-    const pesado = [...kgPorLote.entries()].sort((a, b) => b[1] - a[1])[0][0];
-    const elegido = p.baseLote && kgPorLote.has(p.baseLote) ? p.baseLote : null;
-    if (p.baseLote && !elegido) throw new ErrorNegocio(400, `El lote ${p.baseLote} no está entre los que escogió para unificar`);
-    base = destinos.find(d => d.l.Lote === (elegido ?? pesado))!;
+    // El lote que da el código: siempre el que escogió el encargado entre los marcados.
+    if (!p.baseLote) throw new ErrorNegocio(400, "Escoja con cuál lote se unifica");
+    const elegido = destinos.find(d => d.l.Lote === p.baseLote);
+    if (!elegido) throw new ErrorNegocio(400, `El lote ${p.baseLote} no está entre los que escogió para unificar`);
+    base = elegido;
     if (sinCiclo(base)) {
       throw new ErrorNegocio(400, `${base.l.Lote}: la piscina ${base.piscina.Nombre} lleva ciclo y el código no lo trae; escoja otro lote para unificar`);
     }
@@ -392,6 +390,57 @@ export async function registrarDescarte(tx: any, a: Ajuste) {
     a.fecha, c.Lote, c.Clase, Number(a.talla) || 900, c.FechaProduccion,
     peso, c.UM, aKg(peso, c.UM), motivo, c.Lote, c.Clase, a.operador);
   return { ok: true };
+}
+
+// ── Devolver el lote completo al piso ───────────────────────────────────────────────────────────
+/**
+ * Un lote tomado del piso no se elimina: se DEVUELVE. Todo regresa como estaba antes de tomarlo —
+ * sus tomas vuelven al piso, se anulan sus bajados y descartes, se borran sus transacciones vacías
+ * — y el lote desaparece. Solo mientras no tenga nada pesado: con pesaje ya no se puede devolver
+ * todo, y lo que no se trabajó se baja con "Bajar al piso".
+ */
+export async function devolverLoteAlPiso(tx: any, lote: string, clase: string) {
+  const c = await cuadreLote(tx, lote, clase);
+  if (c.Origen === "MANUAL") throw new ErrorNegocio(400, `${lote} ${clase} se capturó a mano: no vino del piso`);
+  if (c.Procesado > 0.001) {
+    throw new ErrorNegocio(400,
+      `${lote} ${clase} ya tiene ${c.Procesado.toFixed(2)} ${c.UM} pesados: no se puede devolver completo. ` +
+      `Lo que no se trabajó se baja con "Bajar al piso".`);
+  }
+
+  // Lo bajado tiene que seguir al piso: si ya lo tomó el lote de otro día, devolver este lo dejaría
+  // en negativo.
+  const movs = await movimientosDeLote(tx, lote, clase);
+  for (const m of movs.filter(x => x.Tipo === "BAJADO")) {
+    const [b]: any[] = await tx.$queryRawUnsafe(`
+      SELECT BodegaDestino, RemisionId, Lote, Clase, Talla, DATE_FORMAT(FechaLote, '%Y-%m-%d') AS FechaLote
+        FROM MovimientoPiso WHERE MovimientoId = ?`, m.MovimientoId);
+    const s = (await saldoLineas(tx, String(b.BodegaDestino), [String(b.Lote)])).find(x => claveLinea(x) === claveLinea(b));
+    if ((s?.Kg ?? 0) < m.PesoKg - 0.001) {
+      throw new ErrorNegocio(400, `Lo que se bajó de ${lote} ya se volvió a tomar del piso; devuelva primero ese otro lote.`);
+    }
+  }
+
+  // Transacciones sin pesaje (Procesado en cero ya lo garantiza): se van con sus termos, igual que
+  // al eliminarlas a mano.
+  const trans: any[] = await tx.$queryRawUnsafe(
+    `SELECT TransaccionId FROM TransaccionesProduccion WHERE Lote = ? AND ClaseOrigen = ? FOR UPDATE`, lote, clase);
+  const ids = trans.map(t => Number(t.TransaccionId));
+  if (ids.length) {
+    const [p]: any[] = await tx.$queryRawUnsafe(
+      `SELECT COUNT(*) AS n FROM PesajeDetalle WHERE TransaccionId IN (${enLista(ids)})`, ...ids);
+    if (Number(p.n) > 0) throw new ErrorNegocio(400, `${lote} ${clase} tiene pesajes registrados: no se puede devolver completo.`);
+    await tx.$executeRawUnsafe(`DELETE FROM Termos WHERE TransaccionId IN (${enLista(ids)})`, ...ids);
+    await tx.$executeRawUnsafe(`DELETE FROM TransaccionesProduccion WHERE TransaccionId IN (${enLista(ids)})`, ...ids);
+  }
+
+  const kgAlPiso = r2(movs.filter(m => m.Tipo === "DESTAJO").reduce((t, m) => t + m.PesoKg, 0));
+  await tx.$executeRawUnsafe(
+    `DELETE FROM MovimientoPiso WHERE LoteProceso = ? AND ClaseProceso = ? AND Tipo IN ('DESTAJO', 'BAJADO', 'DESCARTE')`,
+    lote, clase);
+  await tx.$executeRawUnsafe(`DELETE FROM Lotes WHERE Lote = ? AND Clase = ?`, lote, clase);
+  return { ok: true, KgAlPiso: kgAlPiso, Transacciones: ids.length,
+           Bajados: movs.filter(m => m.Tipo === "BAJADO").length, Descartes: movs.filter(m => m.Tipo === "DESCARTE").length };
 }
 
 // ── Movimientos de un lote y deshacer ───────────────────────────────────────────────────────────

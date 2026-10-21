@@ -9,7 +9,7 @@ import "dotenv/config";
 import prisma from "../src/lib/prisma.ts";
 import {
   saldoParaDestajo, tomarDelPiso, bajarAlPiso, registrarDescarte, deshacerMovimiento, cuadreLote,
-  movimientosDeLote, rendimientoLote,
+  movimientosDeLote, rendimientoLote, devolverLoteAlPiso,
 } from "../src/lib/destajoPiso.ts";
 import { componerCodigoLote } from "../src/lib/codigoLote.ts";
 
@@ -87,11 +87,13 @@ const PISO = [
       ] }), /misma finca/, "no se unifican dos fincas");
       const em719 = { RemisionId: null, Lote: "G719EM03-E05-7", Clase: "C20", Talla: 237, FechaLote: "2026-06-17" };
       const em220 = { RemisionId: null, Lote: "G220EM00-E00", Clase: "C20", Talla: 237, FechaLote: "2026-05-11" };
-      const r3 = await tomarDelPiso(tx, { bodega: "PELADO", unificar: true, fecha: HOY, operador: OP,
+      await falla(() => tomarDelPiso(tx, { bodega: "PELADO", unificar: true, fecha: HOY, operador: OP,
+        lineas: [{ ...em719, Kg: 10 }, { ...em220, Kg: 5 }] }), /Escoja con cuál lote/, "unificar sin escoger el lote se rechaza (no es automático)");
+      const r3 = await tomarDelPiso(tx, { bodega: "PELADO", unificar: true, baseLote: "G719EM03-E05-7", fecha: HOY, operador: OP,
         lineas: [{ ...em719, Kg: 10 }, { ...em220, Kg: 5 }] });
       const lote719 = componerCodigoLote("EM03-E05", HOY, "7");
       check(r3.lotes.length === 1 && r3.lotes[0].Lote === lote719 && r3.lotes[0].Kg === 15,
-        `sin escoger, va al lote de más kilos (G719EM03-E05-7 → ${r3.lotes[0].Lote}) con los 15 kg`);
+        `escogido el de más kilos (G719EM03-E05-7 → ${r3.lotes[0].Lote}), entran los 15 kg`);
       check((await cuadreLote(tx, lote719, "C20")).Ingreso === 40.45, "y se suma al lote de ese código que ya existía hoy (25.45 + 15)");
       const r3b = await tomarDelPiso(tx, { bodega: "PELADO", unificar: true, baseLote: "G220EM00-E00", fecha: HOY, operador: OP,
         lineas: [{ ...em719, Kg: 13.58 }, { ...em220, Kg: 13.14 }] });
@@ -169,6 +171,39 @@ const PISO = [
       const primeraToma = movK.find(m => m.Tipo === "DESTAJO")!.MovimientoId;   // la de 500 kg
       await falla(() => deshacerMovimiento(tx, primeraToma), /quedaría con 476\.10/,
         "no se devuelve una toma si el lote ya bajó o pesó más de lo que le quedaría");
+
+      console.log("9. Devolver al piso el lote completo");
+      await tx.$executeRawUnsafe(`
+        INSERT INTO MovimientoPiso (Tipo, FechaProduccion, BodegaDestino, Lote, Clase, Talla, FechaLote, Peso, UM, PesoKg, RegistradoPor)
+        VALUES ('TRASLADO', ?, 'PELADO', 'G521EM05-E01-8', 'C20', 237, '2026-07-01', 50, 'KG', 50, ?)`, HOY, OP);
+      const lin = { RemisionId: null, Lote: "G521EM05-E01-8", Clase: "C20", Talla: 237, FechaLote: "2026-07-01" };
+      const rd = await tomarDelPiso(tx, { bodega: "PELADO", unificar: false, fecha: HOY, operador: OP, lineas: [{ ...lin, Kg: 50 }] });
+      const ld = rd.lotes[0].Lote;
+      await bajarAlPiso(tx, { lote: ld, clase: "C20", peso: 10, fecha: HOY, operador: OP });
+      await registrarDescarte(tx, { lote: ld, clase: "C20", peso: 2, motivo: "Rojo", fecha: HOY, operador: OP });
+      const [tp]: any[] = await tx.$queryRawUnsafe(`SELECT Proceso, ClasePT FROM TransaccionesProduccion ORDER BY TransaccionId DESC LIMIT 1`);
+      await tx.$executeRawUnsafe(`INSERT INTO TransaccionesProduccion (Lote, ClaseOrigen, Proceso, ClasePT, Talla, AlmacenOrigen, AlmacenDestino, RegistradoPor)
+        VALUES (?, 'C20', ?, ?, 237, 'PISO', 'PISO', ?)`, ld, tp.Proceso, tp.ClasePT, OP);
+      const [ti]: any[] = await tx.$queryRawUnsafe(`SELECT LAST_INSERT_ID() AS id`);
+      await tx.$executeRawUnsafe(`INSERT INTO Termos (TransaccionId, NumeroTermo, AlmacenActual, Capacidad) VALUES (?, 'T-PRUEBA', 'PISO', 150)`, ti.id);
+      const dv = await devolverLoteAlPiso(tx, ld, "C20");
+      const [quedan]: any[] = await tx.$queryRawUnsafe(`
+        SELECT (SELECT COUNT(*) FROM Lotes WHERE Lote = ? AND Clase = 'C20') AS lotes,
+               (SELECT COUNT(*) FROM MovimientoPiso WHERE LoteProceso = ?) AS movs,
+               (SELECT COUNT(*) FROM TransaccionesProduccion WHERE TransaccionId = ?) AS trans,
+               (SELECT COUNT(*) FROM Termos WHERE TransaccionId = ?) AS termos`, ld, ld, ti.id, ti.id);
+      check(Number(quedan.lotes) === 0 && Number(quedan.movs) === 0, `el lote ${ld} desaparece con su toma, su bajado y su descarte`);
+      check(Number(quedan.trans) === 0 && Number(quedan.termos) === 0 && dv.Transacciones === 1, "su transacción vacía y su termo se borran");
+      const vuelta = (await saldoParaDestajo(tx, "PELADO", HOY)).filter(l => l.Lote === "G521EM05-E01-8" || l.Lote === ld);
+      check(vuelta.length === 1 && vuelta[0].Lote === "G521EM05-E01-8" && vuelta[0].Kg === 50,
+        `el piso queda como antes de tomarlo: ${vuelta.map(v => `${v.Lote} ${v.Kg} kg`).join(", ")}`);
+      await falla(() => devolverLoteAlPiso(tx, componerCodigoLote("TM05-E04", HOY, "7"), "C20"), /capturó a mano/,
+        "un lote capturado a mano no se devuelve al piso");
+      // loteK tiene 900 kg bajados (paso 8): los toma el lote del día siguiente.
+      await tomarDelPiso(tx, { bodega: "PELADO", unificar: false, fecha: MANANA, operador: OP, lineas: [
+        { RemisionId: null, Lote: loteK, Clase: "D30", Talla: 900, FechaLote: HOY, Kg: 900 }] });
+      await falla(() => devolverLoteAlPiso(tx, loteK, "D30"), /ya se volvió a tomar/,
+        "no se devuelve un lote cuyo bajado ya tomó otro lote");
 
       throw new Revertir();
     }, { timeout: 180000, maxWait: 15000 });

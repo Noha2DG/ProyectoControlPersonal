@@ -331,7 +331,7 @@ router.delete("/:lote/:clase", requireAuth, requirePerm("destajo", "eliminar"), 
     // fuera del piso y fuera de Destajo. Se deshacen sus movimientos y el lote se va solo.
     const piso: any[] = await prisma.$queryRaw`SELECT COUNT(*) AS n FROM MovimientoPiso WHERE LoteProceso = ${lote} AND ClaseProceso = ${clase}`;
     if (Number(piso[0].n) > 0) {
-      res.status(400).json({ error: "Este lote tiene movimientos del piso: deshágalos en su detalle (devolver al piso) en lugar de eliminarlo" });
+      res.status(400).json({ error: "Este lote se tomó del piso: no se elimina, se devuelve al piso" });
       return;
     }
     await prisma.$executeRaw`DELETE FROM Lotes WHERE Lote = ${lote} AND Clase = ${clase}`;

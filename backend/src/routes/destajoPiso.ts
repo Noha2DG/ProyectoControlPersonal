@@ -7,7 +7,7 @@ import { requireAuth, requirePerm } from "../middleware/auth.ts";
 import { hoyGT } from "../lib/dateGT.ts";
 import {
   BODEGAS_CON_DESTAJO, ErrorNegocio, saldoParaDestajo, tomarDelPiso, bajarAlPiso, registrarDescarte,
-  movimientosDeLote, deshacerMovimiento, cuadreLote,
+  movimientosDeLote, deshacerMovimiento, cuadreLote, devolverLoteAlPiso,
 } from "../lib/destajoPiso.ts";
 
 const router = Router();
@@ -55,7 +55,7 @@ router.get("/saldo", requireAuth, requirePerm("destajo", "ver"), async (req: Req
 });
 
 // POST /api/destajo-piso/tomar  { Bodega, Unificar, BaseLote?, Lineas: [{ RemisionId, Lote, Clase, Talla, FechaLote, Kg, PiscinaId?, Ciclo? }] }
-// BaseLote: al unificar, el lote de origen (entre los marcados) que da el código; sin él, el de más kilos.
+// BaseLote: al unificar, el lote de origen (entre los marcados) que da el código. Obligatorio al unificar.
 router.post("/tomar", requireAuth, requirePerm("destajo", "crear"), async (req: Request, res: Response) => {
   try {
     const lineas = Array.isArray(req.body.Lineas) ? req.body.Lineas : [];
@@ -104,6 +104,16 @@ router.post("/lote/:lote/:clase/descarte", requireAuth, requirePerm("destajo", "
       nota: req.body.Nota || null, fecha: hoyGT(), operador: getOperador(req),
     }), TX);
     res.status(201).json(out);
+  } catch (err: any) {
+    responderError(res, err);
+  }
+});
+
+// POST /api/destajo-piso/lote/:lote/:clase/devolver — el lote completo regresa al piso y desaparece.
+// Reemplaza a "Eliminar" para los lotes tomados del piso.
+router.post("/lote/:lote/:clase/devolver", requireAuth, requirePerm("destajo", "editar"), async (req: Request, res: Response) => {
+  try {
+    res.json(await prisma.$transaction(tx => devolverLoteAlPiso(tx, String(req.params.lote), String(req.params.clase)), TX));
   } catch (err: any) {
     responderError(res, err);
   }
