@@ -74,14 +74,18 @@ router.get("/", requireAuth, requirePerm("destajo", "ver"), async (req: Request,
   }
 });
 
-// POST /api/transacciones-produccion  { Lote, ClaseOrigen, Proceso, ClasePT, Talla, AlmacenOrigen, AlmacenDestino, FechaProduccion }
+// POST /api/transacciones-produccion  { Lote, ClaseOrigen, Proceso, ClasePT, Talla, FechaProduccion }
 // ClaseOrigen es la Clase de la fila de Lotes (Materia Prima) que se está consumiendo — obligatoria
 // porque el texto de Lote puede repetirse entre Clases del mismo Piscina+Ciclo+Fecha.
+//
+// El almacén de origen y destino ya no se pide (21 oct 2026): era el catálogo Almacenes (BCONS/PISO),
+// que nadie leía, y de dónde viene y a dónde va el producto ya lo dice el inventario al piso. Las
+// columnas quedan vacías (scripts/alterAlmacenesOpcionales.ts).
 router.post("/", requireAuth, requirePerm("destajo", "crear"), async (req: Request, res: Response) => {
   try {
-    const { Lote, ClaseOrigen, Proceso, ClasePT, Talla, AlmacenOrigen, AlmacenDestino, FechaProduccion } = req.body;
-    if (!Lote || !ClaseOrigen || !Proceso || !ClasePT || !Talla || !AlmacenOrigen || !AlmacenDestino) {
-      res.status(400).json({ error: "Lote, Clase origen, Proceso, Clase PT, Talla, Almacén origen y destino son requeridos" });
+    const { Lote, ClaseOrigen, Proceso, ClasePT, Talla, FechaProduccion } = req.body;
+    if (!Lote || !ClaseOrigen || !Proceso || !ClasePT || !Talla) {
+      res.status(400).json({ error: "Lote, Clase origen, Proceso, Clase PT y Talla son requeridos" });
       return;
     }
     const lotes: any[] = await prisma.$queryRaw`SELECT Lote FROM Lotes WHERE Lote = ${Lote} AND Clase = ${ClaseOrigen} AND Activo = 1 LIMIT 1`;
@@ -89,12 +93,12 @@ router.post("/", requireAuth, requirePerm("destajo", "crear"), async (req: Reque
 
     const operador = getOperador(req);
     await prisma.$executeRaw`
-      INSERT INTO TransaccionesProduccion (Lote, ClaseOrigen, Proceso, ClasePT, Talla, AlmacenOrigen, AlmacenDestino, FechaProduccion, RegistradoPor)
-      VALUES (${Lote}, ${ClaseOrigen}, ${Number(Proceso)}, ${ClasePT}, ${Number(Talla)}, ${AlmacenOrigen}, ${AlmacenDestino}, ${FechaProduccion || new Date().toLocaleDateString("sv-SE", { timeZone: "America/Guatemala" })}, ${operador})
+      INSERT INTO TransaccionesProduccion (Lote, ClaseOrigen, Proceso, ClasePT, Talla, FechaProduccion, RegistradoPor)
+      VALUES (${Lote}, ${ClaseOrigen}, ${Number(Proceso)}, ${ClasePT}, ${Number(Talla)}, ${FechaProduccion || new Date().toLocaleDateString("sv-SE", { timeZone: "America/Guatemala" })}, ${operador})
     `;
     res.status(201).json({ ok: true });
   } catch (err: any) {
-    if (err.message?.includes("foreign key")) res.status(400).json({ error: "Proceso, Clase PT, Talla o Almacén no existen" });
+    if (err.message?.includes("foreign key")) res.status(400).json({ error: "Proceso, Clase PT o Talla no existen" });
     else res.status(500).json({ error: err.message });
   }
 });
