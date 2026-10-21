@@ -54,12 +54,14 @@ router.get("/saldo", requireAuth, requirePerm("destajo", "ver"), async (req: Req
   }
 });
 
-// POST /api/destajo-piso/tomar  { Bodega, Unificar, Lineas: [{ RemisionId, Lote, Clase, Talla, FechaLote, Kg, PiscinaId?, Ciclo? }] }
+// POST /api/destajo-piso/tomar  { Bodega, Unificar, BaseLote?, Lineas: [{ RemisionId, Lote, Clase, Talla, FechaLote, Kg, PiscinaId?, Ciclo? }] }
+// BaseLote: al unificar, el lote de origen (entre los marcados) que da el código; sin él, el de más kilos.
 router.post("/tomar", requireAuth, requirePerm("destajo", "crear"), async (req: Request, res: Response) => {
   try {
     const lineas = Array.isArray(req.body.Lineas) ? req.body.Lineas : [];
     const out = await prisma.$transaction(tx => tomarDelPiso(tx, {
       bodega: String(req.body.Bodega ?? ""), lineas, unificar: !!req.body.Unificar,
+      baseLote: req.body.BaseLote ? String(req.body.BaseLote) : null,
       fecha: hoyGT(), operador: getOperador(req),
     }), TX);
     res.status(201).json(out);

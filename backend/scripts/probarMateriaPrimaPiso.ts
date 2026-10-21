@@ -85,21 +85,30 @@ const PISO = [
         { RemisionId: null, Lote: "G220EM00-E00", Clase: "C20", Talla: 237, FechaLote: "2026-05-11", Kg: 18.14 },
         { RemisionId: null, Lote: "G324TM05-E04-7", Clase: "C20", Talla: 237, FechaLote: "2026-06-10", Kg: 5.4 },
       ] }), /misma finca/, "no se unifican dos fincas");
-      const r3 = await tomarDelPiso(tx, { bodega: "PELADO", unificar: true, fecha: HOY, operador: OP, lineas: [
-        { RemisionId: null, Lote: "G719EM03-E05-7", Clase: "C20", Talla: 237, FechaLote: "2026-06-17", Kg: 23.58 },
-        { RemisionId: null, Lote: "G220EM00-E00", Clase: "C20", Talla: 237, FechaLote: "2026-05-11", Kg: 18.14 },
-      ] });
-      const uni = r3.lotes[0];
-      check(r3.lotes.length === 1 && uni.Lote === componerCodigoLote("EM00-E00", HOY, "") && uni.Kg === 41.72,
-        `dos lotes de Esteromar en uno con la piscina genérica: ${uni.Lote} ${uni.Kg} kg`);
+      const em719 = { RemisionId: null, Lote: "G719EM03-E05-7", Clase: "C20", Talla: 237, FechaLote: "2026-06-17" };
+      const em220 = { RemisionId: null, Lote: "G220EM00-E00", Clase: "C20", Talla: 237, FechaLote: "2026-05-11" };
+      const r3 = await tomarDelPiso(tx, { bodega: "PELADO", unificar: true, fecha: HOY, operador: OP,
+        lineas: [{ ...em719, Kg: 10 }, { ...em220, Kg: 5 }] });
+      const lote719 = componerCodigoLote("EM03-E05", HOY, "7");
+      check(r3.lotes.length === 1 && r3.lotes[0].Lote === lote719 && r3.lotes[0].Kg === 15,
+        `sin escoger, va al lote de más kilos (G719EM03-E05-7 → ${r3.lotes[0].Lote}) con los 15 kg`);
+      check((await cuadreLote(tx, lote719, "C20")).Ingreso === 40.45, "y se suma al lote de ese código que ya existía hoy (25.45 + 15)");
+      const r3b = await tomarDelPiso(tx, { bodega: "PELADO", unificar: true, baseLote: "G220EM00-E00", fecha: HOY, operador: OP,
+        lineas: [{ ...em719, Kg: 13.58 }, { ...em220, Kg: 13.14 }] });
+      const uni = r3b.lotes[0];
+      check(r3b.lotes.length === 1 && uni.Lote === componerCodigoLote("EM00-E00", HOY, "") && uni.Kg === 26.72,
+        `con el lote escogido (el de menos kilos) va a ese: ${uni.Lote} ${uni.Kg} kg`);
       const origenes = (await movimientosDeLote(tx, uni.Lote, "C20")).filter(m => m.Tipo === "DESTAJO").map(m => m.LoteOrigen);
       check(origenes.includes("G719EM03-E05-7") && origenes.includes("G220EM00-E00"), `el unificado guarda de qué lotes vino: ${origenes.join(", ")}`);
+      await falla(() => tomarDelPiso(tx, { bodega: "PELADO", unificar: true, baseLote: "G999XX", fecha: HOY, operador: OP,
+        lineas: [{ RemisionId: null, Lote: "G324TM05-E04-7", Clase: "C20", Talla: 237, FechaLote: "2026-06-10", Kg: 1 }] }),
+        /no está entre los que escogió/, "el lote escogido tiene que estar entre los marcados");
       await tx.$executeRawUnsafe(`
         INSERT INTO MovimientoPiso (Tipo, FechaProduccion, BodegaDestino, Lote, Clase, Talla, FechaLote, Peso, UM, PesoKg, RegistradoPor)
         VALUES ('TRASLADO', ?, 'PELADO', 'G241K024', 'D30', 217, '2026-09-30', 10, 'KG', 10, ?)`, HOY, OP);
       await falla(() => tomarDelPiso(tx, { bodega: "PELADO", unificar: true, fecha: HOY, operador: OP, lineas: [
         { RemisionId: null, Lote: "G241K024", Clase: "D30", Talla: 217, FechaLote: "2026-09-30", Kg: 10 },
-      ] }), /no tiene piscina genérica/, "maquila no se unifica (no tiene piscina genérica)");
+      ] }), /contenedor/, "maquila no se unifica (cada lote es un contenedor)");
 
       console.log("4. Choque con un lote capturado a mano");
       const tc = componerCodigoLote("TM05-E04", HOY, "7");

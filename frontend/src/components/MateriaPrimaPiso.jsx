@@ -40,6 +40,7 @@ export function TomarDelPisoModal({ onHecho, onClose }) {
   const [piscinas, setPiscinas] = useState([]);
   const [guardando, setGuardando] = useState(false);
   const [hecho, setHecho] = useState(null);
+  const [base, setBase] = useState("");   // al unificar: el lote de origen que da el código
 
   useEffect(() => {
     fetch(`${API}/bodegas`, { headers: authHeader() }).then(leerJSON).then(d => {
@@ -75,6 +76,19 @@ export function TomarDelPisoModal({ onHecho, onClose }) {
   const fincaDe = l => l.Legible ? l.CodigoFinca : piscinas.find(p => p.PiscinaId === Number(sel[l.Clave]?.piscinaId))?.CodigoFinca;
   const fincas = new Set(elegidas.map(fincaDe).filter(Boolean));
   const totalKg = elegidas.reduce((s, l) => s + kgDe(l), 0);
+
+  // Candidatos a dar el código al unificar: los lotes de origen marcados, el de más kilos primero.
+  // Por omisión se usa ese (es lo que hace la planta); el encargado puede escoger otro.
+  const candidatos = (() => {
+    const m = new Map();
+    for (const l of elegidas) {
+      if (!m.has(l.Lote)) m.set(l.Lote, { Lote: l.Lote, codigo: l.LoteDestajo, kg: 0 });
+      m.get(l.Lote).kg += kgDe(l);
+    }
+    return [...m.values()].sort((a, b) => b.kg - a.kg);
+  })();
+  const baseEfectiva = candidatos.some(c => c.Lote === base) ? base : (candidatos[0]?.Lote ?? "");
+  const puedeUnificar = candidatos.length >= 2 && fincas.size === 1;
 
   // Qué lotes saldrían sin unificar: uno por código + clase.
   const vista = useMemo(() => {
@@ -114,7 +128,7 @@ export function TomarDelPisoModal({ onHecho, onClose }) {
       const res = await fetch(`${API}/tomar`, {
         method: "POST", headers: { "Content-Type": "application/json", ...authHeader() },
         body: JSON.stringify({
-          Bodega: bodega, Unificar: unificar,
+          Bodega: bodega, Unificar: unificar, ...(unificar ? { BaseLote: baseEfectiva } : {}),
           Lineas: elegidas.map(l => ({
             RemisionId: l.RemisionId, Lote: l.Lote, Clase: l.Clase, Talla: l.Talla, FechaLote: l.FechaLote,
             Kg: kgDe(l),
@@ -245,11 +259,23 @@ export function TomarDelPisoModal({ onHecho, onClose }) {
         {fincas.size > 1 && (
           <p className="text-xs text-amber-700">Para unificar, todas las líneas tienen que ser de la misma finca.</p>
         )}
+        {puedeUnificar && (
+          <div className="flex flex-wrap items-center gap-2 text-xs text-gray-600">
+            <span>Al unificar, usar el lote</span>
+            <select value={baseEfectiva} onChange={e => setBase(e.target.value)}
+              className="border border-gray-300 rounded px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-blue-400">
+              {candidatos.map(c => (
+                <option key={c.Lote} value={c.Lote}>{c.codigo || c.Lote} — de {c.Lote} ({fmtNum(c.kg)} kg)</option>
+              ))}
+            </select>
+            <span className="text-gray-400">y todo lo marcado entra a ese lote ({fmtNum(totalKg)} kg).</span>
+          </div>
+        )}
         {error && <p className="text-sm text-red-600">{error}</p>}
         <div className="flex flex-wrap justify-end gap-2">
           <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 transition">Cancelar</button>
-          <button onClick={() => tomar(true)} disabled={guardando || elegidas.length < 2 || fincas.size !== 1}
-            title="Un solo lote por clase con la piscina genérica de la finca (ej. EM00-E00), para las tandas de pocas libras de muchos lotes"
+          <button onClick={() => tomar(true)} disabled={guardando || !puedeUnificar}
+            title="Todo lo marcado en un solo lote por clase: el que se escoja arriba (por omisión, el de más kilos)"
             className="px-4 py-2 text-sm font-semibold rounded-lg border border-blue-600 text-blue-700 hover:bg-blue-50 transition disabled:opacity-40 disabled:cursor-not-allowed">
             Unificar en un lote
           </button>

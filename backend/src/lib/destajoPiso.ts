@@ -14,11 +14,13 @@
 //   DESTAJO   piso de la bodega → lote de Destajo   (BodegaOrigen = la bodega)
 //   BAJADO    mesa → piso de la bodega              (BodegaDestino = la bodega; se retoma otro día)
 //   DESCARTE  mesa → nada                           (sin bodega: es merma, no inventario)
+// UNIFICAR junta varias líneas de la misma finca en el lote de una de ellas (la de más kilos por
+// omisión); cada línea sigue diciendo en el kardex de qué lote de origen vino.
 // No hace falta ninguna columna nueva: las de enlace quedaron puestas con el esquema de 41c50a2.
 //
 // RENDIMIENTO del lote = Procesado ÷ (Ingreso − Bajado). Lo bajado no se trabajó, así que no cuenta;
 // el descarte (rojo incluido) sí se trabajó y se perdió, así que se queda dentro como merma.
-import { componerCodigoLote, descomponerCodigoLote, piscinaRequiereCiclo } from "./codigoLote.ts";
+import { componerCodigoLote, descomponerCodigoLote, piscinaRequiereCiclo, FINCAS_SIN_CICLO } from "./codigoLote.ts";
 
 // Bodegas cuyo piso alimenta Destajo. Pelado y Descabezado son dos áreas con piso propio desde el
 // 20 oct 2026 (scripts/separarPeladoDescabezado.ts).
@@ -178,11 +180,16 @@ type LineaToma = {
 
 /**
  * Crea (o suma a) los lotes de Destajo del día con lo que el encargado escogió del piso, y saca ese
- * producto del piso. Con `unificar`, todas las líneas van a UN lote por clase con la piscina
- * genérica de su finca (EM00-E00, TM00-E00): para las tandas de pocas libras de muchos lotes.
+ * producto del piso.
+ *
+ * Con `unificar`, todas las líneas van a UN lote por clase: el de la línea `baseLote` que escoge el
+ * encargado entre las marcadas —  en la planta se usa uno de los que se están trabajando, casi siempre
+ * el de más libras, que es el que queda por omisión. Es para las tandas de pocas libras de muchos
+ * lotes. Lo absorbido no se pierde: cada línea guarda en el kardex de qué lote de origen vino.
  */
 export async function tomarDelPiso(
-  tx: any, p: { bodega: string; lineas: LineaToma[]; unificar: boolean; fecha: string; operador: string }
+  tx: any, p: { bodega: string; lineas: LineaToma[]; unificar: boolean; baseLote?: string | null;
+                fecha: string; operador: string }
 ) {
   const { bodega, fecha, operador } = p;
   if (!BODEGAS_CON_DESTAJO.includes(bodega)) throw new ErrorNegocio(400, `${bodega} no alimenta Destajo`);
@@ -230,33 +237,45 @@ export async function tomarDelPiso(
       if (!d) throw new ErrorNegocio(400, `No se reconoce la piscina del lote ${l.Lote}: escójala a mano`);
       piscina = d.piscina; ciclo = d.ciclo;
     }
-    if (!p.unificar && piscinaRequiereCiclo(piscina.Nombre, piscina.CodigoFinca) && !ciclo) {
-      throw new ErrorNegocio(400, `${l.Lote}: la piscina ${piscina.Nombre} lleva ciclo y el código no lo trae`);
-    }
     return { l, piscina, ciclo, anio: anioDeCodigo(l.Lote, fecha) };
   });
+  const sinCiclo = (d: { l: { Lote: string }; piscina: Piscina; ciclo: number | null }) =>
+    piscinaRequiereCiclo(d.piscina.Nombre, d.piscina.CodigoFinca) && !d.ciclo;
 
-  // Unificar: una sola finca, y que tenga su piscina genérica. Maquila e Importación no tienen, y
-  // está bien que no se puedan unificar: la merma de maquila se calcula por lote del cliente.
-  let generica: Piscina | null = null;
+  // Unificar: una sola finca, y nunca un proveedor externo (Maquila, Importación, Pescado): ahí cada
+  // lote es un contenedor y su merma se calcula por separado —  la de maquila se le rinde al cliente.
+  let base: (typeof destinos)[number] | null = null;
   if (p.unificar) {
     const fincas = [...new Set(destinos.map(d => d.piscina.CodigoFinca))];
     if (fincas.length > 1) {
       throw new ErrorNegocio(400, `Solo se pueden unificar lotes de la misma finca (escogió de ${fincas.join(", ")})`);
     }
-    generica = piscinas.find(x => x.CodigoFinca === fincas[0] && /00-E00$/i.test(x.Nombre)) ?? null;
-    if (!generica) throw new ErrorNegocio(400, `La finca ${fincas[0]} no tiene piscina genérica (00-E00): sus lotes no se pueden unificar`);
+    if (FINCAS_SIN_CICLO.includes(fincas[0])) {
+      throw new ErrorNegocio(400, `Los lotes de ${fincas[0]} no se unifican: cada lote es un contenedor y su merma se calcula por separado`);
+    }
+    // El lote que da el código: el que escogió el encargado, o el de más kilos entre los marcados.
+    const kgPorLote = new Map<string, number>();
+    for (const d of destinos) kgPorLote.set(d.l.Lote, (kgPorLote.get(d.l.Lote) ?? 0) + d.l.Kg);
+    const pesado = [...kgPorLote.entries()].sort((a, b) => b[1] - a[1])[0][0];
+    const elegido = p.baseLote && kgPorLote.has(p.baseLote) ? p.baseLote : null;
+    if (p.baseLote && !elegido) throw new ErrorNegocio(400, `El lote ${p.baseLote} no está entre los que escogió para unificar`);
+    base = destinos.find(d => d.l.Lote === (elegido ?? pesado))!;
+    if (sinCiclo(base)) {
+      throw new ErrorNegocio(400, `${base.l.Lote}: la piscina ${base.piscina.Nombre} lleva ciclo y el código no lo trae; escoja otro lote para unificar`);
+    }
+  } else {
+    const d = destinos.find(sinCiclo);
+    if (d) throw new ErrorNegocio(400, `${d.l.Lote}: la piscina ${d.piscina.Nombre} lleva ciclo y el código no lo trae`);
   }
 
   // Agrupar por lote de Destajo (código + clase).
   const grupos = new Map<string, { lote: string; clase: string; piscina: Piscina; ciclo: number | null;
                                    anio: number; lineas: typeof lineas }>();
   for (const d of destinos) {
-    const piscina = generica ?? d.piscina;
-    const ciclo = generica ? null : d.ciclo;
+    const { piscina, ciclo, anio } = base ?? d;
     const lote = componerCodigoLote(piscina.Nombre, fecha, ciclo ? String(ciclo) : "");
     const k = `${lote}|${d.l.Clase}`;
-    if (!grupos.has(k)) grupos.set(k, { lote, clase: d.l.Clase, piscina, ciclo, anio: d.anio, lineas: [] });
+    if (!grupos.has(k)) grupos.set(k, { lote, clase: d.l.Clase, piscina, ciclo, anio, lineas: [] });
     grupos.get(k)!.lineas.push(d.l);
   }
 
