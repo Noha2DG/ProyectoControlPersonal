@@ -207,7 +207,7 @@ export function exportarHojaLote(termos, lote) {
   XLSX.utils.sheet_add_json(ws, filas, { origin: -1 });
   const ajustes = (lote.Ajustes ?? []).map(a => [
     a.Tipo === "DESCARTE" ? "Descarte" : a.Tipo === "COLA" ? "Cola" : "Bajado al piso",
-    a.Tipo === "COLA" ? `termo ${a.NumeroTermo} · ${a.ClaseCola}` : (a.Motivo ?? ""),
+    a.Tipo === "COLA" ? `termo ${a.NumeroTermo} · ${a.DescripcionClaseCola || a.ClaseCola}` : (a.Motivo ?? ""),
     a.Talla !== 900 ? a.DescripcionTalla : "", a.Peso, a.UM]);
   if (ajustes.length) XLSX.utils.sheet_add_aoa(ws, [[], ["Cola, bajado al piso y descarte"], ...ajustes], { origin: -1 });
   if (lote.EsEntero) {

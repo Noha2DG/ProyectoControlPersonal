@@ -198,10 +198,11 @@ router.get("/produccion", requireAuth, requirePerm("destajo", "ver"), async (req
     // Y los termos de cola de los lotes entero (Tipo COLA): su clase es la de la cola (D30…).
     const pAjustes = () => prisma.$queryRawUnsafe(`
       SELECT m.LoteProceso AS Lote, m.ClaseProceso AS Clase, m.Tipo, m.Motivo, m.Talla, ta.Descripcion AS DescripcionTalla,
-             m.Peso, m.UM, m.NumeroTermo, m.Clase AS ClaseCola
+             m.Peso, m.UM, m.NumeroTermo, m.Clase AS ClaseCola, cc.Descripcion AS DescripcionClaseCola
         FROM MovimientoPiso m
         JOIN Lotes l ON l.Lote = m.LoteProceso AND l.Clase = m.ClaseProceso
         JOIN Tallas ta ON ta.Codigo = m.Talla
+        JOIN Clase cc ON cc.Clase = m.Clase
        WHERE m.Tipo IN ('BAJADO', 'DESCARTE', 'COLA') AND l.Fecha BETWEEN ? AND ?
        ORDER BY m.MovimientoId
     `, desde, hasta);
@@ -213,7 +214,7 @@ router.get("/produccion", requireAuth, requirePerm("destajo", "ver"), async (req
       const k = `${a.Lote}|${a.Clase}`;
       ajustesDe.set(k, [...(ajustesDe.get(k) ?? []),
         { Tipo: a.Tipo, Motivo: a.Motivo, Talla: Number(a.Talla), DescripcionTalla: a.DescripcionTalla, Peso: Number(a.Peso), UM: a.UM,
-          NumeroTermo: a.NumeroTermo, ClaseCola: a.ClaseCola }]);
+          NumeroTermo: a.NumeroTermo, ClaseCola: a.ClaseCola, DescripcionClaseCola: a.DescripcionClaseCola }]);
     }
 
     // Rendimiento sobre lo TRABAJADO: lo bajado al piso no se trabajó en este lote (se retoma en el

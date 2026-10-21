@@ -78,7 +78,7 @@ function AjustesLote({ l, compacto = false }) {
               <span className={a.Tipo === "DESCARTE" ? "text-red-700 font-semibold" : a.Tipo === "COLA" ? "text-emerald-700 font-semibold" : "font-semibold"}>
                 {a.Tipo === "DESCARTE" ? "Descarte" : a.Tipo === "COLA" ? "Cola" : "Bajado al piso"}
               </span>
-              {a.Tipo === "COLA" ? ` · termo ${a.NumeroTermo} · ${a.ClaseCola}` : a.Motivo ? ` · ${a.Motivo}` : ""}
+              {a.Tipo === "COLA" ? ` · termo ${a.NumeroTermo} · ${a.DescripcionClaseCola || a.ClaseCola}` : a.Motivo ? ` · ${a.Motivo}` : ""}
               {a.Talla !== 900 ? ` · ${a.DescripcionTalla}` : ""}
             </span>
             <span className="tabular-nums whitespace-nowrap">{fmtNum(a.Peso)} {a.UM}</span>

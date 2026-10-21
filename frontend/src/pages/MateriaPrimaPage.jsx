@@ -751,7 +751,7 @@ export default function MateriaPrimaPage() {
           onHecho={() => { setAjuste(null); trasMovimientoPiso(); }} />
       )}
       {ajuste === "cola" && loteSel && (
-        <ColaModal lote={loteSel} tallas={tallas} onRegistrado={trasMovimientoPiso} onClose={() => setAjuste(null)} />
+        <ColaModal lote={loteSel} tallas={tallas} clases={clases} onRegistrado={trasMovimientoPiso} onClose={() => setAjuste(null)} />
       )}
       {modalTrans && loteSel && (
         <TransaccionModal lote={loteSel} procesos={procesos} clases={clases} tallas={tallas} almacenes={almacenes}

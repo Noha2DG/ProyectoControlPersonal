@@ -445,7 +445,10 @@ export function AjusteLoteModal({ tipo, lote, tallas, onHecho, onClose }) {
 // El modal se queda abierto para seguir registrando termos durante el día.
 const CLASES_COLA = ["D30", "D33", "D34", "D35"];   // las mismas que valida backend/src/lib/destajoPiso.ts
 
-export function ColaModal({ lote, tallas, onRegistrado, onClose }) {
+export function ColaModal({ lote, tallas, clases = [], onRegistrado, onClose }) {
+  // Se muestra la descripción de la clase ("CULTIVO COLA COLA SIFON"), no el código: es como la
+  // conoce el área.
+  const descr = c => clases.find(x => x.Clase === c)?.Descripcion ?? c;
   const [termo, setTermo] = useState("");
   const [peso, setPeso] = useState("");
   const [claseCola, setClaseCola] = useState(lote.ClaseCola || CLASES_COLA[0]);
@@ -491,31 +494,29 @@ export function ColaModal({ lote, tallas, onRegistrado, onClose }) {
               className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
           </div>
         </div>
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <label className="block text-xs font-medium text-gray-500 mb-1">Clase de la cola *</label>
-            <div className="flex flex-wrap gap-1.5">
-              {CLASES_COLA.map(c => (
-                <button type="button" key={c} onClick={() => setClaseCola(c)}
-                  className={`px-2.5 py-1.5 text-sm font-mono rounded-lg border transition ${claseCola === c ? "bg-emerald-600 text-white border-emerald-600" : "border-gray-300 text-gray-600 hover:bg-gray-50"}`}>
-                  {c}
-                </button>
-              ))}
-            </div>
+        <div>
+          <label className="block text-xs font-medium text-gray-500 mb-1">Clase de la cola *</label>
+          <div className="grid grid-cols-2 gap-1.5">
+            {CLASES_COLA.map(c => (
+              <button type="button" key={c} onClick={() => setClaseCola(c)}
+                className={`px-2.5 py-1.5 text-sm text-left rounded-lg border transition ${claseCola === c ? "bg-emerald-600 text-white border-emerald-600" : "border-gray-300 text-gray-600 hover:bg-gray-50"}`}>
+                {descr(c)}
+              </button>
+            ))}
           </div>
-          <div>
-            <label className="block text-xs font-medium text-gray-500 mb-1">Talla</label>
-            <select value={talla} onChange={e => setTalla(e.target.value)}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400">
-              <option value="">Sin talla</option>
-              {tallas.map(t => <option key={t.Codigo} value={t.Codigo}>{t.Descripcion}</option>)}
-            </select>
-          </div>
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-gray-500 mb-1">Talla</label>
+          <select value={talla} onChange={e => setTalla(e.target.value)}
+            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400">
+            <option value="">Sin talla</option>
+            {tallas.map(t => <option key={t.Codigo} value={t.Codigo}>{t.Descripcion}</option>)}
+          </select>
         </div>
         {hechos.length > 0 && (
           <div className="text-xs bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2 space-y-0.5">
             {hechos.map((h, i) => (
-              <p key={i} className="flex justify-between"><span>Termo <b className="font-mono">{h.termo}</b> · {h.claseCola}</span><span>{fmtNum(h.peso)} {lote.UM}</span></p>
+              <p key={i} className="flex justify-between gap-3"><span>Termo <b className="font-mono">{h.termo}</b> · {descr(h.claseCola)}</span><span className="whitespace-nowrap">{fmtNum(h.peso)} {lote.UM}</span></p>
             ))}
           </div>
         )}
@@ -582,7 +583,7 @@ export function MovimientosPisoLote({ lote, recarga, puedeEditar, onCambio }) {
                   {tipo === "DESTAJO" && <><span className="font-mono">{m.LoteOrigen}</span>{m.FolioRemision ? ` · ${m.FolioRemision}` : ""}</>}
                   {tipo === "BAJADO" && <>{m.Motivo ? `${m.Motivo} · ` : ""}{m.NombreBodega} · {m.Fecha}</>}
                   {tipo === "DESCARTE" && <>{m.Motivo || "Descarte"}</>}
-                  {tipo === "COLA" && <>Termo <span className="font-mono font-semibold">{m.NumeroTermo}</span> · <span className="font-mono">{m.Clase}</span> · {m.Fecha}</>}
+                  {tipo === "COLA" && <>Termo <span className="font-mono font-semibold">{m.NumeroTermo}</span> · {m.DescripcionClase || m.Clase} · {m.Fecha}</>}
                   {m.Talla !== 900 && <span className="text-gray-400"> · {m.DescripcionTalla}</span>}
                 </span>
                 <span className="font-semibold text-gray-800 whitespace-nowrap">

@@ -560,11 +560,12 @@ export async function movimientosDeLote(client: any, lote: string, clase: string
   const rows: any[] = await client.$queryRawUnsafe(`
     SELECT m.MovimientoId, m.Tipo, DATE_FORMAT(m.FechaHora, '%Y-%m-%d %H:%i') AS FechaHora,
            DATE_FORMAT(m.FechaProduccion, '%Y-%m-%d') AS Fecha,
-           m.Lote AS LoteOrigen, m.Clase, m.Talla, ta.Descripcion AS DescripcionTalla,
+           m.Lote AS LoteOrigen, m.Clase, cl.Descripcion AS DescripcionClase, m.Talla, ta.Descripcion AS DescripcionTalla,
            m.Peso, m.UM, m.PesoKg, m.Motivo, m.NumeroTermo, rm.Folio AS FolioRemision,
            COALESCE(m.BodegaOrigen, m.BodegaDestino) AS Bodega, b.Nombre AS NombreBodega, m.RegistradoPor
       FROM MovimientoPiso m
       JOIN Tallas ta ON ta.Codigo = m.Talla
+      JOIN Clase cl ON cl.Clase = m.Clase
       LEFT JOIN Remisiones rm ON rm.RemisionId = m.RemisionId
       LEFT JOIN BodegaVirtual b ON b.Codigo = COALESCE(m.BodegaOrigen, m.BodegaDestino)
      WHERE m.LoteProceso = ? AND m.ClaseProceso = ? AND m.Tipo IN ('DESTAJO', 'BAJADO', 'DESCARTE', 'COLA')
