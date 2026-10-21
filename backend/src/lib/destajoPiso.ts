@@ -15,6 +15,7 @@
 //   BAJADO    mesa → piso de la bodega              (BodegaDestino = la bodega; se retoma otro día).
 //             Motivo "Sobrante" (no se terminó) o "Rojo" (se separa y se vuelve a revisar).
 //   DESCARTE  mesa → nada                           (sin bodega: es merma, no inventario)
+//   COLA      lote entero → piso de Pelado           (un renglón por termo; ver registrarCola)
 // UNIFICAR junta varias líneas de la misma finca en el lote de una de ellas (la de más kilos por
 // omisión); cada línea sigue diciendo en el kardex de qué lote de origen vino.
 // No hace falta ninguna columna nueva: las de enlace quedaron puestas con el esquema de 41c50a2.
@@ -22,11 +23,27 @@
 // RENDIMIENTO del lote = Procesado ÷ (Ingreso − Bajado). Lo bajado (sobrante o rojo) no se trabajó,
 // así que no cuenta; el descarte sí se trabajó y se perdió, así que se queda dentro como merma.
 // El rojo NO es descarte: se separa, vuelve al piso y se revisa otra vez.
+//
+// LOTE ENTERO (C20 → cola en Descabezado): el pesaje por persona es la CABEZA (lo que se paga), así
+// que Procesado ÷ Ingreso daba ~35 % y no era un rendimiento. La cola no va a nadie: se pesa por termo
+// y entra al piso de Pelado como inventario. Su rendimiento es Cola ÷ (Ingreso − Bajado), y el total
+// (Cabeza + Cola) ÷ (Ingreso − Bajado) sirve de cuadre.
 import { componerCodigoLote, descomponerCodigoLote, piscinaRequiereCiclo, FINCAS_SIN_CICLO } from "./codigoLote.ts";
 
 // Bodegas cuyo piso alimenta Destajo. Pelado y Descabezado son dos áreas con piso propio desde el
 // 20 oct 2026 (scripts/separarPeladoDescabezado.ts).
 export const BODEGAS_CON_DESTAJO = ["PELADO", "DESCABEZADO"];
+
+// Lotes entero que se descabezan, y las clases de cola que salen de ellos (decisión del usuario,
+// 21 oct 2026). La cola va siempre al piso de Pelado.
+export const CLASES_ENTERO = ["C20", "C23", "C24", "C25", "L20", "L21", "L22"];
+export const CLASES_COLA = ["D30", "D33", "D34", "D35"];
+const BODEGA_COLA = "PELADO";
+/** La cola que le corresponde a cada entero por omisión: sifón → cola sifón, entero-R → cola-R. */
+export function claseColaSugerida(claseEntero: string) {
+  return ({ C24: "D35", C25: "D33" } as Record<string, string>)[claseEntero] ?? "D30";
+}
+export const esEntero = (clase: string) => CLASES_ENTERO.includes(String(clase));
 
 const LB_POR_KG = 2.20462;
 
@@ -53,15 +70,30 @@ const sumaAjuste = (tipo: string, alias: string) => `
               FROM MovimientoPiso m
              WHERE m.LoteProceso = ${alias}.Lote AND m.ClaseProceso = ${alias}.Clase AND m.Tipo = '${tipo}'), 0)`;
 
-/** Columnas SQL Bajado y Descarte de un lote, para pegar en un SELECT sobre Lotes con alias `alias`. */
+/** Columnas SQL Bajado, Descarte y Cola de un lote, para pegar en un SELECT sobre Lotes con alias `alias`. */
 export function sqlAjustesLote(alias = "l") {
-  return `ROUND(${sumaAjuste("BAJADO", alias)}, 2) AS Bajado, ROUND(${sumaAjuste("DESCARTE", alias)}, 2) AS Descarte`;
+  return `ROUND(${sumaAjuste("BAJADO", alias)}, 2) AS Bajado, ROUND(${sumaAjuste("DESCARTE", alias)}, 2) AS Descarte, ` +
+         `ROUND(${sumaAjuste("COLA", alias)}, 2) AS Cola`;
 }
 
 /** Rendimiento sobre lo trabajado: lo bajado al piso no se trabajó; el descarte sí (es merma). */
 export function rendimientoLote(ingreso: number, bajado: number, procesado: number) {
   const trabajado = ingreso - bajado;
   return trabajado > 0 ? (procesado / trabajado) * 100 : 0;
+}
+
+/**
+ * Los números de un lote entero: lo pesado es CABEZA, la cola sale de los termos. El rendimiento del
+ * lote es el de cola; el total (cabeza + cola) es el cuadre contra lo trabajado.
+ */
+export function rendimientosEntero(ingreso: number, bajado: number, cabeza: number, cola: number, descarte: number) {
+  const trabajado = ingreso - bajado;
+  const pct = (x: number) => (trabajado > 0 ? (x / trabajado) * 100 : 0);
+  return {
+    Cabeza: r2(cabeza), Total: r2(cabeza + cola),
+    RendimientoCabeza: pct(cabeza), RendimientoCola: pct(cola), RendimientoTotal: pct(cabeza + cola),
+    Diferencia: r2(trabajado - descarte - cabeza - cola),
+  };
 }
 
 /** Ingreso, procesado, bajado y descarte de un lote, con la fila del lote bloqueada. */
@@ -79,7 +111,7 @@ export async function cuadreLote(tx: any, lote: string, clase: string) {
     Lote: String(l.Lote), Clase: String(l.Clase), UM: String(l.UM), Origen: String(l.Origen),
     FechaProduccion: String(l.FechaProduccion),
     Ingreso: Number(l.PesoIngreso), Procesado: Number(l.Procesado), Transacciones: Number(l.Transacciones),
-    Bajado: Number(l.Bajado), Descarte: Number(l.Descarte),
+    Bajado: Number(l.Bajado), Descarte: Number(l.Descarte), Cola: Number(l.Cola),
   };
   return { ...c, Pendiente: r2(c.Ingreso - c.Bajado - c.Descarte - c.Procesado) };
 }
@@ -103,13 +135,13 @@ async function saldoLineas(client: any, bodega: string, lotes?: string[]) {
            t.Talla, ta.Descripcion AS DescripcionTalla, DATE_FORMAT(t.FechaLote, '%Y-%m-%d') AS FechaLote,
            DATE_FORMAT(MIN(CASE WHEN t.Delta > 0 THEN t.FechaProduccion END), '%Y-%m-%d') AS FechaIngreso,
            ROUND(SUM(t.Delta), 2) AS Kg, SUM(t.Masters) AS Masters, MAX(t.KgPorMaster) AS KgPorMaster,
-           MAX(t.EsBajado) AS EsBajado, MAX(t.EsRojo) AS EsRojo
+           MAX(t.EsBajado) AS EsBajado, MAX(t.EsRojo) AS EsRojo, MAX(t.EsCola) AS EsCola
       FROM (
         SELECT RemisionId, Lote, Clase, Talla, FechaLote, FechaProduccion,  PesoKg AS Delta,  Masters, KgPorMaster,
-               Tipo = 'BAJADO' AS EsBajado, Tipo = 'BAJADO' AND Motivo LIKE 'Rojo%' AS EsRojo
+               Tipo = 'BAJADO' AS EsBajado, Tipo = 'BAJADO' AND Motivo LIKE 'Rojo%' AS EsRojo, Tipo = 'COLA' AS EsCola
           FROM MovimientoPiso WHERE BodegaDestino = ? ${filtro}
         UNION ALL
-        SELECT RemisionId, Lote, Clase, Talla, FechaLote, FechaProduccion, -PesoKg, -Masters, KgPorMaster, 0, 0
+        SELECT RemisionId, Lote, Clase, Talla, FechaLote, FechaProduccion, -PesoKg, -Masters, KgPorMaster, 0, 0, 0
           FROM MovimientoPiso WHERE BodegaOrigen = ? ${filtro}
       ) t
       JOIN Clase cl ON cl.Clase = t.Clase
@@ -126,6 +158,7 @@ async function saldoLineas(client: any, bodega: string, lotes?: string[]) {
     KgPorMaster: r.KgPorMaster == null ? null : Number(r.KgPorMaster),
     EsBajado: Number(r.EsBajado) === 1,
     EsRojo: Number(r.EsRojo) === 1,
+    EsCola: Number(r.EsCola) === 1,
   }));
 }
 
@@ -416,6 +449,58 @@ export async function registrarDescarte(tx: any, a: Ajuste) {
   return { ok: true };
 }
 
+// ── Cola de un lote entero ──────────────────────────────────────────────────────────────────────
+/**
+ * Un termo de cola que sale de un lote entero en Descabezado. No va a ninguna persona —  lo que se
+ * paga es la cabeza, que ya está en el pesaje— : se pesa el termo lleno y entra al piso de Pelado,
+ * que lo toma desde "Tomar del piso" (antes creaba el D30 a mano con el mismo código).
+ *
+ * El número de termo se teclea: no es el mismo que se anota en el pesaje de cabeza.
+ *
+ * NO se resta de lo disponible para pesar ni del Pendiente: cabeza y cola se pesan por separado y
+ * pueden sumar más que el ingreso (agua, hielo), y restarla podría trabar el pesaje de cabeza, que es
+ * el pago.
+ */
+export async function registrarCola(
+  tx: any, a: { lote: string; clase: string; peso: number; termo: string; claseCola: string;
+                talla?: number | null; fecha: string; operador: string }
+) {
+  const c = await cuadreLote(tx, a.lote, a.clase);
+  if (!esEntero(c.Clase)) throw new ErrorNegocio(400, `${c.Lote} ${c.Clase} no es un lote entero: no produce cola`);
+  if (!CLASES_COLA.includes(a.claseCola)) {
+    throw new ErrorNegocio(400, `La cola tiene que ser ${CLASES_COLA.join(", ")} (llegó ${a.claseCola || "vacía"})`);
+  }
+  const termo = String(a.termo ?? "").trim();
+  if (!termo) throw new ErrorNegocio(400, "Falta el número de termo");
+  if (termo.length > 20) throw new ErrorNegocio(400, "El número de termo es demasiado largo");
+  const peso = r2(Number(a.peso));
+  if (!(peso > 0)) throw new ErrorNegocio(400, "El peso debe ser mayor que cero");
+  // Techo de cordura, no de cuadre: la cola no puede pasar de lo que se trabajó del lote.
+  const trabajado = c.Ingreso - c.Bajado;
+  if (c.Cola + peso > trabajado + 0.001) {
+    throw new ErrorNegocio(400,
+      `La cola del lote ${c.Lote} quedaría en ${(c.Cola + peso).toFixed(2)} ${c.UM}, más que lo trabajado (${trabajado.toFixed(2)}).`);
+  }
+
+  await tx.$executeRawUnsafe(`
+    INSERT INTO MovimientoPiso (Tipo, FechaProduccion, BodegaDestino, Lote, Clase, Talla, FechaLote,
+                                Peso, UM, PesoKg, NumeroTermo, LoteProceso, ClaseProceso, RegistradoPor)
+    VALUES ('COLA', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    a.fecha, BODEGA_COLA, c.Lote, a.claseCola, Number(a.talla) || 900, c.FechaProduccion,
+    peso, c.UM, aKg(peso, c.UM), termo, c.Lote, c.Clase, a.operador);
+  return { ok: true, Bodega: BODEGA_COLA };
+}
+
+// Lo que un lote mandó a un piso (bajado o cola) tiene que seguir ahí para poder deshacerlo: si ya lo
+// tomó otro lote, borrarlo dejaría ese saldo en negativo.
+async function sigueAlPiso(tx: any, movimientoId: number) {
+  const [b]: any[] = await tx.$queryRawUnsafe(`
+    SELECT BodegaDestino, RemisionId, Lote, Clase, Talla, DATE_FORMAT(FechaLote, '%Y-%m-%d') AS FechaLote, PesoKg
+      FROM MovimientoPiso WHERE MovimientoId = ?`, movimientoId);
+  const s = (await saldoLineas(tx, String(b.BodegaDestino), [String(b.Lote)])).find(x => claveLinea(x) === claveLinea(b));
+  return (s?.Kg ?? 0) >= Number(b.PesoKg) - 0.001;
+}
+
 // ── Devolver el lote completo al piso ───────────────────────────────────────────────────────────
 /**
  * Un lote tomado del piso no se elimina: se DEVUELVE. Todo regresa como estaba antes de tomarlo —
@@ -432,16 +517,14 @@ export async function devolverLoteAlPiso(tx: any, lote: string, clase: string) {
       `Lo que no se trabajó se baja con "Bajar al piso".`);
   }
 
-  // Lo bajado tiene que seguir al piso: si ya lo tomó el lote de otro día, devolver este lo dejaría
-  // en negativo.
+  // Lo bajado y la cola tienen que seguir al piso: si ya los tomó otro lote, devolver este dejaría
+  // ese saldo en negativo.
   const movs = await movimientosDeLote(tx, lote, clase);
-  for (const m of movs.filter(x => x.Tipo === "BAJADO")) {
-    const [b]: any[] = await tx.$queryRawUnsafe(`
-      SELECT BodegaDestino, RemisionId, Lote, Clase, Talla, DATE_FORMAT(FechaLote, '%Y-%m-%d') AS FechaLote
-        FROM MovimientoPiso WHERE MovimientoId = ?`, m.MovimientoId);
-    const s = (await saldoLineas(tx, String(b.BodegaDestino), [String(b.Lote)])).find(x => claveLinea(x) === claveLinea(b));
-    if ((s?.Kg ?? 0) < m.PesoKg - 0.001) {
-      throw new ErrorNegocio(400, `Lo que se bajó de ${lote} ya se volvió a tomar del piso; devuelva primero ese otro lote.`);
+  for (const m of movs.filter(x => x.Tipo === "BAJADO" || x.Tipo === "COLA")) {
+    if (!(await sigueAlPiso(tx, m.MovimientoId))) {
+      throw new ErrorNegocio(400, m.Tipo === "COLA"
+        ? `La cola de ${lote} ya la tomó Pelado; devuelva primero ese lote.`
+        : `Lo que se bajó de ${lote} ya se volvió a tomar del piso; devuelva primero ese otro lote.`);
     }
   }
 
@@ -460,7 +543,7 @@ export async function devolverLoteAlPiso(tx: any, lote: string, clase: string) {
 
   const kgAlPiso = r2(movs.filter(m => m.Tipo === "DESTAJO").reduce((t, m) => t + m.PesoKg, 0));
   await tx.$executeRawUnsafe(
-    `DELETE FROM MovimientoPiso WHERE LoteProceso = ? AND ClaseProceso = ? AND Tipo IN ('DESTAJO', 'BAJADO', 'DESCARTE')`,
+    `DELETE FROM MovimientoPiso WHERE LoteProceso = ? AND ClaseProceso = ? AND Tipo IN ('DESTAJO', 'BAJADO', 'DESCARTE', 'COLA')`,
     lote, clase);
   await tx.$executeRawUnsafe(`DELETE FROM Lotes WHERE Lote = ? AND Clase = ?`, lote, clase);
   return { ok: true, KgAlPiso: kgAlPiso, Transacciones: ids.length,
@@ -473,13 +556,13 @@ export async function movimientosDeLote(client: any, lote: string, clase: string
     SELECT m.MovimientoId, m.Tipo, DATE_FORMAT(m.FechaHora, '%Y-%m-%d %H:%i') AS FechaHora,
            DATE_FORMAT(m.FechaProduccion, '%Y-%m-%d') AS Fecha,
            m.Lote AS LoteOrigen, m.Clase, m.Talla, ta.Descripcion AS DescripcionTalla,
-           m.Peso, m.UM, m.PesoKg, m.Motivo, rm.Folio AS FolioRemision,
+           m.Peso, m.UM, m.PesoKg, m.Motivo, m.NumeroTermo, rm.Folio AS FolioRemision,
            COALESCE(m.BodegaOrigen, m.BodegaDestino) AS Bodega, b.Nombre AS NombreBodega, m.RegistradoPor
       FROM MovimientoPiso m
       JOIN Tallas ta ON ta.Codigo = m.Talla
       LEFT JOIN Remisiones rm ON rm.RemisionId = m.RemisionId
       LEFT JOIN BodegaVirtual b ON b.Codigo = COALESCE(m.BodegaOrigen, m.BodegaDestino)
-     WHERE m.LoteProceso = ? AND m.ClaseProceso = ? AND m.Tipo IN ('DESTAJO', 'BAJADO', 'DESCARTE')
+     WHERE m.LoteProceso = ? AND m.ClaseProceso = ? AND m.Tipo IN ('DESTAJO', 'BAJADO', 'DESCARTE', 'COLA')
      ORDER BY m.MovimientoId`, lote, clase);
   return rows.map(r => ({ ...r, MovimientoId: Number(r.MovimientoId), Talla: Number(r.Talla),
                           Peso: Number(r.Peso), PesoKg: Number(r.PesoKg) }));
@@ -490,6 +573,7 @@ export async function movimientosDeLote(client: any, lote: string, clase: string
  *   toma     → el producto vuelve al piso y el lote baja su ingreso; si el lote nació del piso y se
  *              queda sin nada ni transacciones, se borra (es un lote que nunca existió).
  *   bajado   → solo mientras nadie lo haya vuelto a tomar del piso.
+ *   cola     → igual: solo mientras Pelado no la haya tomado.
  *   descarte → siempre.
  */
 export async function deshacerMovimiento(tx: any, movimientoId: number) {
@@ -497,7 +581,7 @@ export async function deshacerMovimiento(tx: any, movimientoId: number) {
     SELECT MovimientoId, Tipo, BodegaOrigen, BodegaDestino, RemisionId, Lote, Clase, Talla,
            DATE_FORMAT(FechaLote, '%Y-%m-%d') AS FechaLote, Peso, UM, PesoKg, LoteProceso, ClaseProceso
       FROM MovimientoPiso WHERE MovimientoId = ? FOR UPDATE`, movimientoId);
-  if (!m || !m.LoteProceso || !["DESTAJO", "BAJADO", "DESCARTE"].includes(String(m.Tipo))) {
+  if (!m || !m.LoteProceso || !["DESTAJO", "BAJADO", "DESCARTE", "COLA"].includes(String(m.Tipo))) {
     throw new ErrorNegocio(404, "Ese movimiento no existe o no es de Materia Prima");
   }
   const lote = String(m.LoteProceso), clase = String(m.ClaseProceso);
@@ -506,11 +590,11 @@ export async function deshacerMovimiento(tx: any, movimientoId: number) {
   if (m.Tipo === "DESTAJO") {
     const resta = r2(aUnidadLote(Number(m.PesoKg), c.UM));
     const nuevo = r2(c.Ingreso - resta);
-    const comprometido = c.Procesado + c.Bajado + c.Descarte;
+    const comprometido = c.Procesado + c.Bajado + c.Descarte + c.Cola;
     if (nuevo < comprometido - 0.001) {
       throw new ErrorNegocio(400,
         `No se puede devolver al piso: el lote ${lote} ${clase} quedaría con ${Math.max(nuevo, 0).toFixed(2)} ${c.UM} de ingreso ` +
-        `y ya tiene ${comprometido.toFixed(2)} pesado, bajado o descartado.`);
+        `y ya tiene ${comprometido.toFixed(2)} pesado, bajado, descartado o en cola.`);
     }
     await tx.$executeRawUnsafe(`DELETE FROM MovimientoPiso WHERE MovimientoId = ?`, movimientoId);
     const [q]: any[] = await tx.$queryRawUnsafe(
@@ -523,15 +607,10 @@ export async function deshacerMovimiento(tx: any, movimientoId: number) {
     return { ok: true, LoteBorrado: false };
   }
 
-  if (m.Tipo === "BAJADO") {
-    // Lo bajado tiene que seguir al piso entero: si ya lo tomaron otro día, deshacerlo dejaría ese
-    // saldo en negativo.
-    const linea = { RemisionId: m.RemisionId, Lote: m.Lote, Clase: m.Clase, Talla: m.Talla, FechaLote: m.FechaLote };
-    const saldo = await saldoLineas(tx, String(m.BodegaDestino), [String(m.Lote)]);
-    const s = saldo.find(x => claveLinea(x) === claveLinea(linea));
-    if ((s?.Kg ?? 0) < Number(m.PesoKg) - 0.001) {
-      throw new ErrorNegocio(400, "Lo bajado ya se volvió a tomar del piso; deshaga primero esa toma.");
-    }
+  if ((m.Tipo === "BAJADO" || m.Tipo === "COLA") && !(await sigueAlPiso(tx, movimientoId))) {
+    throw new ErrorNegocio(400, m.Tipo === "COLA"
+      ? "Esa cola ya la tomó Pelado del piso; deshaga primero esa toma."
+      : "Lo bajado ya se volvió a tomar del piso; deshaga primero esa toma.");
   }
   await tx.$executeRawUnsafe(`DELETE FROM MovimientoPiso WHERE MovimientoId = ?`, movimientoId);
   return { ok: true };

@@ -1,7 +1,7 @@
 import { Router, Request, Response } from "express";
 import prisma from "../lib/prisma.ts";
 import { requireAuth, requirePerm, tienePermiso, AuthRequest } from "../middleware/auth.ts";
-import { sqlAjustesLote, rendimientoLote } from "../lib/destajoPiso.ts";
+import { sqlAjustesLote, rendimientoLote, rendimientosEntero, esEntero } from "../lib/destajoPiso.ts";
 
 const router = Router();
 
@@ -195,13 +195,14 @@ router.get("/produccion", requireAuth, requirePerm("destajo", "ver"), async (req
     // pPersona es la más pesada: va primero para que las livianas corran en el otro carril mientras tanto.
     // Lo bajado al piso y lo descartado de cada lote, renglón por renglón: es lo que antes se anotaba
     // a mano en Lotes.Notas ("se bajó 22 kg de 51/60…") y ahora sale del control de Materia Prima.
+    // Y los termos de cola de los lotes entero (Tipo COLA): su clase es la de la cola (D30…).
     const pAjustes = () => prisma.$queryRawUnsafe(`
       SELECT m.LoteProceso AS Lote, m.ClaseProceso AS Clase, m.Tipo, m.Motivo, m.Talla, ta.Descripcion AS DescripcionTalla,
-             m.Peso, m.UM
+             m.Peso, m.UM, m.NumeroTermo, m.Clase AS ClaseCola
         FROM MovimientoPiso m
         JOIN Lotes l ON l.Lote = m.LoteProceso AND l.Clase = m.ClaseProceso
         JOIN Tallas ta ON ta.Codigo = m.Talla
-       WHERE m.Tipo IN ('BAJADO', 'DESCARTE') AND l.Fecha BETWEEN ? AND ?
+       WHERE m.Tipo IN ('BAJADO', 'DESCARTE', 'COLA') AND l.Fecha BETWEEN ? AND ?
        ORDER BY m.MovimientoId
     `, desde, hasta);
 
@@ -211,16 +212,34 @@ router.get("/produccion", requireAuth, requirePerm("destajo", "ver"), async (req
     for (const a of ajustes) {
       const k = `${a.Lote}|${a.Clase}`;
       ajustesDe.set(k, [...(ajustesDe.get(k) ?? []),
-        { Tipo: a.Tipo, Motivo: a.Motivo, Talla: Number(a.Talla), DescripcionTalla: a.DescripcionTalla, Peso: Number(a.Peso), UM: a.UM }]);
+        { Tipo: a.Tipo, Motivo: a.Motivo, Talla: Number(a.Talla), DescripcionTalla: a.DescripcionTalla, Peso: Number(a.Peso), UM: a.UM,
+          NumeroTermo: a.NumeroTermo, ClaseCola: a.ClaseCola }]);
     }
 
     // Rendimiento sobre lo TRABAJADO: lo bajado al piso no se trabajó en este lote (se retoma en el
     // del día siguiente), y el descarte sí, así que se queda dentro como merma. Ver lib/destajoPiso.ts.
-    const lotesFmt = numerizar(porLote, ["PesoIngreso", "Procesado", "NumTransacciones", "Bajado", "Descarte"])
-      .map(l => ({ ...l,
-        Ajustes: ajustesDe.get(`${l.Lote}|${l.Clase}`) ?? [],
-        Pendiente: l.PesoIngreso - l.Bajado - l.Descarte - l.Procesado,
-        Rendimiento: rendimientoLote(l.PesoIngreso, l.Bajado, l.Procesado) }));
+    //
+    // Lote ENTERO (C20 → cola): lo pesado es CABEZA, no producto, así que su rendimiento es el de cola
+    // (Cola ÷ trabajado) y el total Cabeza + Cola va aparte como cuadre. `Salida` es lo que cuenta
+    // para el rendimiento total del reporte: la cola en un entero, lo procesado en los demás.
+    //
+    // Un entero SIN cola registrada (todos los de antes del 21 oct 2026) no tiene rendimiento que
+    // medir: va como SinCola y queda fuera del rendimiento total —  ni su salida ni su trabajado—  en
+    // vez de entrar con 0 % y hundir el promedio de cualquier rango histórico.
+    const lotesFmt = numerizar(porLote, ["PesoIngreso", "Procesado", "NumTransacciones", "Bajado", "Descarte", "Cola"])
+      .map(l => {
+        const entero = esEntero(l.Clase);
+        const sinCola = entero && !(l.Cola > 0);
+        const base = { ...l,
+          Ajustes: ajustesDe.get(`${l.Lote}|${l.Clase}`) ?? [],
+          Pendiente: l.PesoIngreso - l.Bajado - l.Descarte - l.Procesado,
+          EsEntero: entero, SinCola: sinCola,
+          Salida: sinCola ? 0 : entero ? l.Cola : l.Procesado,
+          TrabajadoRend: sinCola ? 0 : l.PesoIngreso - l.Bajado };
+        if (!entero) return { ...base, Rendimiento: rendimientoLote(l.PesoIngreso, l.Bajado, l.Procesado) };
+        const e = rendimientosEntero(l.PesoIngreso, l.Bajado, l.Procesado, l.Cola, l.Descarte);
+        return { ...base, ...e, Rendimiento: e.RendimientoCola };
+      });
     const detalleFmt = numerizar(porLoteTalla, ["Talla", "Procesado", "NumPesajes"]);
     const tallaFmt = numerizar(porTalla, ["Talla", "Procesado", "NumPesajes"]);
     const termoFmt = numerizar(porTermo, ["TermoId", "Talla", "Proceso", "Procesado"]);
@@ -231,7 +250,10 @@ router.get("/produccion", requireAuth, requirePerm("destajo", "ver"), async (req
       Procesado: acc.Procesado + l.Procesado,
       Bajado: acc.Bajado + l.Bajado,
       Descarte: acc.Descarte + l.Descarte,
-    }), { PesoIngreso: 0, Procesado: 0, Bajado: 0, Descarte: 0 });
+      Cola: acc.Cola + l.Cola,
+      Salida: acc.Salida + l.Salida,
+      TrabajadoRend: acc.TrabajadoRend + l.TrabajadoRend,
+    }), { PesoIngreso: 0, Procesado: 0, Bajado: 0, Descarte: 0, Cola: 0, Salida: 0, TrabajadoRend: 0 });
 
     res.json({
       desde, hasta,
@@ -243,7 +265,7 @@ router.get("/produccion", requireAuth, requirePerm("destajo", "ver"), async (req
       pausasNoPaga,
       fincasConLotes,
       totales: { ...totales, Pendiente: totales.PesoIngreso - totales.Bajado - totales.Descarte - totales.Procesado,
-                 Rendimiento: rendimientoLote(totales.PesoIngreso, totales.Bajado, totales.Procesado) },
+                 Rendimiento: totales.TrabajadoRend > 0 ? totales.Salida / totales.TrabajadoRend * 100 : 0 },
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message });

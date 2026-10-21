@@ -264,8 +264,9 @@ export default function PesajePage() {
 
   const termoActual = termos.find(t => t.NumeroTermo === numeroTermo);
   // Sobre lo trabajado: lo bajado al piso no se trabajó en este lote (ver backend/src/lib/destajoPiso.ts).
+  // En un lote entero lo pesado es cabeza: el rendimiento es el de la cola, que se registra por termo.
   const trabajado = lote ? lote.PesoIngreso - (lote.Bajado || 0) : 0;
-  const rendimiento = trabajado > 0 ? (lote.Procesado / trabajado * 100) : 0;
+  const rendimiento = trabajado > 0 ? ((lote.EsEntero ? (lote.Cola || 0) : lote.Procesado) / trabajado * 100) : 0;
 
   return (
     <div>
@@ -293,9 +294,9 @@ export default function PesajePage() {
                 <p className={`text-sm font-bold ${lote.Pendiente < 0 ? "text-red-600" : "text-amber-600"}`}>{fmtNum(lote.Pendiente, 1)}</p>
               </div>
               <div className="text-center">
-                <p className="text-xs text-gray-400">Rendimiento</p>
+                <p className="text-xs text-gray-400">{lote.EsEntero ? "Rend. cola" : "Rendimiento"}</p>
                 <p className="text-xs font-mono font-semibold text-blue-600 truncate">&nbsp;</p>
-                <p className="text-sm font-bold text-gray-700">{rendimiento.toFixed(1)}%</p>
+                <p className="text-sm font-bold text-gray-700">{lote.EsEntero && !(lote.Cola > 0) ? "sin cola" : `${rendimiento.toFixed(1)}%`}</p>
               </div>
             </div>
             <div className="w-full bg-gray-200 rounded-full h-3 overflow-hidden">

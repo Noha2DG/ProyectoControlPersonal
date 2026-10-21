@@ -3,7 +3,7 @@ import { fmtNum } from "../utils/numero.js";
 import { authHeader, usePuede } from "../context/AuthContext.jsx";
 import { componerCodigoLote, piscinaRequiereCiclo } from "../utils/codigoLote.js";
 import { useColWidths, Th, Colgroup } from "../components/ResizableTh.jsx";
-import { TomarDelPisoModal, AjusteLoteModal, MovimientosPisoLote } from "../components/MateriaPrimaPiso.jsx";
+import { TomarDelPisoModal, AjusteLoteModal, MovimientosPisoLote, ColaModal } from "../components/MateriaPrimaPiso.jsx";
 
 const LOTE_COL_DEFAULTS = { lote: 130, finca: 140, ciclo: 90, clase: 90, talla: 130, peso: 130, acciones: 130 };
 const LOTE_COLS = Object.keys(LOTE_COL_DEFAULTS);
@@ -335,7 +335,7 @@ export default function MateriaPrimaPage() {
   const [modalTrans, setModalTrans] = useState(false);
   const [busqueda, setBusqueda] = useState("");
   const [modalPiso, setModalPiso] = useState(false);
-  const [ajuste, setAjuste] = useState(null);          // "bajar" | "descarte"
+  const [ajuste, setAjuste] = useState(null);          // "bajar" | "descarte" | "cola"
   const [recargaMov, setRecargaMov] = useState(0);
   const [widthsLote, startResizeLote] = useColWidths("materiaprima_lotes", LOTE_COL_DEFAULTS);
   const [widthsTrans, startResizeTrans] = useColWidths("materiaprima_trans", TRANS_COL_DEFAULTS);
@@ -603,6 +603,33 @@ export default function MateriaPrimaPage() {
           <div className="bg-white rounded-xl shadow px-4 py-8 text-center text-gray-400 text-sm">Seleccione un lote para ver sus transacciones</div>
         ) : (
           <>
+            {/* Lote entero (C20 → cola): lo pesado es CABEZA. El rendimiento es el de la cola, que se
+                registra por termo; Cabeza + Cola es el cuadre contra lo trabajado. */}
+            {loteSel.EsEntero && (() => {
+              const trabajado = loteSel.PesoIngreso - (loteSel.Bajado || 0);
+              const pct = x => trabajado > 0 ? fmtNum(x / trabajado * 100, 1) : "0";
+              return (
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-2">
+                  <div className="bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2 text-center">
+                    <p className="text-xs text-emerald-700">Cola</p>
+                    <p className="text-sm font-bold text-emerald-800">{fmtNum(loteSel.Cola || 0)} {loteSel.UM}</p>
+                  </div>
+                  <div className="bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2 text-center">
+                    <p className="text-xs text-emerald-700">Rendimiento cola</p>
+                    <p className="text-sm font-bold text-emerald-800">{pct(loteSel.Cola || 0)}%</p>
+                  </div>
+                  <div className="bg-white rounded-lg shadow px-3 py-2 text-center">
+                    <p className="text-xs text-gray-400">Cabeza (pesado)</p>
+                    <p className="text-sm font-bold text-blue-700">{fmtNum(loteSel.Procesado)} {loteSel.UM} · {pct(loteSel.Procesado)}%</p>
+                  </div>
+                  <div className="bg-white rounded-lg shadow px-3 py-2 text-center">
+                    <p className="text-xs text-gray-400">Cabeza + Cola</p>
+                    <p className="text-sm font-bold text-gray-800">{fmtNum(loteSel.Procesado + (loteSel.Cola || 0))} {loteSel.UM} · {pct(loteSel.Procesado + (loteSel.Cola || 0))}%</p>
+                  </div>
+                </div>
+              );
+            })()}
+
             <div className="grid grid-cols-3 sm:grid-cols-5 gap-2 mb-3">
               <div className="bg-white rounded-lg shadow px-3 py-2 text-center">
                 <p className="text-xs text-gray-400">Ingreso</p>
@@ -695,6 +722,13 @@ export default function MateriaPrimaPage() {
                   className="text-sm font-medium px-3 py-1.5 rounded-lg border border-red-200 text-red-600 hover:bg-red-50 transition">
                   Descarte
                 </button>
+                {loteSel.EsEntero && (
+                  <button onClick={() => setAjuste("cola")}
+                    title="Un termo de cola lleno: entra al piso de Pelado"
+                    className="text-sm font-medium px-3 py-1.5 rounded-lg border border-emerald-300 text-emerald-700 hover:bg-emerald-50 transition">
+                    Cola (termo)
+                  </button>
+                )}
               </div>
             )}
 
@@ -712,9 +746,12 @@ export default function MateriaPrimaPage() {
         <TomarDelPisoModal onClose={() => setModalPiso(false)}
           onHecho={() => { setModalPiso(false); trasMovimientoPiso(); }} />
       )}
-      {ajuste && loteSel && (
+      {(ajuste === "bajar" || ajuste === "descarte") && loteSel && (
         <AjusteLoteModal tipo={ajuste} lote={loteSel} tallas={tallas} onClose={() => setAjuste(null)}
           onHecho={() => { setAjuste(null); trasMovimientoPiso(); }} />
+      )}
+      {ajuste === "cola" && loteSel && (
+        <ColaModal lote={loteSel} tallas={tallas} onRegistrado={trasMovimientoPiso} onClose={() => setAjuste(null)} />
       )}
       {modalTrans && loteSel && (
         <TransaccionModal lote={loteSel} procesos={procesos} clases={clases} tallas={tallas} almacenes={almacenes}

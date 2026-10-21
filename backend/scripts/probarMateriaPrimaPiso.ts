@@ -9,7 +9,7 @@ import "dotenv/config";
 import prisma from "../src/lib/prisma.ts";
 import {
   saldoParaDestajo, tomarDelPiso, bajarAlPiso, registrarDescarte, deshacerMovimiento, cuadreLote,
-  movimientosDeLote, rendimientoLote, devolverLoteAlPiso,
+  movimientosDeLote, rendimientoLote, devolverLoteAlPiso, registrarCola, rendimientosEntero,
 } from "../src/lib/destajoPiso.ts";
 import { componerCodigoLote } from "../src/lib/codigoLote.ts";
 
@@ -219,6 +219,43 @@ const PISO = [
         { RemisionId: null, Lote: loteK, Clase: "D30", Talla: 900, FechaLote: HOY, Kg: 900 }] });
       await falla(() => devolverLoteAlPiso(tx, loteK, "D30"), /ya se volvió a tomar/,
         "no se devuelve un lote cuyo bajado ya tomó otro lote");
+
+      console.log("10. Cola de un lote entero (Descabezado → piso de Pelado)");
+      await tx.$executeRawUnsafe(`
+        INSERT INTO MovimientoPiso (Tipo, FechaProduccion, BodegaDestino, Lote, Clase, Talla, FechaLote, Peso, UM, PesoKg, RegistradoPor)
+        VALUES ('TRASLADO', ?, 'DESCABEZADO', 'G433TM04-E04-6', 'C20', 237, '2026-08-13', 100, 'KG', 100, ?)`, HOY, OP);
+      const re = await tomarDelPiso(tx, { bodega: "DESCABEZADO", unificar: false, fecha: HOY, operador: OP,
+        lineas: [{ RemisionId: null, Lote: "G433TM04-E04-6", Clase: "C20", Talla: 237, FechaLote: "2026-08-13", Kg: 100 }] });
+      const le = re.lotes[0].Lote;
+      const cola = (extra: any) => registrarCola(tx, { lote: le, clase: "C20", peso: 1, termo: "T-1", claseCola: "D30",
+        talla: 233, fecha: HOY, operador: OP, ...extra });
+      await falla(() => registrarCola(tx, { lote: loteK, clase: "D30", peso: 1, termo: "1", claseCola: "D30", fecha: HOY, operador: OP }),
+        /no es un lote entero/, "un lote que no es entero no produce cola");
+      await falla(() => cola({ claseCola: "E41" }), /La cola tiene que ser D30, D33, D34, D35/, "la cola solo puede ser D30, D33, D34 o D35");
+      await falla(() => cola({ termo: "  " }), /Falta el número de termo/, "el número de termo es obligatorio");
+      await cola({ peso: 40, termo: "T-5" });
+      await cola({ peso: 22.5, termo: "T-6" });
+      const ce = await cuadreLote(tx, le, "C20");
+      check(ce.Cola === 62.5 && ce.Pendiente === 100,
+        `la cola suma 62.5 en el lote y no toca el pendiente ni lo disponible para pesar (${ce.Pendiente})`);
+      const enPelado = await linea(le, 233);
+      check(!!enPelado && enPelado.Kg === 62.5 && enPelado.EsCola && enPelado.Clase === "D30",
+        "los dos termos están al piso de Pelado como cola D30 (62.5 kg)");
+      await falla(() => cola({ peso: 40, termo: "T-7" }), /más que lo trabajado/, "la cola no puede pasar de lo trabajado");
+      const ren = rendimientosEntero(100, 0, 35, 62.5, 0);
+      check(Math.abs(ren.RendimientoCola - 62.5) < 0.01 && Math.abs(ren.RendimientoTotal - 97.5) < 0.01 && ren.Diferencia === 2.5,
+        `rendimientos: cola ${ren.RendimientoCola.toFixed(1)}%, cabeza + cola ${ren.RendimientoTotal.toFixed(1)}%, diferencia ${ren.Diferencia}`);
+      const rp = await tomarDelPiso(tx, { bodega: "PELADO", unificar: false, fecha: HOY, operador: OP,
+        lineas: [{ RemisionId: null, Lote: le, Clase: "D30", Talla: 233, FechaLote: HOY, Kg: 62.5 }] });
+      check(rp.lotes[0].Lote === le && rp.lotes[0].Clase === "D30" && rp.lotes[0].Kg === 62.5,
+        `Pelado la toma: nace ${rp.lotes[0].Lote} D30 con 62.5 kg, el mismo código del entero`);
+      const termo5 = (await movimientosDeLote(tx, le, "C20")).find(m => m.Tipo === "COLA" && m.NumeroTermo === "T-5")!;
+      await falla(() => deshacerMovimiento(tx, termo5.MovimientoId), /ya la tomó Pelado/, "una cola que Pelado ya tomó no se deshace");
+      await falla(() => devolverLoteAlPiso(tx, le, "C20"), /ya tiene|ya la tomó Pelado/, "ni se devuelve el entero cuya cola ya tomó Pelado");
+      await devolverLoteAlPiso(tx, le, "D30");
+      await deshacerMovimiento(tx, termo5.MovimientoId);
+      check((await cuadreLote(tx, le, "C20")).Cola === 22.5 && (await linea(le, 233))?.Kg === 22.5,
+        "devuelto el D30 de Pelado, el termo T-5 se deshace y al piso queda el otro (22.5 kg)");
 
       throw new Revertir();
     }, { timeout: 180000, maxWait: 15000 });

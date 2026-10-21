@@ -251,7 +251,9 @@ export function TomarDelPisoModal({ onHecho, onClose }) {
                     <td className="px-3 py-2 font-mono text-gray-700">{l.Clase}</td>
                     <td className="px-3 py-2 text-gray-700 whitespace-nowrap">{l.Talla === 900 ? <span className="text-gray-300">—</span> : l.DescripcionTalla}</td>
                     <td className="px-3 py-2 text-gray-600 whitespace-nowrap">
-                      {l.EsBajado ? <span className="text-amber-700">Bajado de la mesa{l.EsRojo ? " · rojo a revisar" : ""}</span> : (l.FolioRemision || "—")}
+                      {l.EsBajado ? <span className="text-amber-700">Bajado de la mesa{l.EsRojo ? " · rojo a revisar" : ""}</span>
+                        : l.EsCola ? <span className="text-emerald-700">Cola de Descabezado</span>
+                        : (l.FolioRemision || "—")}
                       <span className="block text-[11px] text-gray-400">{l.DiasAlPiso === 0 ? "hoy" : `${l.DiasAlPiso} día${l.DiasAlPiso !== 1 ? "s" : ""} al piso`}</span>
                     </td>
                     <td className="px-3 py-2 text-right font-semibold text-gray-800 whitespace-nowrap">{fmtNum(l.Kg)}</td>
@@ -437,9 +439,104 @@ export function AjusteLoteModal({ tipo, lote, tallas, onHecho, onClose }) {
   );
 }
 
+// ── Cola de un lote entero ──────────────────────────────────────────────────────────────────────
+// En Descabezado lo que se pesa por persona es la CABEZA (el pago). La cola no va a nadie: se pesa el
+// termo lleno y entra al piso de Pelado. El número de termo se teclea (no es el del pesaje de cabeza).
+// El modal se queda abierto para seguir registrando termos durante el día.
+const CLASES_COLA = ["D30", "D33", "D34", "D35"];   // las mismas que valida backend/src/lib/destajoPiso.ts
+
+export function ColaModal({ lote, tallas, onRegistrado, onClose }) {
+  const [termo, setTermo] = useState("");
+  const [peso, setPeso] = useState("");
+  const [claseCola, setClaseCola] = useState(lote.ClaseCola || CLASES_COLA[0]);
+  const [talla, setTalla] = useState("");
+  const [error, setError] = useState("");
+  const [guardando, setGuardando] = useState(false);
+  const [hechos, setHechos] = useState([]);   // los termos registrados con este modal abierto
+
+  const guardar = async (e) => {
+    e.preventDefault();
+    setGuardando(true); setError("");
+    try {
+      const res = await fetch(`${API}/lote/${enc(lote.Lote)}/${enc(lote.Clase)}/cola`, {
+        method: "POST", headers: { "Content-Type": "application/json", ...authHeader() },
+        body: JSON.stringify({ NumeroTermo: termo.trim(), Peso: Number(peso), ClaseCola: claseCola, Talla: talla || null }),
+      });
+      const d = await leerJSON(res);
+      if (!res.ok) { setError(d.error || "No se pudo registrar"); return; }
+      setHechos(h => [...h, { termo: termo.trim(), peso: Number(peso), claseCola }]);
+      setTermo(""); setPeso("");
+      onRegistrado();
+    } catch (err) {
+      setError(err.message || "No se pudo conectar con el servidor");
+    } finally { setGuardando(false); }
+  };
+
+  return (
+    <Marco titulo={`Cola — ${lote.Lote} ${lote.Clase}`} onClose={onClose}>
+      <form onSubmit={guardar} className="px-5 py-4 space-y-4">
+        <p className="text-xs text-gray-500">
+          Un registro por termo lleno. La cola entra al inventario al piso de <b>Pelado</b>; lo pesado por persona
+          es la cabeza (el pago) y no cambia.
+        </p>
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">N° de termo *</label>
+            <input required autoFocus type="text" maxLength={20} value={termo} onChange={e => setTermo(e.target.value)}
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-400" />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Peso ({lote.UM}) *</label>
+            <input required type="number" step="0.01" min="0.01" value={peso} onChange={e => setPeso(e.target.value)}
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Clase de la cola *</label>
+            <div className="flex flex-wrap gap-1.5">
+              {CLASES_COLA.map(c => (
+                <button type="button" key={c} onClick={() => setClaseCola(c)}
+                  className={`px-2.5 py-1.5 text-sm font-mono rounded-lg border transition ${claseCola === c ? "bg-emerald-600 text-white border-emerald-600" : "border-gray-300 text-gray-600 hover:bg-gray-50"}`}>
+                  {c}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Talla</label>
+            <select value={talla} onChange={e => setTalla(e.target.value)}
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400">
+              <option value="">Sin talla</option>
+              {tallas.map(t => <option key={t.Codigo} value={t.Codigo}>{t.Descripcion}</option>)}
+            </select>
+          </div>
+        </div>
+        {hechos.length > 0 && (
+          <div className="text-xs bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2 space-y-0.5">
+            {hechos.map((h, i) => (
+              <p key={i} className="flex justify-between"><span>Termo <b className="font-mono">{h.termo}</b> · {h.claseCola}</span><span>{fmtNum(h.peso)} {lote.UM}</span></p>
+            ))}
+          </div>
+        )}
+        {error && <p className="text-sm text-red-600">{error}</p>}
+        <div className="flex justify-end gap-3 pt-1">
+          <button type="button" onClick={onClose} className="px-4 py-2 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 transition">
+            {hechos.length ? "Listo" : "Cancelar"}
+          </button>
+          <button type="submit" disabled={guardando}
+            className="px-5 py-2 text-sm bg-emerald-600 hover:bg-emerald-700 text-white font-semibold rounded-lg transition disabled:opacity-50">
+            {guardando ? "Guardando…" : "Registrar termo"}
+          </button>
+        </div>
+      </form>
+    </Marco>
+  );
+}
+
 // ── Movimientos del piso de un lote ─────────────────────────────────────────────────────────────
-const TITULO = { DESTAJO: "Tomado del piso", BAJADO: "Bajado al piso", DESCARTE: "Descarte" };
-const DESHACER = { DESTAJO: "Devolver al piso", BAJADO: "Deshacer", DESCARTE: "Deshacer" };
+const TITULO = { DESTAJO: "Tomado del piso", COLA: "Cola (termos) → piso de Pelado", BAJADO: "Bajado al piso", DESCARTE: "Descarte" };
+const DESHACER = { DESTAJO: "Devolver al piso", COLA: "Deshacer", BAJADO: "Deshacer", DESCARTE: "Deshacer" };
 
 export function MovimientosPisoLote({ lote, recarga, puedeEditar, onCambio }) {
   const [movs, setMovs] = useState([]);
@@ -458,6 +555,8 @@ export function MovimientosPisoLote({ lote, recarga, puedeEditar, onCambio }) {
   const deshacer = async (m) => {
     const que = m.Tipo === "DESTAJO"
       ? `¿Devolver al piso ${fmtNum(m.PesoKg)} kg de ${m.LoteOrigen}? El lote baja su ingreso${movs.length === 1 ? " (y se elimina si se queda sin nada)" : ""}.`
+      : m.Tipo === "COLA"
+      ? `¿Deshacer el termo ${m.NumeroTermo} de cola (${fmtNum(m.Peso)} ${m.UM})? Sale del piso de Pelado.`
       : `¿Deshacer este ${TITULO[m.Tipo].toLowerCase()} de ${fmtNum(m.Peso)} ${m.UM}?`;
     if (!confirm(que)) return;
     const res = await fetch(`${API}/movimiento/${m.MovimientoId}`, { method: "DELETE", headers: authHeader() });
@@ -471,7 +570,7 @@ export function MovimientosPisoLote({ lote, recarga, puedeEditar, onCambio }) {
 
   return (
     <div className="bg-white rounded-xl shadow mb-4 divide-y divide-gray-100">
-      {["DESTAJO", "BAJADO", "DESCARTE"].map(tipo => {
+      {["DESTAJO", "COLA", "BAJADO", "DESCARTE"].map(tipo => {
         const lista = movs.filter(m => m.Tipo === tipo);
         if (!lista.length) return null;
         return (
@@ -483,6 +582,7 @@ export function MovimientosPisoLote({ lote, recarga, puedeEditar, onCambio }) {
                   {tipo === "DESTAJO" && <><span className="font-mono">{m.LoteOrigen}</span>{m.FolioRemision ? ` · ${m.FolioRemision}` : ""}</>}
                   {tipo === "BAJADO" && <>{m.Motivo ? `${m.Motivo} · ` : ""}{m.NombreBodega} · {m.Fecha}</>}
                   {tipo === "DESCARTE" && <>{m.Motivo || "Descarte"}</>}
+                  {tipo === "COLA" && <>Termo <span className="font-mono font-semibold">{m.NumeroTermo}</span> · <span className="font-mono">{m.Clase}</span> · {m.Fecha}</>}
                   {m.Talla !== 900 && <span className="text-gray-400"> · {m.DescripcionTalla}</span>}
                 </span>
                 <span className="font-semibold text-gray-800 whitespace-nowrap">

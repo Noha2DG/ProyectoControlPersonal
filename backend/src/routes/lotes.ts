@@ -3,7 +3,7 @@ import jwt from "jsonwebtoken";
 import prisma from "../lib/prisma.ts";
 import { requireAuth, requirePerm } from "../middleware/auth.ts";
 import { componerCodigoLote, piscinaRequiereCiclo } from "../lib/codigoLote.ts";
-import { sqlAjustesLote } from "../lib/destajoPiso.ts";
+import { sqlAjustesLote, esEntero, claseColaSugerida } from "../lib/destajoPiso.ts";
 
 const router = Router();
 
@@ -63,6 +63,10 @@ function formatear(rows: any[]) {
     Procesado: Number(r.Procesado),
     Bajado: Number(r.Bajado),
     Descarte: Number(r.Descarte),
+    // Lote entero (C20 → cola): lo pesado es cabeza y la cola se registra por termo.
+    Cola: Number(r.Cola),
+    EsEntero: esEntero(r.Clase),
+    ClaseCola: esEntero(r.Clase) ? claseColaSugerida(r.Clase) : null,
     Pendiente: Number(r.PesoIngreso) - Number(r.Bajado) - Number(r.Descarte) - Number(r.Procesado),
     Activo: Number(r.Activo) === 1,
   }));

@@ -108,10 +108,12 @@ export function exportarReporteGeneral(porLote, porTalla, desde, hasta) {
     "Peso Ingreso":    l.PesoIngreso,
     "UM":              l.UM,
     "Procesado":       +l.Procesado.toFixed(2),
+    "Cola":            l.EsEntero ? +(l.Cola || 0).toFixed(2) : "",
     "Bajado al piso":  +(l.Bajado || 0).toFixed(2),
     "Descarte":        +(l.Descarte || 0).toFixed(2),
     "Pendiente":       +l.Pendiente.toFixed(2),
-    "Rendimiento %":   +l.Rendimiento.toFixed(1),
+    "Rendimiento %":   l.SinCola ? "sin cola" : +l.Rendimiento.toFixed(1),
+    "Rend. total %":   l.EsEntero ? +l.RendimientoTotal.toFixed(1) : "",
     "Transacciones":   l.NumTransacciones,
   }));
 
@@ -132,6 +134,33 @@ export function exportarReporteGeneral(porLote, porTalla, desde, hasta) {
   XLSX.utils.book_append_sheet(wb, wsTallas, "Por Talla");
 
   XLSX.writeFile(wb, `ReporteGeneral_${desde}_a_${hasta}.xlsx`);
+}
+
+// Entero → Cola (Descabezado): lo pesado es cabeza, la cola sale de los termos registrados en
+// Materia Prima. Porcentajes sobre lo trabajado (ingreso − bajado al piso).
+export function exportarEnteroCola(lotes, desde, hasta) {
+  const filas = lotes.map(l => ({
+    "Lote":            l.Lote,
+    "Finca":           l.NombreFinca,
+    "Clase":           l.Clase,
+    "Fecha":           l.Fecha?.slice(0, 10),
+    "Ingreso":         +l.PesoIngreso.toFixed(2),
+    "Bajado al piso":  +(l.Bajado || 0).toFixed(2),
+    "Cabeza":          +l.Procesado.toFixed(2),
+    "% Cabeza":        +l.RendimientoCabeza.toFixed(1),
+    "Cola":            +(l.Cola || 0).toFixed(2),
+    "% Cola":          +l.RendimientoCola.toFixed(1),
+    "Cabeza + Cola":   +l.Total.toFixed(2),
+    "% Total":         +l.RendimientoTotal.toFixed(1),
+    "Descarte":        +(l.Descarte || 0).toFixed(2),
+    "Diferencia":      +l.Diferencia.toFixed(2),
+    "UM":              l.UM,
+  }));
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.json_to_sheet(filas);
+  autoWidth(ws, filas);
+  XLSX.utils.book_append_sheet(wb, ws, "Entero a Cola");
+  XLSX.writeFile(wb, `EnteroACola_${desde}_a_${hasta}.xlsx`);
 }
 
 export function exportarReporteTermos(porTermo, desde, hasta) {
@@ -177,8 +206,14 @@ export function exportarHojaLote(termos, lote) {
   ]);
   XLSX.utils.sheet_add_json(ws, filas, { origin: -1 });
   const ajustes = (lote.Ajustes ?? []).map(a => [
-    a.Tipo === "DESCARTE" ? "Descarte" : "Bajado al piso", a.Motivo ?? "", a.Talla !== 900 ? a.DescripcionTalla : "", a.Peso, a.UM]);
-  if (ajustes.length) XLSX.utils.sheet_add_aoa(ws, [[], ["Bajado al piso y descarte"], ...ajustes], { origin: -1 });
+    a.Tipo === "DESCARTE" ? "Descarte" : a.Tipo === "COLA" ? "Cola" : "Bajado al piso",
+    a.Tipo === "COLA" ? `termo ${a.NumeroTermo} · ${a.ClaseCola}` : (a.Motivo ?? ""),
+    a.Talla !== 900 ? a.DescripcionTalla : "", a.Peso, a.UM]);
+  if (ajustes.length) XLSX.utils.sheet_add_aoa(ws, [[], ["Cola, bajado al piso y descarte"], ...ajustes], { origin: -1 });
+  if (lote.EsEntero) {
+    XLSX.utils.sheet_add_aoa(ws, [[], ["Total Cola", +(lote.Cola || 0).toFixed(2)], ["Cabeza + Cola", +lote.Total.toFixed(2)],
+      ["Rendimiento cola %", +lote.RendimientoCola.toFixed(1)], ["Rendimiento total %", +lote.RendimientoTotal.toFixed(1)]], { origin: -1 });
+  }
   if (lote.Notas) XLSX.utils.sheet_add_aoa(ws, [[], ["Nota anterior", lote.Notas]], { origin: -1 });
   autoWidth(ws, filas);
   XLSX.utils.book_append_sheet(wb, ws, "Camaron Pelado");
