@@ -626,22 +626,6 @@ export default function MateriaPrimaPage() {
               </div>
             </div>
 
-            {puedeEditar && (
-              <div className="flex flex-wrap gap-2 mb-3">
-                <button onClick={() => setAjuste("bajar")}
-                  className="text-sm font-medium px-3 py-1.5 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50 transition">
-                  Bajar al piso
-                </button>
-                <button onClick={() => setAjuste("descarte")}
-                  className="text-sm font-medium px-3 py-1.5 rounded-lg border border-red-200 text-red-600 hover:bg-red-50 transition">
-                  Descarte
-                </button>
-              </div>
-            )}
-
-            <MovimientosPisoLote lote={loteSel} recarga={recargaMov} puedeEditar={puedeEditar}
-              onCambio={trasMovimientoPiso} />
-
             {loadingTrans ? (
               <div className="flex justify-center py-10"><div className="w-6 h-6 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" /></div>
             ) : (
@@ -700,6 +684,22 @@ export default function MateriaPrimaPage() {
                 </table>
               </div>
             )}
+
+            {puedeEditar && (
+              <div className="flex flex-wrap gap-2 mt-4 mb-3">
+                <button onClick={() => setAjuste("bajar")}
+                  className="text-sm font-medium px-3 py-1.5 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50 transition">
+                  Bajar al piso
+                </button>
+                <button onClick={() => setAjuste("descarte")}
+                  className="text-sm font-medium px-3 py-1.5 rounded-lg border border-red-200 text-red-600 hover:bg-red-50 transition">
+                  Descarte
+                </button>
+              </div>
+            )}
+
+            <MovimientosPisoLote lote={loteSel} recarga={recargaMov} puedeEditar={puedeEditar}
+              onCambio={trasMovimientoPiso} />
           </>
         )}
       </div>
