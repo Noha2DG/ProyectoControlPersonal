@@ -10,11 +10,11 @@ const hoy = () => new Date().toLocaleDateString("sv-SE", { timeZone: "America/Gu
 const COL_DEFAULTS = { fecha: 100, lote: 140, area: 100, origen: 110, congelacion: 120, masters: 90, impresion: 140, acciones: 130 };
 const COLS = Object.keys(COL_DEFAULTS);
 
-// Áreas de la tabla Areas relevantes para Etiquetado — el catálogo completo trae áreas de todo
-// el resto de la planta (RRHH, cafetería, etc.) que no aplican aquí.
-const AREAS_ETIQUETADO = ["EF", "ES", "MV", "EY", "RE"]; // Tunel, Masterizado Entero, Masterizado Varios, Reempaque, Reetiquetado
-
-const FORM_VACIO = { Finca: "", PiscinaId: "", Ciclo: "", AreaCodigo: "", FechaProduccion: hoy(), Color: "SC", Origen: "", Congelacion: "", CantidadMaster: "" };
+// El "Área" de la captura es una BODEGA virtual, con la misma lista de la trazabilidad (Descongelado):
+// activas, que llevan piso, en orden de flujo. Se pide a /api/bodegas y no a /descongelado/bodegas
+// porque quien captura Agrupación no tiene por fuerza permiso de Descongelado. La etiqueta impresa
+// sigue mostrando el nombre del área de siempre (ver resolverBodegaArea en routes/ordenEtiquetado.ts).
+const FORM_VACIO = { Finca: "", PiscinaId: "", Ciclo: "", BodegaCodigo: "", FechaProduccion: hoy(), Color: "SC", Origen: "", Congelacion: "", CantidadMaster: "" };
 
 export default function EtiquetadoPage() {
   const puedeCrear = usePuede("etiquetado", "crear");
@@ -33,7 +33,7 @@ export default function EtiquetadoPage() {
   const [empaques, setEmpaques] = useState([]);
   const [fincas, setFincas] = useState([]);
   const [piscinas, setPiscinas] = useState([]);
-  const [areas, setAreas] = useState([]);
+  const [bodegas, setBodegas] = useState([]);
   const [origenes, setOrigenes] = useState([]);
   const [congelaciones, setCongelaciones] = useState([]);
 
@@ -47,7 +47,7 @@ export default function EtiquetadoPage() {
   // "Impresión" ordena por cuántas etiquetas llevan impresas, que es lo que separa una captura
   // pendiente de una lista — no por el texto de la píldora.
   const capturasOrdenadas = ordenarFilas(capturas, orden, {
-    fecha: c => c.FechaProduccion, lote: c => c.Lote, area: c => c.NombreArea,
+    fecha: c => c.FechaProduccion, lote: c => c.Lote, area: c => c.NombreBodega || c.NombreArea,
     origen: c => c.DescripcionOrigen, congelacion: c => c.DescripcionCongelacion,
     masters: c => c.CantidadMaster, impresion: c => c.Impresas,
   });
@@ -62,10 +62,10 @@ export default function EtiquetadoPage() {
       fetch("/api/presentacion", { headers: authHeader() }).then(r => r.json()),
       fetch("/api/empaques", { headers: authHeader() }).then(r => r.json()),
       fetch("/api/finca", { headers: authHeader() }).then(r => r.json()),
-      fetch("/api/areas", { headers: authHeader() }).then(r => r.json()),
+      fetch("/api/bodegas", { headers: authHeader() }).then(r => r.json()),
       fetch("/api/origen", { headers: authHeader() }).then(r => r.json()),
       fetch("/api/unidades-congelacion", { headers: authHeader() }).then(r => r.json()),
-    ]).then(([ped, cl, pc, ta, pr, em, fi, ar, or, co]) => {
+    ]).then(([ped, cl, pc, ta, pr, em, fi, bo, or, co]) => {
       if (Array.isArray(ped)) setPedidos(ped);
       if (Array.isArray(cl)) setClases(cl);
       if (Array.isArray(pc)) setProcesos(pc);
@@ -73,7 +73,7 @@ export default function EtiquetadoPage() {
       if (Array.isArray(pr)) setPresentaciones(pr);
       if (Array.isArray(em)) setEmpaques(em);
       if (Array.isArray(fi)) setFincas(fi.filter(f => f.Activo));
-      if (Array.isArray(ar)) setAreas(ar.filter(a => a.Activa && AREAS_ETIQUETADO.includes(a.Codigo)).sort((a, b) => a.Nombre.localeCompare(b.Nombre)));
+      if (Array.isArray(bo)) setBodegas(bo.filter(b => b.Activo && b.LlevaPiso));
       if (Array.isArray(or)) setOrigenes(or.filter(o => o.Activo));
       if (Array.isArray(co)) setCongelaciones(co.filter(c => c.Activo));
     }).finally(() => setLoading(false));
@@ -136,7 +136,7 @@ export default function EtiquetadoPage() {
       Finca: captura.CodigoFinca,
       PiscinaId: String(captura.PiscinaId),
       Ciclo: captura.Ciclo,
-      AreaCodigo: captura.AreaCodigo || "",
+      BodegaCodigo: captura.BodegaCodigo || "",
       FechaProduccion: captura.FechaProduccion?.slice(0, 10),
       Color: captura.Color || "SC",
       Origen: captura.Origen,
@@ -153,8 +153,8 @@ export default function EtiquetadoPage() {
     setGuardando(true);
     try {
       // Finca solo se usa para filtrar Piscina en el formulario, no viaja al backend
-      const { PiscinaId, Ciclo, AreaCodigo, FechaProduccion, Color, Origen, Congelacion, CantidadMaster } = form;
-      const datos = { PiscinaId, Ciclo, AreaCodigo, FechaProduccion, Color, Origen, Congelacion, CantidadMaster };
+      const { PiscinaId, Ciclo, BodegaCodigo, FechaProduccion, Color, Origen, Congelacion, CantidadMaster } = form;
+      const datos = { PiscinaId, Ciclo, BodegaCodigo, FechaProduccion, Color, Origen, Congelacion, CantidadMaster };
       const res = editando
         ? await fetch(`/api/orden-etiquetado/${editando}`, {
             method: "PUT",
@@ -356,10 +356,10 @@ export default function EtiquetadoPage() {
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-gray-500 mb-1">Área *</label>
-                  <select required value={form.AreaCodigo} onChange={set("AreaCodigo")}
+                  <select required value={form.BodegaCodigo} onChange={set("BodegaCodigo")}
                     className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400">
                     <option value="">Seleccione...</option>
-                    {areas.map(a => <option key={a.Codigo} value={a.Codigo}>{a.Nombre}</option>)}
+                    {bodegas.map(b => <option key={b.Codigo} value={b.Codigo}>{b.Nombre}</option>)}
                   </select>
                 </div>
                 <div>
@@ -435,7 +435,7 @@ export default function EtiquetadoPage() {
                     <tr key={c.OrdenId} className={`hover:bg-gray-50 transition ${c.Estatus === "Cancelada" ? "opacity-50" : ""}`}>
                       <td className="px-4 py-3 whitespace-nowrap">{c.FechaProduccion?.slice(0, 10)}</td>
                       <td className="px-4 py-3 font-mono text-gray-700 whitespace-nowrap">{c.Lote}</td>
-                      <td className="px-4 py-3 whitespace-nowrap">{c.NombreArea || <span className="text-gray-400 italic">Sin área</span>}</td>
+                      <td className="px-4 py-3 whitespace-nowrap">{c.NombreBodega || c.NombreArea || <span className="text-gray-400 italic">Sin área</span>}</td>
                       <td className="px-4 py-3 whitespace-nowrap">{c.DescripcionOrigen}</td>
                       <td className="px-4 py-3 whitespace-nowrap">{c.DescripcionCongelacion}</td>
                       <td className="px-4 py-3 text-right whitespace-nowrap">{c.CantidadMaster}</td>

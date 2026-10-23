@@ -70,7 +70,11 @@ async function obtenerDatosOrden(ordenId: number) {
            dp.EsGranel, dp.Activo,
            cli.RazonSocial AS NombreCliente, sub.RazonSocial AS NombreSubcliente,
            ped.CodigoCliente, ped.CodigoSubcliente,
-           org.Descripcion AS DescripcionOrigen, cong.Descripcion AS DescripcionCongelacion, ar.Nombre AS NombreArea
+           org.Descripcion AS DescripcionOrigen, cong.Descripcion AS DescripcionCongelacion,
+           -- La etiqueta sigue imprimiendo el nombre del ÁREA aunque la Agrupación ya elija bodega
+           -- (decisión del usuario, oct 2026). Las bodegas sin área de etiquetado (Pelado, Blast...)
+           -- imprimen el nombre de la bodega, en mayúsculas como el resto.
+           COALESCE(ar.Nombre, UPPER(bv.Nombre)) AS NombreArea
     FROM OrdenEtiquetado oe
     JOIN DetallePedido dp ON oe.DetalleId = dp.DetalleId
     JOIN Clase cl ON dp.Clase = cl.Clase
@@ -83,6 +87,7 @@ async function obtenerDatosOrden(ordenId: number) {
     JOIN Origen org ON oe.Origen = org.Codigo
     JOIN UnidadesCongelacion cong ON oe.Congelacion = cong.Codigo
     LEFT JOIN Areas ar ON oe.AreaCodigo = ar.Codigo
+    LEFT JOIN BodegaVirtual bv ON oe.BodegaCodigo = bv.Codigo
     WHERE oe.OrdenId = ${ordenId} LIMIT 1
   `;
   return rows[0] ?? null;
