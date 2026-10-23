@@ -27,6 +27,39 @@ function getOperador(req: Request): string {
   }
 }
 
+// Áreas que hacen etiquetado. Varias áreas de otros módulos apuntan a la misma bodega (Destajo,
+// Descongelado...), así que al derivar el área desde la bodega solo se busca entre estas.
+const AREAS_ETIQUETADO = ["EF", "ES", "MV", "EY", "RE"]; // Túnel Entrada, Masterizado Entero/Varios, Reempaque, Reetiquetado
+
+// La Agrupación elige la BODEGA (la misma de polines y trazabilidad), pero la etiqueta impresa sigue
+// mostrando el nombre del área de siempre — decisión del usuario, oct 2026. De ahí que se guarden las
+// dos: BodegaCodigo es lo que se eligió, AreaCodigo se deriva de ella (Areas.BodegaVirtualCodigo).
+// Una bodega sin área de etiquetado (Pelado, Blast 1...) queda con AreaCodigo NULL y la etiqueta
+// imprime el nombre de la bodega.
+//
+// La lista es la misma de la trazabilidad (GET /api/descongelado/bodegas): activas y que llevan
+// piso, en orden de flujo — pedido del usuario, oct 2026.
+//
+// Acepta todavía AreaCodigo solo (pestaña cargada antes del despliegue) y deriva la bodega al revés.
+async function resolverBodegaArea(BodegaCodigo: any, AreaCodigo: any): Promise<{ bodega: string; area: string | null } | { error: string; status: number }> {
+  if (BodegaCodigo) {
+    const bod: any[] = await prisma.$queryRaw`
+      SELECT Codigo FROM BodegaVirtual WHERE Codigo = ${String(BodegaCodigo)} AND Activo = 1 AND LlevaPiso = 1 LIMIT 1`;
+    if (!bod.length) return { error: "Bodega no encontrada o inactiva", status: 404 };
+    const ar: any[] = await prisma.$queryRawUnsafe(
+      `SELECT Codigo FROM Areas WHERE BodegaVirtualCodigo = ? AND Activa = 1 AND Codigo IN (${AREAS_ETIQUETADO.map(() => "?").join(",")})
+        ORDER BY Codigo LIMIT 1`, String(BodegaCodigo), ...AREAS_ETIQUETADO);
+    return { bodega: String(BodegaCodigo), area: ar[0]?.Codigo ?? null };
+  }
+  if (AreaCodigo) {
+    const ar: any[] = await prisma.$queryRaw`
+      SELECT Codigo, BodegaVirtualCodigo FROM Areas WHERE Codigo = ${String(AreaCodigo)} AND Activa = 1 LIMIT 1`;
+    if (!ar.length || !ar[0].BodegaVirtualCodigo) return { error: "Área no encontrada o inactiva", status: 404 };
+    return { bodega: String(ar[0].BodegaVirtualCodigo), area: String(ar[0].Codigo) };
+  }
+  return { error: "La bodega es requerida", status: 400 };
+}
+
 function formatear(rows: any[]) {
   return rows.map(r => ({
     ...r,
@@ -59,7 +92,7 @@ async function agregarTechoLinea(rows: any[]) {
 
 const COLS_ORDEN = `
   SELECT oe.OrdenId, oe.Lote, oe.PiscinaId, oe.Ciclo, oe.DetalleId, oe.AreaCodigo,
-         ar.Nombre AS NombreArea, oe.FechaProduccion, oe.Color,
+         ar.Nombre AS NombreArea, oe.BodegaCodigo, bv.Nombre AS NombreBodega, oe.FechaProduccion, oe.Color,
          oe.Origen, org.Descripcion AS DescripcionOrigen,
          oe.Congelacion, cong.Descripcion AS DescripcionCongelacion,
          oe.CantidadMaster, oe.Estatus, oe.RegistradoPor, oe.CreadoEn,
@@ -111,6 +144,7 @@ const FROM_ORDEN = `
   JOIN Piscina pi ON oe.PiscinaId = pi.PiscinaId
   JOIN Finca f ON pi.CodigoFinca = f.Codigo
   LEFT JOIN Areas ar ON oe.AreaCodigo = ar.Codigo
+  LEFT JOIN BodegaVirtual bv ON oe.BodegaCodigo = bv.Codigo
   JOIN Pedidos ped ON dp.CodigoPedido = ped.CodigoPedido
   JOIN Clientes cli ON ped.CodigoCliente = cli.Codigo
   LEFT JOIN Subcliente sub ON ped.CodigoCliente = sub.CodigoCliente AND ped.CodigoSubcliente = sub.CodigoSubcliente
@@ -242,12 +276,12 @@ router.get("/resumen/:detalleId", requireAuth, requirePerm("etiquetado", "ver"),
   }
 });
 
-// POST /api/orden-etiquetado  { PiscinaId, Ciclo, DetalleId, AreaCodigo, FechaProduccion, Color, Origen, Congelacion, CantidadMaster }
+// POST /api/orden-etiquetado  { PiscinaId, Ciclo, DetalleId, BodegaCodigo, FechaProduccion, Color, Origen, Congelacion, CantidadMaster }
 router.post("/", requireAuth, requirePerm("etiquetado", "crear"), async (req: Request, res: Response) => {
   try {
-    const { PiscinaId, Ciclo, DetalleId, AreaCodigo, FechaProduccion, Color, Origen, Congelacion, CantidadMaster } = req.body;
-    if (!PiscinaId || !DetalleId || !AreaCodigo || !FechaProduccion || !Origen || !Congelacion || !CantidadMaster) {
-      res.status(400).json({ error: "Piscina, línea de pedido, área, fecha, origen, congelación y cantidad de master son requeridos" });
+    const { PiscinaId, Ciclo, DetalleId, BodegaCodigo, AreaCodigo, FechaProduccion, Color, Origen, Congelacion, CantidadMaster } = req.body;
+    if (!PiscinaId || !DetalleId || !(BodegaCodigo || AreaCodigo) || !FechaProduccion || !Origen || !Congelacion || !CantidadMaster) {
+      res.status(400).json({ error: "Piscina, línea de pedido, bodega, fecha, origen, congelación y cantidad de master son requeridos" });
       return;
     }
     const cantidad = Number(CantidadMaster);
@@ -256,8 +290,8 @@ router.post("/", requireAuth, requirePerm("etiquetado", "crear"), async (req: Re
       return;
     }
 
-    const areas: any[] = await prisma.$queryRaw`SELECT Codigo FROM Areas WHERE Codigo = ${AreaCodigo} AND Activa = 1 LIMIT 1`;
-    if (!areas.length) { res.status(404).json({ error: "Área no encontrada o inactiva" }); return; }
+    const destino = await resolverBodegaArea(BodegaCodigo, AreaCodigo);
+    if ("error" in destino) { res.status(destino.status).json({ error: destino.error }); return; }
 
     const piscina = await obtenerPiscina(Number(PiscinaId));
     if (!piscina) { res.status(404).json({ error: "Piscina no encontrada o inactiva" }); return; }
@@ -296,21 +330,21 @@ router.post("/", requireAuth, requirePerm("etiquetado", "crear"), async (req: Re
 
     const operador = getOperador(req);
     await prisma.$executeRaw`
-      INSERT INTO OrdenEtiquetado (Lote, PiscinaId, Ciclo, DetalleId, AreaCodigo, FechaProduccion, Color, Origen, Congelacion, CantidadMaster, RegistradoPor)
-      VALUES (${lote}, ${Number(PiscinaId)}, ${cicloEfectivo}, ${Number(DetalleId)}, ${AreaCodigo}, ${FechaProduccion}, ${Color || null}, ${Origen}, ${Congelacion}, ${cantidad}, ${operador})
+      INSERT INTO OrdenEtiquetado (Lote, PiscinaId, Ciclo, DetalleId, AreaCodigo, BodegaCodigo, FechaProduccion, Color, Origen, Congelacion, CantidadMaster, RegistradoPor)
+      VALUES (${lote}, ${Number(PiscinaId)}, ${cicloEfectivo}, ${Number(DetalleId)}, ${destino.area}, ${destino.bodega}, ${FechaProduccion}, ${Color || null}, ${Origen}, ${Congelacion}, ${cantidad}, ${operador})
     `;
     res.status(201).json({ ok: true, Lote: lote });
   } catch (err: any) {
-    if (err.message?.includes("foreign key")) res.status(400).json({ error: "Piscina, línea de pedido, área, origen o congelación no existen" });
+    if (err.message?.includes("foreign key")) res.status(400).json({ error: "Piscina, línea de pedido, bodega, origen o congelación no existen" });
     else res.status(500).json({ error: err.message });
   }
 });
 
-// PUT /api/orden-etiquetado/:id  { PiscinaId, Ciclo, AreaCodigo, FechaProduccion, Color, Origen, Congelacion, CantidadMaster, Estatus }
+// PUT /api/orden-etiquetado/:id  { PiscinaId, Ciclo, BodegaCodigo, FechaProduccion, Color, Origen, Congelacion, CantidadMaster, Estatus }
 router.put("/:id", requireAuth, requirePerm("etiquetado", "editar"), async (req: Request, res: Response) => {
   try {
     const id = Number(req.params.id);
-    const { PiscinaId, Ciclo, AreaCodigo, FechaProduccion, Color, Origen, Congelacion, CantidadMaster, Estatus } = req.body;
+    const { PiscinaId, Ciclo, BodegaCodigo, AreaCodigo, FechaProduccion, Color, Origen, Congelacion, CantidadMaster, Estatus } = req.body;
 
     const actuales: any[] = await prisma.$queryRaw`
       SELECT oe.DetalleId, oe.CantidadMaster, dp.EsGranel, dp.Activo
@@ -319,9 +353,8 @@ router.put("/:id", requireAuth, requirePerm("etiquetado", "editar"), async (req:
     `;
     if (!actuales.length) { res.status(404).json({ error: "Captura no encontrada" }); return; }
 
-    if (!AreaCodigo) { res.status(400).json({ error: "El área es requerida" }); return; }
-    const areas: any[] = await prisma.$queryRaw`SELECT Codigo FROM Areas WHERE Codigo = ${AreaCodigo} AND Activa = 1 LIMIT 1`;
-    if (!areas.length) { res.status(404).json({ error: "Área no encontrada o inactiva" }); return; }
+    const destino = await resolverBodegaArea(BodegaCodigo, AreaCodigo);
+    if ("error" in destino) { res.status(destino.status).json({ error: destino.error }); return; }
 
     const cantidad = Number(CantidadMaster);
     if (!Number.isInteger(cantidad) || cantidad <= 0) {
@@ -388,7 +421,7 @@ router.put("/:id", requireAuth, requirePerm("etiquetado", "editar"), async (req:
 
     await prisma.$executeRaw`
       UPDATE OrdenEtiquetado SET Lote = ${lote}, PiscinaId = ${Number(PiscinaId)}, Ciclo = ${cicloEfectivo},
-        AreaCodigo = ${AreaCodigo}, FechaProduccion = ${FechaProduccion}, Color = ${Color || null},
+        AreaCodigo = ${destino.area}, BodegaCodigo = ${destino.bodega}, FechaProduccion = ${FechaProduccion}, Color = ${Color || null},
         Origen = ${Origen}, Congelacion = ${Congelacion}, CantidadMaster = ${cantidad}, Estatus = ${Estatus || "Pendiente"}
       WHERE OrdenId = ${id}
     `;
