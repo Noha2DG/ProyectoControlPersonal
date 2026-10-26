@@ -1300,10 +1300,18 @@ export default function ReporteProduccionPage() {
                     <p className="text-xs text-gray-500">Descarte</p>
                     <p className="text-lg font-bold text-red-600">{fmtNum(loteHoja.Descarte || 0)}</p>
                   </div>
-                  <div className="border-2 border-gray-800 rounded px-3 py-2 text-center">
-                    <p className="text-xs text-gray-500">{loteHoja.EsEntero ? "Total Cabeza" : "Total Pelado"}</p>
-                    <p className="text-lg font-bold text-blue-700">{fmtNum(totalPeladoHoja)}</p>
-                  </div>
+                  {/* Entero: Ingresada − Bajado − Descarte → Total Cola → Rendimiento cola, en ese orden. */}
+                  {loteHoja.EsEntero ? (
+                    <div className="border-2 border-gray-800 rounded px-3 py-2 text-center">
+                      <p className="text-xs text-gray-500">Total Cola</p>
+                      <p className="text-lg font-bold text-emerald-700">{fmtNum(loteHoja.Cola || 0)}</p>
+                    </div>
+                  ) : (
+                    <div className="border-2 border-gray-800 rounded px-3 py-2 text-center">
+                      <p className="text-xs text-gray-500">Total Pelado</p>
+                      <p className="text-lg font-bold text-blue-700">{fmtNum(totalPeladoHoja)}</p>
+                    </div>
+                  )}
                   <div className="border-2 border-gray-800 rounded px-3 py-2 text-center">
                     <p className="text-xs text-gray-500">{loteHoja.EsEntero ? "Rendimiento cola" : "Rendimiento"}</p>
                     <p className="text-lg font-bold text-gray-800">{loteHoja.SinCola ? "sin cola" : `${fmtNum(loteHoja.Rendimiento, 0)}%`}</p>
@@ -1313,8 +1321,8 @@ export default function ReporteProduccionPage() {
                 {loteHoja.EsEntero && (
                   <div className="grid grid-cols-3 gap-3 mb-4">
                     <div className="border-2 border-gray-800 rounded px-3 py-2 text-center">
-                      <p className="text-xs text-gray-500">Total Cola</p>
-                      <p className="text-lg font-bold text-emerald-700">{fmtNum(loteHoja.Cola || 0)}</p>
+                      <p className="text-xs text-gray-500">Total Cabeza</p>
+                      <p className="text-lg font-bold text-blue-700">{fmtNum(totalPeladoHoja)}</p>
                     </div>
                     <div className="border-2 border-gray-800 rounded px-3 py-2 text-center">
                       <p className="text-xs text-gray-500">Cabeza + Cola</p>

@@ -585,10 +585,10 @@ export default function MateriaPrimaPage() {
         ) : (
           <>
             {/* Lote entero (C20 → cola): lo pesado es CABEZA. El rendimiento es el de la cola, que se
-                registra por termo; Cabeza + Cola es el cuadre contra lo trabajado. */}
+                registra por termo; la base es Ingreso − Bajado − Descarte (igual que rendimientosEntero). */}
             {loteSel.EsEntero && (() => {
-              const trabajado = loteSel.PesoIngreso - (loteSel.Bajado || 0);
-              const pct = x => trabajado > 0 ? fmtNum(x / trabajado * 100, 1) : "0";
+              const base = loteSel.PesoIngreso - (loteSel.Bajado || 0) - (loteSel.Descarte || 0);
+              const pct = x => base > 0 ? fmtNum(x / base * 100, 1) : "0";
               return (
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-2">
                   <div className="bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2 text-center">

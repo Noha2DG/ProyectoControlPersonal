@@ -102,15 +102,16 @@ export function rendimientoLote(ingreso: number, bajado: number, procesado: numb
 
 /**
  * Los números de un lote entero: lo pesado es CABEZA, la cola sale de los termos. El rendimiento del
- * lote es el de cola; el total (cabeza + cola) es el cuadre contra lo trabajado.
+ * lote es el de cola; el total (cabeza + cola) es el cuadre. A diferencia del pelado, aquí el descarte
+ * NO cuenta: la base es lo ingresado menos lo bajado al piso y menos lo descartado.
  */
 export function rendimientosEntero(ingreso: number, bajado: number, cabeza: number, cola: number, descarte: number) {
-  const trabajado = ingreso - bajado;
-  const pct = (x: number) => (trabajado > 0 ? (x / trabajado) * 100 : 0);
+  const base = ingreso - bajado - descarte;
+  const pct = (x: number) => (base > 0 ? (x / base) * 100 : 0);
   return {
     Cabeza: r2(cabeza), Total: r2(cabeza + cola),
     RendimientoCabeza: pct(cabeza), RendimientoCola: pct(cola), RendimientoTotal: pct(cabeza + cola),
-    Diferencia: r2(trabajado - descarte - cabeza - cola),
+    Diferencia: r2(base - cabeza - cola),
   };
 }
 

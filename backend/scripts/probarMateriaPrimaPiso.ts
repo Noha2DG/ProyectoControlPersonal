@@ -249,6 +249,9 @@ const PISO = [
       const ren = rendimientosEntero(100, 0, 35, 62.5, 0);
       check(Math.abs(ren.RendimientoCola - 62.5) < 0.01 && Math.abs(ren.RendimientoTotal - 97.5) < 0.01 && ren.Diferencia === 2.5,
         `rendimientos: cola ${ren.RendimientoCola.toFixed(1)}%, cabeza + cola ${ren.RendimientoTotal.toFixed(1)}%, diferencia ${ren.Diferencia}`);
+      const renD = rendimientosEntero(9.07, 2, 0, 5, 1);
+      check(Math.abs(renD.RendimientoCola - 5 / 6.07 * 100) < 0.01,
+        `en entero el descarte sale de la base: 5 ÷ (9.07 − 2 − 1) = ${renD.RendimientoCola.toFixed(1)}%`);
 
       console.log("11. Cerrar la transacción de Descabezado: la cola pasa al siguiente proceso");
       const nueva = async (lote: string, claseOrigen: string, proceso: number, clasePT: string, talla: number) => {
