@@ -239,9 +239,9 @@ export function TomarDelPisoModal({ onHecho, onClose }) {
                 <th className="px-3 py-2 text-left">Lote de origen</th>
                 <th className="px-3 py-2 text-left">Clase</th>
                 <th className="px-3 py-2 text-left">Talla</th>
-                <th className="px-3 py-2 text-left">Viene de</th>
                 <th className="px-3 py-2 text-right">Al piso</th>
                 <th className="px-3 py-2 text-right w-28">Tomar kg</th>
+                <th className="px-3 py-2 text-left w-28">Termo</th>
                 <th className="px-3 py-2 text-left">Lote de Destajo</th>
               </tr>
             </thead>
@@ -254,21 +254,23 @@ export function TomarDelPisoModal({ onHecho, onClose }) {
                     <td className="px-3 py-2 font-mono text-gray-800 whitespace-nowrap">
                       {l.Lote}
                       {l.NombreFinca && <span className="block text-[11px] font-sans text-gray-400">{l.NombreFinca}</span>}
+                      {/* Lo que no viene de Descongelado se marca: el rojo se tiene que revisar antes. */}
+                      {l.EsBajado && <span className="block text-[11px] font-sans text-amber-700">Bajado de la mesa{l.EsRojo ? " · rojo a revisar" : ""}</span>}
+                      {l.EsCola && <span className="block text-[11px] font-sans text-emerald-700">Cola de Descabezado</span>}
                     </td>
                     <td className="px-3 py-2 font-mono text-gray-700">{l.Clase}</td>
                     <td className="px-3 py-2 text-gray-700 whitespace-nowrap">{l.Talla === 900 ? <span className="text-gray-300">—</span> : l.DescripcionTalla}</td>
-                    <td className="px-3 py-2 text-gray-600 whitespace-nowrap">
-                      {l.EsBajado ? <span className="text-amber-700">Bajado de la mesa{l.EsRojo ? " · rojo a revisar" : ""}</span>
-                        : l.EsCola ? <span className="text-emerald-700">Cola de Descabezado</span>
-                        : (l.FolioRemision || "—")}
-                      <span className="block text-[11px] text-gray-400">{l.DiasAlPiso === 0 ? "hoy" : `${l.DiasAlPiso} día${l.DiasAlPiso !== 1 ? "s" : ""} al piso`}</span>
-                    </td>
                     <td className="px-3 py-2 text-right font-semibold text-gray-800 whitespace-nowrap">{fmtNum(l.Kg)}</td>
                     <td className="px-3 py-2 text-right">
                       {s && (
                         <input type="number" step="0.01" min="0" max={l.Kg} value={s.kg} onChange={e => cambiar(l, "kg", e.target.value)}
                           className="w-24 border border-gray-300 rounded px-2 py-1 text-sm text-right focus:outline-none focus:ring-2 focus:ring-blue-400" />
                       )}
+                    </td>
+                    {/* Solo información: el termo (o canasta) en que llegó la línea. Aquí no se asigna
+                        termo, solo se crea la materia prima. */}
+                    <td className="px-3 py-2 font-mono text-gray-700 max-w-[9rem] truncate" title={l.Termos || ""}>
+                      {l.Termos || <span className="text-gray-300">—</span>}
                     </td>
                     <td className="px-3 py-2 whitespace-nowrap">
                       {l.Legible ? (
