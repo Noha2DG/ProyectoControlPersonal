@@ -28,6 +28,8 @@ const MODULOS = [
   // "cerrar" es aparte de "editar" a propósito: capturar renglones lo hace el operador de turno,
   // pero cerrar la hoja fija la merma y el rendimiento del día, y reabrirla los borra.
   { key: "descongelado",   label: "Descongelado de Materia Prima",   acciones: ["ver","crear","editar","eliminar","cerrar"], grupo: "Operación" },
+  // Igual que Descongelado: "cerrar" fija las diferencias de báscula del día y reabrir las borra.
+  { key: "tratamiento",    label: "Tratamiento de Camarón (químico)", acciones: ["ver","crear","editar","eliminar","cerrar"], grupo: "Operación" },
   { key: "destajo",        label: "Destajo — Materia Prima y Pesaje", acciones: ["ver","crear","editar","eliminar"], grupo: "Operación" },
   { key: "etiquetado",     label: "Etiquetado — Orden de Trabajo",   acciones: ["ver","crear","editar","eliminar","imprimir"], grupo: "Operación" },
   // "trasladar" es la acción fuerte de bodega: mueve cajas de un polín SELLADO (cerrado y ubicado en
