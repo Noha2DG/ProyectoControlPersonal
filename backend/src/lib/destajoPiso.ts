@@ -153,13 +153,17 @@ async function saldoLineas(client: any, bodega: string, lotes?: string[]) {
            t.Talla, ta.Descripcion AS DescripcionTalla, DATE_FORMAT(t.FechaLote, '%Y-%m-%d') AS FechaLote,
            DATE_FORMAT(MIN(CASE WHEN t.Delta > 0 THEN t.FechaProduccion END), '%Y-%m-%d') AS FechaIngreso,
            ROUND(SUM(t.Delta), 2) AS Kg, SUM(t.Masters) AS Masters, MAX(t.KgPorMaster) AS KgPorMaster,
-           MAX(t.EsBajado) AS EsBajado, MAX(t.EsRojo) AS EsRojo, MAX(t.EsCola) AS EsCola
+           MAX(t.EsBajado) AS EsBajado, MAX(t.EsRojo) AS EsRojo, MAX(t.EsCola) AS EsCola,
+           -- Los termos (o canastas) en que llegó la línea. Solo es información para quien toma del
+           -- piso: aquí no se asigna termo, solo se crea la materia prima.
+           GROUP_CONCAT(DISTINCT t.NumeroTermo ORDER BY t.NumeroTermo SEPARATOR ', ') AS Termos
       FROM (
         SELECT RemisionId, Lote, Clase, Talla, FechaLote, FechaProduccion,  PesoKg AS Delta,  Masters, KgPorMaster,
-               Tipo = 'BAJADO' AS EsBajado, Tipo = 'BAJADO' AND Motivo LIKE 'Rojo%' AS EsRojo, Tipo = 'COLA' AS EsCola
+               Tipo = 'BAJADO' AS EsBajado, Tipo = 'BAJADO' AND Motivo LIKE 'Rojo%' AS EsRojo, Tipo = 'COLA' AS EsCola,
+               NumeroTermo
           FROM MovimientoPiso WHERE BodegaDestino = ? ${filtro}
         UNION ALL
-        SELECT RemisionId, Lote, Clase, Talla, FechaLote, FechaProduccion, -PesoKg, -Masters, KgPorMaster, 0, 0, 0
+        SELECT RemisionId, Lote, Clase, Talla, FechaLote, FechaProduccion, -PesoKg, -Masters, KgPorMaster, 0, 0, 0, NULL
           FROM MovimientoPiso WHERE BodegaOrigen = ? ${filtro}
       ) t
       JOIN Clase cl ON cl.Clase = t.Clase

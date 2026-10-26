@@ -42,8 +42,8 @@ const PISO = [
       // ── Piso de prueba en Pelado ───────────────────────────────────────────────────────────
       for (const p of PISO) {
         await tx.$executeRawUnsafe(`
-          INSERT INTO MovimientoPiso (Tipo, FechaProduccion, BodegaDestino, Lote, Clase, Talla, FechaLote, Peso, UM, PesoKg, RegistradoPor)
-          VALUES ('TRASLADO', ?, 'PELADO', ?, ?, ?, ?, ?, 'KG', ?, ?)`, HOY, p.Lote, p.Clase, p.Talla, p.FechaLote, p.Kg, p.Kg, OP);
+          INSERT INTO MovimientoPiso (Tipo, FechaProduccion, BodegaDestino, Lote, Clase, Talla, FechaLote, Peso, UM, PesoKg, NumeroTermo, RegistradoPor)
+          VALUES ('TRASLADO', ?, 'PELADO', ?, ?, ?, ?, ?, 'KG', ?, '20', ?)`, HOY, p.Lote, p.Clase, p.Talla, p.FechaLote, p.Kg, p.Kg, OP);
       }
       const linea = async (lote: string, talla: number, fecha = HOY) =>
         (await saldoParaDestajo(tx, "PELADO", fecha)).find(l => l.Lote === lote && l.Talla === talla && !l.RemisionId);
@@ -51,6 +51,7 @@ const PISO = [
       console.log("1. Lo que hay al piso de Pelado");
       const k = await linea("G240K025", 217);
       check(!!k && k.Kg === 976.1 && k.Legible, `G240K025 al piso con 976.1 kg (${k?.Kg})`);
+      check(k?.Termos === "20", `la línea muestra el termo en que llegó de Descongelado, solo como información (${k?.Termos})`);
       check(k?.LoteDestajo === componerCodigoLote("K025", HOY, ""), `toma el código del día: ${k?.LoteDestajo}`);
       const em = await linea("G719EM03-E05-7", 237);
       check(em?.LoteDestajo === componerCodigoLote("EM03-E05", HOY, "7"), `conserva el ciclo: ${em?.LoteDestajo}`);
