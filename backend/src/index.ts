@@ -38,6 +38,7 @@ import bodegaFisicaRouter from "./routes/bodegaFisica.ts";
 import remisionesRouter from "./routes/remisiones.ts";
 import reportesRouter from "./routes/reportes.ts";
 import descongeladoRouter from "./routes/descongelado.ts";
+import tratamientoRouter from "./routes/tratamiento.ts";
 import mesasRouter from "./routes/mesas.ts";
 import tarifasRouter from "./routes/tarifas.ts";
 import { requireAuth } from "./middleware/auth.ts";
@@ -117,6 +118,7 @@ app.use("/api/bodega-fisica", bodegaFisicaRouter);
 app.use("/api/remisiones", remisionesRouter);
 app.use("/api/reportes", reportesRouter);
 app.use("/api/descongelado", descongeladoRouter);
+app.use("/api/tratamiento", tratamientoRouter);
 app.use("/api/mesas", mesasRouter);
 app.use("/api/tarifas", tarifasRouter);
 

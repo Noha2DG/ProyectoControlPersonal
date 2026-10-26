@@ -16,6 +16,7 @@ import PedidosClientesPage from "./pages/PedidosClientesPage.jsx";
 import CatalogosPage from "./pages/CatalogosPage.jsx";
 import DestajoPage from "./pages/DestajoPage.jsx";
 import DescongeladoPage from "./pages/DescongeladoPage.jsx";
+import TratamientoPage from "./pages/TratamientoPage.jsx";
 import EtiquetadoPage from "./pages/EtiquetadoPage.jsx";
 import ImpresionEtiquetasPage from "./pages/ImpresionEtiquetasPage.jsx";
 import PalletsPage from "./pages/PalletsPage.jsx";
@@ -210,6 +211,7 @@ function Dashboard({ inicio }) {
   if (perm("transferencias", "ver")) nav.push({ key: "transf",    label: "Transferencias",      icon: "transf"   });
   if (perm("planificacion",   "ver")) nav.push({ key: "planif",    label: "Planificación",       icon: "planif"   });
   if (perm("descongelado",   "ver")) nav.push({ key: "descongelado", label: "Descongelado",     icon: "descongelado" });
+  if (perm("tratamiento",    "ver")) nav.push({ key: "tratamiento",  label: "Tratamiento",      icon: "tratamiento"  });
   // Destajo también aparece con solo `mesas.reporte` (supervisores que consultan la producción por
   // mesa); adentro DestajoPage muestra solo las pestañas de cada permiso.
   const verDestajo = perm("destajo", "ver") || perm("mesas", "reporte");
@@ -246,6 +248,7 @@ function Dashboard({ inicio }) {
     transf:    "Transferencias — Corrección",
     planif:    "Planificación por Área",
     descongelado: "Descongelado de Materia Prima",
+    tratamiento: "Tratamiento de Camarón",
     destajo:   "Destajo — Materia Prima y Pesaje",
     etiquetado: "Agrupación — Orden de Trabajo",
     imprimirEtiquetas: "Impresión de Etiquetas",
@@ -396,6 +399,7 @@ function Dashboard({ inicio }) {
             {seccion === "transf"   && perm("transferencias", "ver") && <TransferenciasAdminPage />}
             {seccion === "planif"   && perm("planificacion",   "ver") && <PlanificacionPage />}
             {seccion === "descongelado" && perm("descongelado", "ver") && <DescongeladoPage />}
+            {seccion === "tratamiento"  && perm("tratamiento",  "ver") && <TratamientoPage />}
             {seccion === "destajo"  && verDestajo && <DestajoPage tabInicial={inicio?.tab} />}
             {seccion === "pedidos"   && perm("pedidos",       "ver") && <PedidosClientesPage />}
             {seccion === "etiquetado" && perm("etiquetado",    "ver") && <EtiquetadoPage />}
