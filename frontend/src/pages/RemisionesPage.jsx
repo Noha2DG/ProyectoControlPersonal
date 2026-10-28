@@ -535,10 +535,17 @@ function PanelRemision({ remisionId, onClose, onCambio }) {
     else await mostrarAlerta("Error: " + (data.error || "No se pudo quitar el polín"));
   };
 
+  // A un área, confirmar es la ENTREGA física (usuario, 28 oct 2026): recién ahí el producto entra a
+  // su piso y el área lo puede trabajar; antes lo ve como "aún en bodega".
+  const aArea = !!(remision?.BodegaDestino || remision?.AreaDestino);
+  const textoConfirmar = aArea ? "Confirmar entrega" : "Confirmar salida";
+
   const handleConfirmar = async () => {
-    const confirmado = await pedirConfirmacion(
-      `¿Confirmar la remisión ${remision.Folio}?\n\nSus ${remision.CantidadMasters} master(s) ya salieron de bodega al escanearse; confirmar cierra el documento. Después de esto solo se puede anular.`,
-      { textoConfirmar: "Confirmar salida" }
+    const lugar = remision.NombreBodegaDestino || remision.NombreAreaDestino || "el área";
+    const confirmado = await pedirConfirmacion(aArea
+      ? `¿Confirmar la entrega de ${remision.Folio}?\n\nConfirmar es la entrega física: sus ${remision.CantidadMasters} master(s) entran al piso de ${lugar} y desde ese momento el área los puede trabajar. Confírmela cuando ya los tengan. Después de esto solo se puede anular.`
+      : `¿Confirmar la remisión ${remision.Folio}?\n\nSus ${remision.CantidadMasters} master(s) ya salieron de bodega al escanearse; confirmar cierra el documento. Después de esto solo se puede anular.`,
+      { textoConfirmar }
     );
     if (!confirmado) return;
     const res = await fetch(`${API}/${remisionId}/confirmar`, { method: "POST", headers: authHeader() });
@@ -824,7 +831,7 @@ function PanelRemision({ remisionId, onClose, onCambio }) {
             {editable && (
               <button onClick={handleConfirmar} disabled={!remision?.CantidadMasters}
                 className="px-4 py-2 rounded-lg text-sm font-semibold bg-blue-600 text-white hover:bg-blue-700 transition disabled:opacity-50">
-                Confirmar salida
+                {textoConfirmar}
               </button>
             )}
           </div>

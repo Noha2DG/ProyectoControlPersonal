@@ -7,6 +7,10 @@ import { fmtNum } from "../utils/numero.js";
 //
 // No pide nada al servidor: imprime las mismas líneas que se ven en AL PISO, agrupadas igual (por
 // remisión). Así el papel con el que se cuenta el piso no puede decir otra cosa que la pantalla.
+//
+// Lo que bodega escaneó y no ha confirmado sigue en bodega (confirmar es la entrega, 28 oct 2026):
+// no se cuenta ni suma. Va aparte al final, para que quien cuenta sepa que viene y no lo busque.
+const pendiente = r => r.PorEntregar === true || r.EstatusRemision === "Borrador";
 
 // Fechas puras (YYYY-MM-DD) partidas a mano: new Date() las lee como medianoche UTC y en Guatemala
 // las muestra un día antes (ver utils/fecha.js).
@@ -23,13 +27,15 @@ function agruparPorRemision(saldo) {
   for (const r of saldo) {
     const clave = r.RemisionId ?? "sin-remision";
     let g = grupos.find(x => x.clave === clave);
-    if (!g) { g = { clave, Folio: r.FolioRemision, ConfirmadaEn: r.ConfirmadaEn, Estatus: r.EstatusRemision, lineas: [], Kg: 0, Masters: 0 }; grupos.push(g); }
+    if (!g) { g = { clave, Folio: r.FolioRemision, ConfirmadaEn: r.ConfirmadaEn, lineas: [], Kg: 0, Masters: 0 }; grupos.push(g); }
     g.lineas.push(r); g.Kg += r.Kg; g.Masters += r.Masters || 0;
   }
   return grupos;
 }
 
-function ContenidoInventario({ fecha, saldo }) {
+function ContenidoInventario({ fecha, saldo: todo, porEntregar = [] }) {
+  const saldo = todo.filter(r => !pendiente(r));
+  const llegan = agruparPorRemision([...todo.filter(pendiente), ...porEntregar]);
   const grupos = agruparPorRemision(saldo);
   const totalKg = saldo.reduce((s, r) => s + r.Kg, 0);
   const totalM = saldo.reduce((s, r) => s + (r.Masters || 0), 0);
@@ -62,7 +68,6 @@ function ContenidoInventario({ fecha, saldo }) {
             <h2 className="text-base font-bold">
               {g.Folio || "Sin remisión (ajuste)"}
               {g.ConfirmadaEn && <span className="text-xs font-normal text-gray-500 ml-2">confirmada {g.ConfirmadaEn}</span>}
-              {g.Estatus === "Borrador" && <span className="text-xs font-semibold ml-2">(sin confirmar — puede seguir en bodega)</span>}
             </h2>
             <p className="text-sm font-bold tabular-nums">{g.Masters ? `${g.Masters} masters · ` : ""}{fmtNum(g.Kg)} kg</p>
           </div>
@@ -113,6 +118,29 @@ function ContenidoInventario({ fecha, saldo }) {
         </div>
       )}
 
+      {llegan.length > 0 && (
+        <div className="mt-6" style={{ breakInside: "avoid-page" }}>
+          <h2 className="text-sm font-bold border-b border-gray-400 pb-0.5 mb-1">
+            Por entregar — sigue en bodega, no se cuenta
+            <span className="text-xs font-normal text-gray-500 ml-2">bodega lo escaneó y todavía no confirma la remisión</span>
+          </h2>
+          <table className="w-full text-xs print-table text-gray-600">
+            <tbody>
+              {llegan.flatMap(g => g.lineas.map((r, i) => (
+                <tr key={`${g.clave}-${i}`} className="border-t border-gray-200">
+                  <td className="py-1 pr-2 font-semibold">{i === 0 ? g.Folio : ""}</td>
+                  <td className="py-1 pr-2 font-mono">{r.Lote}</td>
+                  <td className="py-1 pr-2"><span className="font-mono">{r.Clase}</span> {r.DescripcionClase}</td>
+                  <td className="py-1 pr-2">{r.DescripcionTalla}</td>
+                  <td className="py-1 pr-2 text-right tabular-nums">{r.Masters || ""}</td>
+                  <td className="py-1 text-right tabular-nums">{fmtNum(r.Kg)} kg</td>
+                </tr>
+              )))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
       <div className="grid grid-cols-2 gap-16 mt-10">
         <div className="text-center">
           <p className="h-5"></p>
@@ -131,7 +159,7 @@ function ContenidoInventario({ fecha, saldo }) {
   );
 }
 
-export default function InventarioDescongeladoModal({ fecha, saldo, onCerrar }) {
+export default function InventarioDescongeladoModal({ fecha, saldo, porEntregar = [], onCerrar }) {
   // El nombre del PDF lo pone el navegador a partir del título de la página.
   useEffect(() => {
     const antes = document.title;
@@ -157,7 +185,7 @@ export default function InventarioDescongeladoModal({ fecha, saldo, onCerrar }) 
             </div>
           </div>
           <div className="px-8 py-6 overflow-auto">
-            <ContenidoInventario fecha={fecha} saldo={saldo} />
+            <ContenidoInventario fecha={fecha} saldo={saldo} porEntregar={porEntregar} />
           </div>
         </div>
       </div>
@@ -165,7 +193,7 @@ export default function InventarioDescongeladoModal({ fecha, saldo, onCerrar }) 
       {createPortal(
         <div className="hidden print:block">
           <style>{"@media print { @page { size: letter; margin: 1.2cm; } }"}</style>
-          <ContenidoInventario fecha={fecha} saldo={saldo} />
+          <ContenidoInventario fecha={fecha} saldo={saldo} porEntregar={porEntregar} />
         </div>,
         document.getElementById("print-root")
       )}

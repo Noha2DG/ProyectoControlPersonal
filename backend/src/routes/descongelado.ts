@@ -80,8 +80,9 @@ function num(rows: any[], campos: string[]) {
 const SQL_SALDO = `
   SELECT t.Bodega, b.Nombre AS NombreBodega, t.RemisionId, rm.Folio AS FolioRemision,
          DATE_FORMAT(rm.ConfirmadaEn, '%Y-%m-%d %H:%i') AS ConfirmadaEn,
-         -- Desde el 28 oct 2026 una remisión en BORRADOR ya está al piso (entra al escanearse): la
-         -- pantalla la marca "sin confirmar", porque puede seguir físicamente en bodega.
+         -- Una remisión entra al piso al CONFIRMARSE, que es la entrega física (28 oct 2026). Si
+         -- alguna con ingreso vuelve a borrador, la pantalla la marca "aún en bodega" y no deja
+         -- trabajarla (ver exigirEntregadas).
          rm.Estatus AS EstatusRemision,
          t.Lote, t.Clase, cl.Descripcion AS DescripcionClase,
          t.Talla, ta.Descripcion AS DescripcionTalla,
@@ -145,6 +146,48 @@ router.get("/saldo", requireAuth, requirePerm("descongelado", "ver"), async (req
     const hasta = (req.query.hasta as string) || hoyGT();
     const bodega = (req.query.bodega || req.query.area) as string | undefined;
     res.json(await saldoAlPiso(bodega, hasta));
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Lo que bodega ya escaneó para el área y todavía no confirma: sigue FÍSICAMENTE en bodega, porque
+// confirmar es la entrega (usuario, 28 oct 2026). No es saldo del piso —  no se descongela, no se
+// cuenta, no entra al reporte—: se muestra en AL PISO marcado "aún en bodega" para que el área sepa
+// qué viene. Mismas columnas que el saldo, con PorEntregar = true.
+//
+// Las remisiones que ya tienen ingreso al piso se dejan fuera aunque estén en borrador (una que se
+// regresó a borrador a mano): esas ya salen en el saldo, y saldrían dos veces.
+export async function porEntregar(client: any, bodega: string) {
+  const rows: any[] = await client.$queryRawUnsafe(`
+    SELECT r.RemisionId, r.Folio AS FolioRemision, r.Estatus AS EstatusRemision,
+           oe.Lote, dp.Clase, cl.Descripcion AS DescripcionClase, dp.Talla, ta.Descripcion AS DescripcionTalla,
+           DATE_FORMAT(oe.FechaProduccion, '%Y-%m-%d') AS FechaLote,
+           DATE_FORMAT(MIN(rd.AgregadoEn), '%Y-%m-%d') AS FechaEscaneo,
+           COUNT(*) AS Masters,
+           ROUND(pre.PesoKG * pre.CajasXMaster, 3) AS KgPorMaster,
+           ROUND(COUNT(*) * pre.PesoKG * pre.CajasXMaster, 2) AS Kg
+    FROM Remisiones r
+    LEFT JOIN Areas a ON a.Codigo = r.AreaDestino
+    JOIN RemisionDetalle rd ON rd.RemisionId = r.RemisionId AND rd.Vigente = 1
+    JOIN Masters m ON m.MasterId = rd.MasterId
+    JOIN EtiquetaImpresa e ON e.EtiquetaId = m.EtiquetaId
+    JOIN OrdenEtiquetado oe ON oe.OrdenId = e.OrdenId
+    JOIN DetallePedido dp ON dp.DetalleId = oe.DetalleId
+    JOIN Presentacion pre ON pre.Codigo = dp.Presentacion
+    JOIN Clase cl ON cl.Clase = dp.Clase
+    JOIN Tallas ta ON ta.Codigo = dp.Talla
+    WHERE r.Estatus = 'Borrador' AND COALESCE(r.BodegaDestino, a.BodegaVirtualCodigo) = ?
+      AND NOT EXISTS (SELECT 1 FROM MovimientoPiso mp WHERE mp.RemisionId = r.RemisionId AND mp.Tipo = 'INGRESO')
+    GROUP BY r.RemisionId, r.Folio, r.Estatus, oe.Lote, dp.Clase, cl.Descripcion, dp.Talla, ta.Descripcion,
+             oe.FechaProduccion, pre.PesoKG, pre.CajasXMaster
+    ORDER BY r.RemisionId, oe.FechaProduccion, oe.Lote, ta.Descripcion`, bodega);
+  return num(rows, ["RemisionId", "Talla", "Masters", "KgPorMaster", "Kg"]).map((r: any) => ({ ...r, PorEntregar: true }));
+}
+
+router.get("/por-entregar", requireAuth, requirePerm("descongelado", "ver"), async (req: Request, res: Response) => {
+  try {
+    res.json(await porEntregar(prisma, String(req.query.bodega || "DESCONGELADO")));
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -876,6 +919,27 @@ export function normalizarLineas(crudas: any[], pideDestino: boolean, termoGener
 const claveDeLinea = (r: any) => `${r.remId ?? ""}|${r.Lote}|${r.Clase}|${r.talla}`;
 const claveConFecha = (r: any) => `${claveDeLinea(r)}|${r.fechaLote ?? ""}`;
 
+// Solo se trabaja lo que bodega ya ENTREGÓ: confirmar la remisión es la entrega física al área
+// (usuario, 28 oct 2026). Una remisión en borrador sigue en bodega aunque ya esté escaneada, y bodega
+// la puede seguir cambiando; si el área la trabajara, quitarle un polín chocaría con lo descongelado.
+//
+// El FOR UPDATE de la remisión es además el candado común con bodega: quitar, confirmar y devolver
+// también la bloquean, así que las dos cosas no pueden pasar a la vez sobre la misma remisión.
+// Quien llama lo pone antes de cualquier otra lectura cuando puede (ver descongelarMarcado): así lo
+// que lee después ya ve lo que bodega acaba de guardar.
+async function exigirEntregadas(tx: any, remIds: (number | null | undefined)[]) {
+  const ids = [...new Set(remIds.filter((x): x is number => x != null))];
+  if (!ids.length) return;
+  const rems: any[] = await tx.$queryRawUnsafe(
+    `SELECT RemisionId, Folio, Estatus FROM Remisiones WHERE RemisionId IN (${ids.map(() => "?").join(",")}) FOR UPDATE`,
+    ...ids);
+  const sinEntregar = rems.find(r => r.Estatus === "Borrador");
+  if (sinEntregar) {
+    throw new ErrorNegocio(400,
+      `La remisión ${sinEntregar.Folio} todavía no la entrega bodega (sigue sin confirmar): se puede trabajar cuando bodega la confirme.`);
+  }
+}
+
 /**
  * Valida contra el saldo al piso y escribe los CONSUMO. Devuelve sus MovimientoId en el mismo
  * orden que `lineas`, para que quien llama pueda atarles la fila que sigue.
@@ -887,6 +951,7 @@ const claveConFecha = (r: any) => `${claveDeLinea(r)}|${r.fechaLote ?? ""}`;
 export async function consumirDelPiso(
   tx: any, hoja: any, hojaId: number, lineas: LineaPiso[], operador: string, fecha: string
 ): Promise<number[]> {
+  await exigirEntregadas(tx, lineas.map(l => l.remId));
   // La disponibilidad, acotada a los LOTES del despacho. Sin ese filtro la consulta agrega todo el
   // histórico del piso en cada movimiento, así que su costo crecería con cada master que pasó por
   // el área desde que existe el módulo; con él depende del tamaño del despacho, que no crece.
@@ -1158,6 +1223,9 @@ export async function descongelarMarcado(tx: any, hojaId: number, p: {
   }
 
   const h = await hojaParaEscribir(tx, hojaId);
+  // Antes que cualquier otra lectura: el saldo que se lee después tiene que ver lo último que guardó
+  // bodega (una devolución o una confirmación de hace un instante). Ver exigirEntregadas.
+  await exigirEntregadas(tx, crudas.map(l => (l.RemisionId ? Number(l.RemisionId) : null)));
   await validarDestino(tx, destino, h.BodegaCodigo);
   if (unificar) await validarUnificacion(tx, lotes);
   const fecha = fechaDeHoja(h);

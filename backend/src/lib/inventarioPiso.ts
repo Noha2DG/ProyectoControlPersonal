@@ -1,10 +1,11 @@
 // Puente entre bodega y el inventario al piso.
 //
-// Cuando una remisión con destino a un área recibe producto, ese producto entra al piso del área.
-// Desde el 28 oct 2026 eso pasa AL ESCANEAR, no al confirmar (usuario: "todo producto que entre a
-// remisión sea rebajado del sistema aunque no se confirme salida"): bodega lo rebaja en el acto y el
-// área lo ve en el acto. Antes, una remisión que se quedaba en borrador dejaba el producto contado en
-// bodega y ausente del piso, aunque ya estuviera en el área.
+// Cuando bodega CONFIRMA una remisión con destino a un área, el producto entra al piso del área:
+// confirmar es la entrega física (usuario, 28 oct 2026). Bodega ya lo rebajó al escanearlo, pero
+// mientras la remisión es borrador sigue físicamente en bodega, y el área lo ve en AL PISO como "aún
+// en bodega" sin poder trabajarlo (porEntregar y exigirEntregadas en routes/descongelado.ts). Ese
+// mismo día se probó que entrara al escanear y se descartó: el área veía producto que nunca le
+// llegó (el 31/35 de RS-0106).
 // Automático, sin que nadie lo acepte en otra pantalla: una aceptación aparte dejaría el producto en
 // limbo entre las dos pantallas, despachado por bodega y no recibido por nadie, que es exactamente el
 // hueco que este módulo existe para cerrar.
@@ -26,9 +27,7 @@ export class PisoEnNegativo extends Error {}
 // Una fila por (remisión, lote, fecha del lote, clase, talla, peso del master). La fecha del lote
 // entra al agrupado a propósito: el mismo texto de lote puede traer dos fechas de producción
 // distintas —  G220EM00-E00 tiene 11 y 12 de mayo—  y colapsarlas perdería la diferencia.
-// `sin` deja fuera esa cantidad de masters (sus ids van después del de la remisión): es lo que va a
-// quedar en la remisión cuando se le quiten.
-const sqlLineas = (sin = 0) => `
+const SQL_LINEAS = `
   SELECT oe.Lote,
          DATE_FORMAT(oe.FechaProduccion, '%Y-%m-%d') AS FechaLote,
          dp.Clase, dp.Talla,
@@ -42,7 +41,6 @@ const sqlLineas = (sin = 0) => `
   JOIN DetallePedido dp ON dp.DetalleId = oe.DetalleId
   JOIN Presentacion pre ON pre.Codigo = dp.Presentacion
   WHERE rd.RemisionId = ? AND rd.Vigente = 1
-    ${sin ? `AND rd.MasterId NOT IN (${Array(sin).fill("?").join(",")})` : ""}
   GROUP BY oe.Lote, oe.FechaProduccion, dp.Clase, dp.Talla, pre.PesoKG, pre.CajasXMaster
 `;
 
@@ -69,8 +67,8 @@ async function bodegaConPiso(tx: any, destino: Destino): Promise<string | null> 
 
 /**
  * Mete al piso del área TODO lo que trae una remisión, de una vez. Lo usa scripts/cargarIngresosPiso.ts
- * para cargar jornadas pasadas; la pantalla usa sincronizarIngresoDeRemision (abajo), que lo va
- * metiendo a medida que se escanea.
+ * para cargar jornadas pasadas; la confirmación usa sincronizarIngresoDeRemision (abajo), que además
+ * no duplica lo que ya esté.
  */
 export async function registrarIngresoDesdeRemision(
   tx: any, remisionId: number, destino: Destino,
@@ -78,7 +76,7 @@ export async function registrarIngresoDesdeRemision(
 ): Promise<{ lineas: number; kg: number }> {
   const bodega = await bodegaConPiso(tx, destino);
   if (!bodega) return { lineas: 0, kg: 0 };   // bodega sin inventario al piso, o área sin bodega
-  const lineas: any[] = await tx.$queryRawUnsafe(sqlLineas(), remisionId);
+  const lineas: any[] = await tx.$queryRawUnsafe(SQL_LINEAS, remisionId);
   if (!lineas.length) return { lineas: 0, kg: 0 };
 
   // Un solo INSERT con todas las filas: el backend habla con la base por red y una remisión de
@@ -100,27 +98,23 @@ export async function registrarIngresoDesdeRemision(
 }
 
 /**
- * Deja el ingreso al piso de una remisión igual a lo que la remisión trae —  o va a traer, sin los
- * masters de `sinMasters`, que quien llama está por quitarle. Se llama dentro de la misma
- * transacción cada vez que el borrador gana o pierde líneas o cambia de destino, y otra vez al
- * confirmar (por los borradores que se armaron antes de que el piso se llenara al escanear).
+ * Deja el ingreso al piso de una remisión igual a lo que la remisión trae. Se llama al CONFIRMAR, que
+ * es la entrega: normalmente no hay nada en el piso todavía y mete todo. Si ya había algo —  una
+ * confirmada que se regresó a borrador a mano y se vuelve a confirmar—  lo iguala sin duplicar.
  *
  * Una fila de INGRESO por llave (bodega, lote, fecha del lote, clase, talla, peso del master), que se
- * ACTUALIZA en vez de sumarle filas: escaneando caja por caja quedaría una fila por master, y cada
- * una redondea sus kilos por su lado —  al descongelar la línea completa sobrarían centésimas al
- * piso. Con una sola fila los kilos son los mismos que daba confirmar de una vez. La fila conserva la
- * jornada en que entró la primera caja de esa llave.
+ * ACTUALIZA en vez de sumarle filas: cada fila redondea sus kilos por su lado, y con varias por llave
+ * al descongelar la línea completa sobrarían centésimas al piso. La fila conserva la jornada en que
+ * entró.
  *
  * Se niega si lo que se quita ya lo trabajó el área: igual que al anular, dejaría el saldo al piso en
  * negativo. Se revisa ANTES de escribir nada, para que el rechazo no deje nada a medias.
  */
 export async function sincronizarIngresoDeRemision(
   tx: any, remisionId: number, destino: Destino, fechaJornada: string, operador: string,
-  sinMasters: number[] = [],
 ): Promise<{ lineas: number; kg: number }> {
   const bodega = await bodegaConPiso(tx, destino);
-  const deseadas: any[] = bodega
-    ? await tx.$queryRawUnsafe(sqlLineas(sinMasters.length), remisionId, ...sinMasters) : [];
+  const deseadas: any[] = bodega ? await tx.$queryRawUnsafe(SQL_LINEAS, remisionId) : [];
   const actuales: any[] = await tx.$queryRawUnsafe(`
     SELECT MovimientoId, BodegaDestino AS Bodega, Lote, DATE_FORMAT(FechaLote, '%Y-%m-%d') AS FechaLote,
            Clase, Talla, KgPorMaster, Masters, PesoKg
@@ -218,8 +212,8 @@ export async function sincronizarIngresoDeRemision(
  * desde el área, que ya salieron del piso allá, y recalcularla las descontaría otra vez.
  *
  * Se niega si el área ya trabajó ese producto (entonces sí estaba con ellos). Revisa ANTES de
- * escribir. Si el piso ya no tiene ese ingreso —  se vació en un reset, o la remisión es de antes del
- * piso—  no hay nada que descontar.
+ * escribir. Si el piso no tiene ese ingreso —  un borrador, que recibe al confirmar; un piso que se
+ * vació en un reset; una remisión de antes del piso—  no hay nada que descontar.
  */
 export async function descontarDevolucionDelPiso(
   tx: any, remisionId: number, destino: Destino, masterIds: number[],
@@ -258,11 +252,14 @@ export async function descontarDevolucionDelPiso(
     const kgQueda = quedan ? Number((quedan * kgExacto).toFixed(2)) : 0;
     const kgQuita = Number((kgTiene - kgQueda).toFixed(2));
 
+    // FOR UPDATE: lectura con candado, que ve lo último que guardó el área aunque esta transacción
+    // haya empezado antes (un descongelado de hace un instante), y la detiene mientras se descuenta.
     const [s]: any[] = await tx.$queryRawUnsafe(`
       SELECT COALESCE(SUM(CASE WHEN BodegaDestino = ? THEN PesoKg ELSE -PesoKg END), 0) AS Kg
       FROM MovimientoPiso
       WHERE RemisionId = ? AND Lote = ? AND Clase = ? AND Talla = ? AND FechaLote <=> ?
-        AND (BodegaDestino = ? OR BodegaOrigen = ?)`,
+        AND (BodegaDestino = ? OR BodegaOrigen = ?)
+      FOR UPDATE`,
       bodega, remisionId, g.Lote, g.Clase, g.Talla, g.FechaLote, bodega, bodega);
     const saldo = Number(s?.Kg ?? 0);
     if (saldo - kgQuita < -0.001) {

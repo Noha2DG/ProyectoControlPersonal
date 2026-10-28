@@ -7,7 +7,16 @@ import { fmtNum } from "../utils/numero.js";
 // Si el área dice que no lo tiene, se quedó en bodega y hay que sacarlo de la remisión —  Devolver
 // polín en una confirmada, Quitar polín en un borrador—  para que salga del piso del área.
 export default function PisoDeRemision({ piso, borrador }) {
-  if (!piso || !piso.Lineas?.length) return null;
+  if (!piso) return null;
+  // Un borrador no le ha entregado nada al área: entra a su piso al confirmar (28 oct 2026).
+  if (!piso.Lineas?.length) {
+    return borrador ? (
+      <p className="mb-4 px-3 py-2 rounded-lg border border-amber-200 bg-amber-50 text-xs text-amber-800">
+        {piso.NombreBodega} todavía no tiene nada de esta remisión: lo ve como <b>aún en bodega</b> y lo puede
+        trabajar cuando confirmes la entrega. Lo que no se lleven, quítalo antes de confirmar.
+      </p>
+    ) : null;
+  }
   const queda = piso.Lineas.reduce((s, l) => s + l.QuedaKg, 0);
   const hayQueda = queda > 0.004;
 

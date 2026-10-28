@@ -14,10 +14,10 @@ import { hoyGT } from "../lib/dateGT.ts";
 // Ciclo de vida:  Borrador ──confirmar──> Confirmada ──anular──> Anulada
 //                    └──eliminar──> (borrada: todo lo que había salido vuelve a bodega)
 //
-// El inventario se mueve AL ESCANEAR, no al confirmar (desde el 28 oct 2026, ver "Rebajar al
-// escanear" más abajo): lo que entra al borrador sale de bodega y, si va a un área, entra a su piso
-// en el mismo instante. Quitarlo del borrador lo regresa. El UNIQUE (MasterId, Vigente) de
-// RemisionDetalle sigue impidiendo que dos remisiones se peleen el mismo master.
+// Bodega se rebaja AL ESCANEAR, no al confirmar (desde el 28 oct 2026, ver "Rebajar al escanear" más
+// abajo): lo que entra al borrador sale de las existencias, y quitarlo lo regresa. El piso del área
+// lo recibe AL CONFIRMAR, que es la entrega física. El UNIQUE (MasterId, Vigente) de RemisionDetalle
+// sigue impidiendo que dos remisiones se peleen el mismo master.
 const router = Router();
 
 // Mismo patrón que pallets.ts / bodegaFisica.ts: error de negocio lanzado dentro de la transacción,
@@ -445,7 +445,7 @@ router.put("/:id", requireAuth, requirePerm("remisiones", "editar"), async (req:
   try {
     const remisionId = Number(req.params.id);
     const rows: any[] = await prisma.$queryRaw`
-      SELECT r.Tipo, r.Estatus, se.Nombre, se.Destino, se.TipoCliente, se.PidePedido, se.PideEmbarque
+      SELECT r.Tipo, r.Estatus, r.BodegaDestino, r.AreaDestino, se.Nombre, se.Destino, se.TipoCliente, se.PidePedido, se.PideEmbarque
       FROM Remisiones r JOIN SerieRemision se ON r.Tipo = se.Tipo
       WHERE r.RemisionId = ${remisionId} LIMIT 1
     `;
@@ -483,27 +483,34 @@ router.put("/:id", requireAuth, requirePerm("remisiones", "editar"), async (req:
       }
     }
 
-    // Lo escaneado ya está en el piso de la bodega destino: si el borrador cambia de bodega, el
-    // producto se pasa al piso nuevo en la misma transacción (y se niega si el área vieja ya lo trabajó).
-    const operador = getOperador(req);
-    await prisma.$transaction(async (tx) => {
-      await tx.$executeRaw`
-        UPDATE Remisiones SET
-          Fecha = ${fecha},
-          CodigoCliente = ${destino.CodigoCliente},
-          CodigoSubcliente = ${destino.CodigoSubcliente},
-          AreaDestino = ${destino.AreaDestino},
-          BodegaDestino = ${destino.BodegaDestino},
-          RecibidoPor = ${destino.RecibidoPor},
-          CodigoPedido = ${destino.CodigoPedido},
-          EsMixta = ${esMixta ? 1 : 0},
-          Contenedor = ${embarque.Contenedor},
-          Sello = ${embarque.Sello},
-          Observaciones = ${String(req.body.Observaciones ?? "").trim() || null}
-        WHERE RemisionId = ${remisionId}
-      `;
-      await sincronizarPiso(tx, { RemisionId: remisionId, BodegaDestino: destino.BodegaDestino, AreaDestino: destino.AreaDestino }, operador);
-    }, { timeout: 30_000 });
+    // Un borrador no tiene nada en el piso (entra al confirmar). Si alguno sí tiene —  una confirmada
+    // que se regresó a borrador a mano—, cambiarle la bodega dejaría ese ingreso en el piso viejo.
+    const cambiaBodega = (destino.BodegaDestino ?? null) !== (rows[0].BodegaDestino ?? null)
+      || (destino.AreaDestino ?? null) !== (rows[0].AreaDestino ?? null);
+    if (cambiaBodega) {
+      const enPiso: any[] = await prisma.$queryRaw`
+        SELECT 1 FROM MovimientoPiso WHERE RemisionId = ${remisionId} AND Tipo = 'INGRESO' LIMIT 1`;
+      if (enPiso.length) {
+        res.status(400).json({ error: "Esta remisión ya tiene producto en el piso de su área — no se le puede cambiar el destino." });
+        return;
+      }
+    }
+
+    await prisma.$executeRaw`
+      UPDATE Remisiones SET
+        Fecha = ${fecha},
+        CodigoCliente = ${destino.CodigoCliente},
+        CodigoSubcliente = ${destino.CodigoSubcliente},
+        AreaDestino = ${destino.AreaDestino},
+        BodegaDestino = ${destino.BodegaDestino},
+        RecibidoPor = ${destino.RecibidoPor},
+        CodigoPedido = ${destino.CodigoPedido},
+        EsMixta = ${esMixta ? 1 : 0},
+        Contenedor = ${embarque.Contenedor},
+        Sello = ${embarque.Sello},
+        Observaciones = ${String(req.body.Observaciones ?? "").trim() || null}
+      WHERE RemisionId = ${remisionId}
+    `;
     res.json({ ok: true });
   } catch (err: any) {
     if (err instanceof ErrorNegocio) { res.status(err.status).json({ error: err.message }); return; }
@@ -513,14 +520,14 @@ router.put("/:id", requireAuth, requirePerm("remisiones", "editar"), async (req:
 });
 
 // DELETE /api/remisiones/:id — solo en Borrador. Se borra de verdad (líneas incluidas) y todo lo que
-// había salido al escanear vuelve a bodega y sale del piso del área, con la SALIDA borrada del
-// kardex: el borrador nunca llegó a ser documento. El folio consumido de la serie NO se recicla,
-// igual que un talonario. Una remisión Confirmada no se elimina: se anula (deja rastro en el kardex).
+// había salido al escanear vuelve a bodega, con la SALIDA borrada del kardex: el borrador nunca llegó
+// a ser documento. El folio consumido de la serie NO se recicla, igual que un talonario. Una remisión
+// Confirmada no se elimina: se anula (deja rastro en el kardex).
 export async function eliminarBorrador(tx: any, remisionId: number, operador: string) {
   const remision = await exigirBorrador(tx, remisionId);
   const lineas: any[] = await tx.$queryRaw`SELECT MasterId FROM RemisionDetalle WHERE RemisionId = ${remisionId} FOR UPDATE`;
   const masterIds = lineas.map(l => Number(l.MasterId));
-  await sincronizarPiso(tx, remision, operador, masterIds);
+  await descontarPiso(tx, remisionId, remision, masterIds);
   await regresarABodega(tx, remisionId, masterIds, operador);
   await tx.$executeRaw`DELETE FROM RemisionDetalle WHERE RemisionId = ${remisionId}`;
   await tx.$executeRaw`DELETE FROM Remisiones WHERE RemisionId = ${remisionId}`;
@@ -621,9 +628,13 @@ function validarProforma(remision: { Folio: string; CodigoPedido: string | null;
 // confirme (usuario: "todo producto que entre a remisión sea rebajado del sistema aunque no se
 // confirme salida"). Antes un borrador olvidado dejaba sus masters contados en existencias, en el
 // avance del pedido y en su posición del rack, con el producto ya en el camión o en el área.
-// Si va a un área, entra a su piso en el mismo instante (también decisión del usuario).
-// Confirmar quedó para cerrar el documento: ya no se le agregan ni quitan líneas y empieza a correr
-// el plazo para anular.
+//
+// El piso del área, en cambio, lo recibe AL CONFIRMAR: confirmar es la ENTREGA física (usuario, mismo
+// 28 oct). Se probó que entrara al escanear y se descartó ese día: el área veía producto que seguía
+// en bodega (RS-0106: el 31/35 nunca se lo llevaron) y, si lo trabajaba, bodega ya no podía quitarlo
+// del borrador sin chocar. Mientras es borrador, el área lo ve en AL PISO como "aún en bodega" y no lo
+// puede trabajar (exigirEntregadas en descongelado.ts). Confirmada, ya no se le agregan ni quitan
+// líneas y empieza a correr el plazo para anular.
 
 type RemisionDestino = { RemisionId: number; BodegaDestino?: string | null; AreaDestino?: string | null };
 
@@ -710,12 +721,11 @@ async function regresarABodega(tx: any, remisionId: number, masterIds: number[],
   }
 }
 
-// El piso del área destino, igualado a lo que el borrador trae ahora (o va a traer sin `sinMasters`).
-// Que el área ya trabajó lo que se quita es un rechazo de negocio (400), no una falla del servidor.
-// Al QUITAR se llama antes de tocar bodega: el rechazo sale antes de que se escriba nada.
-async function sincronizarPiso(tx: any, remision: RemisionDestino, operador: string, sinMasters: number[] = []) {
+// Al confirmar, el piso del área recibe lo que trae la remisión. Que el área ya trabajó algo que se
+// quita es un rechazo de negocio (400), no una falla del servidor.
+async function sincronizarPiso(tx: any, remision: RemisionDestino, operador: string) {
   try {
-    return await sincronizarIngresoDeRemision(tx, Number(remision.RemisionId), remision, hoyGT(), operador, sinMasters);
+    return await sincronizarIngresoDeRemision(tx, Number(remision.RemisionId), remision, hoyGT(), operador);
   } catch (e: any) {
     if (e instanceof PisoEnNegativo) throw new ErrorNegocio(400, e.message);
     throw e;
@@ -723,7 +733,9 @@ async function sincronizarPiso(tx: any, remision: RemisionDestino, operador: str
 }
 
 // Lo que bodega devuelve de una remisión CONFIRMADA sale también del piso del área, solo esos masters
-// (ver descontarDevolucionDelPiso). Se llama antes de mover nada en bodega, por la misma razón.
+// (ver descontarDevolucionDelPiso). Se llama antes de mover nada en bodega: el rechazo sale antes de
+// que se escriba nada. En un borrador normal no hay nada en el piso y no hace nada; sí descuenta en
+// uno que se regresó a borrador a mano después de confirmado.
 async function descontarPiso(tx: any, remisionId: number, destino: { BodegaDestino?: string | null; AreaDestino?: string | null }, masterIds: number[]) {
   try {
     return await descontarDevolucionDelPiso(tx, remisionId, destino, masterIds);
@@ -733,8 +745,9 @@ async function descontarPiso(tx: any, remisionId: number, destino: { BodegaDesti
   }
 }
 
-// Aplica la regla a un borrador armado ANTES del cambio: saca de bodega lo que todavía está ahí y lo
-// mete al piso. Lo usa scripts/rebajarBorradoresExistentes.ts una sola vez, al desplegar.
+// Aplica la regla a un borrador armado ANTES del cambio: saca de bodega lo que todavía está ahí. El
+// piso no se toca: lo recibe al confirmar. Lo usa scripts/rebajarBorradoresExistentes.ts una sola
+// vez, al desplegar.
 export async function rebajarBorrador(tx: any, remisionId: number, operador: string) {
   const remision = await exigirBorrador(tx, remisionId);
   const lineas: any[] = await tx.$queryRaw`
@@ -742,8 +755,7 @@ export async function rebajarBorrador(tx: any, remisionId: number, operador: str
     WHERE rd.RemisionId = ${remisionId} AND rd.Vigente = 1 AND m.Estatus <> 'Salido'
   `;
   await sacarDeBodega(tx, remision, lineas.map(l => Number(l.MasterId)), operador);
-  const piso = await sincronizarPiso(tx, remision, operador);
-  return { Folio: remision.Folio as string, Rebajados: lineas.length, PisoKg: piso.kg };
+  return { Folio: remision.Folio as string, Rebajados: lineas.length };
 }
 
 // POST /api/remisiones/:id/agregar-pallet  { Codigo | PalletId }
@@ -812,8 +824,7 @@ export async function agregarPallet(
     ...params
   );
   await sacarDeBodega(tx, remision, masters.map(m => Number(m.MasterId)), operador);
-  const piso = await sincronizarPiso(tx, remision, operador);
-  return { ok: true, PalletCodigo: pallet.Codigo, Agregados: masters.length, Linea: linea, PisoKg: piso.kg };
+  return { ok: true, PalletCodigo: pallet.Codigo, Agregados: masters.length, Linea: linea };
 }
 
 router.post("/:id/agregar-pallet", requireAuth, requirePerm("remisiones", "editar"), async (req: Request, res: Response) => {
@@ -875,7 +886,6 @@ export async function agregarMaster(
     VALUES (${remisionId}, ${masterId}, ${linea}, ${operador})
   `;
   await sacarDeBodega(tx, remision, [masterId], operador);
-  await sincronizarPiso(tx, remision, operador);
   return { MasterId: masterId, Linea: linea };
 }
 
@@ -896,7 +906,8 @@ router.post("/:id/agregar-master", requireAuth, requirePerm("remisiones", "edita
 });
 
 // Quita líneas del borrador —  una suelta (detalleId) o todas las de un polín (palletId)—  y lo que
-// habían sacado vuelve a bodega y sale del piso del área. Devuelve cuántas quitó.
+// habían sacado vuelve a bodega. Como el área no recibe nada hasta que se confirma, no hay con qué
+// chocar. Devuelve cuántas quitó.
 export async function quitarLineas(
   tx: any, remisionId: number, filtro: { detalleId?: number; palletId?: number }, operador: string,
 ): Promise<number> {
@@ -912,7 +923,7 @@ export async function quitarLineas(
   if (!lineas.length) return 0;
 
   const masterIds = lineas.map(l => Number(l.MasterId));
-  await sincronizarPiso(tx, remision, operador, masterIds);
+  await descontarPiso(tx, remisionId, remision, masterIds);
   await regresarABodega(tx, remisionId, masterIds, operador);
   const detalles = lineas.map(l => Number(l.DetalleId));
   await tx.$executeRawUnsafe(
@@ -960,11 +971,12 @@ router.post("/:id/quitar-pallet", requireAuth, requirePerm("remisiones", "editar
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 
 // POST /api/remisiones/:id/confirmar
-// Cierra el documento. El inventario ya se movió al escanear (bodega y piso del área); aquí solo se
-// revalida la proforma, se marca Confirmada —  desde ahí corre el plazo para anular—  y el borrador
-// deja de aceptar cambios.
+// Es la ENTREGA. Bodega ya se rebajó al escanear; aquí se revalida la proforma, se marca Confirmada
+// —  desde ahí corre el plazo para anular—, el borrador deja de aceptar cambios y, si va a un área,
+// el producto entra a su piso: desde ese momento el área lo puede trabajar. La jornada del ingreso
+// es el día de la confirmación, que es cuando el área lo recibe de verdad.
 // Los borradores armados ANTES del 28 oct 2026 todavía traen líneas en bodega: esas salen aquí, como
-// salían siempre, y entran al piso en la misma transacción.
+// salían siempre.
 export async function confirmarRemision(tx: any, remisionId: number, operador: string) {
   const remision = await exigirBorrador(tx, remisionId);
 

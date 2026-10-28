@@ -1,7 +1,8 @@
 // Una sola vez, AL DESPLEGAR "rebajar al escanear" (28 oct 2026): los borradores que ya estaban
-// armados tienen sus masters todavía EnBodega y nada en el piso del área, porque se escanearon con la
-// regla vieja (el inventario se movía al confirmar). Este script les aplica la regla nueva: salen de
-// bodega (Salido + SALIDA en el kardex + polín vacío Despachado) y, si van a un área, entran a su piso.
+// armados tienen sus masters todavía EnBodega, porque se escanearon con la regla vieja (bodega se
+// rebajaba al confirmar). Este script les aplica la regla nueva: salen de bodega (Salido + SALIDA en
+// el kardex + polín vacío Despachado). El piso del área no se toca: lo recibe al confirmar, que es la
+// entrega; mientras tanto el área los ve "aún en bodega".
 //
 // Correrlo DESPUÉS de desplegar el código nuevo, nunca antes: el código viejo rechaza confirmar una
 // remisión con masters Salido ("ya salieron de bodega en otro documento").
@@ -11,7 +12,7 @@
 //   npx tsx scripts/rebajarBorradoresExistentes.ts --aplicar  → lo aplica
 //
 // Para deshacerlo en un borrador: quitarle las líneas o eliminarlo desde la pantalla, que ya las
-// regresa a bodega y al piso con la regla nueva.
+// regresa a bodega con la regla nueva.
 import "dotenv/config";
 import { PrismaClient } from "@prisma/client";
 import { rebajarBorrador } from "../src/routes/remisiones.ts";
@@ -38,7 +39,7 @@ async function main() {
       for (const b of borradores) {
         const r = await rebajarBorrador(tx, Number(b.RemisionId), "Sistema (rebaja al escanear)");
         console.log(`  ${r.Folio}: ${r.Rebajados} master(s) salen de bodega` +
-          (b.BodegaDestino ? ` · ${r.PisoKg} kg al piso de ${b.BodegaDestino}` : ""));
+          (b.BodegaDestino ? ` · ${b.BodegaDestino} los recibe al confirmar` : ""));
       }
       if (!APLICAR) throw new Error(SIMULACRO);
     }, { timeout: 300_000 });

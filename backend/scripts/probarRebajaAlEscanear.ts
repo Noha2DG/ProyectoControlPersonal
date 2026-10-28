@@ -1,10 +1,12 @@
-// Prueba de "rebajar al escanear" (28 oct 2026): lo que entra a una remisión sale de bodega y entra
-// al piso del área EN ESE MOMENTO, sin esperar a confirmar. Corre contra la BASE REAL pero SIN dejar
-// nada: todo va dentro de una transacción que al final SIEMPRE se revierte (se lanza a propósito).
-// Mismo patrón que probarDevolverMaster.ts — ver feedback_probar_con_transaccion_revertida.
+// Prueba de "rebajar al escanear" (28 oct 2026): lo que entra a una remisión sale de bodega EN ESE
+// MOMENTO, sin esperar a confirmar, y el piso del área lo recibe AL CONFIRMAR, que es la entrega
+// física. Mientras tanto el área lo ve "por entregar" y no lo puede trabajar. Corre contra la BASE
+// REAL pero SIN dejar nada: todo va dentro de una transacción que al final SIEMPRE se revierte (se
+// lanza a propósito). Mismo patrón que probarDevolverMaster.ts — ver
+// feedback_probar_con_transaccion_revertida.
 //
 // Los rechazos se prueban en la misma transacción, así que las funciones tienen que rechazar ANTES de
-// escribir (MariaDB no deja abrir un SAVEPOINT por el protocolo que usa Prisma). La prueba 15
+// escribir (MariaDB no deja abrir un SAVEPOINT por el protocolo que usa Prisma). La prueba 17
 // verifica justo eso: tras el rechazo, todo sigue como estaba.
 //
 //   npx tsx scripts/probarRebajaAlEscanear.ts
@@ -15,6 +17,7 @@ import {
 } from "../src/routes/remisiones.ts";
 import { sincronizarIngresoDeRemision } from "../src/lib/inventarioPiso.ts";
 import { SALIO_EN_TRASLADO } from "../src/lib/masters.ts";
+import { porEntregar, consumirDelPiso } from "../src/routes/descongelado.ts";
 
 const p = new PrismaClient();
 const ROLLBACK = "__ROLLBACK_PRUEBA__";
@@ -62,7 +65,6 @@ async function main() {
         SELECT PosicionId FROM Posiciones
         WHERE PosicionId NOT IN (SELECT PosicionId FROM Pallets WHERE PosicionId IS NOT NULL) LIMIT 3`);
       const [posX, posY, posZ] = libres.map(r => Number(r.PosicionId));
-      const otraBodega = await q(`SELECT Codigo FROM BodegaVirtual WHERE LlevaPiso = 1 AND Codigo <> 'DESCONGELADO' LIMIT 1`);
 
       const PEDIDO = "ZZPRUEBA_REB";
       await x(`INSERT INTO Pedidos (CodigoPedido, CodigoCliente, Descripcion, FechaInicio, Estatus)
@@ -119,83 +121,83 @@ async function main() {
       const p1 = await polin(P1.palletId);
       check("3. el polín vacío queda Despachado y suelta su posición", p1.Estatus === "Despachado" && p1.PosicionId == null, JSON.stringify(p1));
       let ing = await ingreso(R1);
-      check("4. entra al piso de Descongelado en el acto (1 fila, 3 masters)",
-        ing.length === 1 && ing[0].BodegaDestino === "DESCONGELADO" && Number(ing[0].Masters) === 3 && cerca(Number(ing[0].PesoKg), kg(3)),
-        JSON.stringify(ing));
+      check("4. al piso del área NO entra hasta confirmar (confirmar es la entrega)", ing.length === 0, JSON.stringify(ing));
       const cuenta = await q(`SELECT COUNT(*) AS n FROM Masters m WHERE m.MasterId = ? AND ${SALIO_EN_TRASLADO}`, p1m[0].masterId);
       check("5. cuenta como trasladado para el cupo del pedido aunque siga en borrador", Number(cuenta[0].n) === 1);
 
-      // ── 2. Picking de una caja: suma a la MISMA fila del piso, el polín conserva su posición ───
+      // ── 2. Picking de una caja: el polín conserva su posición ───────────────────────────────────
       await agregarMaster(tx, R1, { Correlativo: p2m[0].correlativo }, OP);
       check("6. el master suelto queda Salido", (await estatus(p2m[0].masterId)) === "Salido");
       const p2 = await polin(P2.palletId);
       check("7. su polín, a medias, sigue Cerrado en su posición", p2.Estatus === "Cerrado" && Number(p2.PosicionId) === posY, JSON.stringify(p2));
-      ing = await ingreso(R1);
-      check("8. el piso sigue en UNA fila, ahora con 4 masters", ing.length === 1 && Number(ing[0].Masters) === 4 && cerca(Number(ing[0].PesoKg), kg(4)), JSON.stringify(ing));
+      check("8. el piso del área sigue sin nada", (await ingreso(R1)).length === 0);
       await esperarError("9. el mismo master no entra dos veces",
         () => agregarMaster(tx, R1, { Correlativo: p2m[0].correlativo }, OP), "ya está en la remisión");
 
-      // ── 3. Quitar una línea la regresa a bodega y al piso ───────────────────────────────────────
+      // ── 3. El área lo ve "aún en bodega" y no lo puede trabajar ─────────────────────────────────
+      const deR1 = async () => (await porEntregar(tx, "DESCONGELADO")).filter((r: any) => r.RemisionId === R1);
+      let pe = await deR1();
+      check("10. el área ve las 4 cajas del borrador como por entregar",
+        pe.length === 1 && pe[0].Masters === 4 && pe[0].PorEntregar === true && pe[0].EstatusRemision === "Borrador", JSON.stringify(pe));
+      await esperarError("11. Descongelado no puede trabajar lo que bodega no ha entregado",
+        () => consumirDelPiso(tx, { BodegaCodigo: "DESCONGELADO" }, 0, [{
+          remId: R1, Lote: "ZZPRUEBA", Clase: det[0].Clase, talla: Number(det[0].Talla), um: "KG",
+          masters: 1, kgxm: kgpm, declarado: kg(1), kgDecl: kg(1), fechaLote: null, fechaPedida: null,
+        }], OP, "2026-10-28"),
+        "todavía no la entrega bodega");
+
+      // ── 4. Quitar del borrador: regresa a bodega sin chocar con nada ────────────────────────────
       const lineaP2: any[] = await q(`SELECT DetalleId FROM RemisionDetalle WHERE RemisionId = ? AND MasterId = ?`, R1, p2m[0].masterId);
       await quitarLineas(tx, R1, { detalleId: Number(lineaP2[0].DetalleId) }, OP);
-      check("10. el master quitado vuelve a EnBodega", (await estatus(p2m[0].masterId)) === "EnBodega");
-      check("11. su SALIDA se borra del kardex", (await salidas(R1)) === 3);
-      ing = await ingreso(R1);
-      check("12. el piso baja a 3 masters", ing.length === 1 && Number(ing[0].Masters) === 3, JSON.stringify(ing));
+      check("12. el master quitado vuelve a EnBodega y su SALIDA se borra",
+        (await estatus(p2m[0].masterId)) === "EnBodega" && (await salidas(R1)) === 3);
+      pe = await deR1();
+      check("13. ... y el área ya solo ve 3 por entregar", pe.length === 1 && pe[0].Masters === 3, JSON.stringify(pe));
 
-      // ── 4. Lo que el área ya descongeló no se puede quitar ni eliminar ──────────────────────────
+      // ── 5. Una confirmada que se regresó a borrador a mano (RS-0108, 28 oct): ya tiene piso ─────
+      await sincronizarIngresoDeRemision(tx, R1, { BodegaDestino: "DESCONGELADO" }, "2026-10-28", OP);
       await x(`INSERT INTO MovimientoPiso (Tipo, FechaProduccion, BodegaOrigen, Lote, Clase, Talla, FechaLote, Peso, UM, PesoKg, Masters, KgPorMaster, RemisionId, RegistradoPor)
                VALUES ('CONSUMO', CURDATE(), 'DESCONGELADO', 'ZZPRUEBA', ?, ?, CURDATE(), ?, 'KG', ?, 2, ?, ?, 'prueba')`,
         det[0].Clase, det[0].Talla, kg(2), kg(2), kgpm, R1);
       const consumoId = await id();
-      await esperarError("13. no deja quitar un polín que el área ya descongeló",
-        () => quitarLineas(tx, R1, { palletId: P1.palletId }, OP), "El área ya trabajó");
-      await esperarError("14. no deja eliminar el borrador con producto ya descongelado",
-        () => eliminarBorrador(tx, R1, OP), "El área ya trabajó");
-      check("15. tras el rechazo todo sigue como estaba (masters Salido, 3 al piso)",
+      check("14. con ingreso al piso ya no sale también como por entregar", (await deR1()).length === 0);
+      await esperarError("15. no deja quitar un polín que el área ya descongeló",
+        () => quitarLineas(tx, R1, { palletId: P1.palletId }, OP), "ya trabajó ese producto");
+      await esperarError("16. ni eliminar el borrador",
+        () => eliminarBorrador(tx, R1, OP), "ya trabajó ese producto");
+      check("17. tras el rechazo todo sigue como estaba (masters Salido, 3 al piso)",
         (await estatus(p1m[0].masterId)) === "Salido" && Number((await ingreso(R1))[0]?.Masters) === 3);
       await x(`DELETE FROM MovimientoPiso WHERE MovimientoId = ?`, consumoId);
-
-      // ── 5. Cambiar la bodega destino del borrador mueve el piso ─────────────────────────────────
-      if (otraBodega.length) {
-        await x(`UPDATE Remisiones SET BodegaDestino = ? WHERE RemisionId = ?`, otraBodega[0].Codigo, R1);
-        await sincronizarIngresoDeRemision(tx, R1, { BodegaDestino: otraBodega[0].Codigo }, "2026-10-28", OP);
-        ing = await ingreso(R1);
-        check("16. el ingreso pasa al piso de la bodega nueva", ing.length === 1 && ing[0].BodegaDestino === otraBodega[0].Codigo, JSON.stringify(ing));
-        await x(`UPDATE Remisiones SET BodegaDestino = 'DESCONGELADO' WHERE RemisionId = ?`, R1);
-        await sincronizarIngresoDeRemision(tx, R1, { BodegaDestino: "DESCONGELADO" }, "2026-10-28", OP);
-      } else {
-        check("16. (sin otra bodega con piso para probar el cambio de destino)", true);
-      }
+      await x(`DELETE FROM MovimientoPiso WHERE RemisionId = ? AND Tipo = 'INGRESO'`, R1);
 
       // ── 6. Quitar un polín entero cuya posición ya ocupó otro: queda sin posición ──────────────
       await nuevoPallet(posX);   // otro polín se puso en X mientras P1 estaba en el borrador
       await quitarLineas(tx, R1, { palletId: P1.palletId }, OP);
       const p1b = await polin(P1.palletId);
-      check("17. el polín regresa Cerrado SIN posición (la suya ya está ocupada)", p1b.Estatus === "Cerrado" && p1b.PosicionId == null, JSON.stringify(p1b));
+      check("18. el polín regresa Cerrado SIN posición (la suya ya está ocupada)", p1b.Estatus === "Cerrado" && p1b.PosicionId == null, JSON.stringify(p1b));
       const des = await q(`SELECT COUNT(*) AS n FROM MovimientosBodega WHERE PalletId = ? AND Tipo = 'DESUBICACION' AND PosicionOrigenId = ?`, P1.palletId, posX);
-      check("18. queda su DESUBICACION en el kardex", Number(des[0].n) === 1);
-      check("19. sus masters vuelven a EnBodega y salen del piso",
+      check("19. queda su DESUBICACION en el kardex", Number(des[0].n) === 1);
+      check("20. sus masters vuelven a EnBodega y salen del piso",
         (await estatus(p1m[0].masterId)) === "EnBodega" && (await ingreso(R1)).length === 0 && (await salidas(R1)) === 0);
 
       // ── 7. Quitar un polín cuya posición sigue libre: la recupera ───────────────────────────────
       const P3 = await nuevoPallet(posZ);
       const p3m = [await nuevoMaster(P3.palletId), await nuevoMaster(P3.palletId)];
       await agregarPallet(tx, R1, { Codigo: P3.codigo }, OP);
-      check("20. P3 despachado al escanearlo", (await polin(P3.palletId)).Estatus === "Despachado");
+      check("21. P3 despachado al escanearlo", (await polin(P3.palletId)).Estatus === "Despachado");
       await quitarLineas(tx, R1, { palletId: P3.palletId }, OP);
       const p3 = await polin(P3.palletId);
-      check("21. al quitarlo vuelve Cerrado a SU posición", p3.Estatus === "Cerrado" && Number(p3.PosicionId) === posZ, JSON.stringify(p3));
+      check("22. al quitarlo vuelve Cerrado a SU posición", p3.Estatus === "Cerrado" && Number(p3.PosicionId) === posZ, JSON.stringify(p3));
 
       // ── 8. Eliminar el borrador regresa todo ────────────────────────────────────────────────────
       await agregarPallet(tx, R1, { Codigo: P3.codigo }, OP);
       await eliminarBorrador(tx, R1, OP);
-      check("22. eliminar el borrador: la remisión ya no existe",
+      check("23. eliminar el borrador: la remisión ya no existe",
         (await q(`SELECT 1 FROM Remisiones WHERE RemisionId = ?`, R1)).length === 0);
-      check("23. ... sus masters vuelven a EnBodega y su polín a su posición",
+      check("24. ... sus masters vuelven a EnBodega y su polín a su posición",
         (await Promise.all(p3m.map(m => estatus(m.masterId)))).every(e => e === "EnBodega")
         && Number((await polin(P3.palletId)).PosicionId) === posZ);
-      check("24. ... y no queda nada en el piso ni en el kardex con esa remisión",
+      check("25. ... y no queda nada en el piso ni en el kardex con esa remisión",
         (await q(`SELECT 1 FROM MovimientoPiso WHERE RemisionId = ?`, R1)).length === 0
         && (await q(`SELECT 1 FROM MovimientosBodega WHERE RemisionId = ?`, R1)).length === 0);
 
@@ -205,22 +207,22 @@ async function main() {
       // Una línea "vieja": entró al borrador antes del cambio, sin sacar el master de bodega.
       await x(`INSERT INTO RemisionDetalle (RemisionId, MasterId, AgregadoPor) VALUES (?, ?, 'prueba')`, R2, p2m[1].masterId);
       const conf: any = await confirmarRemision(tx, R2, OP);
-      check("25. confirma con los 3 masters", conf.ok === true && conf.Masters === 3, JSON.stringify(conf));
-      check("26. la línea vieja sale de bodega al confirmar", (await estatus(p2m[1].masterId)) === "Salido" && (await salidas(R2)) === 3);
+      check("26. confirma con los 3 masters", conf.ok === true && conf.Masters === 3, JSON.stringify(conf));
+      check("27. la línea vieja sale de bodega al confirmar", (await estatus(p2m[1].masterId)) === "Salido" && (await salidas(R2)) === 3);
       ing = await ingreso(R2);
-      check("27. el piso queda con los 3 (una sola fila)", ing.length === 1 && Number(ing[0].Masters) === 3 && cerca(Number(ing[0].PesoKg), kg(3)), JSON.stringify(ing));
-      check("28. la remisión queda Confirmada",
+      check("28. el piso queda con los 3 (una sola fila)", ing.length === 1 && Number(ing[0].Masters) === 3 && cerca(Number(ing[0].PesoKg), kg(3)), JSON.stringify(ing));
+      check("29. la remisión queda Confirmada",
         (await q(`SELECT Estatus FROM Remisiones WHERE RemisionId = ?`, R2))[0].Estatus === "Confirmada");
-      await esperarError("29. confirmada ya no acepta líneas",
+      await esperarError("30. confirmada ya no acepta líneas",
         () => agregarMaster(tx, R2, { Correlativo: p2m[0].correlativo }, OP), "ya no se le pueden cambiar las líneas");
 
       // ── 10. Remisión a cliente: rebaja bodega, no toca ningún piso ──────────────────────────────
       const R3 = await nuevaRemision(serieCliente[0].Tipo, null);
       await agregarMaster(tx, R3, { Correlativo: p2m[0].correlativo }, OP);
-      check("30. a cliente: el master queda Salido al escanear", (await estatus(p2m[0].masterId)) === "Salido");
-      check("31. a cliente: no entra nada a ningún piso", (await q(`SELECT 1 FROM MovimientoPiso WHERE RemisionId = ?`, R3)).length === 0);
+      check("31. a cliente: el master queda Salido al escanear", (await estatus(p2m[0].masterId)) === "Salido");
+      check("32. a cliente: no entra nada a ningún piso", (await q(`SELECT 1 FROM MovimientoPiso WHERE RemisionId = ?`, R3)).length === 0);
       const p2c = await polin(P2.palletId);
-      check("32. el polín P2 ya vacío queda Despachado sin posición", p2c.Estatus === "Despachado" && p2c.PosicionId == null, JSON.stringify(p2c));
+      check("33. el polín P2 ya vacío queda Despachado sin posición", p2c.Estatus === "Despachado" && p2c.PosicionId == null, JSON.stringify(p2c));
 
       throw new Error(ROLLBACK);
     }, { timeout: 180_000 });
@@ -229,7 +231,7 @@ async function main() {
   }
 
   const sobras: any[] = await p.$queryRawUnsafe(`SELECT CodigoPedido FROM Pedidos WHERE CodigoPedido = 'ZZPRUEBA_REB'`);
-  check("33. la transacción revirtió TODO el fixture", sobras.length === 0);
+  check("34. la transacción revirtió TODO el fixture", sobras.length === 0);
 
   console.log(`\n${ok} OK, ${fallos} fallas`);
   await p.$disconnect();
