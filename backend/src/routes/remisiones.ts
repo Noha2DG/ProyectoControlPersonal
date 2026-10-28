@@ -4,7 +4,9 @@ import prisma from "../lib/prisma.ts";
 import { requireAuth, requirePerm, AuthRequest } from "../middleware/auth.ts";
 import { MASTER_SELECT, formatearMaster } from "../lib/masters.ts";
 import { normalizarCorrelativo, resolverEtiqueta } from "../lib/correlativo.ts";
-import { sincronizarIngresoDeRemision, revertirIngresoDeRemision, PisoEnNegativo } from "../lib/inventarioPiso.ts";
+import {
+  sincronizarIngresoDeRemision, revertirIngresoDeRemision, descontarDevolucionDelPiso, pisoDeRemision, PisoEnNegativo,
+} from "../lib/inventarioPiso.ts";
 import { hoyGT } from "../lib/dateGT.ts";
 
 // Salida de bodega = Remisión (ver createRemisiones.ts para el modelo y las decisiones de diseño).
@@ -349,6 +351,11 @@ router.get("/:id", requireAuth, requirePerm("remisiones", "ver"), async (req: Re
       };
     });
 
+    // Lo que la remisión dejó al piso del área: bodega ve qué sigue sin trabajar y, si el área dice
+    // que no lo tiene, qué se quedó en bodega y hay que devolver.
+    const piso = remision.Estatus === "Anulada" ? null
+      : await pisoDeRemision(prisma, remisionId, { BodegaDestino: remision.BodegaDestino, AreaDestino: remision.AreaDestino });
+
     res.json({
       ...remision,
       RemisionId: Number(remision.RemisionId),
@@ -367,6 +374,7 @@ router.get("/:id", requireAuth, requirePerm("remisiones", "ver"), async (req: Re
       CantidadMasters: lineas.length,
       PesoKg: lineas.reduce((acc, l) => acc + l.PesoMasterKG, 0),
       PesoLb: lineas.reduce((acc, l) => acc + l.PesoMasterLb, 0),
+      Piso: piso,
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -708,6 +716,17 @@ async function regresarABodega(tx: any, remisionId: number, masterIds: number[],
 async function sincronizarPiso(tx: any, remision: RemisionDestino, operador: string, sinMasters: number[] = []) {
   try {
     return await sincronizarIngresoDeRemision(tx, Number(remision.RemisionId), remision, hoyGT(), operador, sinMasters);
+  } catch (e: any) {
+    if (e instanceof PisoEnNegativo) throw new ErrorNegocio(400, e.message);
+    throw e;
+  }
+}
+
+// Lo que bodega devuelve de una remisión CONFIRMADA sale también del piso del área, solo esos masters
+// (ver descontarDevolucionDelPiso). Se llama antes de mover nada en bodega, por la misma razón.
+async function descontarPiso(tx: any, remisionId: number, destino: { BodegaDestino?: string | null; AreaDestino?: string | null }, masterIds: number[]) {
+  try {
+    return await descontarDevolucionDelPiso(tx, remisionId, destino, masterIds);
   } catch (e: any) {
     if (e instanceof PisoEnNegativo) throw new ErrorNegocio(400, e.message);
     throw e;
@@ -1202,7 +1221,7 @@ export async function devolverMaster(
   }
 
   const rdRows: any[] = await tx.$queryRaw`
-    SELECT rd.RemisionId, r.Folio, r.Estatus, r.ConfirmadaEn
+    SELECT rd.RemisionId, r.Folio, r.Estatus, r.ConfirmadaEn, r.BodegaDestino, r.AreaDestino
     FROM RemisionDetalle rd JOIN Remisiones r ON rd.RemisionId = r.RemisionId
     WHERE rd.MasterId = ${masterId} AND rd.Vigente = 1 LIMIT 1 FOR UPDATE
   `;
@@ -1236,6 +1255,10 @@ export async function devolverMaster(
 
   const origenPalletId = Number(masterRows[0].PalletId);
 
+  // Si la remisión fue a un área con piso, la caja sale también de ahí (28 oct 2026, RS-0106): si no,
+  // queda contada dos veces. Va primero: si el área ya la trabajó, se rechaza sin tocar bodega.
+  const piso = await descontarPiso(tx, remisionId, rdRows[0], [masterId]);
+
   await tx.$executeRaw`UPDATE RemisionDetalle SET Vigente = NULL WHERE RemisionId = ${remisionId} AND MasterId = ${masterId}`;
   await tx.$executeRaw`UPDATE Masters SET Estatus = 'EnBodega', PalletId = ${palletDestinoId} WHERE MasterId = ${masterId}`;
   await tx.$executeRaw`
@@ -1243,7 +1266,87 @@ export async function devolverMaster(
     VALUES (${palletDestinoId}, ${origenPalletId}, ${masterId}, ${remisionId}, 'DEVOLUCION', NULL, NULL, ${params.operador}, ${`Devolución de la remisión ${rdRows[0].Folio}: ${motivo}`.slice(0, 200)})
   `;
 
-  return { ok: true, Correlativo: etiqueta.Correlativo, RemisionFolio: rdRows[0].Folio, PalletDestino: dest[0].Codigo };
+  return { ok: true, Correlativo: etiqueta.Correlativo, RemisionFolio: rdRows[0].Folio, PalletDestino: dest[0].Codigo, PisoKg: piso.kg };
+}
+
+// POST /api/remisiones/:id/devolver-polin  { Codigo, Motivo }
+//
+// El polín entero no se lo llevaron: se quedó al piso de bodega (RS-0106, 28 oct 2026: Descongelado
+// solo tomó el 21/25 y el 31/35 se quedó). Con Devolver master había que crear un polín de
+// devolución y escanear las 80 cajas una por una; aquí se escanea la hoja del polín UNA vez y vuelve
+// el MISMO polín, porque nunca salió —  su hoja sigue pegada y sus cajas son las mismas—.
+//
+// Toma solo los masters de ese polín que van en ESTA remisión. Sus líneas quedan Vigente = NULL
+// (igual que Devolver master), los masters vuelven a EnBodega, el kardex gana una DEVOLUCION por
+// caja y el polín, si se había despachado entero, vuelve a Cerrado sin posición para que bodega lo
+// ubique. Sale del piso del área en la misma transacción, y se niega si el área ya lo trabajó.
+//
+// Mismo permiso y mismo plazo que anular y Devolver master: reversar una salida confirmada.
+// Un polín que sigue en su posición del rack se rechaza: si parte de él se quedó arriba, lo que
+// regresa son cajas sueltas y va por Devolver master a un polín de devolución.
+export async function devolverPolin(
+  tx: any,
+  params: { remisionId: number; codigo: any; motivo: any; operador: string; esAdmin: boolean },
+) {
+  const codigo = String(params.codigo ?? "").trim().toUpperCase();
+  if (!codigo) throw new ErrorNegocio(400, "Escanea el QR de la hoja del polín");
+  const motivo = String(params.motivo ?? "").trim();
+  if (!motivo) throw new ErrorNegocio(400, "El motivo de la devolución es requerido");
+
+  const rem: any[] = await tx.$queryRaw`
+    SELECT RemisionId, Folio, Estatus, ConfirmadaEn, BodegaDestino, AreaDestino
+    FROM Remisiones WHERE RemisionId = ${params.remisionId} LIMIT 1 FOR UPDATE
+  `;
+  if (!rem.length) throw new ErrorNegocio(404, "Remisión no encontrada");
+  const remision = rem[0];
+  if (remision.Estatus === "Borrador") {
+    throw new ErrorNegocio(400, `La remisión ${remision.Folio} sigue en borrador — quita el polín con "Quitar polín", regresa a bodega solo.`);
+  }
+  if (remision.Estatus !== "Confirmada") throw new ErrorNegocio(400, `La remisión ${remision.Folio} está anulada`);
+  if (anulacionVencida(remision.ConfirmadaEn) && !params.esAdmin) {
+    const dias = diasDesdeConfirmada(remision.ConfirmadaEn);
+    throw new ErrorNegocio(403,
+      `La remisión ${remision.Folio} se confirmó hace ${dias} días y el plazo para devolver producto de ahí es de ${DIAS_PARA_ANULAR}. ` +
+      `Pasado ese plazo solo un administrador puede hacerlo.`);
+  }
+
+  const pal: any[] = await tx.$queryRaw`
+    SELECT p.PalletId, p.Codigo, p.Estatus, p.PosicionId, pos.Codigo AS PosicionCodigo
+    FROM Pallets p LEFT JOIN Posiciones pos ON pos.PosicionId = p.PosicionId
+    WHERE p.Codigo = ${codigo} LIMIT 1 FOR UPDATE
+  `;
+  if (!pal.length) throw new ErrorNegocio(404, `QR no reconocido — no existe el polín ${codigo}`);
+  const pallet = pal[0];
+  const palletId = Number(pallet.PalletId);
+
+  const masters: any[] = await tx.$queryRaw`
+    SELECT m.MasterId FROM Masters m
+    JOIN RemisionDetalle rd ON rd.MasterId = m.MasterId AND rd.RemisionId = ${params.remisionId} AND rd.Vigente = 1
+    WHERE m.PalletId = ${palletId} AND m.Estatus = 'Salido'
+    FOR UPDATE
+  `;
+  if (!masters.length) throw new ErrorNegocio(400, `El polín ${pallet.Codigo} no tiene cajas en la remisión ${remision.Folio}`);
+  if (pallet.PosicionId != null) {
+    throw new ErrorNegocio(400,
+      `El polín ${pallet.Codigo} sigue ubicado en ${pallet.PosicionCodigo ?? "el rack"}: lo que regresa son cajas sueltas. ` +
+      `Devuélvelas con Devolver master en un polín de devolución.`);
+  }
+  const ids = masters.map(m => Number(m.MasterId));
+  const marcas = ids.map(() => "?").join(",");
+
+  const piso = await descontarPiso(tx, params.remisionId, remision, ids);
+
+  await tx.$executeRawUnsafe(
+    `UPDATE RemisionDetalle SET Vigente = NULL WHERE RemisionId = ? AND MasterId IN (${marcas})`, params.remisionId, ...ids);
+  await tx.$executeRawUnsafe(`UPDATE Masters SET Estatus = 'EnBodega' WHERE MasterId IN (${marcas})`, ...ids);
+  const texto = `Devolución de la remisión ${remision.Folio} (el polín no salió): ${motivo}`.slice(0, 200);
+  await tx.$executeRawUnsafe(
+    `INSERT INTO MovimientosBodega (PalletId, PalletOrigenId, MasterId, RemisionId, Tipo, PosicionOrigenId, PosicionDestinoId, Usuario, Motivo)
+     VALUES ${ids.map(() => "(?, ?, ?, ?, 'DEVOLUCION', NULL, NULL, ?, ?)").join(", ")}`,
+    ...ids.flatMap(id => [palletId, palletId, id, params.remisionId, params.operador, texto]));
+  await tx.$executeRaw`UPDATE Pallets SET Estatus = 'Cerrado' WHERE PalletId = ${palletId} AND Estatus = 'Despachado'`;
+
+  return { ok: true, PalletCodigo: pallet.Codigo, Masters: ids.length, Folio: remision.Folio, PisoKg: piso.kg };
 }
 
 router.post("/devolver-master", requireAuth, requirePerm("remisiones", "anular"), async (req: AuthRequest, res: Response) => {
@@ -1255,6 +1358,23 @@ router.post("/devolver-master", requireAuth, requirePerm("remisiones", "anular")
         motivo: req.body.Motivo, operador, esAdmin: req.user?.rol === "admin",
       }),
       { timeout: 30_000 },
+    );
+    res.json(respuesta);
+  } catch (err: any) {
+    if (err instanceof ErrorNegocio) { res.status(err.status).json({ error: err.message }); return; }
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post("/:id/devolver-polin", requireAuth, requirePerm("remisiones", "anular"), async (req: AuthRequest, res: Response) => {
+  try {
+    const operador = getOperador(req);
+    const respuesta = await prisma.$transaction(
+      (tx) => devolverPolin(tx, {
+        remisionId: Number(req.params.id), codigo: req.body.Codigo, motivo: req.body.Motivo,
+        operador, esAdmin: req.user?.rol === "admin",
+      }),
+      { timeout: 60_000 },
     );
     res.json(respuesta);
   } catch (err: any) {

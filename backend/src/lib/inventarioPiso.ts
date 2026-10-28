@@ -208,6 +208,138 @@ export async function sincronizarIngresoDeRemision(
 }
 
 /**
+ * Saca del piso del área lo que bodega devuelve de una remisión YA CONFIRMADA: un master (Devolver
+ * master) o un polín que no se llevaron (Devolver polín). Sin esto el producto quedaba contado dos
+ * veces —  en bodega y al piso—: RS-0096 el 27 oct y RS-0106 el 28 oct 2026, donde Descongelado veía
+ * 80 masters de 31/35 que se habían quedado en bodega.
+ *
+ * A diferencia de sincronizarIngresoDeRemision, NO recalcula la remisión entera: descuenta
+ * exactamente esos masters de su lote y talla. Una confirmada vieja pudo tener devoluciones hechas
+ * desde el área, que ya salieron del piso allá, y recalcularla las descontaría otra vez.
+ *
+ * Se niega si el área ya trabajó ese producto (entonces sí estaba con ellos). Revisa ANTES de
+ * escribir. Si el piso ya no tiene ese ingreso —  se vació en un reset, o la remisión es de antes del
+ * piso—  no hay nada que descontar.
+ */
+export async function descontarDevolucionDelPiso(
+  tx: any, remisionId: number, destino: Destino, masterIds: number[],
+): Promise<{ kg: number }> {
+  const bodega = await bodegaConPiso(tx, destino);
+  if (!bodega || !masterIds.length) return { kg: 0 };
+
+  const grupos: any[] = await tx.$queryRawUnsafe(`
+    SELECT oe.Lote, DATE_FORMAT(oe.FechaProduccion, '%Y-%m-%d') AS FechaLote, dp.Clase, dp.Talla,
+           ta.Descripcion AS DescripcionTalla, pre.PesoKG * pre.CajasXMaster AS KgExacto, COUNT(*) AS Masters
+    FROM Masters m
+    JOIN EtiquetaImpresa e ON e.EtiquetaId = m.EtiquetaId
+    JOIN OrdenEtiquetado oe ON oe.OrdenId = e.OrdenId
+    JOIN DetallePedido dp ON dp.DetalleId = oe.DetalleId
+    JOIN Presentacion pre ON pre.Codigo = dp.Presentacion
+    JOIN Tallas ta ON ta.Codigo = dp.Talla
+    WHERE m.MasterId IN (${masterIds.map(() => "?").join(",")})
+    GROUP BY oe.Lote, oe.FechaProduccion, dp.Clase, dp.Talla, ta.Descripcion, pre.PesoKG, pre.CajasXMaster`, ...masterIds);
+
+  // Primero el plan y la revisión del saldo; después se escribe.
+  const plan: { filas: any[]; quedan: number; kgQueda: number }[] = [];
+  let kgTotal = 0;
+  for (const g of grupos) {
+    const kgExacto = Number(g.KgExacto);
+    const filas: any[] = await tx.$queryRawUnsafe(`
+      SELECT MovimientoId, Masters, PesoKg FROM MovimientoPiso
+      WHERE RemisionId = ? AND Tipo = 'INGRESO' AND BodegaDestino = ? AND Lote = ? AND Clase = ? AND Talla = ?
+        AND FechaLote <=> ? AND ABS(KgPorMaster - ?) < 0.0005
+      ORDER BY MovimientoId FOR UPDATE`,
+      remisionId, bodega, g.Lote, g.Clase, g.Talla, g.FechaLote, Number(kgExacto.toFixed(3)));
+    if (!filas.length) continue;
+
+    const tiene = filas.reduce((s, f) => s + Number(f.Masters ?? 0), 0);
+    const kgTiene = filas.reduce((s, f) => s + Number(f.PesoKg), 0);
+    const quedan = Math.max(0, tiene - Number(g.Masters));
+    const kgQueda = quedan ? Number((quedan * kgExacto).toFixed(2)) : 0;
+    const kgQuita = Number((kgTiene - kgQueda).toFixed(2));
+
+    const [s]: any[] = await tx.$queryRawUnsafe(`
+      SELECT COALESCE(SUM(CASE WHEN BodegaDestino = ? THEN PesoKg ELSE -PesoKg END), 0) AS Kg
+      FROM MovimientoPiso
+      WHERE RemisionId = ? AND Lote = ? AND Clase = ? AND Talla = ? AND FechaLote <=> ?
+        AND (BodegaDestino = ? OR BodegaOrigen = ?)`,
+      bodega, remisionId, g.Lote, g.Clase, g.Talla, g.FechaLote, bodega, bodega);
+    const saldo = Number(s?.Kg ?? 0);
+    if (saldo - kgQuita < -0.001) {
+      const [b]: any[] = await tx.$queryRawUnsafe(`SELECT Nombre FROM BodegaVirtual WHERE Codigo = ?`, bodega);
+      const area = b?.Nombre ?? bodega;
+      throw new PisoEnNegativo(
+        `${area} ya trabajó ese producto (lote ${g.Lote} ${g.Clase} ${g.DescripcionTalla}: al piso quedan ` +
+        `${saldo.toFixed(2)} kg y lo que se devuelve pesa ${kgQuita.toFixed(2)} kg). Si de verdad regresó a bodega, ` +
+        `primero hay que deshacerlo en ${area}.`);
+    }
+    plan.push({ filas, quedan, kgQueda });
+    kgTotal += kgQuita;
+  }
+
+  // La fila más vieja conserva lo que queda (y la jornada en que entró); las demás se borran.
+  for (const x of plan) {
+    const [primera, ...resto] = x.filas;
+    const borrar = [...resto.map(f => Number(f.MovimientoId)), ...(x.quedan ? [] : [Number(primera.MovimientoId)])];
+    if (x.quedan) {
+      await tx.$executeRawUnsafe(
+        `UPDATE MovimientoPiso SET Peso = ?, PesoKg = ?, Masters = ? WHERE MovimientoId = ?`,
+        x.kgQueda, x.kgQueda, x.quedan, Number(primera.MovimientoId));
+    }
+    if (borrar.length) {
+      await tx.$executeRawUnsafe(
+        `DELETE FROM MovimientoPiso WHERE MovimientoId IN (${borrar.map(() => "?").join(",")})`, ...borrar);
+    }
+  }
+  return { kg: Number(kgTotal.toFixed(2)) };
+}
+
+/**
+ * Lo que una remisión le dejó al piso de su área, por lote y talla: cuánto entró, cuánto ya trabajó el
+ * área y cuánto queda. Es lo que ve bodega en el panel de la remisión para saber qué buscar: si queda
+ * algo al piso y el área dice que no lo tiene, se quedó en bodega y hay que devolverlo.
+ * Los masters de lo trabajado pueden faltar (un ajuste o una merma van en kg), así que lo que manda es
+ * el kg; los masters que quedan solo se informan si cuadran.
+ */
+export async function pisoDeRemision(client: any, remisionId: number, destino: Destino) {
+  const bodega = await bodegaConPiso(client, destino);
+  if (!bodega) return null;
+  const [b]: any[] = await client.$queryRawUnsafe(`SELECT Nombre FROM BodegaVirtual WHERE Codigo = ?`, bodega);
+  const filas: any[] = await client.$queryRawUnsafe(`
+    SELECT t.Lote, t.Clase, cl.Descripcion AS DescripcionClase, t.Talla, ta.Descripcion AS DescripcionTalla,
+           DATE_FORMAT(t.FechaLote, '%Y-%m-%d') AS FechaLote,
+           SUM(CASE WHEN t.Entra = 1 THEN COALESCE(t.Masters, 0) ELSE 0 END) AS EntroMasters,
+           ROUND(SUM(CASE WHEN t.Entra = 1 THEN t.PesoKg ELSE 0 END), 2)    AS EntroKg,
+           SUM(CASE WHEN t.Entra = 1 THEN 0 ELSE COALESCE(t.Masters, 0) END) AS SalioMasters,
+           ROUND(SUM(CASE WHEN t.Entra = 1 THEN 0 ELSE t.PesoKg END), 2)    AS SalioKg
+    FROM (
+      SELECT Lote, Clase, Talla, FechaLote, Masters, PesoKg, CASE WHEN BodegaDestino = ? THEN 1 ELSE 0 END AS Entra
+        FROM MovimientoPiso WHERE RemisionId = ? AND (BodegaDestino = ? OR BodegaOrigen = ?)
+    ) t
+    JOIN Clase cl ON cl.Clase = t.Clase
+    JOIN Tallas ta ON ta.Codigo = t.Talla
+    GROUP BY t.Lote, t.Clase, cl.Descripcion, t.Talla, ta.Descripcion, t.FechaLote
+    ORDER BY t.FechaLote, t.Lote, ta.Descripcion`, bodega, remisionId, bodega, bodega);
+  return {
+    Bodega: bodega, NombreBodega: b?.Nombre ?? bodega,
+    Lineas: filas.map(f => {
+      const entroM = Number(f.EntroMasters), entroKg = Number(f.EntroKg);
+      const quedaKg = Number((entroKg - Number(f.SalioKg)).toFixed(2));
+      // Masters que quedan = kg que quedan ÷ peso del master, solo si da un número entero.
+      const kgPorMaster = entroM ? entroKg / entroM : 0;
+      const m = kgPorMaster ? Math.round(quedaKg / kgPorMaster) : null;
+      const cuadra = m != null && Math.abs(quedaKg - m * kgPorMaster) < 0.05;
+      return {
+        Lote: f.Lote, Clase: f.Clase, DescripcionClase: f.DescripcionClase, Talla: Number(f.Talla),
+        DescripcionTalla: f.DescripcionTalla, FechaLote: f.FechaLote,
+        EntroMasters: entroM, EntroKg: entroKg, SalioKg: Number(f.SalioKg),
+        QuedaKg: quedaKg, QuedaMasters: cuadra ? m : null,
+      };
+    }),
+  };
+}
+
+/**
  * Saca del piso lo que había metido una remisión, al anularla.
  *
  * Se niega si el área ya trabajó ese producto. Borrar el ingreso de algo que ya se descongeló

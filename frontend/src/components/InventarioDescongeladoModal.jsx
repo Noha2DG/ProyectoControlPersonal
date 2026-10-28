@@ -23,7 +23,7 @@ function agruparPorRemision(saldo) {
   for (const r of saldo) {
     const clave = r.RemisionId ?? "sin-remision";
     let g = grupos.find(x => x.clave === clave);
-    if (!g) { g = { clave, Folio: r.FolioRemision, ConfirmadaEn: r.ConfirmadaEn, lineas: [], Kg: 0, Masters: 0 }; grupos.push(g); }
+    if (!g) { g = { clave, Folio: r.FolioRemision, ConfirmadaEn: r.ConfirmadaEn, Estatus: r.EstatusRemision, lineas: [], Kg: 0, Masters: 0 }; grupos.push(g); }
     g.lineas.push(r); g.Kg += r.Kg; g.Masters += r.Masters || 0;
   }
   return grupos;
@@ -62,6 +62,7 @@ function ContenidoInventario({ fecha, saldo }) {
             <h2 className="text-base font-bold">
               {g.Folio || "Sin remisión (ajuste)"}
               {g.ConfirmadaEn && <span className="text-xs font-normal text-gray-500 ml-2">confirmada {g.ConfirmadaEn}</span>}
+              {g.Estatus === "Borrador" && <span className="text-xs font-semibold ml-2">(sin confirmar — puede seguir en bodega)</span>}
             </h2>
             <p className="text-sm font-bold tabular-nums">{g.Masters ? `${g.Masters} masters · ` : ""}{fmtNum(g.Kg)} kg</p>
           </div>
