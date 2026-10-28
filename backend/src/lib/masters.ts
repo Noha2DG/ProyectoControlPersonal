@@ -156,7 +156,8 @@ export function objetivoDeLinea(
 }
 
 // Condición SQL (alias m = Masters): el master salió en un TRASLADO INTERNO — su remisión vigente
-// está Confirmada y es de una serie con Destino 'Area' (reempaque, reetiquetado, reproceso).
+// es de una serie con Destino 'Area' (reempaque, reetiquetado, reproceso). Cuenta también la que
+// sigue en borrador: desde el 28 oct 2026 el master sale de bodega al escanearse, no al confirmar.
 //
 // Ese master deja de contar para el cupo de su línea, en los dos candados (declarado en Agrupación y
 // techo de escaneo). Decisión del usuario, 28 oct 2026, con los 56 master de 020-2026 mandados a
@@ -172,7 +173,7 @@ export function objetivoDeLinea(
 // esas áreas.
 export const SALIO_EN_TRASLADO = `(m.Estatus = 'Salido' AND EXISTS (
     SELECT 1 FROM RemisionDetalle rdt
-    JOIN Remisiones rt ON rt.RemisionId = rdt.RemisionId AND rt.Estatus = 'Confirmada'
+    JOIN Remisiones rt ON rt.RemisionId = rdt.RemisionId AND rt.Estatus IN ('Borrador', 'Confirmada')
     JOIN SerieRemision st ON st.Tipo = rt.Tipo AND st.Destino = 'Area'
     WHERE rdt.MasterId = m.MasterId AND rdt.Vigente = 1))`;
 

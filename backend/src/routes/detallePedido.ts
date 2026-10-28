@@ -348,7 +348,8 @@ router.get("/avance", requireAuth, requireAnyPerm([["pedidos", "ver"], ["etiquet
     // líneas y ahí las correlacionadas se vuelven lentas (mismo patrón que calcularTechoLineaBatch).
     // La serie de la remisión separa el despacho al cliente del traslado interno. Hay a lo sumo una
     // remisión vigente por master (UNIQUE (MasterId, Vigente) en RemisionDetalle), así que el LEFT
-    // JOIN no duplica filas.
+    // JOIN no duplica filas. El borrador cuenta igual que la confirmada: el master sale de bodega al
+    // escanearse en la remisión (28 oct 2026).
     const fisicos: any[] = await prisma.$queryRawUnsafe(`
       SELECT oe.DetalleId,
              SUM(CASE WHEN m.Estatus <> 'Salido' THEN 1 ELSE 0 END) AS enBodega,
@@ -357,7 +358,7 @@ router.get("/avance", requireAuth, requireAnyPerm([["pedidos", "ver"], ["etiquet
       JOIN EtiquetaImpresa ei ON ei.EtiquetaId = m.EtiquetaId
       JOIN OrdenEtiquetado oe ON oe.OrdenId = ei.OrdenId
       LEFT JOIN RemisionDetalle rdv ON rdv.MasterId = m.MasterId AND rdv.Vigente = 1
-      LEFT JOIN Remisiones rv ON rv.RemisionId = rdv.RemisionId AND rv.Estatus = 'Confirmada'
+      LEFT JOIN Remisiones rv ON rv.RemisionId = rdv.RemisionId AND rv.Estatus IN ('Borrador', 'Confirmada')
       LEFT JOIN SerieRemision sv ON sv.Tipo = rv.Tipo
       WHERE oe.DetalleId IN (${marcas})
       GROUP BY oe.DetalleId`, ...ids);

@@ -1,13 +1,16 @@
 // Puente entre bodega y el inventario al piso.
 //
-// Cuando bodega confirma una remisión con destino a un área, el producto entra al piso de esa área.
-// Automático, sin que nadie lo acepte en otra pantalla: la confirmación YA es la entrega firmada —
-// `Remisiones.RecibidoPor` lleva al empleado del área que la recibió. Una aceptación aparte dejaría
-// el producto en limbo entre las dos pantallas, despachado por bodega y no recibido por nadie, que
-// es exactamente el hueco que este módulo existe para cerrar.
+// Cuando una remisión con destino a un área recibe producto, ese producto entra al piso del área.
+// Desde el 28 oct 2026 eso pasa AL ESCANEAR, no al confirmar (usuario: "todo producto que entre a
+// remisión sea rebajado del sistema aunque no se confirme salida"): bodega lo rebaja en el acto y el
+// área lo ve en el acto. Antes, una remisión que se quedaba en borrador dejaba el producto contado en
+// bodega y ausente del piso, aunque ya estuviera en el área.
+// Automático, sin que nadie lo acepte en otra pantalla: una aceptación aparte dejaría el producto en
+// limbo entre las dos pantallas, despachado por bodega y no recibido por nadie, que es exactamente el
+// hueco que este módulo existe para cerrar.
 //
-// Vive acá y no dentro de routes/remisiones.ts porque lo usan dos llamadores: la confirmación desde
-// la pantalla y scripts/cargarIngresosPiso.ts, que carga una jornada ya pasada. Dos copias de esta
+// Vive acá y no dentro de routes/remisiones.ts porque lo usan dos llamadores: la remisión desde la
+// pantalla y scripts/cargarIngresosPiso.ts, que carga una jornada ya pasada. Dos copias de esta
 // consulta terminarían dando dos inventarios distintos para el mismo despacho.
 //
 // EL LOTE SE COPIA TAL CUAL de la orden de etiquetado, con su fecha de producción. Eso es lo que
@@ -16,10 +19,16 @@
 
 export const MARCA_REMISION = "Remisión confirmada";
 
+// Lo que se quita del piso ya lo trabajó el área. Es un rechazo de negocio, no una falla: quien llama
+// lo traduce a un 400 con este mensaje.
+export class PisoEnNegativo extends Error {}
+
 // Una fila por (remisión, lote, fecha del lote, clase, talla, peso del master). La fecha del lote
 // entra al agrupado a propósito: el mismo texto de lote puede traer dos fechas de producción
 // distintas —  G220EM00-E00 tiene 11 y 12 de mayo—  y colapsarlas perdería la diferencia.
-const SQL_LINEAS = `
+// `sin` deja fuera esa cantidad de masters (sus ids van después del de la remisión): es lo que va a
+// quedar en la remisión cuando se le quiten.
+const sqlLineas = (sin = 0) => `
   SELECT oe.Lote,
          DATE_FORMAT(oe.FechaProduccion, '%Y-%m-%d') AS FechaLote,
          dp.Clase, dp.Talla,
@@ -33,25 +42,21 @@ const SQL_LINEAS = `
   JOIN DetallePedido dp ON dp.DetalleId = oe.DetalleId
   JOIN Presentacion pre ON pre.Codigo = dp.Presentacion
   WHERE rd.RemisionId = ? AND rd.Vigente = 1
+    ${sin ? `AND rd.MasterId NOT IN (${Array(sin).fill("?").join(",")})` : ""}
   GROUP BY oe.Lote, oe.FechaProduccion, dp.Clase, dp.Talla, pre.PesoKG, pre.CajasXMaster
 `;
 
-/**
- * Mete al piso del área lo que trae una remisión. Se llama DENTRO de la transacción que confirma,
- * para que el producto entre al inventario en el mismo instante en que sale de bodega — o no entre
- * en absoluto si la confirmación falla.
- */
-export async function registrarIngresoDesdeRemision(
-  tx: any, remisionId: number, destino: { BodegaDestino?: string | null; AreaDestino?: string | null },
-  fechaJornada: string, operador: string
-): Promise<{ lineas: number; kg: number }> {
-  // Desde oct 2026 la remisión trae la BODEGA a la que se carga (Remisiones.BodegaDestino). Las de
-  // antes solo traen el ÁREA (AreaDestino) y se traduce por su bodega —  Pelado son seis áreas que
-  // comparten el mismo piso.
-  //
-  // LlevaPiso = 1 es parte de la condición, no un adorno: hay bodegas que existen en el catálogo
-  // sin llevar inventario al piso —  las que solo son origen de polín (Bodega, Devoluciones). Sin
-  // este filtro, una remisión a cualquiera de ellas abriría un saldo al piso que nadie va a cuadrar.
+type Destino = { BodegaDestino?: string | null; AreaDestino?: string | null };
+
+// Desde oct 2026 la remisión trae la BODEGA a la que se carga (Remisiones.BodegaDestino). Las de
+// antes solo traen el ÁREA (AreaDestino) y se traduce por su bodega —  Pelado son seis áreas que
+// comparten el mismo piso.
+//
+// LlevaPiso = 1 es parte de la condición, no un adorno: hay bodegas que existen en el catálogo
+// sin llevar inventario al piso —  las que solo son origen de polín (Bodega, Devoluciones). Sin
+// este filtro, una remisión a cualquiera de ellas abriría un saldo al piso que nadie va a cuadrar.
+async function bodegaConPiso(tx: any, destino: Destino): Promise<string | null> {
+  if (!destino.BodegaDestino && !destino.AreaDestino) return null;
   const [b]: any[] = destino.BodegaDestino
     ? await tx.$queryRawUnsafe(
         `SELECT Codigo AS Bodega FROM BodegaVirtual WHERE Codigo = ? AND LlevaPiso = 1`, destino.BodegaDestino)
@@ -59,9 +64,21 @@ export async function registrarIngresoDesdeRemision(
         `SELECT a.BodegaVirtualCodigo AS Bodega FROM Areas a
            JOIN BodegaVirtual b ON b.Codigo = a.BodegaVirtualCodigo AND b.LlevaPiso = 1
           WHERE a.Codigo = ?`, destino.AreaDestino ?? null);
-  const bodega = b?.Bodega;
+  return b?.Bodega ?? null;
+}
+
+/**
+ * Mete al piso del área TODO lo que trae una remisión, de una vez. Lo usa scripts/cargarIngresosPiso.ts
+ * para cargar jornadas pasadas; la pantalla usa sincronizarIngresoDeRemision (abajo), que lo va
+ * metiendo a medida que se escanea.
+ */
+export async function registrarIngresoDesdeRemision(
+  tx: any, remisionId: number, destino: Destino,
+  fechaJornada: string, operador: string
+): Promise<{ lineas: number; kg: number }> {
+  const bodega = await bodegaConPiso(tx, destino);
   if (!bodega) return { lineas: 0, kg: 0 };   // bodega sin inventario al piso, o área sin bodega
-  const lineas: any[] = await tx.$queryRawUnsafe(SQL_LINEAS, remisionId);
+  const lineas: any[] = await tx.$queryRawUnsafe(sqlLineas(), remisionId);
   if (!lineas.length) return { lineas: 0, kg: 0 };
 
   // Un solo INSERT con todas las filas: el backend habla con la base por red y una remisión de
@@ -80,6 +97,114 @@ export async function registrarIngresoDesdeRemision(
      VALUES ${filas}`, ...args);
 
   return { lineas: lineas.length, kg: Number(lineas.reduce((s, l) => s + Number(l.Kg), 0).toFixed(2)) };
+}
+
+/**
+ * Deja el ingreso al piso de una remisión igual a lo que la remisión trae —  o va a traer, sin los
+ * masters de `sinMasters`, que quien llama está por quitarle. Se llama dentro de la misma
+ * transacción cada vez que el borrador gana o pierde líneas o cambia de destino, y otra vez al
+ * confirmar (por los borradores que se armaron antes de que el piso se llenara al escanear).
+ *
+ * Una fila de INGRESO por llave (bodega, lote, fecha del lote, clase, talla, peso del master), que se
+ * ACTUALIZA en vez de sumarle filas: escaneando caja por caja quedaría una fila por master, y cada
+ * una redondea sus kilos por su lado —  al descongelar la línea completa sobrarían centésimas al
+ * piso. Con una sola fila los kilos son los mismos que daba confirmar de una vez. La fila conserva la
+ * jornada en que entró la primera caja de esa llave.
+ *
+ * Se niega si lo que se quita ya lo trabajó el área: igual que al anular, dejaría el saldo al piso en
+ * negativo. Se revisa ANTES de escribir nada, para que el rechazo no deje nada a medias.
+ */
+export async function sincronizarIngresoDeRemision(
+  tx: any, remisionId: number, destino: Destino, fechaJornada: string, operador: string,
+  sinMasters: number[] = [],
+): Promise<{ lineas: number; kg: number }> {
+  const bodega = await bodegaConPiso(tx, destino);
+  const deseadas: any[] = bodega
+    ? await tx.$queryRawUnsafe(sqlLineas(sinMasters.length), remisionId, ...sinMasters) : [];
+  const actuales: any[] = await tx.$queryRawUnsafe(`
+    SELECT MovimientoId, BodegaDestino AS Bodega, Lote, DATE_FORMAT(FechaLote, '%Y-%m-%d') AS FechaLote,
+           Clase, Talla, KgPorMaster, Masters, PesoKg
+      FROM MovimientoPiso WHERE RemisionId = ? AND Tipo = 'INGRESO'
+     ORDER BY MovimientoId FOR UPDATE`, remisionId);
+
+  // La llave de la fila lleva el peso del master; la del saldo no, porque AL PISO no lo separa.
+  const grupo = (b: string, l: any) => [b, l.Lote, l.FechaLote ?? "", l.Clase, String(l.Talla)].join("|");
+  const clave = (b: string, l: any) => `${grupo(b, l)}|${Number(l.KgPorMaster ?? 0).toFixed(3)}`;
+  const porClave = new Map<string, any[]>();
+  for (const a of actuales) {
+    const k = clave(a.Bodega, a);
+    porClave.set(k, [...(porClave.get(k) ?? []), a]);
+  }
+
+  // Primero el plan, sin escribir: qué se inserta, qué se actualiza, qué se borra, y cuánto cambia
+  // cada grupo del saldo.
+  const insertar: any[] = [];
+  const actualizar: { id: number; kg: number; masters: number }[] = [];
+  const borrar: number[] = [];
+  const cambio = new Map<string, number>();
+  const sumar = (g: string, kg: number) => cambio.set(g, (cambio.get(g) ?? 0) + kg);
+  for (const d of deseadas) {
+    const k = clave(bodega!, d);
+    const [fila, ...sobran] = porClave.get(k) ?? [];
+    porClave.delete(k);
+    const kg = Number(d.Kg), masters = Number(d.Masters);
+    for (const s of sobran) { borrar.push(Number(s.MovimientoId)); sumar(grupo(bodega!, d), -Number(s.PesoKg)); }
+    if (!fila) {
+      insertar.push(d);
+      sumar(grupo(bodega!, d), kg);
+    } else if (Number(fila.Masters) !== masters || Math.abs(Number(fila.PesoKg) - kg) > 0.001) {
+      actualizar.push({ id: Number(fila.MovimientoId), kg, masters });
+      sumar(grupo(bodega!, d), kg - Number(fila.PesoKg));
+    }
+  }
+  // Lo que la remisión ya no trae: líneas quitadas, o el destino cambió de bodega.
+  for (const filas of porClave.values()) {
+    for (const f of filas) { borrar.push(Number(f.MovimientoId)); sumar(grupo(f.Bodega, f), -Number(f.PesoKg)); }
+  }
+
+  // Donde el ingreso baja, el saldo de esta remisión tiene que alcanzar —  mismo saldo que AL PISO
+  // (por remisión, lote, clase, talla y fecha del lote).
+  const bajan = [...cambio].filter(([, kg]) => kg < -0.001);
+  if (bajan.length) {
+    const saldos: any[] = await tx.$queryRawUnsafe(`
+      SELECT Bodega, Lote, DATE_FORMAT(FechaLote, '%Y-%m-%d') AS FechaLote, Clase, Talla, SUM(Delta) AS Kg FROM (
+        SELECT BodegaDestino AS Bodega, Lote, Clase, Talla, FechaLote,  PesoKg AS Delta
+          FROM MovimientoPiso WHERE RemisionId = ? AND BodegaDestino IS NOT NULL
+        UNION ALL
+        SELECT BodegaOrigen  AS Bodega, Lote, Clase, Talla, FechaLote, -PesoKg AS Delta
+          FROM MovimientoPiso WHERE RemisionId = ? AND BodegaOrigen  IS NOT NULL
+      ) t GROUP BY Bodega, Lote, Clase, Talla, FechaLote`, remisionId, remisionId);
+    const saldo = new Map(saldos.map(s => [grupo(s.Bodega, s), Number(s.Kg)]));
+    for (const [g, kg] of bajan) {
+      const queda = (saldo.get(g) ?? 0) + kg;
+      if (queda < -0.001) {
+        const [, lote, , clase] = g.split("|");
+        throw new PisoEnNegativo(
+          `El área ya trabajó ese producto (lote ${lote} ${clase}: quitarlo dejaría ${queda.toFixed(2)} kg al piso). ` +
+          `Lo que ya se descongeló o se tomó del piso no puede regresar a bodega quitándolo de la remisión.`);
+      }
+    }
+  }
+
+  for (const d of insertar) {
+    await tx.$executeRawUnsafe(
+      `INSERT INTO MovimientoPiso
+         (Tipo, FechaProduccion, BodegaDestino, Lote, Clase, Talla, FechaLote,
+          Peso, UM, PesoKg, Masters, KgPorMaster, RemisionId, RegistradoPor)
+       VALUES ('INGRESO',?,?,?,?,?,?,?,'KG',?,?,?,?,?)`,
+      fechaJornada, bodega, d.Lote, d.Clase, d.Talla, d.FechaLote,
+      Number(d.Kg), Number(d.Kg), Number(d.Masters), Number(d.KgPorMaster), remisionId, operador);
+  }
+  for (const u of actualizar) {
+    await tx.$executeRawUnsafe(
+      `UPDATE MovimientoPiso SET Peso = ?, PesoKg = ?, Masters = ? WHERE MovimientoId = ?`, u.kg, u.kg, u.masters, u.id);
+  }
+  if (borrar.length) {
+    await tx.$executeRawUnsafe(
+      `DELETE FROM MovimientoPiso WHERE MovimientoId IN (${borrar.map(() => "?").join(",")})`, ...borrar);
+  }
+
+  return { lineas: deseadas.length, kg: Number(deseadas.reduce((s, l) => s + Number(l.Kg), 0).toFixed(2)) };
 }
 
 /**

@@ -497,7 +497,7 @@ function PanelRemision({ remisionId, onClose, onCambio }) {
   };
 
   const handleQuitar = async (detalleId, correlativoTexto) => {
-    const confirmado = await pedirConfirmacion(`¿Quitar ${correlativoTexto} de esta remisión?`, { textoConfirmar: "Quitar" });
+    const confirmado = await pedirConfirmacion(`¿Quitar ${correlativoTexto} de esta remisión? Regresa a bodega.`, { textoConfirmar: "Quitar" });
     if (!confirmado) return;
     const res = await fetch(`${API}/${remisionId}/detalle/${detalleId}`, { method: "DELETE", headers: authHeader() });
     const data = await leerJSON(res);
@@ -506,7 +506,7 @@ function PanelRemision({ remisionId, onClose, onCambio }) {
   };
 
   const handleQuitarPallet = async (palletId, palletCodigo) => {
-    const confirmado = await pedirConfirmacion(`¿Quitar todas las líneas del polín ${palletCodigo}?`, { textoConfirmar: "Quitar polín" });
+    const confirmado = await pedirConfirmacion(`¿Quitar todas las líneas del polín ${palletCodigo}? Regresan a bodega.`, { textoConfirmar: "Quitar polín" });
     if (!confirmado) return;
     const res = await fetch(`${API}/${remisionId}/quitar-pallet`, {
       method: "POST",
@@ -520,7 +520,7 @@ function PanelRemision({ remisionId, onClose, onCambio }) {
 
   const handleConfirmar = async () => {
     const confirmado = await pedirConfirmacion(
-      `¿Confirmar la remisión ${remision.Folio}?\n\n${remision.CantidadMasters} master(s) van a salir de bodega. Después de esto solo se puede anular.`,
+      `¿Confirmar la remisión ${remision.Folio}?\n\nSus ${remision.CantidadMasters} master(s) ya salieron de bodega al escanearse; confirmar cierra el documento. Después de esto solo se puede anular.`,
       { textoConfirmar: "Confirmar salida" }
     );
     if (!confirmado) return;
@@ -582,13 +582,13 @@ function PanelRemision({ remisionId, onClose, onCambio }) {
     if (remision?.Destino !== "Cliente") return [];
     const enRemision = {};
     for (const l of lineasRem) enRemision[l.DetalleId] = (enRemision[l.DetalleId] ?? 0) + 1;
-    const confirmada = remision?.Estatus === "Confirmada";
-    return Object.entries(enRemision).map(([id, cuantos]) => {
+    return Object.keys(enRemision).map(id => {
       const a = avance[id];
       // Objetivo null = pedido general: perpetuo, sin cantidad planificada contra la cual comparar.
       if (!a || a.Objetivo === null) return null;
-      // En una confirmada el Despachado del avance YA incluye estas líneas; en un borrador todavía no.
-      const total = confirmada ? a.Despachado : a.Despachado + cuantos;
+      // El Despachado del avance YA incluye estas líneas, también en borrador: el master sale de
+      // bodega al escanearse (28 oct 2026), no al confirmar.
+      const total = a.Despachado;
       if (total <= a.Objetivo) return null;
       const l = lineasRem.find(x => String(x.DetalleId) === String(id));
       return {
@@ -895,7 +895,7 @@ export default function RemisionesPage() {
   };
 
   const handleEliminar = async (r) => {
-    const confirmado = await pedirConfirmacion(`¿Eliminar el borrador ${r.Folio}? No se puede deshacer.`, { textoConfirmar: "Eliminar" });
+    const confirmado = await pedirConfirmacion(`¿Eliminar el borrador ${r.Folio}? Lo que tenía regresa a bodega. No se puede deshacer.`, { textoConfirmar: "Eliminar" });
     if (!confirmado) return;
     const res = await fetch(`${API}/${r.RemisionId}`, { method: "DELETE", headers: authHeader() });
     const data = await leerJSON(res);

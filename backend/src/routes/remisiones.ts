@@ -4,22 +4,23 @@ import prisma from "../lib/prisma.ts";
 import { requireAuth, requirePerm, AuthRequest } from "../middleware/auth.ts";
 import { MASTER_SELECT, formatearMaster } from "../lib/masters.ts";
 import { normalizarCorrelativo, resolverEtiqueta } from "../lib/correlativo.ts";
-import { registrarIngresoDesdeRemision, revertirIngresoDeRemision } from "../lib/inventarioPiso.ts";
+import { sincronizarIngresoDeRemision, revertirIngresoDeRemision, PisoEnNegativo } from "../lib/inventarioPiso.ts";
 import { hoyGT } from "../lib/dateGT.ts";
 
 // Salida de bodega = Remisión (ver createRemisiones.ts para el modelo y las decisiones de diseño).
 //
 // Ciclo de vida:  Borrador ──confirmar──> Confirmada ──anular──> Anulada
-//                    └──eliminar──> (borrada, no deja rastro: nunca tocó inventario)
+//                    └──eliminar──> (borrada: todo lo que había salido vuelve a bodega)
 //
-// El inventario SOLO se mueve al confirmar. Mientras es Borrador, agregar/quitar líneas no cambia el
-// Estatus de ningún master — pero sí los "reserva" vía el UNIQUE (MasterId, Vigente) de
-// RemisionDetalle, así dos remisiones en borrador no pueden pelearse el mismo master.
+// El inventario se mueve AL ESCANEAR, no al confirmar (desde el 28 oct 2026, ver "Rebajar al
+// escanear" más abajo): lo que entra al borrador sale de bodega y, si va a un área, entra a su piso
+// en el mismo instante. Quitarlo del borrador lo regresa. El UNIQUE (MasterId, Vigente) de
+// RemisionDetalle sigue impidiendo que dos remisiones se peleen el mismo master.
 const router = Router();
 
 // Mismo patrón que pallets.ts / bodegaFisica.ts: error de negocio lanzado dentro de la transacción,
 // traducido a su status HTTP por el catch de la ruta en vez de un 500 genérico.
-class ErrorNegocio extends Error {
+export class ErrorNegocio extends Error {
   status: number;
   constructor(status: number, mensaje: string) {
     super(mensaje);
@@ -474,21 +475,27 @@ router.put("/:id", requireAuth, requirePerm("remisiones", "editar"), async (req:
       }
     }
 
-    await prisma.$executeRaw`
-      UPDATE Remisiones SET
-        Fecha = ${fecha},
-        CodigoCliente = ${destino.CodigoCliente},
-        CodigoSubcliente = ${destino.CodigoSubcliente},
-        AreaDestino = ${destino.AreaDestino},
-        BodegaDestino = ${destino.BodegaDestino},
-        RecibidoPor = ${destino.RecibidoPor},
-        CodigoPedido = ${destino.CodigoPedido},
-        EsMixta = ${esMixta ? 1 : 0},
-        Contenedor = ${embarque.Contenedor},
-        Sello = ${embarque.Sello},
-        Observaciones = ${String(req.body.Observaciones ?? "").trim() || null}
-      WHERE RemisionId = ${remisionId}
-    `;
+    // Lo escaneado ya está en el piso de la bodega destino: si el borrador cambia de bodega, el
+    // producto se pasa al piso nuevo en la misma transacción (y se niega si el área vieja ya lo trabajó).
+    const operador = getOperador(req);
+    await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`
+        UPDATE Remisiones SET
+          Fecha = ${fecha},
+          CodigoCliente = ${destino.CodigoCliente},
+          CodigoSubcliente = ${destino.CodigoSubcliente},
+          AreaDestino = ${destino.AreaDestino},
+          BodegaDestino = ${destino.BodegaDestino},
+          RecibidoPor = ${destino.RecibidoPor},
+          CodigoPedido = ${destino.CodigoPedido},
+          EsMixta = ${esMixta ? 1 : 0},
+          Contenedor = ${embarque.Contenedor},
+          Sello = ${embarque.Sello},
+          Observaciones = ${String(req.body.Observaciones ?? "").trim() || null}
+        WHERE RemisionId = ${remisionId}
+      `;
+      await sincronizarPiso(tx, { RemisionId: remisionId, BodegaDestino: destino.BodegaDestino, AreaDestino: destino.AreaDestino }, operador);
+    }, { timeout: 30_000 });
     res.json({ ok: true });
   } catch (err: any) {
     if (err instanceof ErrorNegocio) { res.status(err.status).json({ error: err.message }); return; }
@@ -497,9 +504,20 @@ router.put("/:id", requireAuth, requirePerm("remisiones", "editar"), async (req:
   }
 });
 
-// DELETE /api/remisiones/:id — solo en Borrador. Un borrador nunca tocó inventario, así que se borra
-// de verdad (líneas incluidas); el folio consumido de la serie NO se recicla, igual que un talonario.
-// Una remisión Confirmada no se elimina: se anula (deja rastro en el kardex).
+// DELETE /api/remisiones/:id — solo en Borrador. Se borra de verdad (líneas incluidas) y todo lo que
+// había salido al escanear vuelve a bodega y sale del piso del área, con la SALIDA borrada del
+// kardex: el borrador nunca llegó a ser documento. El folio consumido de la serie NO se recicla,
+// igual que un talonario. Una remisión Confirmada no se elimina: se anula (deja rastro en el kardex).
+export async function eliminarBorrador(tx: any, remisionId: number, operador: string) {
+  const remision = await exigirBorrador(tx, remisionId);
+  const lineas: any[] = await tx.$queryRaw`SELECT MasterId FROM RemisionDetalle WHERE RemisionId = ${remisionId} FOR UPDATE`;
+  const masterIds = lineas.map(l => Number(l.MasterId));
+  await sincronizarPiso(tx, remision, operador, masterIds);
+  await regresarABodega(tx, remisionId, masterIds, operador);
+  await tx.$executeRaw`DELETE FROM RemisionDetalle WHERE RemisionId = ${remisionId}`;
+  await tx.$executeRaw`DELETE FROM Remisiones WHERE RemisionId = ${remisionId}`;
+}
+
 router.delete("/:id", requireAuth, requirePerm("remisiones", "eliminar"), async (req: Request, res: Response) => {
   try {
     const remisionId = Number(req.params.id);
@@ -510,12 +528,17 @@ router.delete("/:id", requireAuth, requirePerm("remisiones", "eliminar"), async 
       return;
     }
 
-    await prisma.$transaction(async (tx) => {
-      await tx.$executeRaw`DELETE FROM RemisionDetalle WHERE RemisionId = ${remisionId}`;
-      await tx.$executeRaw`DELETE FROM Remisiones WHERE RemisionId = ${remisionId}`;
-    }, { timeout: 30_000 });
+    const operador = getOperador(req);
+    await prisma.$transaction((tx) => eliminarBorrador(tx, remisionId, operador), { timeout: 60_000 });
     res.json({ ok: true });
   } catch (err: any) {
+    if (err instanceof ErrorNegocio) { res.status(err.status).json({ error: err.message }); return; }
+    // Algo del piso todavía apunta a la remisión aunque el saldo cuadre (el área movió producto y lo
+    // regresó): no se puede borrar sin perder esa historia.
+    if (err.message?.includes("fk_movpiso_remision")) {
+      res.status(400).json({ error: "El área ya movió producto de esta remisión en su piso — no se puede eliminar. Quita solo las líneas que no se han trabajado." });
+      return;
+    }
     res.status(500).json({ error: err.message });
   }
 });
@@ -583,78 +606,203 @@ function validarProforma(remision: { Folio: string; CodigoPedido: string | null;
     `Si necesitas mezclar sobrantes de varias proformas, marca la remisión como mixta al editarla.`);
 }
 
+// ─────────────────────────────────────────────────────────────────────────────────────────────────
+// Rebajar al escanear
+// ─────────────────────────────────────────────────────────────────────────────────────────────────
+// Desde el 28 oct 2026 lo que entra a una remisión sale de bodega EN ESE MOMENTO, aunque nadie la
+// confirme (usuario: "todo producto que entre a remisión sea rebajado del sistema aunque no se
+// confirme salida"). Antes un borrador olvidado dejaba sus masters contados en existencias, en el
+// avance del pedido y en su posición del rack, con el producto ya en el camión o en el área.
+// Si va a un área, entra a su piso en el mismo instante (también decisión del usuario).
+// Confirmar quedó para cerrar el documento: ya no se le agregan ni quitan líneas y empieza a correr
+// el plazo para anular.
+
+type RemisionDestino = { RemisionId: number; BodegaDestino?: string | null; AreaDestino?: string | null };
+
+// Saca de bodega masters que acaban de entrar al borrador: Salido, SALIDA en el kardex y, si su
+// polín se queda sin nada encima, Despachado y sin posición. Los que ya están Salido se saltan.
+// Agrupado en pocas consultas: un polín son 50+ masters y la base está del otro lado de la red.
+async function sacarDeBodega(tx: any, remision: { RemisionId: number; Folio: string }, masterIds: number[], operador: string) {
+  if (!masterIds.length) return;
+  const lineas: any[] = await tx.$queryRawUnsafe(`
+    SELECT m.MasterId, m.PalletId, p.PosicionId
+    FROM Masters m JOIN Pallets p ON m.PalletId = p.PalletId
+    WHERE m.MasterId IN (${masterIds.map(() => "?").join(",")}) AND m.Estatus <> 'Salido'
+    FOR UPDATE`, ...masterIds);
+  if (!lineas.length) return;
+
+  const ids = lineas.map(l => Number(l.MasterId));
+  await tx.$executeRawUnsafe(
+    `UPDATE Masters SET Estatus = 'Salido' WHERE MasterId IN (${ids.map(() => "?").join(",")})`, ...ids);
+  const motivoSalida = `Remisión ${remision.Folio}`;
+  await tx.$executeRawUnsafe(
+    `INSERT INTO MovimientosBodega (PalletId, MasterId, RemisionId, Tipo, PosicionOrigenId, PosicionDestinoId, Usuario, Motivo)
+     VALUES ${lineas.map(() => "(?, ?, ?, 'SALIDA', ?, NULL, ?, ?)").join(", ")}`,
+    ...lineas.flatMap(l => [
+      Number(l.PalletId), Number(l.MasterId), Number(remision.RemisionId),
+      l.PosicionId == null ? null : Number(l.PosicionId), operador, motivoSalida,
+    ])
+  );
+
+  // Polines que quedaron sin un solo master en bodega → se despachan enteros y sueltan su posición
+  // física. El UPDATE es condicional en la propia consulta (NOT EXISTS) para no depender de haber
+  // contado bien en JS lo que la BD acaba de cambiar. Si salió parcial, el polín conserva su posición
+  // y las cajas que no se llevaron.
+  for (const palletId of new Set(lineas.map(l => Number(l.PalletId)))) {
+    await tx.$executeRaw`
+      UPDATE Pallets SET Estatus = 'Despachado', PosicionId = NULL
+      WHERE PalletId = ${palletId}
+        AND Estatus = 'Cerrado'
+        AND NOT EXISTS (SELECT 1 FROM Masters m WHERE m.PalletId = ${palletId} AND m.Estatus <> 'Salido')
+    `;
+  }
+}
+
+// Contraparte, al quitar líneas de un borrador o eliminarlo: los masters vuelven a EnBodega y su
+// SALIDA se borra del kardex —  el borrador nunca llegó a ser documento—. Un polín que se había
+// despachado entero vuelve a Cerrado y recupera su posición si nadie la ocupó mientras tanto; si ya
+// la ocupó otro, queda sin posición, con su DESUBICACION en el kardex, para que bodega lo vuelva a
+// ubicar (igual que al anular).
+// Las líneas de un borrador armado antes del 28 oct 2026 nunca salieron: no tienen SALIDA y sus
+// masters siguen EnBodega, así que aquí no les pasa nada.
+async function regresarABodega(tx: any, remisionId: number, masterIds: number[], operador: string) {
+  if (!masterIds.length) return;
+  const en = masterIds.map(() => "?").join(",");
+  const salidas: any[] = await tx.$queryRawUnsafe(`
+    SELECT MovimientoId, PalletId, PosicionOrigenId FROM MovimientosBodega
+    WHERE RemisionId = ? AND Tipo = 'SALIDA' AND MasterId IN (${en})`, remisionId, ...masterIds);
+  const polines: any[] = await tx.$queryRawUnsafe(`
+    SELECT DISTINCT p.PalletId, p.Estatus FROM Masters m JOIN Pallets p ON p.PalletId = m.PalletId
+    WHERE m.MasterId IN (${en}) FOR UPDATE`, ...masterIds);
+
+  await tx.$executeRawUnsafe(
+    `UPDATE Masters SET Estatus = 'EnBodega' WHERE MasterId IN (${en}) AND Estatus = 'Salido'`, ...masterIds);
+
+  for (const p of polines) {
+    if (p.Estatus !== "Despachado") continue;
+    const palletId = Number(p.PalletId);
+    const pos = salidas.find(s => Number(s.PalletId) === palletId && s.PosicionOrigenId != null)?.PosicionOrigenId;
+    const posicion = pos == null ? null : Number(pos);
+    const ocupada: any[] = posicion == null ? [] : await tx.$queryRaw`SELECT 1 FROM Pallets WHERE PosicionId = ${posicion} LIMIT 1`;
+    const vuelve = posicion != null && !ocupada.length;
+    await tx.$executeRaw`UPDATE Pallets SET Estatus = 'Cerrado', PosicionId = ${vuelve ? posicion : null} WHERE PalletId = ${palletId}`;
+    if (posicion != null && !vuelve) {
+      await tx.$executeRaw`
+        INSERT INTO MovimientosBodega (PalletId, Tipo, PosicionOrigenId, PosicionDestinoId, Usuario, Motivo)
+        VALUES (${palletId}, 'DESUBICACION', ${posicion}, NULL, ${operador},
+                'Regresó de un borrador de remisión y su posición ya la ocupa otro polín')
+      `;
+    }
+  }
+
+  if (salidas.length) {
+    const movs = salidas.map(s => Number(s.MovimientoId));
+    await tx.$executeRawUnsafe(
+      `DELETE FROM MovimientosBodega WHERE MovimientoId IN (${movs.map(() => "?").join(",")})`, ...movs);
+  }
+}
+
+// El piso del área destino, igualado a lo que el borrador trae ahora (o va a traer sin `sinMasters`).
+// Que el área ya trabajó lo que se quita es un rechazo de negocio (400), no una falla del servidor.
+// Al QUITAR se llama antes de tocar bodega: el rechazo sale antes de que se escriba nada.
+async function sincronizarPiso(tx: any, remision: RemisionDestino, operador: string, sinMasters: number[] = []) {
+  try {
+    return await sincronizarIngresoDeRemision(tx, Number(remision.RemisionId), remision, hoyGT(), operador, sinMasters);
+  } catch (e: any) {
+    if (e instanceof PisoEnNegativo) throw new ErrorNegocio(400, e.message);
+    throw e;
+  }
+}
+
+// Aplica la regla a un borrador armado ANTES del cambio: saca de bodega lo que todavía está ahí y lo
+// mete al piso. Lo usa scripts/rebajarBorradoresExistentes.ts una sola vez, al desplegar.
+export async function rebajarBorrador(tx: any, remisionId: number, operador: string) {
+  const remision = await exigirBorrador(tx, remisionId);
+  const lineas: any[] = await tx.$queryRaw`
+    SELECT rd.MasterId FROM RemisionDetalle rd JOIN Masters m ON m.MasterId = rd.MasterId
+    WHERE rd.RemisionId = ${remisionId} AND rd.Vigente = 1 AND m.Estatus <> 'Salido'
+  `;
+  await sacarDeBodega(tx, remision, lineas.map(l => Number(l.MasterId)), operador);
+  const piso = await sincronizarPiso(tx, remision, operador);
+  return { Folio: remision.Folio as string, Rebajados: lineas.length, PisoKg: piso.kg };
+}
+
 // POST /api/remisiones/:id/agregar-pallet  { Codigo | PalletId }
 // Atajo para el caso normal: se embarca el polín entero. Agrega una línea por cada master del pallet
 // en un solo golpe — a 40+ masters, hacerlo uno por uno con el lector no es viable.
 // Acepta el `Codigo` tal como sale del QR de la hoja del polín (ej. "T0012"), que es la vía normal:
 // escanear lo que uno tiene físicamente enfrente evita el error de elegir el polín equivocado de una
 // lista. `PalletId` se sigue aceptando para llamadas internas.
+// Lo agregado sale de bodega en el acto (ver "Rebajar al escanear").
+export async function agregarPallet(
+  tx: any, remisionId: number, body: { Codigo?: any; PalletId?: any; Linea?: any }, operador: string,
+) {
+  const codigo = String(body.Codigo ?? "").trim().toUpperCase();
+  const palletIdBody = body.PalletId != null ? Number(body.PalletId) : null;
+  if (!codigo && (!Number.isInteger(palletIdBody) || (palletIdBody ?? 0) <= 0)) {
+    throw new ErrorNegocio(400, "Se requiere el código escaneado del polín");
+  }
+  const remision = await exigirBorrador(tx, remisionId);
+  const linea = resolverLinea(remision, body.Linea);
+
+  const palletRows: any[] = codigo
+    ? await tx.$queryRaw`SELECT PalletId, Codigo, Estatus FROM Pallets WHERE Codigo = ${codigo} LIMIT 1 FOR UPDATE`
+    : await tx.$queryRaw`SELECT PalletId, Codigo, Estatus FROM Pallets WHERE PalletId = ${palletIdBody} LIMIT 1 FOR UPDATE`;
+  if (!palletRows.length) throw new ErrorNegocio(404, codigo ? `QR no reconocido — no existe el polín ${codigo}` : "Polín no encontrado");
+  const pallet = palletRows[0];
+  const palletId = Number(pallet.PalletId);
+  if (pallet.Estatus === "Abierto") throw new ErrorNegocio(400, `El polín ${pallet.Codigo} sigue abierto — ciérralo antes de despacharlo`);
+  if (pallet.Estatus !== "Cerrado") throw new ErrorNegocio(400, `El polín ${pallet.Codigo} está ${String(pallet.Estatus).toLowerCase()} — no se puede despachar`);
+
+  // Se toman los masters DISPONIBLES, no "todos o ninguno": desde que se permite el picking caja
+  // por caja, un polín puede tener parte de su contenido ya comprometido en otro documento y el
+  // resto libre. Lo que queda físicamente en el polín es justo lo disponible.
+  const masters: any[] = await tx.$queryRaw`
+    SELECT m.MasterId FROM Masters m
+    WHERE m.PalletId = ${palletId}
+      AND m.Estatus <> 'Salido'
+      AND NOT EXISTS (SELECT 1 FROM RemisionDetalle rd WHERE rd.MasterId = m.MasterId AND rd.Vigente = 1)
+    FOR UPDATE
+  `;
+  if (!masters.length) {
+    const total: any[] = await tx.$queryRaw`SELECT COUNT(*) AS n FROM Masters WHERE PalletId = ${palletId}`;
+    throw new ErrorNegocio(400, Number(total[0].n) === 0
+      ? `El polín ${pallet.Codigo} no tiene masters escaneados`
+      : `El polín ${pallet.Codigo} ya no tiene masters disponibles — todos salieron o ya están en otra remisión`);
+  }
+
+  // Solo los pedidos de lo que REALMENTE va a entrar: si el polín mezcla proformas pero la parte
+  // ajena ya se fue en otro documento, no tiene sentido bloquear por ella.
+  const pedidosDelPallet: any[] = await tx.$queryRawUnsafe(`
+    SELECT DISTINCT dp.CodigoPedido
+    FROM Masters m
+    JOIN EtiquetaImpresa ei ON m.EtiquetaId = ei.EtiquetaId
+    JOIN OrdenEtiquetado oe ON ei.OrdenId = oe.OrdenId
+    JOIN DetallePedido dp ON oe.DetalleId = dp.DetalleId
+    WHERE m.MasterId IN (${masters.map(() => "?").join(",")})
+  `, ...masters.map(m => Number(m.MasterId)));
+  validarProforma(remision, pedidosDelPallet.map(r => r.CodigoPedido));
+
+  // Un solo INSERT con todas las filas, no uno por master: un polín normal trae 50+ y contra una
+  // base remota eso son 50 viajes de ida y vuelta — segundos de espera con el operador parado
+  // frente al lector. Agrupado es un viaje.
+  const valores = masters.map(() => "(?, ?, ?, ?)").join(", ");
+  const params = masters.flatMap(m => [remisionId, Number(m.MasterId), linea, operador]);
+  await tx.$executeRawUnsafe(
+    `INSERT INTO RemisionDetalle (RemisionId, MasterId, LineaContenedor, AgregadoPor) VALUES ${valores}`,
+    ...params
+  );
+  await sacarDeBodega(tx, remision, masters.map(m => Number(m.MasterId)), operador);
+  const piso = await sincronizarPiso(tx, remision, operador);
+  return { ok: true, PalletCodigo: pallet.Codigo, Agregados: masters.length, Linea: linea, PisoKg: piso.kg };
+}
+
 router.post("/:id/agregar-pallet", requireAuth, requirePerm("remisiones", "editar"), async (req: Request, res: Response) => {
   try {
     const remisionId = Number(req.params.id);
-    const codigo = String(req.body.Codigo ?? "").trim().toUpperCase();
-    const palletIdBody = req.body.PalletId != null ? Number(req.body.PalletId) : null;
-    if (!codigo && (!Number.isInteger(palletIdBody) || (palletIdBody ?? 0) <= 0)) {
-      res.status(400).json({ error: "Se requiere el código escaneado del polín" });
-      return;
-    }
-
     const operador = getOperador(req);
-    let respuesta: any = null;
-    await prisma.$transaction(async (tx) => {
-      const remision = await exigirBorrador(tx, remisionId);
-      const linea = resolverLinea(remision, req.body.Linea);
-
-      const palletRows: any[] = codigo
-        ? await tx.$queryRaw`SELECT PalletId, Codigo, Estatus FROM Pallets WHERE Codigo = ${codigo} LIMIT 1 FOR UPDATE`
-        : await tx.$queryRaw`SELECT PalletId, Codigo, Estatus FROM Pallets WHERE PalletId = ${palletIdBody} LIMIT 1 FOR UPDATE`;
-      if (!palletRows.length) throw new ErrorNegocio(404, codigo ? `QR no reconocido — no existe el polín ${codigo}` : "Polín no encontrado");
-      const pallet = palletRows[0];
-      const palletId = Number(pallet.PalletId);
-      if (pallet.Estatus === "Abierto") throw new ErrorNegocio(400, `El polín ${pallet.Codigo} sigue abierto — ciérralo antes de despacharlo`);
-      if (pallet.Estatus !== "Cerrado") throw new ErrorNegocio(400, `El polín ${pallet.Codigo} está ${String(pallet.Estatus).toLowerCase()} — no se puede despachar`);
-
-      // Se toman los masters DISPONIBLES, no "todos o ninguno": desde que se permite el picking caja
-      // por caja, un polín puede tener parte de su contenido ya comprometido en otro documento y el
-      // resto libre. Lo que queda físicamente en el polín es justo lo disponible.
-      const masters: any[] = await tx.$queryRaw`
-        SELECT m.MasterId FROM Masters m
-        WHERE m.PalletId = ${palletId}
-          AND m.Estatus <> 'Salido'
-          AND NOT EXISTS (SELECT 1 FROM RemisionDetalle rd WHERE rd.MasterId = m.MasterId AND rd.Vigente = 1)
-        FOR UPDATE
-      `;
-      if (!masters.length) {
-        const total: any[] = await tx.$queryRaw`SELECT COUNT(*) AS n FROM Masters WHERE PalletId = ${palletId}`;
-        throw new ErrorNegocio(400, Number(total[0].n) === 0
-          ? `El polín ${pallet.Codigo} no tiene masters escaneados`
-          : `El polín ${pallet.Codigo} ya no tiene masters disponibles — todos salieron o ya están en otra remisión`);
-      }
-
-      // Solo los pedidos de lo que REALMENTE va a entrar: si el polín mezcla proformas pero la parte
-      // ajena ya se fue en otro documento, no tiene sentido bloquear por ella.
-      const pedidosDelPallet: any[] = await tx.$queryRawUnsafe(`
-        SELECT DISTINCT dp.CodigoPedido
-        FROM Masters m
-        JOIN EtiquetaImpresa ei ON m.EtiquetaId = ei.EtiquetaId
-        JOIN OrdenEtiquetado oe ON ei.OrdenId = oe.OrdenId
-        JOIN DetallePedido dp ON oe.DetalleId = dp.DetalleId
-        WHERE m.MasterId IN (${masters.map(() => "?").join(",")})
-      `, ...masters.map(m => Number(m.MasterId)));
-      validarProforma(remision, pedidosDelPallet.map(r => r.CodigoPedido));
-
-      // Un solo INSERT con todas las filas, no uno por master: un polín normal trae 50+ y contra una
-      // base remota eso son 50 viajes de ida y vuelta — segundos de espera con el operador parado
-      // frente al lector. Agrupado es un viaje.
-      const valores = masters.map(() => "(?, ?, ?, ?)").join(", ");
-      const params = masters.flatMap(m => [remisionId, Number(m.MasterId), linea, operador]);
-      await tx.$executeRawUnsafe(
-        `INSERT INTO RemisionDetalle (RemisionId, MasterId, LineaContenedor, AgregadoPor) VALUES ${valores}`,
-        ...params
-      );
-      respuesta = { ok: true, PalletCodigo: pallet.Codigo, Agregados: masters.length, Linea: linea };
-    }, { timeout: 30_000 });
-
+    const respuesta = await prisma.$transaction(
+      (tx) => agregarPallet(tx, remisionId, req.body ?? {}, operador), { timeout: 60_000 });
     res.status(201).json(respuesta);
   } catch (err: any) {
     if (err instanceof ErrorNegocio) { res.status(err.status).json({ error: err.message }); return; }
@@ -670,50 +818,57 @@ router.post("/:id/agregar-pallet", requireAuth, requirePerm("remisiones", "edita
 // 2026, revierte la regla original de "desarmar antes").
 // El candado de sellado NO se toca: sigue bloqueando reimprimir, anular y quitar un master "por
 // error" (eso exige polín Abierto). Sellado impide EDITAR, no impide DESPACHAR — son cosas distintas.
+// Lo agregado sale de bodega en el acto (ver "Rebajar al escanear").
+export async function agregarMaster(
+  tx: any, remisionId: number, body: { Correlativo?: any; Linea?: any }, operador: string,
+): Promise<{ MasterId: number; Linea: number | null }> {
+  const codigo = normalizarCorrelativo(body.Correlativo);
+  if (!codigo) throw new ErrorNegocio(400, "Correlativo inválido");
+  const remision = await exigirBorrador(tx, remisionId);
+  const linea = resolverLinea(remision, body.Linea);
+
+  const rows: any[] = await tx.$queryRaw`
+    SELECT m.MasterId, m.Estatus, p.Codigo AS PalletCodigo, dp.CodigoPedido
+    FROM Masters m
+    JOIN Pallets p ON m.PalletId = p.PalletId
+    JOIN EtiquetaImpresa ei ON m.EtiquetaId = ei.EtiquetaId
+    JOIN OrdenEtiquetado oe ON ei.OrdenId = oe.OrdenId
+    JOIN DetallePedido dp ON oe.DetalleId = dp.DetalleId
+    WHERE ei.Correlativo = ${codigo} LIMIT 1 FOR UPDATE
+  `;
+  if (!rows.length) throw new ErrorNegocio(404, `El correlativo ${codigo} no está escaneado en bodega`);
+  const master = rows[0];
+  validarProforma(remision, [master.CodigoPedido]);
+
+  // Primero en qué remisión está y después si salió: desde que se rebaja al escanear, un master de un
+  // borrador ajeno también está Salido, y el folio es lo que le dice al operador dónde buscarlo.
+  const tomado: any[] = await tx.$queryRaw`
+    SELECT r.Folio FROM RemisionDetalle rd
+    JOIN Remisiones r ON rd.RemisionId = r.RemisionId
+    WHERE rd.MasterId = ${Number(master.MasterId)} AND rd.Vigente = 1 LIMIT 1
+  `;
+  if (tomado.length) throw new ErrorNegocio(400, `Este master ya está en la remisión ${tomado[0].Folio}`);
+  if (master.Estatus === "Salido") throw new ErrorNegocio(400, "Este master ya salió de bodega en otra remisión");
+
+  const masterId = Number(master.MasterId);
+  await tx.$executeRaw`
+    INSERT INTO RemisionDetalle (RemisionId, MasterId, LineaContenedor, AgregadoPor)
+    VALUES (${remisionId}, ${masterId}, ${linea}, ${operador})
+  `;
+  await sacarDeBodega(tx, remision, [masterId], operador);
+  await sincronizarPiso(tx, remision, operador);
+  return { MasterId: masterId, Linea: linea };
+}
+
 router.post("/:id/agregar-master", requireAuth, requirePerm("remisiones", "editar"), async (req: Request, res: Response) => {
   try {
     const remisionId = Number(req.params.id);
-    const codigo = normalizarCorrelativo(req.body.Correlativo);
-    if (!codigo) { res.status(400).json({ error: "Correlativo inválido" }); return; }
-
     const operador = getOperador(req);
-    let masterId = 0;
-    let lineaAsignada: number | null = null;
-    await prisma.$transaction(async (tx) => {
-      const remision = await exigirBorrador(tx, remisionId);
-      const linea = resolverLinea(remision, req.body.Linea);
+    const r = await prisma.$transaction(
+      (tx) => agregarMaster(tx, remisionId, req.body ?? {}, operador), { timeout: 30_000 });
 
-      const rows: any[] = await tx.$queryRaw`
-        SELECT m.MasterId, m.Estatus, p.Codigo AS PalletCodigo, dp.CodigoPedido
-        FROM Masters m
-        JOIN Pallets p ON m.PalletId = p.PalletId
-        JOIN EtiquetaImpresa ei ON m.EtiquetaId = ei.EtiquetaId
-        JOIN OrdenEtiquetado oe ON ei.OrdenId = oe.OrdenId
-        JOIN DetallePedido dp ON oe.DetalleId = dp.DetalleId
-        WHERE ei.Correlativo = ${codigo} LIMIT 1 FOR UPDATE
-      `;
-      if (!rows.length) throw new ErrorNegocio(404, `El correlativo ${codigo} no está escaneado en bodega`);
-      const master = rows[0];
-      validarProforma(remision, [master.CodigoPedido]);
-      if (master.Estatus === "Salido") throw new ErrorNegocio(400, "Este master ya salió de bodega en otra remisión");
-
-      const tomado: any[] = await tx.$queryRaw`
-        SELECT r.Folio FROM RemisionDetalle rd
-        JOIN Remisiones r ON rd.RemisionId = r.RemisionId
-        WHERE rd.MasterId = ${Number(master.MasterId)} AND rd.Vigente = 1 LIMIT 1
-      `;
-      if (tomado.length) throw new ErrorNegocio(400, `Este master ya está en la remisión ${tomado[0].Folio}`);
-
-      masterId = Number(master.MasterId);
-      lineaAsignada = linea;
-      await tx.$executeRaw`
-        INSERT INTO RemisionDetalle (RemisionId, MasterId, LineaContenedor, AgregadoPor)
-        VALUES (${remisionId}, ${masterId}, ${linea}, ${operador})
-      `;
-    }, { timeout: 30_000 });
-
-    const filas: any[] = await prisma.$queryRawUnsafe(`${MASTER_SELECT} WHERE m.MasterId = ? LIMIT 1`, masterId);
-    res.status(201).json({ ok: true, Master: formatearMaster(filas[0]), Linea: lineaAsignada });
+    const filas: any[] = await prisma.$queryRawUnsafe(`${MASTER_SELECT} WHERE m.MasterId = ? LIMIT 1`, r.MasterId);
+    res.status(201).json({ ok: true, Master: formatearMaster(filas[0]), Linea: r.Linea });
   } catch (err: any) {
     if (err instanceof ErrorNegocio) { res.status(err.status).json({ error: err.message }); return; }
     if (err.message?.includes("Duplicate")) { res.status(400).json({ error: "Este master ya está en otra remisión" }); return; }
@@ -721,18 +876,39 @@ router.post("/:id/agregar-master", requireAuth, requirePerm("remisiones", "edita
   }
 });
 
+// Quita líneas del borrador —  una suelta (detalleId) o todas las de un polín (palletId)—  y lo que
+// habían sacado vuelve a bodega y sale del piso del área. Devuelve cuántas quitó.
+export async function quitarLineas(
+  tx: any, remisionId: number, filtro: { detalleId?: number; palletId?: number }, operador: string,
+): Promise<number> {
+  const remision = await exigirBorrador(tx, remisionId);
+  const lineas: any[] = filtro.detalleId != null
+    ? await tx.$queryRaw`
+        SELECT DetalleId, MasterId FROM RemisionDetalle
+        WHERE DetalleId = ${filtro.detalleId} AND RemisionId = ${remisionId} FOR UPDATE`
+    : await tx.$queryRaw`
+        SELECT rd.DetalleId, rd.MasterId FROM RemisionDetalle rd
+        JOIN Masters m ON rd.MasterId = m.MasterId
+        WHERE rd.RemisionId = ${remisionId} AND m.PalletId = ${filtro.palletId ?? 0} FOR UPDATE`;
+  if (!lineas.length) return 0;
+
+  const masterIds = lineas.map(l => Number(l.MasterId));
+  await sincronizarPiso(tx, remision, operador, masterIds);
+  await regresarABodega(tx, remisionId, masterIds, operador);
+  const detalles = lineas.map(l => Number(l.DetalleId));
+  await tx.$executeRawUnsafe(
+    `DELETE FROM RemisionDetalle WHERE DetalleId IN (${detalles.map(() => "?").join(",")})`, ...detalles);
+  return lineas.length;
+}
+
 // DELETE /api/remisiones/:id/detalle/:detalleId — quita una línea suelta del borrador.
 router.delete("/:id/detalle/:detalleId", requireAuth, requirePerm("remisiones", "editar"), async (req: Request, res: Response) => {
   try {
     const remisionId = Number(req.params.id);
     const detalleId = Number(req.params.detalleId);
-    let quitadas = 0;
-    await prisma.$transaction(async (tx) => {
-      await exigirBorrador(tx, remisionId);
-      quitadas = Number(await tx.$executeRaw`
-        DELETE FROM RemisionDetalle WHERE DetalleId = ${detalleId} AND RemisionId = ${remisionId}
-      `);
-    }, { timeout: 30_000 });
+    const operador = getOperador(req);
+    const quitadas = await prisma.$transaction(
+      (tx) => quitarLineas(tx, remisionId, { detalleId }, operador), { timeout: 30_000 });
     if (!quitadas) { res.status(404).json({ error: "Línea no encontrada en esta remisión" }); return; }
     res.json({ ok: true });
   } catch (err: any) {
@@ -749,15 +925,9 @@ router.post("/:id/quitar-pallet", requireAuth, requirePerm("remisiones", "editar
     const palletId = Number(req.body.PalletId);
     if (!Number.isInteger(palletId) || palletId <= 0) { res.status(400).json({ error: "PalletId inválido" }); return; }
 
-    let quitadas = 0;
-    await prisma.$transaction(async (tx) => {
-      await exigirBorrador(tx, remisionId);
-      quitadas = Number(await tx.$executeRaw`
-        DELETE rd FROM RemisionDetalle rd
-        JOIN Masters m ON rd.MasterId = m.MasterId
-        WHERE rd.RemisionId = ${remisionId} AND m.PalletId = ${palletId}
-      `);
-    }, { timeout: 30_000 });
+    const operador = getOperador(req);
+    const quitadas = await prisma.$transaction(
+      (tx) => quitarLineas(tx, remisionId, { palletId }, operador), { timeout: 60_000 });
     if (!quitadas) { res.status(404).json({ error: "Ese polín no tiene líneas en esta remisión" }); return; }
     res.json({ ok: true, Quitadas: quitadas });
   } catch (err: any) {
@@ -767,103 +937,67 @@ router.post("/:id/quitar-pallet", requireAuth, requirePerm("remisiones", "editar
 });
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
-// Confirmar / anular — los únicos dos puntos donde se mueve inventario
+// Confirmar / anular
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 
 // POST /api/remisiones/:id/confirmar
-// Todo en una transacción: baja los masters, libera la posición de los polines que quedan vacíos y
-// escribe el kardex. Un polín queda "Despachado" solo si TODOS sus masters se van en esta remisión;
-// si salió parcial, el polín conserva su posición y las cajas que no se llevaron.
+// Cierra el documento. El inventario ya se movió al escanear (bodega y piso del área); aquí solo se
+// revalida la proforma, se marca Confirmada —  desde ahí corre el plazo para anular—  y el borrador
+// deja de aceptar cambios.
+// Los borradores armados ANTES del 28 oct 2026 todavía traen líneas en bodega: esas salen aquí, como
+// salían siempre, y entran al piso en la misma transacción.
+export async function confirmarRemision(tx: any, remisionId: number, operador: string) {
+  const remision = await exigirBorrador(tx, remisionId);
+
+  const lineas: any[] = await tx.$queryRaw`
+    SELECT rd.MasterId, m.PalletId, m.Estatus
+    FROM RemisionDetalle rd
+    JOIN Masters m ON rd.MasterId = m.MasterId
+    WHERE rd.RemisionId = ${remisionId} AND rd.Vigente = 1
+    FOR UPDATE
+  `;
+  if (!lineas.length) throw new ErrorNegocio(400, "Esta remisión no tiene líneas — agrega al menos un master antes de confirmarla");
+
+  // Último respaldo del amarre con la proforma: las líneas se validan al agregarse, pero entre
+  // medio se pudo haber apagado la casilla de mixta. Revalidar aquí evita confirmar un documento
+  // que dice ir contra una proforma y lleva producto de otra.
+  const pedidosDeLineas: any[] = await tx.$queryRaw`
+    SELECT DISTINCT dp.CodigoPedido
+    FROM RemisionDetalle rd
+    JOIN Masters m ON rd.MasterId = m.MasterId
+    JOIN EtiquetaImpresa ei ON m.EtiquetaId = ei.EtiquetaId
+    JOIN OrdenEtiquetado oe ON ei.OrdenId = oe.OrdenId
+    JOIN DetallePedido dp ON oe.DetalleId = dp.DetalleId
+    WHERE rd.RemisionId = ${remisionId} AND rd.Vigente = 1
+  `;
+  validarProforma(remision, pedidosDeLineas.map(r => r.CodigoPedido));
+
+  // Un master Salido con línea vigente aquí salió por ESTA remisión: el UNIQUE (MasterId, Vigente)
+  // no deja que otra lo tenga a la vez.
+  await sacarDeBodega(tx, remision, lineas.filter(l => l.Estatus !== "Salido").map(l => Number(l.MasterId)), operador);
+
+  await tx.$executeRaw`
+    UPDATE Remisiones SET Estatus = 'Confirmada', ConfirmadaPor = ${operador}, ConfirmadaEn = NOW()
+    WHERE RemisionId = ${remisionId}
+  `;
+
+  const piso = await sincronizarPiso(tx, remision, operador);
+
+  const palletIds = [...new Set(lineas.map(l => Number(l.PalletId)))];
+  const [d]: any[] = await tx.$queryRawUnsafe(
+    `SELECT COUNT(*) AS n FROM Pallets WHERE Estatus = 'Despachado' AND PalletId IN (${palletIds.map(() => "?").join(",")})`,
+    ...palletIds);
+
+  return { ok: true, Folio: remision.Folio, Masters: lineas.length, PolinesDespachados: Number(d.n),
+           PisoLineas: piso.lineas, PisoKg: piso.kg };
+}
+
 router.post("/:id/confirmar", requireAuth, requirePerm("remisiones", "editar"), async (req: Request, res: Response) => {
   try {
     const remisionId = Number(req.params.id);
     const operador = getOperador(req);
-    let respuesta: any = null;
-
-    await prisma.$transaction(async (tx) => {
-      const remision = await exigirBorrador(tx, remisionId);
-
-      const lineas: any[] = await tx.$queryRaw`
-        SELECT rd.MasterId, m.PalletId, m.Estatus, p.PosicionId
-        FROM RemisionDetalle rd
-        JOIN Masters m ON rd.MasterId = m.MasterId
-        JOIN Pallets p ON m.PalletId = p.PalletId
-        WHERE rd.RemisionId = ${remisionId} AND rd.Vigente = 1
-        FOR UPDATE
-      `;
-      if (!lineas.length) throw new ErrorNegocio(400, "Esta remisión no tiene líneas — agrega al menos un master antes de confirmarla");
-
-      // Relectura del Estatus con las filas ya bloqueadas: entre que se armó el borrador y este
-      // momento, otro usuario pudo haber despachado alguno de estos masters en otra remisión.
-      const yaSalidos = lineas.filter(l => l.Estatus === "Salido");
-      if (yaSalidos.length) {
-        throw new ErrorNegocio(400, `${yaSalidos.length} master(s) de esta remisión ya salieron de bodega en otro documento — quítalos y vuelve a confirmar`);
-      }
-
-      // Último respaldo del amarre con la proforma: las líneas se validan al agregarse, pero entre
-      // medio se pudo haber apagado la casilla de mixta. Revalidar aquí evita confirmar un documento
-      // que dice ir contra una proforma y lleva producto de otra.
-      const pedidosDeLineas: any[] = await tx.$queryRaw`
-        SELECT DISTINCT dp.CodigoPedido
-        FROM RemisionDetalle rd
-        JOIN Masters m ON rd.MasterId = m.MasterId
-        JOIN EtiquetaImpresa ei ON m.EtiquetaId = ei.EtiquetaId
-        JOIN OrdenEtiquetado oe ON ei.OrdenId = oe.OrdenId
-        JOIN DetallePedido dp ON oe.DetalleId = dp.DetalleId
-        WHERE rd.RemisionId = ${remisionId} AND rd.Vigente = 1
-      `;
-      validarProforma(remision, pedidosDeLineas.map(r => r.CodigoPedido));
-
-      // Agrupado en dos consultas en vez de 2×N: una remisión de 3 polines son 150 masters, y uno
-      // por uno contra una base remota son 300 viajes de ida y vuelta dentro de la transacción
-      // (con los candados tomados todo ese rato).
-      const masterIds = lineas.map(l => Number(l.MasterId));
-      await tx.$executeRawUnsafe(
-        `UPDATE Masters SET Estatus = 'Salido' WHERE MasterId IN (${masterIds.map(() => "?").join(",")})`,
-        ...masterIds
-      );
-      const motivoSalida = `Remisión ${remision.Folio}`;
-      await tx.$executeRawUnsafe(
-        `INSERT INTO MovimientosBodega (PalletId, MasterId, RemisionId, Tipo, PosicionOrigenId, PosicionDestinoId, Usuario, Motivo)
-         VALUES ${lineas.map(() => "(?, ?, ?, 'SALIDA', ?, NULL, ?, ?)").join(", ")}`,
-        ...lineas.flatMap(l => [
-          Number(l.PalletId), Number(l.MasterId), remisionId,
-          l.PosicionId == null ? null : Number(l.PosicionId), operador, motivoSalida,
-        ])
-      );
-
-      // Polines que quedaron sin un solo master en bodega → se despachan enteros y sueltan su
-      // posición física. El UPDATE es condicional en la propia consulta (NOT EXISTS) para no
-      // depender de haber contado bien en JS lo que la BD acaba de cambiar.
-      const palletIds = [...new Set(lineas.map(l => Number(l.PalletId)))];
-      let despachados = 0;
-      for (const palletId of palletIds) {
-        const afectadas = Number(await tx.$executeRaw`
-          UPDATE Pallets SET Estatus = 'Despachado', PosicionId = NULL
-          WHERE PalletId = ${palletId}
-            AND Estatus = 'Cerrado'
-            AND NOT EXISTS (SELECT 1 FROM Masters m WHERE m.PalletId = ${palletId} AND m.Estatus <> 'Salido')
-        `);
-        despachados += afectadas;
-      }
-
-      await tx.$executeRaw`
-        UPDATE Remisiones SET Estatus = 'Confirmada', ConfirmadaPor = ${operador}, ConfirmadaEn = NOW()
-        WHERE RemisionId = ${remisionId}
-      `;
-
-      // Traslado interno: lo que sale de bodega entra al piso de la bodega destino en el mismo instante, dentro
-      // de esta misma transacción. La jornada es el día de la confirmación en Guatemala, que es
-      // cuando el área lo recibe de verdad —  no la Fecha del documento, que puede ser de otro día.
-      let piso = { lineas: 0, kg: 0 };
-      if (remision.BodegaDestino || remision.AreaDestino) {
-        piso = await registrarIngresoDesdeRemision(tx, remisionId, remision, hoyGT(), operador);
-      }
-
-      respuesta = { ok: true, Folio: remision.Folio, Masters: lineas.length, PolinesDespachados: despachados,
-                    PisoLineas: piso.lineas, PisoKg: piso.kg };
-    }, { timeout: 60_000 });
-
+    const respuesta = await prisma.$transaction(
+      (tx) => confirmarRemision(tx, remisionId, operador), { timeout: 60_000 });
     res.json(respuesta);
   } catch (err: any) {
     if (err instanceof ErrorNegocio) { res.status(err.status).json({ error: err.message }); return; }
