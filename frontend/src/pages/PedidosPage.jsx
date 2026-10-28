@@ -3,6 +3,7 @@ import { fmtEntero, fmtNum } from "../utils/numero.js";
 import { authHeader, usePuede, useAuth } from "../context/AuthContext.jsx";
 import { useColWidths, useOrden, ordenarFilas, Th, Colgroup } from "../components/ResizableTh.jsx";
 import { fechaDelBackend } from "../utils/fecha.js";
+import AvancePedidoModal from "../components/AvancePedidoModal.jsx";
 
 const ESTATUS = ["Proceso", "Terminado"];
 
@@ -11,18 +12,21 @@ const PEDIDOS_COLS = Object.keys(PEDIDOS_COL_DEFAULTS);
 const DETALLE_COL_DEFAULTS = { clase: 190, talla: 90, presentacion: 130, cajas: 90, kg: 90, acciones: 230 };
 const DETALLE_COLS = Object.keys(DETALLE_COL_DEFAULTS);
 // El avance va en su propia pestaña y no como columnas extra del detalle: el panel vive a media
-// pantalla, así que metidas junto a la proforma quedarían ilegibles. Avance y Cuadre comparan solo
-// lo escaneado que sigue en bodega contra lo pedido: ni lo agrupado ni lo que ya salió.
-const AVANCE_COL_DEFAULTS = { clase: 140, talla: 80, presentacion: 110, objetivo: 85, bodega: 85, dif: 90 };
+// pantalla, así que metidas junto a la proforma quedarían ilegibles. Compara solo lo escaneado que
+// sigue en bodega contra lo pedido (ni lo agrupado ni lo que ya salió): en Kg, que sí se suman entre
+// presentaciones y dan el % de todo el pedido, y en master faltantes, que es como se trabaja en
+// planta. Una fila por línea — ver GET /api/detalle-pedido/cuadre. Hasta el 28 oct 2026 eran dos
+// pestañas, Avance (master) y Cuadre (Kg); el usuario pidió juntarlas.
+const AVANCE_COL_DEFAULTS = { producto: 150, talla: 80, presentacion: 130, objetivo: 100, bodega: 100, dif: 100, faltan: 110, pct: 90 };
 const AVANCE_COLS = Object.keys(AVANCE_COL_DEFAULTS);
-// El Cuadre es lo mismo en Kg, una fila por línea, más el % de avance: en Kg sí se pueden sumar
-// presentaciones distintas y sale el avance de todo el pedido — ver GET /api/detalle-pedido/cuadre.
-const CUADRE_COL_DEFAULTS = { producto: 150, talla: 80, presentacion: 130, objetivo: 100, bodega: 100, dif: 100, pct: 90 };
-const CUADRE_COLS = Object.keys(CUADRE_COL_DEFAULTS);
 
 // % de avance contra lo pedido; null cuando no hay pedido contra qué medir (pedido general o granel).
 const pctAvance = (enBodega, objetivo) => (objetivo ? (enBodega / objetivo) * 100 : null);
 const COLOR_PCT = pct => (pct >= 100 ? "bg-green-500" : pct >= 50 ? "bg-yellow-400" : "bg-red-500");
+// Desde aquí el pedido —o la línea— ya está por cerrarse, y el resumen y cada fila que lo alcance se
+// pintan de verde como aviso, con su barra también verde (pedido del usuario, 28 oct 2026). Debajo
+// del umbral las barras siguen con COLOR_PCT.
+const UMBRAL_AVISO_AVANCE = 85;
 
 // `new Date(v)` con getters locales daba la hora 6 h antes: el backend manda hora de Guatemala
 // etiquetada como UTC (ver utils/fecha.js). El helper lee los dígitos tal cual.
@@ -482,18 +486,17 @@ export default function PedidosPage() {
   const [filtroEstatusPed, setFiltroEstatusPed] = useState("Proceso");
   const [widthsPedidos, startResizePedidos] = useColWidths("pedidos", PEDIDOS_COL_DEFAULTS);
   const [widthsDetalle, startResizeDetalle] = useColWidths("pedidos_detalle", DETALLE_COL_DEFAULTS);
-  const [widthsAvance, startResizeAvance] = useColWidths("pedidos_avance", AVANCE_COL_DEFAULTS);
-  const [widthsCuadre, startResizeCuadre] = useColWidths("pedidos_cuadre", CUADRE_COL_DEFAULTS);
+  // La llave sigue siendo la de Cuadre: son sus mismas columnas, y así no se pierden los anchos que
+  // ya se ajustaron ahí.
+  const [widthsAvance, startResizeAvance] = useColWidths("pedidos_cuadre", AVANCE_COL_DEFAULTS);
   const [vista, setVista] = useState("proforma");
   const [avance, setAvance] = useState([]);
   const [loadingAv, setLoadingAv] = useState(false);
-  const [cuadre, setCuadre] = useState([]);
-  const [loadingCuadre, setLoadingCuadre] = useState(false);
+  const [imprimiendoAvance, setImprimiendoAvance] = useState(false);
   const [historialId, setHistorialId] = useState(null);
   const [ordenPed, alternarOrdenPed] = useOrden();
   const [ordenDet, alternarOrdenDet] = useOrden();
   const [ordenAv, alternarOrdenAv] = useOrden();
-  const [ordenCuadre, alternarOrdenCuadre] = useOrden();
 
   const fetchPedidos = useCallback(async () => {
     setLoading(true);
@@ -535,30 +538,19 @@ export default function PedidosPage() {
   const fetchAvance = useCallback(async (codigo) => {
     setLoadingAv(true);
     try {
-      const res = await fetch(`/api/detalle-pedido/avance?pedido=${encodeURIComponent(codigo)}`, { headers: authHeader() });
+      const res = await fetch(`/api/detalle-pedido/cuadre?pedido=${encodeURIComponent(codigo)}`, { headers: authHeader() });
       const data = await res.json();
       setAvance(Array.isArray(data) ? data : []);
     } finally { setLoadingAv(false); }
   }, []);
 
-  const fetchCuadre = useCallback(async (codigo) => {
-    setLoadingCuadre(true);
-    try {
-      const res = await fetch(`/api/detalle-pedido/cuadre?pedido=${encodeURIComponent(codigo)}`, { headers: authHeader() });
-      const data = await res.json();
-      setCuadre(Array.isArray(data) ? data : []);
-    } finally { setLoadingCuadre(false); }
-  }, []);
-
   const seleccionarPedido = (p) => { setPedidoSel(p); fetchDetalles(p.CodigoPedido); };
 
-  // El avance y el cuadre se recargan al entrar a la pestaña y al cambiar de pedido. Cuentan
-  // producto físico, que se mueve todo el día por escaneo y despacho, así que se piden frescos en
-  // vez de cachearlos.
+  // El avance se recarga al entrar a la pestaña y al cambiar de pedido. Cuenta producto físico, que
+  // se mueve todo el día por escaneo y despacho, así que se pide fresco en vez de cachearlo.
   useEffect(() => {
     if (vista === "avance" && pedidoSel) fetchAvance(pedidoSel.CodigoPedido);
-    if (vista === "cuadre" && pedidoSel) fetchCuadre(pedidoSel.CodigoPedido);
-  }, [vista, pedidoSel, fetchAvance, fetchCuadre]);
+  }, [vista, pedidoSel, fetchAvance]);
 
   const handleSavePedido = async (form) => {
     const isEdit = pedidos.some(p => p.CodigoPedido === form.CodigoPedido);
@@ -631,16 +623,15 @@ export default function PedidosPage() {
   const VALORES_PED = { pedido: p => p.CodigoPedido, descripcion: p => p.Descripcion, estatus: p => p.Estatus };
   const VALORES_DET = { clase: d => productoDesc(d.Clase), talla: d => d.Talla, presentacion: d => d.Presentacion,
                         cajas: d => d.CantidadCajas, kg: d => d.KgPedido };
-  const VALORES_AV = { clase: a => productoDesc(a.Clase), talla: a => a.Talla, presentacion: a => a.Presentacion,
-                       objetivo: a => a.Objetivo, bodega: a => a.EnBodega, dif: a => a.Diferencia };
-  const VALORES_CUADRE = { producto: c => productoDesc(c.Clase), talla: c => c.Talla,
-                          presentacion: c => presentacionDesc(c.Presentacion),
-                          objetivo: c => c.ObjetivoKg, bodega: c => c.EnBodegaKg,
-                          dif: c => c.DiferenciaKg, pct: c => pctAvance(c.EnBodegaKg, c.ObjetivoKg) };
+  const VALORES_AV = { producto: a => productoDesc(a.Clase), talla: a => a.Talla,
+                       presentacion: a => presentacionDesc(a.Presentacion),
+                       objetivo: a => a.ObjetivoKg, bodega: a => a.EnBodegaKg, dif: a => a.DiferenciaKg,
+                       faltan: a => a.FaltanMaster, pct: a => pctAvance(a.EnBodegaKg, a.ObjetivoKg) };
   // Avance de todo el pedido: el granel suma kg en bodega aunque no tenga pedido propio, porque es
   // producto del pedido empacado distinto (se acabó el material).
-  const totalPedidoKg = cuadre.reduce((s, c) => s + (c.ObjetivoKg || 0), 0);
-  const totalBodegaKg = cuadre.reduce((s, c) => s + c.EnBodegaKg, 0);
+  const totalPedidoKg = avance.reduce((s, a) => s + (a.ObjetivoKg || 0), 0);
+  const totalBodegaKg = avance.reduce((s, a) => s + a.EnBodegaKg, 0);
+  const totalFaltanMaster = avance.reduce((s, a) => s + (a.FaltanMaster || 0), 0);
   const pctPedido = pctAvance(totalBodegaKg, totalPedidoKg);
 
   const q = busqueda.toLowerCase();
@@ -718,15 +709,16 @@ export default function PedidosPage() {
         )}
       </div>
 
-      {/* Columna Detalle */}
-      <div className="flex-1 min-w-0">
+      {/* Columna Detalle. En Avance toma dos tercios del ancho: son ocho columnas y a media
+          pantalla se cortaban las últimas (Faltan master y Avance), que son las que se vienen a ver. */}
+      <div className={`${vista === "avance" ? "flex-[2]" : "flex-1"} min-w-0`}>
         <div className="flex flex-wrap gap-3 items-center mb-4">
           <h3 className="text-sm font-medium text-gray-600">
             {pedidoSel ? <span className="font-mono font-bold text-gray-800">{pedidoSel.CodigoPedido}</span> : "Detalle"}
           </h3>
 
           <div className="inline-flex rounded-lg border border-gray-300 overflow-hidden text-xs font-semibold">
-            {[["proforma", "Proforma"], ["avance", "Avance"], ["cuadre", "Cuadre"]].map(([key, label]) => (
+            {[["proforma", "Proforma"], ["avance", "Avance"]].map(([key, label]) => (
               <button key={key} onClick={() => setVista(key)} disabled={!pedidoSel}
                 className={`px-3 py-2 transition disabled:opacity-50 ${vista === key ? "bg-blue-600 text-white" : "bg-white text-gray-600 hover:bg-gray-50"}`}>
                 {label}
@@ -741,16 +733,31 @@ export default function PedidosPage() {
             </button>
           )}
           {vista === "avance" && pedidoSel && (
-            <button onClick={() => fetchAvance(pedidoSel.CodigoPedido)}
-              className="ml-auto text-xs font-medium text-blue-600 hover:text-blue-800 px-2 py-1 rounded hover:bg-blue-50 transition">
-              Actualizar
-            </button>
+            <div className="ml-auto flex items-center gap-3">
+              {/* En relieve (borde inferior oscuro que se hunde al presionar): como enlace de texto
+                  junto a "Actualizar" no se distinguía. */}
+              <button onClick={() => setImprimiendoAvance(true)} disabled={loadingAv || avance.length === 0}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold text-white bg-gradient-to-b from-blue-500 to-blue-700 border-b-4 border-blue-900 shadow-md shadow-blue-900/30 hover:from-blue-400 hover:to-blue-600 active:border-b-0 active:translate-y-1 active:shadow-none transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 focus-visible:ring-offset-2 disabled:opacity-50 disabled:pointer-events-none">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4" aria-hidden="true">
+                  <path d="M6 9V3h12v6" /><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" /><path d="M6 14h12v7H6z" />
+                </svg>
+                Imprimir avance
+              </button>
+              <button onClick={() => fetchAvance(pedidoSel.CodigoPedido)}
+                className="text-xs font-medium text-blue-600 hover:text-blue-800 px-2 py-1 rounded hover:bg-blue-50 transition">
+                Actualizar
+              </button>
+            </div>
           )}
-          {vista === "cuadre" && pedidoSel && (
-            <button onClick={() => fetchCuadre(pedidoSel.CodigoPedido)}
-              className="ml-auto text-xs font-medium text-blue-600 hover:text-blue-800 px-2 py-1 rounded hover:bg-blue-50 transition">
-              Actualizar
-            </button>
+          {/* Imprime las filas en el mismo orden en que se ven, ya con sus descripciones. */}
+          {imprimiendoAvance && pedidoSel && (
+            <AvancePedidoModal
+              pedido={pedidoSel}
+              umbral={UMBRAL_AVISO_AVANCE}
+              filas={ordenarFilas(avance, ordenAv, VALORES_AV).map(a => ({
+                ...a, Producto: productoDesc(a.Clase), TallaDesc: tallaDesc(a.Talla), PresentacionDesc: presentacionDesc(a.Presentacion),
+              }))}
+              onCerrar={() => setImprimiendoAvance(false)} />
           )}
         </div>
 
@@ -761,135 +768,87 @@ export default function PedidosPage() {
             <div className="flex justify-center py-10"><div className="w-6 h-6 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" /></div>
           ) : (
             <>
+              {/* Pedido general: no hay cantidad planificada, así que no hay % que mostrar. */}
+              {pctPedido !== null && (() => {
+                const aviso = pctPedido >= UMBRAL_AVISO_AVANCE;
+                return (
+                  <div className={`rounded-xl shadow px-4 py-3 mb-3 ${aviso ? "bg-green-100 border border-green-300" : "bg-white"}`}>
+                    {aviso && (
+                      <p className="mb-2 text-sm font-semibold text-green-800">
+                        El pedido ya lleva más del {UMBRAL_AVISO_AVANCE} % de avance.
+                      </p>
+                    )}
+                    <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                      <span className={`text-2xl font-bold tabular-nums ${aviso ? "text-green-800" : "text-gray-800"}`}>{fmtNum(pctPedido, 1)} %</span>
+                      <span className={`text-sm ${aviso ? "text-green-700" : "text-gray-500"}`}>avance del pedido</span>
+                      <span className={`text-sm tabular-nums ml-auto ${aviso ? "text-green-700" : "text-gray-500"}`}>
+                        {fmtNum(totalBodegaKg)} de {fmtNum(totalPedidoKg)} kg en bodega
+                        {" · "}faltan <b className={aviso ? "text-green-800" : "text-gray-700"}>{fmtEntero(totalFaltanMaster)}</b> master
+                      </span>
+                    </div>
+                    {/* En aviso la barra va verde aunque no llegue a 100: amarilla sobre fondo verde
+                        se leería como una alerta distinta. */}
+                    <div className={`mt-2 h-2 rounded-full overflow-hidden ${aviso ? "bg-white" : "bg-gray-100"}`}>
+                      <div className={`h-full ${aviso ? "bg-green-500" : COLOR_PCT(pctPedido)}`} style={{ width: `${Math.min(100, pctPedido)}%` }} />
+                    </div>
+                  </div>
+                );
+              })()}
               <div className="bg-white rounded-xl shadow overflow-x-auto">
                 <table className="w-full text-sm table-fixed">
                   <Colgroup columns={AVANCE_COLS} widths={widthsAvance} />
                   <thead>
                     <tr className="bg-gray-100 text-gray-600 uppercase text-xs tracking-wider">
-                      <Th width={widthsAvance.clase} onResizeStart={startResizeAvance("clase")} sortKey="clase" orden={ordenAv} onOrdenar={alternarOrdenAv} className="px-3 py-3 text-left">Clase</Th>
+                      <Th width={widthsAvance.producto} onResizeStart={startResizeAvance("producto")} sortKey="producto" orden={ordenAv} onOrdenar={alternarOrdenAv} className="px-3 py-3 text-left">Producto</Th>
                       <Th width={widthsAvance.talla} onResizeStart={startResizeAvance("talla")} sortKey="talla" orden={ordenAv} onOrdenar={alternarOrdenAv} className="px-3 py-3 text-left">Talla</Th>
                       <Th width={widthsAvance.presentacion} onResizeStart={startResizeAvance("presentacion")} sortKey="presentacion" orden={ordenAv} onOrdenar={alternarOrdenAv} className="px-3 py-3 text-left">Present.</Th>
-                      <Th width={widthsAvance.objetivo} onResizeStart={startResizeAvance("objetivo")} sortKey="objetivo" orden={ordenAv} onOrdenar={alternarOrdenAv} className="px-3 py-3 text-right" title="Master que pide la proforma">Pedido</Th>
-                      <Th width={widthsAvance.bodega} onResizeStart={startResizeAvance("bodega")} sortKey="bodega" orden={ordenAv} onOrdenar={alternarOrdenAv} className="px-3 py-3 text-right" title="Master escaneados que siguen en bodega">Bodega</Th>
-                      <Th width={widthsAvance.dif} onResizeStart={startResizeAvance("dif")} sortKey="dif" orden={ordenAv} onOrdenar={alternarOrdenAv} className="px-3 py-3 text-right" title="Master en bodega menos lo pedido">Dif.</Th>
+                      <Th width={widthsAvance.objetivo} onResizeStart={startResizeAvance("objetivo")} sortKey="objetivo" orden={ordenAv} onOrdenar={alternarOrdenAv} className="px-3 py-3 text-right" title="Kg que pide la proforma">Pedido Kg</Th>
+                      <Th width={widthsAvance.bodega} onResizeStart={startResizeAvance("bodega")} sortKey="bodega" orden={ordenAv} onOrdenar={alternarOrdenAv} className="px-3 py-3 text-right" title="Kg escaneados que siguen en bodega">Bodega Kg</Th>
+                      <Th width={widthsAvance.dif} onResizeStart={startResizeAvance("dif")} sortKey="dif" orden={ordenAv} onOrdenar={alternarOrdenAv} className="px-3 py-3 text-right" title="Kg en bodega menos lo pedido">Dif. Kg</Th>
+                      <Th width={widthsAvance.faltan} onResizeStart={startResizeAvance("faltan")} sortKey="faltan" orden={ordenAv} onOrdenar={alternarOrdenAv} className="px-3 py-3 text-right" title="Master que faltan en bodega para completar la línea">Faltan master</Th>
+                      <Th width={widthsAvance.pct} onResizeStart={startResizeAvance("pct")} sortKey="pct" orden={ordenAv} onOrdenar={alternarOrdenAv} className="px-3 py-3 text-right" title="Kg en bodega ÷ kg pedidos">Avance</Th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
-                    {ordenarFilas(avance, ordenAv, VALORES_AV).map(a => (
-                      <tr key={a.DetalleId} className="hover:bg-gray-50 transition">
-                        <td className="px-3 py-3 text-gray-700" title={`${a.Clase} — ${productoDesc(a.Clase)}`}>
-                          <div className="flex items-center gap-1.5 min-w-0">
-                            <span className="truncate">{productoDesc(a.Clase)}</span>
-                            {a.EsGranel && (
-                              <span className="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-gray-200 text-gray-600">Granel</span>
-                            )}
-                          </div>
-                        </td>
-                        <td className="px-3 py-3 text-gray-700 truncate" title={tallaDesc(a.Talla)}>{tallaDesc(a.Talla)}</td>
-                        <td className="px-3 py-3 text-gray-700 truncate" title={presentacionDesc(a.Presentacion)}>{presentacionDesc(a.Presentacion)}</td>
-                        <td className="px-3 py-3 text-right text-gray-800 font-semibold">
-                          {a.Objetivo === null ? <span className="text-gray-300">—</span> : fmtEntero(a.Objetivo)}
-                        </td>
-                        <td className="px-3 py-3 text-right text-gray-800 font-semibold">{fmtEntero(a.EnBodega)}</td>
-                        <td className="px-3 py-3 text-right">
-                          {a.Diferencia === null ? (
-                            <span className="text-gray-300">—</span>
-                          ) : a.Diferencia > 0 ? (
-                            <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-700"
-                              title="Hay en bodega más de lo que pide la proforma">+{fmtEntero(a.Diferencia)}</span>
-                          ) : a.Diferencia === 0 ? (
-                            <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-green-100 text-green-700">completo</span>
-                          ) : (
-                            <span className="text-gray-500">{fmtEntero(a.Diferencia)}</span>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                    {avance.length === 0 && (
-                      <tr><td colSpan={6} className="px-4 py-8 text-center text-gray-400">Sin líneas en este pedido</td></tr>
-                    )}
-                    {avance.length > 0 && (
-                      <tr className="bg-gray-50 font-semibold">
-                        <td colSpan={3} className="px-3 py-3 text-right text-gray-600">Total</td>
-                        <td className="px-3 py-3 text-right text-gray-800">{fmtEntero(avance.reduce((s, a) => s + (a.Objetivo || 0), 0))}</td>
-                        <td className="px-3 py-3 text-right text-gray-800">{fmtEntero(avance.reduce((s, a) => s + a.EnBodega, 0))}</td>
-                        <td></td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-              <p className="mt-2 text-xs text-gray-500 leading-relaxed">
-                Todo en master. <b>Pedido</b> = cajas de la proforma ÷ cajas por master. <b>Bodega</b> = master
-                escaneados que siguen en bodega; lo que ya salió (despachos y traslados) no cuenta.
-                {" "}Las diferencias en ámbar avisan, no bloquean.
-              </p>
-            </>
-          )
-        ) : vista === "cuadre" ? (
-          loadingCuadre ? (
-            <div className="flex justify-center py-10"><div className="w-6 h-6 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" /></div>
-          ) : (
-            <>
-              {/* Pedido general: no hay cantidad planificada, así que no hay % que mostrar. */}
-              {pctPedido !== null && (
-                <div className="bg-white rounded-xl shadow px-4 py-3 mb-3">
-                  <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-                    <span className="text-2xl font-bold text-gray-800 tabular-nums">{fmtNum(pctPedido, 1)} %</span>
-                    <span className="text-sm text-gray-500">avance del pedido</span>
-                    <span className="text-sm text-gray-500 tabular-nums ml-auto">
-                      {fmtNum(totalBodegaKg)} de {fmtNum(totalPedidoKg)} kg en bodega
-                    </span>
-                  </div>
-                  <div className="mt-2 h-2 bg-gray-100 rounded-full overflow-hidden">
-                    <div className={`h-full ${COLOR_PCT(pctPedido)}`} style={{ width: `${Math.min(100, pctPedido)}%` }} />
-                  </div>
-                </div>
-              )}
-              <div className="bg-white rounded-xl shadow overflow-x-auto">
-                <table className="w-full text-sm table-fixed">
-                  <Colgroup columns={CUADRE_COLS} widths={widthsCuadre} />
-                  <thead>
-                    <tr className="bg-gray-100 text-gray-600 uppercase text-xs tracking-wider">
-                      <Th width={widthsCuadre.producto} onResizeStart={startResizeCuadre("producto")} sortKey="producto" orden={ordenCuadre} onOrdenar={alternarOrdenCuadre} className="px-3 py-3 text-left">Producto</Th>
-                      <Th width={widthsCuadre.talla} onResizeStart={startResizeCuadre("talla")} sortKey="talla" orden={ordenCuadre} onOrdenar={alternarOrdenCuadre} className="px-3 py-3 text-left">Talla</Th>
-                      <Th width={widthsCuadre.presentacion} onResizeStart={startResizeCuadre("presentacion")} sortKey="presentacion" orden={ordenCuadre} onOrdenar={alternarOrdenCuadre} className="px-3 py-3 text-left">Present.</Th>
-                      <Th width={widthsCuadre.objetivo} onResizeStart={startResizeCuadre("objetivo")} sortKey="objetivo" orden={ordenCuadre} onOrdenar={alternarOrdenCuadre} className="px-3 py-3 text-right" title="Kg que pide la proforma">Pedido Kg</Th>
-                      <Th width={widthsCuadre.bodega} onResizeStart={startResizeCuadre("bodega")} sortKey="bodega" orden={ordenCuadre} onOrdenar={alternarOrdenCuadre} className="px-3 py-3 text-right" title="Kg escaneados que siguen en bodega">Bodega Kg</Th>
-                      <Th width={widthsCuadre.dif} onResizeStart={startResizeCuadre("dif")} sortKey="dif" orden={ordenCuadre} onOrdenar={alternarOrdenCuadre} className="px-3 py-3 text-right" title="Kg en bodega menos lo pedido">Dif.</Th>
-                      <Th width={widthsCuadre.pct} onResizeStart={startResizeCuadre("pct")} sortKey="pct" orden={ordenCuadre} onOrdenar={alternarOrdenCuadre} className="px-3 py-3 text-right" title="Kg en bodega ÷ kg pedidos">Avance</Th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-100">
-                    {ordenarFilas(cuadre, ordenCuadre, VALORES_CUADRE).map(c => {
-                      const pct = pctAvance(c.EnBodegaKg, c.ObjetivoKg);
+                    {ordenarFilas(avance, ordenAv, VALORES_AV).map(a => {
+                      const pct = pctAvance(a.EnBodegaKg, a.ObjetivoKg);
+                      const aviso = pct !== null && pct >= UMBRAL_AVISO_AVANCE;
                       return (
-                        <tr key={c.DetalleId} className="hover:bg-gray-50 transition">
-                          <td className="px-3 py-3 text-gray-700" title={`${c.Clase} — ${productoDesc(c.Clase)}`}>
+                        <tr key={a.DetalleId} className={`transition ${aviso ? "bg-green-100 hover:bg-green-200" : "hover:bg-gray-50"}`}
+                          title={aviso ? `Esta línea ya lleva más del ${UMBRAL_AVISO_AVANCE} % de avance` : undefined}>
+                          <td className="px-3 py-3 text-gray-700" title={`${a.Clase} — ${productoDesc(a.Clase)}`}>
                             <div className="flex items-center gap-1.5 min-w-0">
-                              <span className="truncate">{productoDesc(c.Clase)}</span>
-                              {c.EsGranel && (
+                              <span className="truncate">{productoDesc(a.Clase)}</span>
+                              {a.EsGranel && (
                                 <span className="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-gray-200 text-gray-600"
                                   title="Empacado a granel porque se acabó el material: no tiene pedido propio, suma al avance total">Granel</span>
                               )}
                             </div>
                           </td>
-                          <td className="px-3 py-3 text-gray-700 truncate" title={tallaDesc(c.Talla)}>{tallaDesc(c.Talla)}</td>
-                          <td className="px-3 py-3 text-gray-700 truncate" title={presentacionDesc(c.Presentacion)}>{presentacionDesc(c.Presentacion)}</td>
+                          <td className="px-3 py-3 text-gray-700 truncate" title={tallaDesc(a.Talla)}>{tallaDesc(a.Talla)}</td>
+                          <td className="px-3 py-3 text-gray-700 truncate" title={presentacionDesc(a.Presentacion)}>{presentacionDesc(a.Presentacion)}</td>
                           <td className="px-3 py-3 text-right text-gray-800 font-semibold">
-                            {c.ObjetivoKg === null ? <span className="text-gray-300">—</span> : fmtNum(c.ObjetivoKg)}
+                            {a.ObjetivoKg === null ? <span className="text-gray-300">—</span> : fmtNum(a.ObjetivoKg)}
                           </td>
-                          <td className="px-3 py-3 text-right text-gray-800 font-semibold">{fmtNum(c.EnBodegaKg)}</td>
+                          <td className="px-3 py-3 text-right text-gray-800 font-semibold">{fmtNum(a.EnBodegaKg)}</td>
                           <td className="px-3 py-3 text-right">
-                            {c.DiferenciaKg === null ? (
+                            {a.DiferenciaKg === null ? (
                               <span className="text-gray-300">—</span>
-                            ) : c.DiferenciaKg > 0 ? (
+                            ) : a.DiferenciaKg > 0 ? (
                               <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-700"
-                                title="Hay en bodega más kg de los que pide la proforma">+{fmtNum(c.DiferenciaKg)}</span>
-                            ) : c.DiferenciaKg === 0 ? (
+                                title="Hay en bodega más kg de los que pide la proforma">+{fmtNum(a.DiferenciaKg)}</span>
+                            ) : a.DiferenciaKg === 0 ? (
                               <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-green-100 text-green-700">completo</span>
                             ) : (
-                              <span className="text-gray-500">{fmtNum(c.DiferenciaKg)}</span>
+                              <span className="text-gray-500">{fmtNum(a.DiferenciaKg)}</span>
+                            )}
+                          </td>
+                          <td className="px-3 py-3 text-right tabular-nums"
+                            title={a.ObjetivoMaster === null ? undefined : `${fmtEntero(a.EnBodegaMaster)} de ${fmtEntero(a.ObjetivoMaster)} master en bodega`}>
+                            {a.FaltanMaster === null ? (
+                              <span className="text-gray-300">—</span>
+                            ) : (
+                              <span className={`font-semibold ${a.FaltanMaster === 0 ? "text-green-700" : "text-gray-800"}`}>{fmtEntero(a.FaltanMaster)}</span>
                             )}
                           </td>
                           <td className="px-3 py-3 text-right">
@@ -897,9 +856,9 @@ export default function PedidosPage() {
                               <span className="text-gray-300">—</span>
                             ) : (
                               <>
-                                <div className={`tabular-nums font-semibold ${pct >= 100 ? "text-green-700" : "text-gray-700"}`}>{fmtNum(pct, 1)} %</div>
-                                <div className="mt-1 h-1 bg-gray-100 rounded-full overflow-hidden">
-                                  <div className={`h-full ${COLOR_PCT(pct)}`} style={{ width: `${Math.min(100, pct)}%` }} />
+                                <div className={`tabular-nums font-semibold ${aviso ? "text-green-800" : "text-gray-700"}`}>{fmtNum(pct, 1)} %</div>
+                                <div className={`mt-1 h-1 rounded-full overflow-hidden ${aviso ? "bg-white" : "bg-gray-100"}`}>
+                                  <div className={`h-full ${aviso ? "bg-green-500" : COLOR_PCT(pct)}`} style={{ width: `${Math.min(100, pct)}%` }} />
                                 </div>
                               </>
                             )}
@@ -907,15 +866,16 @@ export default function PedidosPage() {
                         </tr>
                       );
                     })}
-                    {cuadre.length === 0 && (
-                      <tr><td colSpan={7} className="px-4 py-8 text-center text-gray-400">Sin líneas en este pedido</td></tr>
+                    {avance.length === 0 && (
+                      <tr><td colSpan={8} className="px-4 py-8 text-center text-gray-400">Sin líneas en este pedido</td></tr>
                     )}
-                    {cuadre.length > 0 && (
+                    {avance.length > 0 && (
                       <tr className="bg-gray-50 font-semibold">
                         <td colSpan={3} className="px-3 py-3 text-right text-gray-600">Total</td>
                         <td className="px-3 py-3 text-right text-gray-800">{pctPedido === null ? <span className="text-gray-300">—</span> : fmtNum(totalPedidoKg)}</td>
                         <td className="px-3 py-3 text-right text-gray-800">{fmtNum(totalBodegaKg)}</td>
                         <td className="px-3 py-3 text-right text-gray-600">{pctPedido === null ? "" : fmtNum(totalBodegaKg - totalPedidoKg)}</td>
+                        <td className="px-3 py-3 text-right text-gray-800 tabular-nums">{pctPedido === null ? "" : fmtEntero(totalFaltanMaster)}</td>
                         <td className="px-3 py-3 text-right text-gray-800 tabular-nums">{pctPedido === null ? "" : `${fmtNum(pctPedido, 1)} %`}</td>
                       </tr>
                     )}
@@ -923,9 +883,10 @@ export default function PedidosPage() {
                 </table>
               </div>
               <p className="mt-2 text-xs text-gray-500 leading-relaxed">
-                Todo en Kg, una fila por línea de la proforma. <b>Bodega Kg</b> = lo escaneado que sigue en
-                bodega; lo que ya salió (despachos y traslados) no cuenta. El granel no tiene pedido propio:
-                sus kg suman al avance total del pedido, no al de una línea.
+                Una fila por línea de la proforma. <b>Bodega Kg</b> = lo escaneado que sigue en bodega; lo que
+                ya salió (despachos y traslados) no cuenta. <b>Faltan master</b> = master pedidos (cajas ÷ cajas
+                por master) menos los que hay en bodega; una línea pasada no resta de las demás. El granel no
+                tiene pedido propio: sus kg suman al avance total del pedido, no al de una línea.
               </p>
             </>
           )
