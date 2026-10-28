@@ -155,12 +155,44 @@ export function objetivoDeLinea(
   return Math.ceil(Number(row.CantidadCajas) / Number(row.CajasXMaster));
 }
 
+// Condición SQL (alias m = Masters): el master salió en un TRASLADO INTERNO — su remisión vigente
+// está Confirmada y es de una serie con Destino 'Area' (reempaque, reetiquetado, reproceso).
+//
+// Ese master deja de contar para el cupo de su línea, en los dos candados (declarado en Agrupación y
+// techo de escaneo). Decisión del usuario, 28 oct 2026, con los 56 master de 020-2026 mandados a
+// reetiquetar en RE-0012: el área puede cambiarlos de cliente, y mientras contaran la línea se quedaba
+// trabada con 41 de cupo cuando le faltaban 97. Si regresan al mismo pedido con etiqueta nueva, entran
+// como captura nueva y vuelven a ocupar cupo; si regresan con la misma etiqueta (devolución de la
+// remisión), el master vuelve a EnBodega y cuenta otra vez solo. Lo DESPACHADO al cliente sí sigue
+// contando: si no, cada contenedor cargado dejaría producir la línea entera de nuevo.
+//
+// Es provisional: lo correcto es seguir esos master por el inventario al piso del área (en el piso
+// siguen siendo del pedido, y solo liberan cupo cuando el área los captura para otro pedido o los da
+// de merma). Ver project_piso_reetiquetado_reempaque en memoria — se hace cuando el piso llegue a
+// esas áreas.
+export const SALIO_EN_TRASLADO = `(m.Estatus = 'Salido' AND EXISTS (
+    SELECT 1 FROM RemisionDetalle rdt
+    JOIN Remisiones rt ON rt.RemisionId = rdt.RemisionId AND rt.Estatus = 'Confirmada'
+    JOIN SerieRemision st ON st.Tipo = rt.Tipo AND st.Destino = 'Area'
+    WHERE rdt.MasterId = m.MasterId AND rdt.Vigente = 1))`;
+
+// Masters de la línea que salieron en traslado interno — lo que Agrupación descuenta de lo declarado.
+export async function trasladadosDeLinea(client: any, detalleId: number): Promise<number> {
+  const rows: any[] = await client.$queryRawUnsafe(`
+    SELECT COUNT(*) AS n FROM Masters m
+    JOIN EtiquetaImpresa ei ON m.EtiquetaId = ei.EtiquetaId
+    JOIN OrdenEtiquetado oe ON ei.OrdenId = oe.OrdenId
+    WHERE oe.DetalleId = ? AND ${SALIO_EN_TRASLADO}`, detalleId);
+  return Number(rows[0].n);
+}
+
 // Objetivo = CEILING(CantidadCajas / CajasXMaster) de la línea de pedido. Escaneado = masters YA
 // confirmados en bodega de esa línea, en cualquier pallet, sumando TODAS las capturas de Etiquetado
-// que compartan ese DetalleId — es el "segundo techo" real (contra lo confirmado en bodega, no
-// contra lo declarado). Movida aquí desde pallets.ts (donde nació) para reusarla también en el
-// reporte de Impresión — la llamada original dentro de la transacción de escanear sigue igual, el
-// candado de concurrencia lo pone el caller con FOR UPDATE antes de invocar esta función.
+// que compartan ese DetalleId, menos los que salieron en traslado interno (SALIO_EN_TRASLADO) — es el
+// "segundo techo" real (contra lo confirmado en bodega, no contra lo declarado). Movida aquí desde
+// pallets.ts (donde nació) para reusarla también en el reporte de Impresión — la llamada original
+// dentro de la transacción de escanear sigue igual, el candado de concurrencia lo pone el caller con
+// FOR UPDATE antes de invocar esta función.
 export async function calcularTechoLinea(client: any, detalleId: number): Promise<TechoLinea | null> {
   const detalle: any[] = await client.$queryRaw`
     SELECT dp.CantidadCajas, dp.EsGranel, pr.CajasXMaster, ped.EsGeneral
@@ -171,12 +203,11 @@ export async function calcularTechoLinea(client: any, detalleId: number): Promis
   `;
   if (!detalle.length) return null;
   const objetivo = objetivoDeLinea(detalle[0]);
-  const escaneadoRows: any[] = await client.$queryRaw`
+  const escaneadoRows: any[] = await client.$queryRawUnsafe(`
     SELECT COUNT(*) AS n FROM Masters m
     JOIN EtiquetaImpresa ei ON m.EtiquetaId = ei.EtiquetaId
     JOIN OrdenEtiquetado oe ON ei.OrdenId = oe.OrdenId
-    WHERE oe.DetalleId = ${detalleId}
-  `;
+    WHERE oe.DetalleId = ? AND NOT ${SALIO_EN_TRASLADO}`, detalleId);
   return { Objetivo: objetivo, Escaneado: Number(escaneadoRows[0].n) };
 }
 
@@ -202,7 +233,7 @@ export async function calcularTechoLineaBatch(client: any, detalleIds: number[])
     FROM Masters m
     JOIN EtiquetaImpresa ei ON m.EtiquetaId = ei.EtiquetaId
     JOIN OrdenEtiquetado oe ON ei.OrdenId = oe.OrdenId
-    WHERE oe.DetalleId IN (${placeholders})
+    WHERE oe.DetalleId IN (${placeholders}) AND NOT ${SALIO_EN_TRASLADO}
     GROUP BY oe.DetalleId
   `, ...ids);
   const escaneadoPorDetalle = new Map<number, number>(escaneados.map((r: any) => [Number(r.DetalleId), Number(r.n)]));
