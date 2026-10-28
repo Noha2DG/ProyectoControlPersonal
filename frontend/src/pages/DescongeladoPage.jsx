@@ -82,7 +82,7 @@ const nombreDestinoDe = (l) => l?.NombreBodegaDestino || l?.BodegaDestino || "�
 // La hoja se abre PRIMERO, a mano, con el encargado y la hora de inicio, y después se va llenando
 // con los lotes que se descongelan en el turno (usuario, 26 oct 2026). Antes la abría sola lo
 // primero que se descongelaba, con la cabecera metida en ese modal.
-// Sin hoja abierta no se puede descongelar ni devolver.
+// Sin hoja abierta no se puede descongelar.
 //
 // Al abrir se pide SOLO quién es el encargado y a qué hora arrancó. Cuántas personas trabajaron se
 // cuenta al CERRAR: al abrir todavía no ha llegado todo el turno, y el número que se tomaba acá era
@@ -518,166 +518,6 @@ function ModalDescongelar({ seleccion, hojaAbierta, destinos, destinoSugerido, o
   );
 }
 
-/* ── Modal: devolver a bodega ─────────────────────────────────────── */
-// Devolver NO es elegir kilos: es elegir CAJAS, con su correlativo. El piso lleva lote y kilos y no
-// tiene forma de nombrar un master, así que devolver desde ahí dejaría a bodega con kilos que no
-// puede posicionar y con los masters marcados 'Salido' para siempre.
-//
-// La identidad la conserva la remisión, que guarda cada MasterId que despachó. Por eso acá no se
-// escanea nada —  en Descongelado no hay lector—  sino que se marca de la lista que salió, agrupada
-// por el polín del que vino, que es como la planta la devuelve: casi siempre el polín completo.
-function ModalDevolver({ titulo, datos, onConfirmar, onCerrar }) {
-  const [sel, setSel] = useState(() => new Set());
-  const [expandido, setExpandido] = useState(() => new Set());
-  const [motivo, setMotivo] = useState("");
-  const [guardando, setGuardando] = useState(false);
-
-  const polines = datos?.polines ?? [];
-  const todos = polines.flatMap(p => p.Masters);
-  const claveLote = m => `${m.Lote}|${m.Clase}|${m.Talla}`;
-
-  // Un master cuyo producto YA se descongeló no puede regresar: sus kilos salieron del piso y
-  // devolverlo dejaría el saldo en negativo. El tope se cuenta por lote, y se tapa acá en vez de
-  // dejar que el servidor rechace el lote entero después de marcar veinte casillas.
-  const usadosPorLote = useMemo(() => {
-    const m = new Map();
-    for (const x of todos) if (sel.has(x.MasterId)) m.set(claveLote(x), (m.get(claveLote(x)) ?? 0) + 1);
-    return m;
-  }, [sel, todos]);
-
-  const cabe = (m) => sel.has(m.MasterId) || (usadosPorLote.get(claveLote(m)) ?? 0) < m.AlPiso;
-  const bloqueado = (m) => !sel.has(m.MasterId) && m.AlPiso <= 0;
-
-  const alternar = (id) => setSel(s => {
-    const n = new Set(s);
-    n.has(id) ? n.delete(id) : n.add(id);
-    return n;
-  });
-
-  // Marcar el polín entero es el gesto normal; se saltan las cajas cuyo producto ya se descongeló.
-  const alternarPolin = (p) => setSel(s => {
-    const n = new Set(s);
-    const marcados = p.Masters.filter(m => n.has(m.MasterId)).length;
-    if (marcados === p.Masters.length) { for (const m of p.Masters) n.delete(m.MasterId); return n; }
-    const usados = new Map(usadosPorLote);
-    for (const m of p.Masters) {
-      if (n.has(m.MasterId)) continue;
-      const k = claveLote(m);
-      if ((usados.get(k) ?? 0) < m.AlPiso) { n.add(m.MasterId); usados.set(k, (usados.get(k) ?? 0) + 1); }
-    }
-    return n;
-  });
-
-  const marcados = todos.filter(m => sel.has(m.MasterId));
-  const totalKg = Number(marcados.reduce((s, m) => s + m.KgPorMaster, 0).toFixed(2));
-  const listo = marcados.length > 0 && motivo.trim() && !datos?.Vencida;
-
-  const confirmar = async () => {
-    setGuardando(true);
-    try { await onConfirmar(marcados.map(m => m.MasterId), motivo.trim()); }
-    finally { setGuardando(false); }
-  };
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-3xl min-w-0 flex flex-col max-h-[92vh]">
-        <div className="px-5 py-3 border-b flex items-center justify-between shrink-0">
-          <div>
-            <h2 className="font-bold text-gray-800">Devolver a bodega</h2>
-            <p className="text-xs text-gray-500 mt-0.5">
-              {titulo}
-              {datos?.ConfirmadaEn && ` · confirmada ${datos.ConfirmadaEn}`}
-              {datos?.Dias != null && ` · hace ${datos.Dias} día${datos.Dias !== 1 ? "s" : ""}`}
-            </p>
-          </div>
-          <button onClick={onCerrar} className="text-gray-400 hover:text-gray-600 text-2xl leading-none">&times;</button>
-        </div>
-
-        <div className="px-5 py-2.5 bg-gray-50 border-b flex items-center gap-2 shrink-0">
-          <label className="text-xs font-semibold text-gray-600 shrink-0">Por qué regresa</label>
-          <input value={motivo} onChange={e => setMotivo(e.target.value)}
-            placeholder="No se alcanzó a procesar, se pidió de más…"
-            className="flex-1 min-w-0 border border-gray-300 rounded px-2 py-1 text-sm" />
-        </div>
-
-        <div className="px-5 py-3 overflow-y-auto">
-          {datos?.Vencida && (
-            <p className="mb-3 text-xs text-red-700 bg-red-50 border border-red-200 rounded px-3 py-2">
-              Esta remisión se confirmó hace <b>{datos.Dias} días</b> y el plazo para devolver es de {datos.DiasLimite}.
-              Pasado ese plazo la devolución la tiene que hacer un administrador.
-            </p>
-          )}
-          {polines.length === 0 && (
-            <p className="py-6 text-center text-gray-400 text-xs">
-              Esta remisión ya no tiene cajas que devolver.
-            </p>
-          )}
-
-          {polines.map(p => {
-            const nSel = p.Masters.filter(m => sel.has(m.MasterId)).length;
-            const abierto = expandido.has(p.PalletId);
-            return (
-              <div key={p.PalletId} className="border border-gray-200 rounded mb-2 overflow-hidden">
-                <div className="flex items-center gap-2 px-3 py-2 bg-gray-50">
-                  <input type="checkbox" checked={nSel === p.Masters.length && nSel > 0}
-                    ref={el => { if (el) el.indeterminate = nSel > 0 && nSel < p.Masters.length; }}
-                    onChange={() => alternarPolin(p)} className="w-4 h-4 cursor-pointer" />
-                  <button onClick={() => setExpandido(s => {
-                      const n = new Set(s); n.has(p.PalletId) ? n.delete(p.PalletId) : n.add(p.PalletId); return n;
-                    })}
-                    className="flex-1 min-w-0 text-left">
-                    <span className="font-mono font-bold text-sm text-gray-800">{p.Codigo}</span>
-                    <span className="text-xs text-gray-500 ml-2">{p.Estatus}</span>
-                    <span className="text-xs text-gray-500 ml-2">
-                      · {nSel} de {p.Masters.length} caja{p.Masters.length !== 1 ? "s" : ""}
-                    </span>
-                  </button>
-                  <span className="text-gray-400 text-xs font-bold w-4 text-center">{abierto ? "▾" : "▸"}</span>
-                </div>
-                {abierto && (
-                  <div className="divide-y divide-gray-100">
-                    {p.Masters.map(m => (
-                      <label key={m.MasterId}
-                        className={`flex items-center gap-2 px-3 py-1.5 text-xs
-                          ${bloqueado(m) ? "opacity-40" : "hover:bg-gray-50 cursor-pointer"}`}>
-                        <input type="checkbox" checked={sel.has(m.MasterId)}
-                          disabled={!cabe(m)} onChange={() => alternar(m.MasterId)}
-                          className="w-4 h-4 ml-5 cursor-pointer" />
-                        <span className="font-mono text-gray-700">{m.Correlativo}</span>
-                        <span className="font-mono text-gray-400">{m.Lote}</span>
-                        <span className="text-gray-500">{m.Clase} · {m.DescripcionTalla}</span>
-                        <span className="ml-auto tabular-nums text-gray-600">{fmtNum(m.KgPorMaster)} kg</span>
-                        {bloqueado(m) && <span className="text-amber-600 shrink-0">ya descongelado</span>}
-                      </label>
-                    ))}
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-
-        <div className="px-5 py-3 border-t flex flex-wrap items-center gap-x-3 gap-y-2 shrink-0">
-          <span className="text-xs text-gray-500 w-full sm:w-auto">
-            {marcados.length > 0
-              ? <>Regresan <b>{marcados.length}</b> caja{marcados.length !== 1 ? "s" : ""} · {fmtNum(totalKg)} kg ·
-                  se crea un polín de devolución que bodega tiene que ubicar</>
-              : "Marque las cajas que regresan"}
-          </span>
-          <button onClick={onCerrar}
-            className="ml-auto shrink-0 border border-gray-300 rounded px-4 py-1.5 text-sm text-gray-600 hover:bg-gray-50">
-            Cancelar
-          </button>
-          <button onClick={confirmar} disabled={!listo || guardando}
-            className="shrink-0 whitespace-nowrap bg-amber-600 hover:bg-amber-700 text-white rounded px-5 py-1.5 text-sm font-semibold disabled:opacity-40">
-            {guardando ? "Guardando…" : `Devolver ${marcados.length} caja${marcados.length !== 1 ? "s" : ""}`}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 /* ── Inventario al piso ───────────────────────────────────────────── */
 // Lo que el área tiene y todavía no ha bajado. Entra solo cuando bodega confirma la remisión y sale
 // solo cuando se descongela; nadie lo teclea ni lo arrastra de un día a otro.
@@ -687,11 +527,15 @@ function ModalDevolver({ titulo, datos, onConfirmar, onCerrar }) {
 // Se marca lo que se descongela —  una línea, varias o una remisión completa—  y en cada marcada se
 // dice cuántos masters bajan (vienen todos; si se bajan menos, el resto sigue al piso). Después,
 // "Descongelar".
+//
+// Ya no se devuelve a bodega desde aquí (usuario, 28 oct 2026): el botón "Devolver" de cada remisión
+// se quitó por una inconsistencia en el proceso. Las devoluciones que ya estaban anotadas se siguen
+// viendo en la hoja (SeccionDevoluciones).
 const claveDeLinea = r => `${r.RemisionId ?? "-"}|${r.Lote}|${r.Clase}|${r.Talla}|${r.FechaLote ?? ""}`;
 
 // `onAbrirHoja` llega solo cuando no hay hoja abierta y el usuario puede abrirla: en ese caso no se
 // marca nada (puedeCrear viene en false) y la barra pide abrir la hoja primero.
-function InventarioPiso({ saldo, resumen, puedeCrear, marcadas, setMarcadas, onDescongelar, onDevolver, onAbrirHoja, onImprimir }) {
+function InventarioPiso({ saldo, resumen, puedeCrear, marcadas, setMarcadas, onDescongelar, onAbrirHoja, onImprimir }) {
   const [abierto, setAbierto] = useState(true);
   const totalKg = saldo.reduce((s, r) => s + r.Kg, 0);
   const totalM  = saldo.reduce((s, r) => s + (r.Masters || 0), 0);
@@ -809,12 +653,11 @@ function InventarioPiso({ saldo, resumen, puedeCrear, marcadas, setMarcadas, onD
                 <th className="px-3 py-2 text-right font-semibold">Masters</th>
                 <th className="px-3 py-2 text-right font-semibold">Kg</th>
                 {puedeCrear && <th className="px-3 py-2 text-right font-semibold">Bajar</th>}
-                <th className="px-3 py-2 w-24"></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
               {saldo.length === 0 ? (
-                <tr><td colSpan={10} className="px-4 py-8 text-center text-gray-400 text-xs">
+                <tr><td colSpan={9} className="px-4 py-8 text-center text-gray-400 text-xs">
                   Nada al piso. El producto aparece aquí cuando bodega confirma una remisión al área.</td></tr>
               ) : grupos.map(g => {
                 const todas = g.lineas.every(r => marcadas[claveDeLinea(r)] != null);
@@ -837,17 +680,6 @@ function InventarioPiso({ saldo, resumen, puedeCrear, marcadas, setMarcadas, onD
                       <td className="px-3 py-1.5 text-right tabular-nums text-xs font-bold text-blue-900">{g.Masters || ""}</td>
                       <td className="px-3 py-1.5 text-right tabular-nums text-xs font-bold text-blue-900">{fmtNum(g.Kg)}</td>
                       {puedeCrear && <td></td>}
-                      <td className="px-3 py-1.5 text-center whitespace-nowrap">
-                        {/* Devolver va SOLO a nivel de remisión: se rastrea por las cajas que ella
-                            despachó. El producto que entró por un ajuste no tiene remisión detrás. */}
-                        {puedeCrear && g.clave !== "sin-remision" && (
-                          <button onClick={() => onDevolver(g.clave, g.Folio)}
-                            title="Regresar cajas a bodega sin descongelar"
-                            className="border border-amber-300 text-amber-700 rounded px-2 py-1 text-xs font-semibold hover:bg-amber-50">
-                            Devolver
-                          </button>
-                        )}
-                      </td>
                     </tr>
                     {g.lineas.map(r => {
                       const k = claveDeLinea(r);
@@ -882,7 +714,6 @@ function InventarioPiso({ saldo, resumen, puedeCrear, marcadas, setMarcadas, onD
                               )}
                             </td>
                           )}
-                          <td></td>
                         </tr>
                       );
                     })}
@@ -1064,10 +895,9 @@ function TablaDescongelado({ hoja, destinos, puedeEditar, puedeBorrar, onCambiar
 }
 
 /* ── Devoluciones a bodega ────────────────────────────────────────── */
-// Producto que bajó del piso y regresa sin descongelar. SOLO SE LEE: la captura vive en la lista
-// del piso, con el botón "Devolver", porque ahí el producto ya está escrito y solo hay que
-// señalarlo. Este formulario pedía teclear lote, producto y talla a mano — en el teléfono del área
-// eso es una errata garantizada, y una errata acá inventa un lote que no existe.
+// Producto que bajó del piso y regresó sin descongelar. SOLO SE LEE, y solo sale en las hojas que
+// tienen alguna: desde el 28 oct 2026 ya no se devuelve desde Descongelado (ver InventarioPiso), así
+// que esto queda para las devoluciones anotadas antes, que se pueden seguir quitando.
 function SeccionDevoluciones({ hoja, puedeBorrar, onBorrar }) {
   const [abierto, setAbierto] = useState((hoja.devoluciones?.length ?? 0) > 0);
 
@@ -1098,11 +928,6 @@ function SeccionDevoluciones({ hoja, puedeBorrar, onBorrar }) {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {hoja.devoluciones.length === 0 && (
-                <tr><td colSpan={8} className="px-4 py-6 text-center text-gray-400 text-xs">
-                  Nada devuelto. Use <b>Devolver</b> en la lista del piso para regresar a bodega lo que
-                  no se alcanzó a descongelar.</td></tr>
-              )}
               {hoja.devoluciones.map(l => (
                 <tr key={l.MovimientoId} className="hover:bg-gray-50">
                   <td className="px-3 py-1.5 font-mono text-xs">{l.Lote}</td>
@@ -1181,7 +1006,6 @@ export default function DescongeladoPage() {
   const [modal, setModal]   = useState(null);   // { seleccion } — descongelar lo marcado
   const [marcadas, setMarcadas] = useState({});   // clave de la línea del piso → masters (o kg) que bajan
   const [ultimoDestino, setUltimoDestino] = useState("");   // el destino anterior se sugiere
-  const [devol, setDevol]   = useState(null);   // { titulo, datos }    — devolver
   const [cierre, setCierre] = useState(false);   // modal de cerrar la hoja
   const [imprimir, setImprimir] = useState(false); // vista previa de la hoja para imprimir / PDF
   const [reporte, setReporte] = useState(false);   // reporte de la jornada completa
@@ -1190,7 +1014,7 @@ export default function DescongeladoPage() {
   const [abriendoHoja, setAbriendoHoja] = useState(false);   // modal de abrir la hoja del turno
 
   // La hoja se abre a mano ANTES de descongelar (ver ModalAbrirHoja) y todo lo del turno se agrega
-  // a ella. Sin hoja abierta no se descongela ni se devuelve.
+  // a ella. Sin hoja abierta no se descongela.
   const hojaAbierta = hojas.find(h => h.Estatus === "Abierta") || null;
 
   const fetchHojas = useCallback(async () => {
@@ -1292,27 +1116,6 @@ export default function DescongeladoPage() {
     await recargar(hojaId);
   };
 
-  // Devolver: se pregunta primero QUÉ cajas despachó esa remisión y siguen al piso. Lo devuelto se
-  // anota en la hoja abierta.
-  const abrirDevolver = async (remisionId, folio) => {
-    const res = await fetch(`${API}/devolvibles?remision=${remisionId}&bodega=DESCONGELADO`, { headers: authHeader() });
-    const data = await leerJSON(res);
-    if (!res.ok) { await mostrarAlerta(data.error || "No se pudo leer la remisión"); return; }
-    setDevol({ titulo: folio || `Remisión ${remisionId}`, datos: data });
-  };
-
-  const confirmarDevolucion = async (masters, motivo) => {
-    const hojaId = hojaAbierta?.HojaId;
-    if (!hojaId) { await mostrarAlerta("No hay hoja abierta: ábrala primero con su encargado y hora de inicio."); return; }
-    const out = await post(`${API}/hojas/${hojaId}/devolver`, { Motivo: motivo, Masters: masters });
-    if (!out) return;
-    setDevol(null);
-    await recargar(hojaId);
-    await mostrarAlerta(
-      `Regresaron ${out.Masters} caja${out.Masters !== 1 ? "s" : ""} (${fmtNum(out.KgDevuelto)} kg) en el polín ` +
-      `${out.Polin}. Bodega tiene que ubicarlo: aparece sin posición.`, "exito");
-  };
-
   const cambiarDestino = async (id, BodegaDestino) => {
     if (!await post(`${API}/traslado/${id}`, { BodegaDestino }, "PUT")) return false;
     await recargar(sel.HojaId);
@@ -1398,10 +1201,6 @@ export default function DescongeladoPage() {
         <ModalCerrarHoja hoja={sel}
           onConfirmar={cerrarHoja} onCerrar={() => setCierre(false)} />
       )}
-      {devol && (
-        <ModalDevolver key={devol.titulo} titulo={devol.titulo} datos={devol.datos}
-          onConfirmar={confirmarDevolucion} onCerrar={() => setDevol(null)} />
-      )}
 
       {/* Barra superior */}
       <div className="bg-white border border-gray-300 rounded-lg px-4 py-3 flex flex-wrap items-center gap-3">
@@ -1439,7 +1238,6 @@ export default function DescongeladoPage() {
       <InventarioPiso saldo={saldo} resumen={resumen} puedeCrear={puedeCrear && !!hojaAbierta}
         marcadas={marcadas} setMarcadas={setMarcadas}
         onDescongelar={(seleccion) => setModal({ seleccion })}
-        onDevolver={abrirDevolver}
         onAbrirHoja={puedeCrear && !hojaAbierta ? () => setAbriendoHoja(true) : null}
         onImprimir={() => setImprimirPiso(true)} />
 
@@ -1510,8 +1308,10 @@ export default function DescongeladoPage() {
             puedeEditar={sel.Estatus === "Abierta" && puedeEditar}
             puedeBorrar={sel.Estatus === "Abierta" && puedeBorrar}
             onCambiarDestino={cambiarDestino} onQuitar={quitarDescongelado} onBorrar={borrarRenglon} />
-          <SeccionDevoluciones hoja={sel}
-            puedeBorrar={sel.Estatus === "Abierta" && puedeBorrar} onBorrar={borrarRenglon} />
+          {sel.devoluciones?.length > 0 && (
+            <SeccionDevoluciones hoja={sel}
+              puedeBorrar={sel.Estatus === "Abierta" && puedeBorrar} onBorrar={borrarRenglon} />
+          )}
         </div>
       )}
     </div>
