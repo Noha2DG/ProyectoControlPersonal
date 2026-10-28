@@ -22,7 +22,7 @@ async function falla(f: () => Promise<any>, patron: RegExp, m: string) {
 class Revertir extends Error {}
 
 (async () => {
-  const rems: any[] = await prisma.$queryRawUnsafe(`SELECT RemisionId FROM Remisiones ORDER BY RemisionId DESC LIMIT 2`);
+  const rems: any[] = await prisma.$queryRawUnsafe(`SELECT RemisionId FROM Remisiones WHERE Estatus = 'Confirmada' ORDER BY RemisionId DESC LIMIT 2`);
   const [R1, R2] = rems.map(r => Number(r.RemisionId));
   const A = { RemisionId: R1, Lote: "ZZ1EM03-E01-7", Clase: "C20", Talla: 229, FechaLote: "2030-01-01", KgPorMaster: 5.448 };
   const B = { RemisionId: R2, Lote: "ZZ2TM04-E02-7", Clase: "C20", Talla: 233, FechaLote: "2030-01-02", KgPorMaster: 5.448 };
