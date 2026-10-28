@@ -215,7 +215,9 @@ function PanelEscaneo({ palletId, onClose, onCambio }) {
     });
     const data = await leerJSON(res);
     if (res.ok) {
-      setMensaje({ ok: true, texto: `${data.Correlativo} — devuelto de la remisión ${data.RemisionFolio}` });
+      // Si la remisión fue a un área con piso, la caja sale también de ahí (desde el 28 oct 2026).
+      const piso = data.PisoKg > 0 ? " · salió del piso del área" : "";
+      setMensaje({ ok: true, texto: `${data.Correlativo} — devuelto de la remisión ${data.RemisionFolio}${piso}` });
       await fetchDetalle();
     } else {
       setMensaje({ ok: false, texto: `${valor}: ${data.error || "No se pudo devolver"}` });

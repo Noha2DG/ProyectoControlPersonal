@@ -9,6 +9,8 @@ import { useState, useEffect, useRef } from "react";
 // `tono` es lo único que distingue cargar de quitar: los dos modales son idénticos en forma, así que
 // sin color el operador no tiene cómo notar que está en el destructivo. `verbo` es el participio que
 // se cuenta al pie ("3 agregados" / "3 quitados").
+// `pideMotivo` (devolver un polín a bodega) exige escribir por qué ANTES de escanear, igual que la
+// línea del contenedor; el motivo se queda puesto para toda la tanda y llega como tercer argumento.
 const TONOS = {
   azul: { chip: "bg-blue-50 text-blue-600", input: "border-blue-300 focus:ring-blue-400", boton: "bg-blue-600 hover:bg-blue-700" },
   rojo: { chip: "bg-red-50 text-red-600", input: "border-red-300 focus:ring-red-400", boton: "bg-red-600 hover:bg-red-700" },
@@ -19,13 +21,19 @@ const TONOS = {
 
 export default function ModalEscaneo({
   titulo, descripcion, placeholder, Icono, pideLinea, onEscanear, onCerrar,
-  tono = "azul", verbo = "agregado",
+  tono = "azul", verbo = "agregado", pideMotivo = false,
 }) {
   const [valor, setValor] = useState("");
   const [linea, setLinea] = useState("");
+  const [motivo, setMotivo] = useState("");
+  // El motivo va en un paso aparte, con "Continuar": si se escribiera en un campo al lado del lector,
+  // la primera letra habilitaría el lector y le robaría el foco, y un escaneo con el foco en el
+  // motivo dejaría el QR escrito como motivo.
+  const [motivoFijo, setMotivoFijo] = useState(!pideMotivo);
   const [historial, setHistorial] = useState([]); // [{ ok, texto }]
   const inputRef = useRef(null);
   const lineaRef = useRef(null);
+  const motivoRef = useRef(null);
   // Candado síncrono contra doble envío: un estado llegaría un render tarde y el lector es más
   // rápido que eso. El input NUNCA se deshabilita — deshabilitarlo le quita el foco en el navegador.
   const enviandoRef = useRef(false);
@@ -34,13 +42,19 @@ export default function ModalEscaneo({
   // La línea del contenedor se captura ANTES de escanear y se mantiene hasta cambiarla: se estiba
   // una línea completa y recién ahí se pasa a la siguiente.
   const lineaNum = Number(linea);
-  const lineaLista = !pideLinea || (Number.isInteger(lineaNum) && lineaNum > 0);
+  const lineaLista = (!pideLinea || (Number.isInteger(lineaNum) && lineaNum > 0)) && motivoFijo;
 
   useEffect(() => {
-    // Mientras falte la línea, el foco va ahí; una vez puesta, al lector.
-    if (lineaLista) inputRef.current?.focus();
+    // Mientras falte el motivo o la línea, el foco va ahí; una vez puestos, al lector.
+    if (!motivoFijo) motivoRef.current?.focus();
+    else if (lineaLista) inputRef.current?.focus();
     else lineaRef.current?.focus();
-  }, [historial, lineaLista]);
+  }, [historial, lineaLista, motivoFijo]);
+
+  const fijarMotivo = (e) => {
+    e.preventDefault();
+    if (motivo.trim()) setMotivoFijo(true);
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -49,7 +63,7 @@ export default function ModalEscaneo({
     enviandoRef.current = true;
     setValor("");
     try {
-      const texto = await onEscanear(v, lineaLista && pideLinea ? lineaNum : null);
+      const texto = await onEscanear(v, lineaLista && pideLinea ? lineaNum : null, pideMotivo ? motivo.trim() : undefined);
       setHistorial(h => [{ ok: true, texto }, ...h]);
     } catch (err) {
       setHistorial(h => [{ ok: false, texto: `${v}: ${err.message}` }, ...h]);
@@ -80,6 +94,26 @@ export default function ModalEscaneo({
         </div>
 
         <div className="px-5 py-4 overflow-y-auto flex-1">
+          {pideMotivo && !motivoFijo && (
+            <form onSubmit={fijarMotivo} className="mb-3">
+              <label className="block text-xs font-medium text-gray-500 mb-1">Por qué regresa *</label>
+              <div className="flex gap-2">
+                <input ref={motivoRef} type="text" value={motivo} onChange={e => setMotivo(e.target.value)}
+                  placeholder="No se lo llevaron, cambio de plan…" maxLength={150}
+                  className="flex-1 min-w-0 border-2 border-amber-300 rounded-lg px-3 py-2.5 text-base focus:outline-none focus:ring-2 focus:ring-amber-400" />
+                <button type="submit" disabled={!motivo.trim()}
+                  className={`shrink-0 px-4 rounded-lg text-sm font-semibold text-white transition disabled:opacity-40 ${colores.boton}`}>
+                  Continuar
+                </button>
+              </div>
+            </form>
+          )}
+          {pideMotivo && motivoFijo && (
+            <p className="mb-3 text-xs text-gray-600">
+              Por qué regresa: <b>{motivo.trim()}</b>{" "}
+              <button type="button" onClick={() => setMotivoFijo(false)} className="text-blue-600 hover:underline">cambiar</button>
+            </p>
+          )}
           {pideLinea && (
             <div className="mb-3">
               <label className="block text-xs font-medium text-gray-500 mb-1">Línea dentro del contenedor *</label>
@@ -96,7 +130,7 @@ export default function ModalEscaneo({
             {/* El lector solo se habilita con la línea puesta: escanear sin saber dónde se estibó es
                 justamente el dato que después no se puede reconstruir. */}
             <input ref={inputRef} type="text" value={valor} onChange={e => setValor(e.target.value)} autoFocus
-              placeholder={lineaLista ? placeholder : "Primero indica la línea del contenedor"}
+              placeholder={lineaLista ? placeholder : !motivoFijo ? "Primero escribe por qué regresa" : "Primero indica la línea del contenedor"}
               readOnly={!lineaLista}
               className={`w-full border-2 rounded-lg px-3 py-3 text-base font-mono focus:outline-none focus:ring-2 ${
                 lineaLista

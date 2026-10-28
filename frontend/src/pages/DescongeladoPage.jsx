@@ -547,7 +547,7 @@ function InventarioPiso({ saldo, resumen, puedeCrear, marcadas, setMarcadas, onD
   for (const r of saldo) {
     const clave = r.RemisionId ?? "sin-remision";
     let g = grupos.find(x => x.clave === clave);
-    if (!g) { g = { clave, Folio: r.FolioRemision, ConfirmadaEn: r.ConfirmadaEn, lineas: [], Kg: 0, Masters: 0 }; grupos.push(g); }
+    if (!g) { g = { clave, Folio: r.FolioRemision, ConfirmadaEn: r.ConfirmadaEn, Estatus: r.EstatusRemision, lineas: [], Kg: 0, Masters: 0 }; grupos.push(g); }
     g.lineas.push(r); g.Kg += r.Kg; g.Masters += r.Masters || 0;
   }
 
@@ -675,6 +675,14 @@ function InventarioPiso({ saldo, resumen, puedeCrear, marcadas, setMarcadas, onD
                       <td colSpan={5} className="px-3 py-1.5 font-semibold text-blue-900 text-xs">
                         {g.Folio || "Sin remisión (ajuste)"}
                         {g.ConfirmadaEn && <span className="font-normal text-blue-600 ml-2">confirmada {g.ConfirmadaEn}</span>}
+                        {/* Una remisión en borrador ya está al piso desde que bodega la escaneó, pero
+                            bodega todavía no la confirma: puede seguir físicamente allá. */}
+                        {g.Estatus === "Borrador" && (
+                          <span className="ml-2 text-[11px] font-semibold px-1.5 py-0.5 rounded bg-amber-100 text-amber-800"
+                            title="Bodega ya la escaneó pero no la ha confirmado: el producto puede seguir en bodega">
+                            sin confirmar · puede seguir en bodega
+                          </span>
+                        )}
                         <span className="font-normal text-blue-600 ml-2">· {g.lineas.length} línea{g.lineas.length !== 1 ? "s" : ""}</span>
                       </td>
                       <td className="px-3 py-1.5 text-right tabular-nums text-xs font-bold text-blue-900">{g.Masters || ""}</td>

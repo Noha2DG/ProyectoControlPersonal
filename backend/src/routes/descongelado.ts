@@ -80,6 +80,9 @@ function num(rows: any[], campos: string[]) {
 const SQL_SALDO = `
   SELECT t.Bodega, b.Nombre AS NombreBodega, t.RemisionId, rm.Folio AS FolioRemision,
          DATE_FORMAT(rm.ConfirmadaEn, '%Y-%m-%d %H:%i') AS ConfirmadaEn,
+         -- Desde el 28 oct 2026 una remisión en BORRADOR ya está al piso (entra al escanearse): la
+         -- pantalla la marca "sin confirmar", porque puede seguir físicamente en bodega.
+         rm.Estatus AS EstatusRemision,
          t.Lote, t.Clase, cl.Descripcion AS DescripcionClase,
          t.Talla, ta.Descripcion AS DescripcionTalla,
          DATE_FORMAT(t.FechaLote, '%Y-%m-%d') AS FechaLote,
@@ -117,7 +120,7 @@ const SQL_SALDO = `
 // El saldo al piso hasta una jornada, por remisión y lote. Una sola función para la pantalla y el
 // reporte: si cada uno armara su consulta, el "queda al piso" impreso podría no coincidir con el
 // que se ve.
-async function saldoAlPiso(bodega: string | undefined, hasta: string) {
+export async function saldoAlPiso(bodega: string | undefined, hasta: string) {
   const filtro = bodega ? "WHERE t.Bodega = ?" : "";
   // Tres veces la misma fecha, en el orden en que MySQL ata los placeholders: la de DiasAlPiso
   // en el SELECT y las dos del WHERE de cada rama del UNION.
@@ -126,7 +129,7 @@ async function saldoAlPiso(bodega: string | undefined, hasta: string) {
   // viejo primero. Ese es el orden en que hay que bajar el producto.
   const rows: any[] = await prisma.$queryRawUnsafe(
     `${SQL_SALDO} ${filtro}
-     GROUP BY t.Bodega, b.Nombre, t.RemisionId, rm.Folio, rm.ConfirmadaEn,
+     GROUP BY t.Bodega, b.Nombre, t.RemisionId, rm.Folio, rm.ConfirmadaEn, rm.Estatus,
               t.Lote, t.Clase, cl.Descripcion, t.Talla, ta.Descripcion, t.FechaLote
      HAVING ABS(Kg) > 0.001
      ORDER BY t.Bodega, rm.ConfirmadaEn IS NULL, rm.ConfirmadaEn ASC, t.RemisionId,
