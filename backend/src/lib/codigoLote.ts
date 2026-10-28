@@ -82,3 +82,31 @@ export function descomponerCodigoLote<P extends { Nombre: string }>(
   if (cola && !/^\d+$/.test(cola)) return null;
   return { piscina: mejor, ciclo: cola ? Number(cola) : null };
 }
+
+export type Piscina = { PiscinaId: number; Nombre: string; CodigoFinca: string };
+
+/** El catálogo de piscinas, para descomponerCodigoLote. */
+export async function cargarPiscinas(client: any): Promise<Piscina[]> {
+  return (await client.$queryRawUnsafe(`SELECT PiscinaId, Nombre, CodigoFinca FROM Piscina`) as any[])
+    .map(p => ({ PiscinaId: Number(p.PiscinaId), Nombre: String(p.Nombre), CodigoFinca: String(p.CodigoFinca) }));
+}
+
+// Sifones y lotes genéricos (EM00-E00, TM00-E00) van siempre solos: no entran a una unificación.
+export const noSeUnifica = (p: { Nombre: string }) => /SIFON|00-E00/i.test(p.Nombre);
+
+/**
+ * Las reglas para juntar varios lotes en uno, las mismas al tomar del piso en Materia Prima que al
+ * descongelar: una sola finca, y nunca un proveedor externo (Maquila, Importación, Pescado) —  ahí
+ * cada lote es un contenedor y su merma se calcula por separado; la de maquila se le rinde al
+ * cliente— , ni sifón ni lotes genéricos. Devuelve el problema, o null si se pueden unificar.
+ */
+export function problemaAlUnificar(lotes: { Lote: string; piscina: Piscina }[]): string | null {
+  const fincas = [...new Set(lotes.map(d => d.piscina.CodigoFinca))];
+  if (fincas.length > 1) return `Solo se pueden unificar lotes de la misma finca (escogió de ${fincas.join(", ")})`;
+  if (FINCAS_SIN_CICLO.includes(fincas[0])) {
+    return `Los lotes de ${fincas[0]} no se unifican: cada lote es un contenedor y su merma se calcula por separado`;
+  }
+  const solos = [...new Set(lotes.filter(d => noSeUnifica(d.piscina)).map(d => d.Lote))];
+  if (solos.length) return `${solos.join(", ")} no se unifica: sifón y lotes genéricos (00-E00) van solos`;
+  return null;
+}

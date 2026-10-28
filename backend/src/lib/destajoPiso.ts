@@ -30,7 +30,10 @@
 // que Procesado ÷ Ingreso daba ~35 % y no era un rendimiento. La cola no va a nadie: se pesa por termo
 // y entra al piso de Pelado como inventario. Su rendimiento es Cola ÷ (Ingreso − Bajado), y el total
 // (Cabeza + Cola) ÷ (Ingreso − Bajado) sirve de cuadre.
-import { componerCodigoLote, descomponerCodigoLote, piscinaRequiereCiclo, FINCAS_SIN_CICLO } from "./codigoLote.ts";
+import {
+  componerCodigoLote, descomponerCodigoLote, piscinaRequiereCiclo, cargarPiscinas, noSeUnifica, problemaAlUnificar,
+  type Piscina,
+} from "./codigoLote.ts";
 
 // Bodegas cuyo piso alimenta Destajo. Pelado y Descabezado son dos áreas con piso propio desde el
 // 20 oct 2026 (scripts/separarPeladoDescabezado.ts).
@@ -72,8 +75,6 @@ export class ErrorNegocio extends Error {
     this.status = status;
   }
 }
-
-type Piscina = { PiscinaId: number; Nombre: string; CodigoFinca: string };
 
 const enLista = (xs: any[]) => xs.map(() => "?").join(",");
 const r2 = (n: number) => Number(n.toFixed(2));
@@ -185,11 +186,6 @@ async function saldoLineas(client: any, bodega: string, lotes?: string[]) {
   }));
 }
 
-async function cargarPiscinas(client: any): Promise<Piscina[]> {
-  return (await client.$queryRawUnsafe(`SELECT PiscinaId, Nombre, CodigoFinca FROM Piscina`) as any[])
-    .map(p => ({ PiscinaId: Number(p.PiscinaId), Nombre: String(p.Nombre), CodigoFinca: String(p.CodigoFinca) }));
-}
-
 // Año del ciclo: el del lote de ORIGEN (su letra), no el de hoy. El ciclo es la siembra de la que
 // salió el camarón, y un lote de diciembre procesado en enero sigue siendo de ella.
 const anioDeCodigo = (lote: string, respaldo: string) => {
@@ -231,9 +227,6 @@ export async function saldoParaDestajo(client: any, bodega: string, fecha: strin
     };
   });
 }
-
-// Sifones y lotes genéricos (EM00-E00, TM00-E00) van siempre solos: no entran a una unificación.
-const noSeUnifica = (p: { Nombre: string }) => /SIFON|00-E00/i.test(p.Nombre);
 
 // ── Tomar del piso ──────────────────────────────────────────────────────────────────────────────
 type LineaToma = {
@@ -305,21 +298,10 @@ export async function tomarDelPiso(
   const sinCiclo = (d: { l: { Lote: string }; piscina: Piscina; ciclo: number | null }) =>
     piscinaRequiereCiclo(d.piscina.Nombre, d.piscina.CodigoFinca) && !d.ciclo;
 
-  // Unificar: una sola finca, y nunca un proveedor externo (Maquila, Importación, Pescado): ahí cada
-  // lote es un contenedor y su merma se calcula por separado —  la de maquila se le rinde al cliente.
   let base: (typeof destinos)[number] | null = null;
   if (p.unificar) {
-    const fincas = [...new Set(destinos.map(d => d.piscina.CodigoFinca))];
-    if (fincas.length > 1) {
-      throw new ErrorNegocio(400, `Solo se pueden unificar lotes de la misma finca (escogió de ${fincas.join(", ")})`);
-    }
-    if (FINCAS_SIN_CICLO.includes(fincas[0])) {
-      throw new ErrorNegocio(400, `Los lotes de ${fincas[0]} no se unifican: cada lote es un contenedor y su merma se calcula por separado`);
-    }
-    const solos = [...new Set(destinos.filter(d => noSeUnifica(d.piscina)).map(d => d.l.Lote))];
-    if (solos.length) {
-      throw new ErrorNegocio(400, `${solos.join(", ")} no se unifica: sifón y lotes genéricos (00-E00) van solos`);
-    }
+    const problema = problemaAlUnificar(destinos.map(d => ({ Lote: d.l.Lote, piscina: d.piscina })));
+    if (problema) throw new ErrorNegocio(400, problema);
     // El lote que da el código: siempre el que escogió el encargado entre los marcados.
     if (!p.baseLote) throw new ErrorNegocio(400, "Escoja con cuál lote se unifica");
     const elegido = destinos.find(d => d.l.Lote === p.baseLote);
