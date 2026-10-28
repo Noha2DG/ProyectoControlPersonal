@@ -577,6 +577,9 @@ function PanelRemision({ remisionId, onClose, onCambio }) {
   }, [pedidosEnRemision]);
 
   const excedidas = (() => {
+    // Un traslado interno (reempaque, reetiquetado, reproceso) no le entrega nada al cliente: no
+    // cuenta en el Despachado del avance y no tiene contra qué excederse.
+    if (remision?.Destino !== "Cliente") return [];
     const enRemision = {};
     for (const l of lineasRem) enRemision[l.DetalleId] = (enRemision[l.DetalleId] ?? 0) + 1;
     const confirmada = remision?.Estatus === "Confirmada";

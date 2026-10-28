@@ -3,7 +3,7 @@ import jwt from "jsonwebtoken";
 import prisma from "../lib/prisma.ts";
 import { requireAuth, requirePerm } from "../middleware/auth.ts";
 import { componerCodigoLote, piscinaRequiereCiclo } from "../lib/codigoLote.ts";
-import { calcularTechoLinea, calcularTechoLineaBatch } from "../lib/masters.ts";
+import { calcularTechoLineaBatch, trasladadosDeLinea } from "../lib/masters.ts";
 
 const router = Router();
 
@@ -225,12 +225,15 @@ router.get("/", requireAuth, requirePerm("etiquetado", "ver"), async (req: Reque
 });
 
 // Objetivo = CEILING(CantidadCajas / CajasXMaster) de la línea de pedido.
-// Acumulado = suma de CantidadMaster ya declarados en otras capturas de esa misma línea — el candado
-// real que bloquea declarar de más SIGUE siendo este (declarado), sin cambios: revisado jul 2026 con
-// el usuario y se dejó así a propósito, para no acoplar cuánto se puede trabajar cada día al ritmo de
-// escaneo de bodega. Escaneado (Bodega ya existe, a diferencia de cuando se escribió este comentario
-// originalmente) se agrega aparte, solo informativo — hoy lo consume la pantalla de captura para
-// mostrar avance real, reusando el mismo cálculo que ya usa Bodega/el reporte de Impresión.
+// Acumulado = suma de CantidadMaster ya declarados en otras capturas de esa misma línea, MENOS los
+// masters de la línea que salieron en traslado interno (Trasladado — ver SALIO_EN_TRASLADO en
+// lib/masters.ts: el área puede cambiarlos de cliente, así que dejan de ocupar cupo). El candado
+// real que bloquea declarar de más SIGUE siendo este (declarado): revisado jul 2026 con el usuario y
+// se dejó así a propósito, para no acoplar cuánto se puede trabajar cada día al ritmo de escaneo de
+// bodega. EnBodega se agrega aparte, solo informativo: masters de la línea escaneados que
+// SIGUEN en bodega, el mismo número que la pestaña Avance de Pedidos (decisión del usuario, 28 oct
+// 2026). Lo que ya salió —despachos y traslados a reempaque/reetiquetado/reproceso— no cuenta. No
+// es el número del techo de escaneo (calcularTechoLinea), que sí cuenta lo despachado al cliente.
 async function calcularResumen(detalleId: number, excluirOrdenId?: number) {
   const detalle: any[] = await prisma.$queryRaw`
     SELECT dp.CantidadCajas, pr.CajasXMaster, ped.EsGeneral
@@ -255,14 +258,29 @@ async function calcularResumen(detalleId: number, excluirOrdenId?: number) {
         SELECT COALESCE(SUM(CantidadMaster), 0) AS acumulado FROM OrdenEtiquetado
         WHERE DetalleId = ${detalleId} AND Estatus != 'Cancelada'
       `;
-  const acumulado = Number(acumRows[0].acumulado);
-  const techo = await calcularTechoLinea(prisma, detalleId);
+  // Los trasladados son de toda la línea, también los de la captura que se edita: lo que se compara
+  // es el total que quedaría (otras + la nueva cantidad) menos lo que ya salió en traslado.
+  const trasladado = await trasladadosDeLinea(prisma, detalleId);
+  const acumulado = Number(acumRows[0].acumulado) - trasladado;
+  const enBodegaRows: any[] = await prisma.$queryRaw`
+    SELECT COUNT(*) AS n FROM Masters m
+    JOIN EtiquetaImpresa ei ON m.EtiquetaId = ei.EtiquetaId
+    JOIN OrdenEtiquetado oe ON ei.OrdenId = oe.OrdenId
+    WHERE oe.DetalleId = ${detalleId} AND m.Estatus <> 'Salido'
+  `;
   return {
     Objetivo: objetivo,
     Acumulado: acumulado,
+    Trasladado: trasladado,
     Pendiente: objetivo === null ? null : objetivo - acumulado,
-    Escaneado: techo?.Escaneado ?? 0,
+    EnBodega: Number(enBodegaRows[0].n),
   };
+}
+
+// Mensaje del candado de lo declarado, igual en alta y en edición.
+function mensajeExcedeDeclarado(resumen: { Objetivo: number | null; Acumulado: number; Trasladado: number }, cantidad: number) {
+  const trasl = resumen.Trasladado ? `, sin contar ${resumen.Trasladado} que salieron en traslado` : "";
+  return `Esta captura dejaría ${resumen.Acumulado + cantidad} masters declarados, pero la línea del pedido solo necesita ${resumen.Objetivo} (ya lleva ${resumen.Acumulado} en otras capturas${trasl}).`;
 }
 
 // GET /api/orden-etiquetado/resumen/:detalleId
@@ -322,9 +340,7 @@ router.post("/", requireAuth, requirePerm("etiquetado", "crear"), async (req: Re
     if (!resumen) { res.status(404).json({ error: "Línea de pedido no encontrada" }); return; }
     // Objetivo null = pedido general: se declara cuanto vaya saliendo, sin techo.
     if (resumen.Objetivo !== null && resumen.Acumulado + cantidad > resumen.Objetivo) {
-      res.status(400).json({
-        error: `Esta captura dejaría ${resumen.Acumulado + cantidad} masters declarados, pero la línea del pedido solo necesita ${resumen.Objetivo} (ya lleva ${resumen.Acumulado} en otras capturas).`,
-      });
+      res.status(400).json({ error: mensajeExcedeDeclarado(resumen, cantidad) });
       return;
     }
 
@@ -413,9 +429,7 @@ router.put("/:id", requireAuth, requirePerm("etiquetado", "editar"), async (req:
 
     const resumen = await calcularResumen(Number(actuales[0].DetalleId), id);
     if (resumen && resumen.Objetivo !== null && resumen.Acumulado + cantidad > resumen.Objetivo) {
-      res.status(400).json({
-        error: `Esta captura dejaría ${resumen.Acumulado + cantidad} masters declarados, pero la línea del pedido solo necesita ${resumen.Objetivo} (ya lleva ${resumen.Acumulado} en otras capturas).`,
-      });
+      res.status(400).json({ error: mensajeExcedeDeclarado(resumen, cantidad) });
       return;
     }
 

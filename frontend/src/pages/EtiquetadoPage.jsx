@@ -294,21 +294,22 @@ export default function EtiquetadoPage() {
                     Almacenaje
                   </span>
                   <span><span className="font-semibold text-gray-800">{resumen.Acumulado}</span> <span className="text-gray-400">declarados</span></span>
-                  <span><span className="font-semibold text-blue-700">{resumen.Escaneado}</span> <span className="text-gray-400">escaneados en bodega</span></span>
+                  <span title="Master escaneados que siguen en bodega; lo que ya salió no cuenta"><span className="font-semibold text-blue-700">{resumen.EnBodega}</span> <span className="text-gray-400">en bodega</span></span>
                   <span className="text-xs text-gray-400 italic">sin cantidad planificada</span>
                 </div>
               )}
               {resumen && resumen.Objetivo != null && (() => {
-                // Este resumen muestra el avance REAL (escaneado en bodega), no lo declarado — el
+                // Este resumen muestra lo que hay escaneado DENTRO de bodega, igual que la pestaña
+                // Avance de Pedidos: ni lo declarado ni lo que ya salió (despachos y traslados). El
                 // candado que bloquea declarar de más sigue comparando contra lo declarado sin
                 // cambios (ver calcularResumen en ordenEtiquetado.ts), esto es solo visualización.
-                const pendienteEscaneado = resumen.Objetivo - resumen.Escaneado;
-                const pct = resumen.Escaneado / Math.max(1, resumen.Objetivo);
+                const pendienteEscaneado = resumen.Objetivo - resumen.EnBodega;
+                const pct = resumen.EnBodega / Math.max(1, resumen.Objetivo);
                 const colorBarra = pct >= 1 ? "bg-green-500" : pct >= 0.5 ? "bg-yellow-400" : "bg-red-500";
                 return (
                   <div className="flex items-center gap-4 text-sm">
                     <span><span className="font-semibold text-gray-800">{resumen.Objetivo}</span> <span className="text-gray-400">pedido</span></span>
-                    <span><span className="font-semibold text-blue-700">{resumen.Escaneado}</span> <span className="text-gray-400">escaneados</span></span>
+                    <span title="Master escaneados que siguen en bodega; lo que ya salió no cuenta"><span className="font-semibold text-blue-700">{resumen.EnBodega}</span> <span className="text-gray-400">en bodega</span></span>
                     <span><span className={`font-semibold ${pendienteEscaneado <= 0 ? "text-green-600" : "text-orange-600"}`}>{pendienteEscaneado}</span> <span className="text-gray-400">pendientes</span></span>
                     <div className="flex-1 h-2 bg-gray-100 rounded-full overflow-hidden">
                       <div className={`h-full transition-colors ${colorBarra}`} style={{ width: `${Math.min(100, pct * 100)}%` }} />

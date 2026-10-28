@@ -316,13 +316,18 @@ router.delete("/:id", requireAuth, requirePerm("pedidos", "eliminar"), async (re
 
 // GET /api/detalle-pedido/avance?pedido=2026-016
 //
-// Cierra la cadena del pedido, que hasta ahora llegaba solo hasta "agrupado" y ahí se cortaba:
-//   Objetivo → Declarado → EnBodega → Despachado
+// Lo que hay escaneado DENTRO de bodega contra lo que pide la proforma, por línea y en master
+// (decisión del usuario, 28 oct 2026). Lo agrupado no entra: es intención, no producto. Lo que ya
+// salió tampoco —ni despachos ni traslados a reempaque/reetiquetado/reproceso—: 56 master de
+// 020-2026 mandados a reetiquetar se veían como avance del pedido sin estar en bodega.
 //
-// Es MEDICIÓN, no candado. La proforma se mueve (se agregan productos en plena carga), así que topar
-// el despacho contra ella frenaría contenedores legítimos en el andén. Diferencia > 0 se muestra en
-// ámbar y el bodeguero decide — el candado duro sigue siendo el de Agrupación (declarado), que sí
-// tiene sentido porque ahí todavía no hay producto físico comprometido.
+// Es MEDICIÓN, no candado: Diferencia > 0 se muestra en ámbar y nada se bloquea. El techo del
+// escaneo (calcularTechoLinea) sigue contando lo despachado al cliente, a propósito: si contara solo
+// lo que está en bodega, cada contenedor despachado reabriría el cupo de la línea. Lo que salió en
+// traslado interno sí libera cupo (ver SALIO_EN_TRASLADO en lib/masters.ts).
+//
+// Despachado (solo remisiones a Cliente) no se pinta aquí: lo consume el aviso de PanelRemision,
+// que compara lo que va saliendo contra el objetivo.
 router.get("/avance", requireAuth, requireAnyPerm([["pedidos", "ver"], ["etiquetado", "ver"], ["remisiones", "ver"]]), async (req: Request, res: Response) => {
   try {
     const pedido = req.query.pedido as string | undefined;
@@ -342,34 +347,32 @@ router.get("/avance", requireAuth, requireAnyPerm([["pedidos", "ver"], ["etiquet
     const ids = lineas.map(l => Number(l.DetalleId));
     const marcas = ids.map(() => "?").join(",");
 
-    // Dos consultas agrupadas en vez de subconsultas por fila: un pedido general acumula cientos de
+    // Una consulta agrupada en vez de subconsultas por fila: un pedido general acumula cientos de
     // líneas y ahí las correlacionadas se vuelven lentas (mismo patrón que calcularTechoLineaBatch).
-    const declarados: any[] = await prisma.$queryRawUnsafe(`
-      SELECT DetalleId, COALESCE(SUM(CantidadMaster), 0) AS n
-      FROM OrdenEtiquetado
-      WHERE DetalleId IN (${marcas}) AND Estatus <> 'Cancelada'
-      GROUP BY DetalleId`, ...ids);
-
+    // La serie de la remisión separa el despacho al cliente del traslado interno. Hay a lo sumo una
+    // remisión vigente por master (UNIQUE (MasterId, Vigente) en RemisionDetalle), así que el LEFT
+    // JOIN no duplica filas.
     const fisicos: any[] = await prisma.$queryRawUnsafe(`
       SELECT oe.DetalleId,
              SUM(CASE WHEN m.Estatus <> 'Salido' THEN 1 ELSE 0 END) AS enBodega,
-             SUM(CASE WHEN m.Estatus =  'Salido' THEN 1 ELSE 0 END) AS despachado
+             SUM(CASE WHEN m.Estatus = 'Salido' AND sv.Destino = 'Cliente' THEN 1 ELSE 0 END) AS despachado
       FROM Masters m
       JOIN EtiquetaImpresa ei ON ei.EtiquetaId = m.EtiquetaId
       JOIN OrdenEtiquetado oe ON oe.OrdenId = ei.OrdenId
+      LEFT JOIN RemisionDetalle rdv ON rdv.MasterId = m.MasterId AND rdv.Vigente = 1
+      LEFT JOIN Remisiones rv ON rv.RemisionId = rdv.RemisionId AND rv.Estatus = 'Confirmada'
+      LEFT JOIN SerieRemision sv ON sv.Tipo = rv.Tipo
       WHERE oe.DetalleId IN (${marcas})
       GROUP BY oe.DetalleId`, ...ids);
 
-    const porDeclarado = new Map(declarados.map((r: any) => [Number(r.DetalleId), Number(r.n)]));
     const porFisico = new Map(fisicos.map((r: any) => [Number(r.DetalleId), r]));
 
     res.json(lineas.map(l => {
       const detalleId = Number(l.DetalleId);
       const f = porFisico.get(detalleId);
-      const despachado = f ? Number(f.despachado) : 0;
+      const enBodega = f ? Number(f.enBodega) : 0;
       // Objetivo null en pedidos generales (perpetuos, sin cantidad planificada) y en líneas de
-      // granel (no están en la proforma). Sin objetivo tampoco hay diferencia — el granel se mide en
-      // el cuadre por (Proceso, Talla), no aquí.
+      // granel (no están en la proforma). Sin objetivo tampoco hay diferencia.
       const objetivo = objetivoDeLinea(l);
       return {
         DetalleId: detalleId,
@@ -378,10 +381,9 @@ router.get("/avance", requireAuth, requireAnyPerm([["pedidos", "ver"], ["etiquet
         CajasXMaster: Number(l.CajasXMaster),
         EsGranel: Number(l.EsGranel) === 1,
         Objetivo: objetivo,
-        Declarado: porDeclarado.get(detalleId) ?? 0,
-        EnBodega: f ? Number(f.enBodega) : 0,
-        Despachado: despachado,
-        Diferencia: objetivo === null ? null : despachado - objetivo,
+        EnBodega: enBodega,
+        Despachado: f ? Number(f.despachado) : 0,
+        Diferencia: objetivo === null ? null : enBodega - objetivo,
       };
     }));
   } catch (err: any) {
@@ -489,19 +491,17 @@ router.post("/granel", requireAuth, requirePerm("etiquetado", "crear"), async (r
   }
 });
 
-// GET /api/detalle-pedido/cuadre?pedido=016-2026 — el cuadre general, por (Proceso, Talla) y en kg.
+// GET /api/detalle-pedido/cuadre?pedido=016-2026 — kg en bodega contra kg pedidos, por presentación.
 //
-// El avance por línea mide master contra master, y eso deja de servir en cuanto el mismo producto
-// sale en dos empaques: 429 master de 20/375 gr (7.5 kg) y 12 de granel 1/20 lb (9.07 kg) no se
-// pueden sumar. En kg sí, y kg es la unidad de la proforma.
+// Igual que el avance, solo cuenta lo escaneado que sigue DENTRO de bodega: ni lo agrupado ni lo que
+// ya salió (despachos y traslados). Lo que agrega es el peso: en kg sí se pueden sumar líneas de
+// distinta presentación, y con eso sale el % de avance de todo el pedido.
 //
-// El compromiso con el cliente es por PRODUCTO y TALLA —"3,217.50 kg de 21/25 P&D"—, no por empaque:
-// cómo se empaque es decisión de planta. Por eso el techo vive en el par (Proceso, Talla) y no en la
-// línea. Se agrupa por Proceso y no por Clase porque es la llave del UNIQUE de la tabla y porque la
-// etiqueta imprime el Proceso: dos master del mismo proceso son indistinguibles en bodega.
-//
-// Las líneas de granel suman al avance y NO al objetivo: ahí es donde el producto empacado a granel
-// aparece como progreso sin inventarse un techo propio.
+// Una fila por (Proceso, Talla, Presentación), que es la llave UNIQUE de DetallePedido: cada fila
+// es una línea de la proforma. Hasta el 28 oct 2026 se agrupaba solo por (Proceso, Talla) para sumar
+// el granel con su producto; el usuario pidió ver la presentación, así que el granel queda en su
+// propia fila, sin pedido propio (ObjetivoKg null). Sus kg sí entran al total del pedido: es producto
+// del pedido empacado distinto porque se acabó el material.
 router.get("/cuadre", requireAuth, requireAnyPerm([["pedidos", "ver"], ["etiquetado", "ver"], ["remisiones", "ver"]]), async (req: Request, res: Response) => {
   try {
     const pedido = req.query.pedido as string | undefined;
@@ -511,72 +511,44 @@ router.get("/cuadre", requireAuth, requireAnyPerm([["pedidos", "ver"], ["etiquet
     if (!gen.length) { res.status(404).json({ error: "Pedido no encontrado" }); return; }
     const esGeneral = Number(gen[0].EsGeneral) === 1;
 
-    // Los dos derivados se acotan a los DetalleId del pedido en vez de agregar las tablas enteras:
-    // OrdenEtiquetado y Masters crecen con toda la planta, y sin ese IN la consulta se degrada a
-    // medida que avanza la temporada (ver project_rendimiento_consultas_destajo).
-    // Empacado y granel se separan en las TRES etapas, no solo al final: si solo se partiera
-    // Despachado, un pedido con 3000 kg empacados + 200 kg a granel todavía en Agrupación se vería
-    // igual que uno sin nada de granel hasta que saliera por bodega — justo cuando ya no sirve para
-    // decidir si hace falta más material de empaque.
+    // El derivado se acota a los DetalleId del pedido en vez de agregar Masters entera: crece con
+    // toda la planta, y sin ese IN la consulta se degrada a medida que avanza la temporada (ver
+    // project_rendimiento_consultas_destajo).
     const filas: any[] = await prisma.$queryRaw`
-      SELECT dp.Proceso,
-             MIN(dp.Clase) AS Clase,
-             dp.Talla,
-             SUM(CASE WHEN dp.EsGranel = 0 THEN dp.KgPedido ELSE 0 END) AS ObjetivoKg,
-
-             SUM(CASE WHEN dp.EsGranel = 0 THEN COALESCE(d.n, 0) ELSE 0 END * pr.PesoKG * pr.CajasXMaster) AS EmpacadoDeclaradoKg,
-             SUM(CASE WHEN dp.EsGranel = 1 THEN COALESCE(d.n, 0) ELSE 0 END * pr.PesoKG * pr.CajasXMaster) AS GranelDeclaradoKg,
-
-             SUM(CASE WHEN dp.EsGranel = 0 THEN COALESCE(f.enBodega, 0) ELSE 0 END * pr.PesoKG * pr.CajasXMaster) AS EmpacadoEnBodegaKg,
-             SUM(CASE WHEN dp.EsGranel = 1 THEN COALESCE(f.enBodega, 0) ELSE 0 END * pr.PesoKG * pr.CajasXMaster) AS GranelEnBodegaKg,
-
-             SUM(CASE WHEN dp.EsGranel = 0 THEN COALESCE(f.despachado, 0) ELSE 0 END * pr.PesoKG * pr.CajasXMaster) AS EmpacadoDespachadoKg,
-             SUM(CASE WHEN dp.EsGranel = 1 THEN COALESCE(f.despachado, 0) ELSE 0 END * pr.PesoKG * pr.CajasXMaster) AS GranelDespachadoKg,
-
-             SUM(dp.EsGranel) AS LineasGranel
+      SELECT dp.DetalleId, dp.Proceso, dp.Clase, dp.Talla, dp.Presentacion, dp.EsGranel, dp.KgPedido,
+             COALESCE(f.enBodega, 0) * pr.PesoKG * pr.CajasXMaster AS EnBodegaKg
       FROM DetallePedido dp
       JOIN Presentacion pr ON pr.Codigo = dp.Presentacion
       LEFT JOIN (
-        SELECT DetalleId, SUM(CantidadMaster) AS n
-        FROM OrdenEtiquetado
-        WHERE Estatus <> 'Cancelada'
-          AND DetalleId IN (SELECT DetalleId FROM DetallePedido WHERE CodigoPedido = ${pedido})
-        GROUP BY DetalleId
-      ) d ON d.DetalleId = dp.DetalleId
-      LEFT JOIN (
-        SELECT oe.DetalleId,
-               SUM(CASE WHEN m.Estatus <> 'Salido' THEN 1 ELSE 0 END) AS enBodega,
-               SUM(CASE WHEN m.Estatus =  'Salido' THEN 1 ELSE 0 END) AS despachado
+        SELECT oe.DetalleId, COUNT(*) AS enBodega
         FROM Masters m
         JOIN EtiquetaImpresa ei ON ei.EtiquetaId = m.EtiquetaId
         JOIN OrdenEtiquetado oe ON oe.OrdenId = ei.OrdenId
-        WHERE oe.DetalleId IN (SELECT DetalleId FROM DetallePedido WHERE CodigoPedido = ${pedido})
+        WHERE m.Estatus <> 'Salido'
+          AND oe.DetalleId IN (SELECT DetalleId FROM DetallePedido WHERE CodigoPedido = ${pedido})
         GROUP BY oe.DetalleId
       ) f ON f.DetalleId = dp.DetalleId
       WHERE dp.CodigoPedido = ${pedido}
-      GROUP BY dp.Proceso, dp.Talla
-      ORDER BY dp.Proceso ASC, dp.Talla ASC
+      ORDER BY dp.Proceso ASC, dp.Talla ASC, dp.EsGranel ASC, dp.Presentacion ASC
       LIMIT 2000
     `;
 
     const r3 = (v: any) => Math.round(Number(v || 0) * 1000) / 1000;
     res.json(filas.map(r => {
-      // En un pedido general todas las líneas llevan el centinela de 1 caja, así que la suma de
-      // KgPedido sería el peso de una caja por línea — un número sin significado. Mejor null.
-      const objetivo = esGeneral ? null : r3(r.ObjetivoKg);
-      const empacadoDespachado = r3(r.EmpacadoDespachadoKg);
-      const granelDespachado = r3(r.GranelDespachadoKg);
-      const despachado = r3(empacadoDespachado + granelDespachado);
+      // En un pedido general todas las líneas llevan el centinela de 1 caja, así que KgPedido es el
+      // peso de una caja — un número sin significado. Una línea de granel no está en la proforma.
+      const objetivo = esGeneral || Number(r.EsGranel) === 1 ? null : r3(r.KgPedido);
+      const enBodega = r3(r.EnBodegaKg);
       return {
+        DetalleId: Number(r.DetalleId),
         Proceso: Number(r.Proceso),
         Clase: r.Clase,
         Talla: Number(r.Talla),
+        Presentacion: r.Presentacion,
+        EsGranel: Number(r.EsGranel) === 1,
         ObjetivoKg: objetivo,
-        Declarado: { EmpacadoKg: r3(r.EmpacadoDeclaradoKg), GranelKg: r3(r.GranelDeclaradoKg) },
-        EnBodega: { EmpacadoKg: r3(r.EmpacadoEnBodegaKg), GranelKg: r3(r.GranelEnBodegaKg) },
-        Despachado: { EmpacadoKg: empacadoDespachado, GranelKg: granelDespachado },
-        LineasGranel: Number(r.LineasGranel || 0),
-        DiferenciaKg: objetivo === null ? null : r3(despachado - objetivo),
+        EnBodegaKg: enBodega,
+        DiferenciaKg: objetivo === null ? null : r3(enBodega - objetivo),
       };
     }));
   } catch (err: any) {
