@@ -24,6 +24,19 @@ function fmtHoras(min) {
 }
 const destinoDe = (l) => l?.NombreAreaDeclarada || l?.NombreBodegaDestino || l?.BodegaDestino || "—";
 
+// Un renglón despachado, visto desde donde SALIÓ. Unificado, el renglón dice el lote y la clase
+// escogidos; el lote, la clase, la remisión y la talla de verdad vienen de su consumo
+// (LoteOrigen y compañía, que el servidor manda solo para lo despachado). UnificadoEn es el lote al
+// que pasó, si cambió.
+export function origenDe(m) {
+  if (m.LoteOrigen == null) {
+    return { Lote: m.Lote, Clase: m.Clase, DescripcionClase: m.DescripcionClase, Folio: m.FolioRemision,
+             Talla: m.DescripcionTalla, UnificadoEn: null };
+  }
+  return { Lote: m.LoteOrigen, Clase: m.ClaseOrigen, DescripcionClase: m.DescripcionClaseOrigen, Folio: m.FolioOrigen,
+           Talla: m.DescripcionTallaOrigen, UnificadoEn: m.LoteOrigen !== m.Lote ? m.Lote : null };
+}
+
 export function ContenidoHoja({ hoja, filas }) {
   const aux = hoja.Auxiliares;
   const abierta = hoja.Estatus !== "Cerrada";
@@ -86,30 +99,31 @@ export function ContenidoHoja({ hoja, filas }) {
             <th className="py-1 pr-2 text-right">Declarado</th>
             <th className="py-1 pr-2 text-right">Pesado</th>
             <th className="py-1 pr-2 text-right">Dif.</th>
-            <th className="py-1 pr-2">Enviado a</th>
-            <th className="py-1">Termo</th>
+            <th className="py-1">Enviado a</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-gray-200">
           {filas.map(({ clave, entrada, salida, ref }) => {
             const dif = entrada && salida ? Number((entrada.PesoKg - salida.PesoKg).toFixed(2)) : null;
+            const o = origenDe(ref);
             return (
               <tr key={clave}>
-                <td className="py-1 pr-2 font-mono whitespace-nowrap">{ref.Lote}</td>
-                <td className="py-1 pr-2">{ref.Clase} {ref.DescripcionClase}</td>
-                <td className="py-1 pr-2 whitespace-nowrap">{ref.DescripcionTalla}</td>
-                <td className="py-1 pr-2 font-mono">{ref.FolioRemision || "—"}</td>
+                <td className="py-1 pr-2 font-mono whitespace-nowrap">
+                  {o.Lote}{o.UnificadoEn && <span className="text-gray-500"> → {o.UnificadoEn}</span>}
+                </td>
+                <td className="py-1 pr-2">{o.Clase} {o.DescripcionClase}</td>
+                <td className="py-1 pr-2 whitespace-nowrap">{o.Talla}</td>
+                <td className="py-1 pr-2 font-mono">{o.Folio || "—"}</td>
                 <td className="py-1 pr-2 text-right">{entrada?.Masters ?? "—"}</td>
                 <td className="py-1 pr-2 text-right">{entrada ? fmtNum(entrada.PesoKg) : "—"}</td>
                 <td className="py-1 pr-2 text-right font-semibold">{salida ? fmtNum(salida.PesoKg) : "sin despachar"}</td>
                 <td className="py-1 pr-2 text-right">{dif ? fmtNum(dif) : "—"}</td>
-                <td className="py-1 pr-2">{salida ? destinoDe(salida) : "—"}</td>
-                <td className="py-1 font-mono">{salida?.NumeroTermo || "—"}</td>
+                <td className="py-1">{salida ? destinoDe(salida) : "—"}</td>
               </tr>
             );
           })}
           {filas.length === 0 && (
-            <tr><td colSpan={10} className="py-3 text-center text-gray-400">Sin renglones</td></tr>
+            <tr><td colSpan={9} className="py-3 text-center text-gray-400">Sin renglones</td></tr>
           )}
         </tbody>
         <tfoot>
@@ -156,41 +170,8 @@ export function ContenidoHoja({ hoja, filas }) {
         </>
       )}
 
-      {aux?.lista?.length > 0 && (
-        <>
-          <h2 className="text-sm font-bold uppercase mb-1">
-            Auxiliares del turno <span className="font-normal normal-case text-gray-500">
-              · de {hora(aux.Desde)} a {hora(aux.Hasta)}</span>
-          </h2>
-          <table className="w-full text-[11px] print-table mb-4">
-            <thead>
-              <tr className="text-left uppercase border-b-2 border-gray-800 text-[10px] text-gray-600">
-                <th className="py-1 pr-2">Nombre</th>
-                <th className="py-1 pr-2">Código</th>
-                <th className="py-1 pr-2">En el área</th>
-                <th className="py-1 text-right">Horas</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-200">
-              {aux.lista.map(a => (
-                <tr key={a.Codigo}>
-                  <td className="py-1 pr-2">{a.Nombre}</td>
-                  <td className="py-1 pr-2 font-mono">{a.Codigo}</td>
-                  <td className="py-1 pr-2">{a.Desde}–{a.Hasta}</td>
-                  <td className="py-1 text-right">{fmtHoras(a.Minutos)}</td>
-                </tr>
-              ))}
-            </tbody>
-            <tfoot>
-              <tr className="border-t-2 border-gray-800 font-bold">
-                <td colSpan={3} className="py-1 pr-2 text-right uppercase text-[10px]">Total</td>
-                <td className="py-1 text-right">{fmtHoras(aux.Minutos)}</td>
-              </tr>
-            </tfoot>
-          </table>
-        </>
-      )}
-
+      {/* La lista de auxiliares con sus horas no va en el papel (usuario, 27 oct 2026): el
+          encabezado ya dice cuántos fueron y cuánto tiempo estuvieron en el área. */}
       {hoja.Observaciones && (
         <p className="text-sm mb-4"><span className="text-gray-500">Observaciones:</span> {hoja.Observaciones}</p>
       )}

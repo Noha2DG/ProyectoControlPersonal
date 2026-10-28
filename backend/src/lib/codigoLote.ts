@@ -41,3 +41,72 @@ export function piscinaRequiereCiclo(nombrePiscina: string, codigoFinca: string)
   if (FINCAS_SIN_CICLO.includes(codigoFinca)) return false;
   return !/SIFON|00-E00/i.test(nombrePiscina || "");
 }
+
+// Sifones impresos con el formato viejo, de antes de que el catálogo los llamara por finca
+// (TM-SIFON / EM-SIFON). Siguen llegando en remisiones de producto congelado de meses atrás:
+// G110SIFON-TF32, F241SIFON-T, G321SIFON-E… Lo que va después de la T/E (F32, 1) no es un ciclo
+// —  un sifón no lleva—  así que se descarta.
+const SIFON_VIEJO: [RegExp, string][] = [
+  [/^SIFON-T/i, "TM-SIFON"],
+  [/^SIFON-E/i, "EM-SIFON"],
+];
+
+/**
+ * El camino inverso de componerCodigoLote: de un código ya impreso saca la piscina y el ciclo.
+ * Devuelve null si no reconoce la piscina — quien llama decide qué hacer (nunca adivina).
+ *
+ * El nombre de la piscina se busca en el catálogo y no se parte por guiones: "EM06-E02" lleva un
+ * guion propio, así que "G135EM06-E02-4" no se puede cortar a ciegas. Gana el nombre más largo que
+ * calce, sin distinguir mayúsculas (hay etiquetas con "k024" contra el "K024" del catálogo).
+ */
+export function descomponerCodigoLote<P extends { Nombre: string }>(
+  lote: string, piscinas: P[]
+): { piscina: P; ciclo: number | null } | null {
+  if (!/^[A-Z][1-7]\d{2}/i.test(lote || "")) return null;
+  const resto = lote.slice(4).toUpperCase();
+
+  for (const [patron, nombre] of SIFON_VIEJO) {
+    if (patron.test(resto)) {
+      const p = piscinas.find(x => x.Nombre.toUpperCase() === nombre);
+      return p ? { piscina: p, ciclo: null } : null;
+    }
+  }
+
+  let mejor: P | null = null;
+  for (const p of piscinas) {
+    const n = p.Nombre.toUpperCase();
+    if ((resto === n || resto.startsWith(n + "-")) && (!mejor || n.length > mejor.Nombre.length)) mejor = p;
+  }
+  if (!mejor) return null;
+  const cola = resto.slice(mejor.Nombre.length + 1);
+  if (cola && !/^\d+$/.test(cola)) return null;
+  return { piscina: mejor, ciclo: cola ? Number(cola) : null };
+}
+
+export type Piscina = { PiscinaId: number; Nombre: string; CodigoFinca: string };
+
+/** El catálogo de piscinas, para descomponerCodigoLote. */
+export async function cargarPiscinas(client: any): Promise<Piscina[]> {
+  return (await client.$queryRawUnsafe(`SELECT PiscinaId, Nombre, CodigoFinca FROM Piscina`) as any[])
+    .map(p => ({ PiscinaId: Number(p.PiscinaId), Nombre: String(p.Nombre), CodigoFinca: String(p.CodigoFinca) }));
+}
+
+// Sifones y lotes genéricos (EM00-E00, TM00-E00) van siempre solos: no entran a una unificación.
+export const noSeUnifica = (p: { Nombre: string }) => /SIFON|00-E00/i.test(p.Nombre);
+
+/**
+ * Las reglas para juntar varios lotes en uno, las mismas al tomar del piso en Materia Prima que al
+ * descongelar: una sola finca, y nunca un proveedor externo (Maquila, Importación, Pescado) —  ahí
+ * cada lote es un contenedor y su merma se calcula por separado; la de maquila se le rinde al
+ * cliente— , ni sifón ni lotes genéricos. Devuelve el problema, o null si se pueden unificar.
+ */
+export function problemaAlUnificar(lotes: { Lote: string; piscina: Piscina }[]): string | null {
+  const fincas = [...new Set(lotes.map(d => d.piscina.CodigoFinca))];
+  if (fincas.length > 1) return `Solo se pueden unificar lotes de la misma finca (escogió de ${fincas.join(", ")})`;
+  if (FINCAS_SIN_CICLO.includes(fincas[0])) {
+    return `Los lotes de ${fincas[0]} no se unifican: cada lote es un contenedor y su merma se calcula por separado`;
+  }
+  const solos = [...new Set(lotes.filter(d => noSeUnifica(d.piscina)).map(d => d.Lote))];
+  if (solos.length) return `${solos.join(", ")} no se unifica: sifón y lotes genéricos (00-E00) van solos`;
+  return null;
+}

@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { createPortal } from "react-dom";
 import { authHeader } from "../context/AuthContext.jsx";
 import { fmtNum } from "../utils/numero.js";
+import { origenDe } from "./HojaDescongeladoModal.jsx";
 
 // Reporte de la JORNADA del área — no de una hoja. La hoja es un turno; esto es el día completo,
 // en el orden en que se mueve el producto: lo que se recibió, lo que se descongeló, lo que se
@@ -137,13 +138,16 @@ export function ContenidoReporte({ r }) {
         <tbody className="divide-y divide-gray-200">
           {r.descongelado.map(x => {
             const dif = x.Declarado != null ? Number((x.Declarado - x.Pesado).toFixed(2)) : null;
+            const o = origenDe(x);
             return (
               <tr key={x.MovimientoId}>
                 <td className={`${TD} font-mono`}>#{x.HojaId}</td>
-                <td className={`${TD} font-mono whitespace-nowrap`}>{x.Lote}</td>
-                <td className={TD}>{producto(x)}</td>
-                <td className={`${TD} whitespace-nowrap`}>{x.DescripcionTalla}</td>
-                <td className={`${TD} font-mono`}>{x.FolioRemision || "—"}</td>
+                <td className={`${TD} font-mono whitespace-nowrap`}>
+                  {o.Lote}{o.UnificadoEn && <span className="text-gray-500"> → {o.UnificadoEn}</span>}
+                </td>
+                <td className={TD}>{producto(o)}</td>
+                <td className={`${TD} whitespace-nowrap`}>{o.Talla}</td>
+                <td className={`${TD} font-mono`}>{o.Folio || "—"}</td>
                 <td className={`${TD} text-right`}>{x.Masters ?? "—"}</td>
                 <td className={`${TD} text-right`}>{kg(x.Declarado)}</td>
                 <td className={`${TD} text-right font-semibold`}>{kg(x.Pesado)}</td>
