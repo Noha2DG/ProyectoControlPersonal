@@ -15,9 +15,8 @@ import { PrismaClient } from "@prisma/client";
 import {
   agregarPallet, agregarMaster, quitarLineas, confirmarRemision, eliminarBorrador,
 } from "../src/routes/remisiones.ts";
-import { sincronizarIngresoDeRemision } from "../src/lib/inventarioPiso.ts";
 import { SALIO_EN_TRASLADO } from "../src/lib/masters.ts";
-import { porEntregar, consumirDelPiso } from "../src/routes/descongelado.ts";
+import { porEntregar, consumirDelPiso, recibirPolines, deshacerRecepcion } from "../src/routes/descongelado.ts";
 
 const p = new PrismaClient();
 const ROLLBACK = "__ROLLBACK_PRUEBA__";
@@ -137,38 +136,41 @@ async function main() {
       // ── 3. El área lo ve "aún en bodega" y no lo puede trabajar ─────────────────────────────────
       const deR1 = async () => (await porEntregar(tx, "DESCONGELADO")).filter((r: any) => r.RemisionId === R1);
       let pe = await deR1();
-      check("10. el área ve las 4 cajas del borrador como por entregar",
-        pe.length === 1 && pe[0].Masters === 4 && pe[0].PorEntregar === true && pe[0].EstatusRemision === "Borrador", JSON.stringify(pe));
-      await esperarError("11. Descongelado no puede trabajar lo que bodega no ha entregado",
+      check("10. el área ve las 4 cajas del borrador por entregar, por polín (P1 con 3, P2 con 1)",
+        pe.length === 2 && pe.every((r: any) => r.PorEntregar && !r.Recibido)
+        && pe.find((r: any) => r.PalletId === P1.palletId)?.Masters === 3 && pe.find((r: any) => r.PalletId === P2.palletId)?.Masters === 1,
+        JSON.stringify(pe));
+      await esperarError("11. Descongelado no puede trabajar lo que no ha recibido (no está en su piso)",
         () => consumirDelPiso(tx, { BodegaCodigo: "DESCONGELADO" }, 0, [{
           remId: R1, Lote: "ZZPRUEBA", Clase: det[0].Clase, talla: Number(det[0].Talla), um: "KG",
           masters: 1, kgxm: kgpm, declarado: kg(1), kgDecl: kg(1), fechaLote: null, fechaPedida: null,
         }], OP, "2026-10-28"),
-        "todavía no la entrega bodega");
+        "solo quedan 0 masters");
 
-      // ── 4. Quitar del borrador: regresa a bodega sin chocar con nada ────────────────────────────
+      // ── 4. Quitar del borrador lo no recibido: regresa a bodega sin tocar el piso ───────────────
       const lineaP2: any[] = await q(`SELECT DetalleId FROM RemisionDetalle WHERE RemisionId = ? AND MasterId = ?`, R1, p2m[0].masterId);
       await quitarLineas(tx, R1, { detalleId: Number(lineaP2[0].DetalleId) }, OP);
       check("12. el master quitado vuelve a EnBodega y su SALIDA se borra",
         (await estatus(p2m[0].masterId)) === "EnBodega" && (await salidas(R1)) === 3);
       pe = await deR1();
-      check("13. ... y el área ya solo ve 3 por entregar", pe.length === 1 && pe[0].Masters === 3, JSON.stringify(pe));
+      check("13. ... y el área ya solo ve P1 por entregar", pe.length === 1 && pe[0].PalletId === P1.palletId && pe[0].Masters === 3, JSON.stringify(pe));
 
-      // ── 5. Una confirmada que se regresó a borrador a mano (RS-0108, 28 oct): ya tiene piso ─────
-      await sincronizarIngresoDeRemision(tx, R1, { BodegaDestino: "DESCONGELADO" }, "2026-10-28", OP);
+      // ── 5. Lo que el área ya recibió y trabajó no se puede quitar ───────────────────────────────
+      await recibirPolines(tx, { RemisionId: R1, PalletIds: [P1.palletId] }, OP);
       await x(`INSERT INTO MovimientoPiso (Tipo, FechaProduccion, BodegaOrigen, Lote, Clase, Talla, FechaLote, Peso, UM, PesoKg, Masters, KgPorMaster, RemisionId, RegistradoPor)
                VALUES ('CONSUMO', CURDATE(), 'DESCONGELADO', 'ZZPRUEBA', ?, ?, CURDATE(), ?, 'KG', ?, 2, ?, ?, 'prueba')`,
         det[0].Clase, det[0].Talla, kg(2), kg(2), kgpm, R1);
       const consumoId = await id();
-      check("14. con ingreso al piso ya no sale también como por entregar", (await deR1()).length === 0);
-      await esperarError("15. no deja quitar un polín que el área ya descongeló",
+      pe = await deR1();
+      check("14. recibido, P1 ya no está por entregar sino recibido", pe.length === 1 && pe[0].Recibido === true, JSON.stringify(pe));
+      await esperarError("15. no deja quitar un polín que el área ya recibió y descongeló",
         () => quitarLineas(tx, R1, { palletId: P1.palletId }, OP), "ya trabajó ese producto");
       await esperarError("16. ni eliminar el borrador",
         () => eliminarBorrador(tx, R1, OP), "ya trabajó ese producto");
       check("17. tras el rechazo todo sigue como estaba (masters Salido, 3 al piso)",
         (await estatus(p1m[0].masterId)) === "Salido" && Number((await ingreso(R1))[0]?.Masters) === 3);
       await x(`DELETE FROM MovimientoPiso WHERE MovimientoId = ?`, consumoId);
-      await x(`DELETE FROM MovimientoPiso WHERE RemisionId = ? AND Tipo = 'INGRESO'`, R1);
+      await deshacerRecepcion(tx, { RemisionId: R1, PalletId: P1.palletId });
 
       // ── 6. Quitar un polín entero cuya posición ya ocupó otro: queda sin posición ──────────────
       await nuevoPallet(posX);   // otro polín se puso en X mientras P1 estaba en el borrador

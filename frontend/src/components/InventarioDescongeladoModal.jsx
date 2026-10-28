@@ -8,9 +8,10 @@ import { fmtNum } from "../utils/numero.js";
 // No pide nada al servidor: imprime las mismas líneas que se ven en AL PISO, agrupadas igual (por
 // remisión). Así el papel con el que se cuenta el piso no puede decir otra cosa que la pantalla.
 //
-// Lo que bodega escaneó y no ha confirmado sigue en bodega (confirmar es la entrega, 28 oct 2026):
-// no se cuenta ni suma. Va aparte al final, para que quien cuenta sepa que viene y no lo busque.
-const pendiente = r => r.PorEntregar === true || r.EstatusRemision === "Borrador";
+// Lo que bodega escaneó y el área todavía no recibe sigue en bodega (28 oct 2026): no se cuenta ni
+// suma. Va aparte al final, polín por polín, para que quien cuenta sepa que viene y no lo busque. Lo
+// ya recibido está en el saldo y se cuenta como lo demás.
+const pendiente = r => r.PorEntregar === true && !r.Recibido;
 
 // Fechas puras (YYYY-MM-DD) partidas a mano: new Date() las lee como medianoche UTC y en Guatemala
 // las muestra un día antes (ver utils/fecha.js).
@@ -33,9 +34,8 @@ function agruparPorRemision(saldo) {
   return grupos;
 }
 
-function ContenidoInventario({ fecha, saldo: todo, porEntregar = [] }) {
-  const saldo = todo.filter(r => !pendiente(r));
-  const llegan = agruparPorRemision([...todo.filter(pendiente), ...porEntregar]);
+function ContenidoInventario({ fecha, saldo, porEntregar = [] }) {
+  const llegan = agruparPorRemision(porEntregar.filter(pendiente));
   const grupos = agruparPorRemision(saldo);
   const totalKg = saldo.reduce((s, r) => s + r.Kg, 0);
   const totalM = saldo.reduce((s, r) => s + (r.Masters || 0), 0);
@@ -122,13 +122,14 @@ function ContenidoInventario({ fecha, saldo: todo, porEntregar = [] }) {
         <div className="mt-6" style={{ breakInside: "avoid-page" }}>
           <h2 className="text-sm font-bold border-b border-gray-400 pb-0.5 mb-1">
             Por entregar — sigue en bodega, no se cuenta
-            <span className="text-xs font-normal text-gray-500 ml-2">bodega lo escaneó y todavía no confirma la remisión</span>
+            <span className="text-xs font-normal text-gray-500 ml-2">bodega lo escaneó y el área todavía no lo recibe</span>
           </h2>
           <table className="w-full text-xs print-table text-gray-600">
             <tbody>
               {llegan.flatMap(g => g.lineas.map((r, i) => (
                 <tr key={`${g.clave}-${i}`} className="border-t border-gray-200">
                   <td className="py-1 pr-2 font-semibold">{i === 0 ? g.Folio : ""}</td>
+                  <td className="py-1 pr-2 font-mono font-semibold">{r.PalletCodigo}</td>
                   <td className="py-1 pr-2 font-mono">{r.Lote}</td>
                   <td className="py-1 pr-2"><span className="font-mono">{r.Clase}</span> {r.DescripcionClase}</td>
                   <td className="py-1 pr-2">{r.DescripcionTalla}</td>
