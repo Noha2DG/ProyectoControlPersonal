@@ -542,8 +542,15 @@ function PanelRemision({ remisionId, onClose, onCambio }) {
 
   const handleConfirmar = async () => {
     const lugar = remision.NombreBodegaDestino || remision.NombreAreaDestino || "el área";
+    // Si el área ya recibió parte en su pantalla, lo que falta se le entrega al confirmar: se avisa
+    // cuáles son, para que lo que se quedó en bodega se quite antes.
+    const recibidos = new Set(), faltan = new Set();
+    for (const l of remision.Lineas ?? []) (l.RecibidoEnArea ? recibidos : faltan).add(l.PalletCodigo);
+    const parcial = aArea && recibidos.size > 0 && faltan.size > 0;
     const confirmado = await pedirConfirmacion(aArea
-      ? `¿Confirmar la entrega de ${remision.Folio}?\n\nConfirmar es la entrega física: sus ${remision.CantidadMasters} master(s) entran al piso de ${lugar} y desde ese momento el área los puede trabajar. Confírmela cuando ya los tengan. Después de esto solo se puede anular.`
+      ? (parcial
+          ? `¿Confirmar la entrega de ${remision.Folio}?\n\n${lugar} ya recibió ${recibidos.size} polín(es). Estos todavía no los recibe: ${[...faltan].join(", ")}. Al confirmar se le entregan y entran a su piso; si se quedaron en bodega, quítalos antes de confirmar. Después de esto solo se puede anular.`
+          : `¿Confirmar la entrega de ${remision.Folio}?\n\nConfirmar es la entrega física: sus ${remision.CantidadMasters} master(s) entran al piso de ${lugar} y desde ese momento el área los puede trabajar. Confírmela cuando ya los tengan. Después de esto solo se puede anular.`)
       : `¿Confirmar la remisión ${remision.Folio}?\n\nSus ${remision.CantidadMasters} master(s) ya salieron de bodega al escanearse; confirmar cierra el documento. Después de esto solo se puede anular.`,
       { textoConfirmar }
     );
@@ -719,6 +726,19 @@ function PanelRemision({ remisionId, onClose, onCambio }) {
                     <div className="flex items-center justify-between mb-1">
                       <span className="text-xs font-semibold text-gray-500">
                         Polín <span className="font-mono text-gray-700">{g.PalletCodigo}</span> · {g.lineas.length} master(s)
+                        {/* En un borrador a un área: si el área ya recibió este polín en su pantalla. */}
+                        {borrador && aArea && (() => {
+                          const rec = g.lineas.filter(l => l.RecibidoEnArea);
+                          if (!rec.length) return <span className="ml-2 font-semibold px-1.5 py-0.5 rounded bg-amber-100 text-amber-800">aún en bodega</span>;
+                          const ultimo = rec.map(l => l.RecibidoEnArea).sort().slice(-1)[0];
+                          return (
+                            <span className="ml-2 font-semibold px-1.5 py-0.5 rounded bg-green-100 text-green-800"
+                              title="El área lo recibió en su pantalla antes de que confirmaras">
+                              {rec.length < g.lineas.length ? `recibido ${rec.length} de ${g.lineas.length}` : "recibido"}
+                              {" "}{ultimo ? ultimo.slice(11) : ""}{rec[0].RecibidoPorArea ? ` · ${rec[0].RecibidoPorArea}` : ""}
+                            </span>
+                          );
+                        })()}
                       </span>
                       {editable && (
                         <button onClick={() => handleQuitarPallet(g.PalletId, g.PalletCodigo)}

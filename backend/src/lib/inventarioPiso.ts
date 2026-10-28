@@ -1,11 +1,11 @@
 // Puente entre bodega y el inventario al piso.
 //
-// Cuando bodega CONFIRMA una remisión con destino a un área, el producto entra al piso del área:
-// confirmar es la entrega física (usuario, 28 oct 2026). Bodega ya lo rebajó al escanearlo, pero
-// mientras la remisión es borrador sigue físicamente en bodega, y el área lo ve en AL PISO como "aún
-// en bodega" sin poder trabajarlo (porEntregar y exigirEntregadas en routes/descongelado.ts). Ese
-// mismo día se probó que entrara al escanear y se descartó: el área veía producto que nunca le
-// llegó (el 31/35 de RS-0106).
+// El producto de una remisión con destino a un área entra al piso del área cuando LLEGA (usuario, 28
+// oct 2026): cuando el área recibe sus polines (de madrugada bodega no está) o cuando bodega confirma,
+// que es la entrega de todo lo demás. Bodega ya lo rebajó al escanearlo, pero mientras no llega sigue
+// físicamente en bodega, y el área lo ve en AL PISO como "aún en bodega" (porEntregar y
+// recibirPolines en routes/descongelado.ts). Ese mismo día se probó que entrara al escanear y se
+// descartó: el área veía producto que nunca le llegó (el 31/35 de RS-0106).
 // Automático, sin que nadie lo acepte en otra pantalla: una aceptación aparte dejaría el producto en
 // limbo entre las dos pantallas, despachado por bodega y no recibido por nadie, que es exactamente el
 // hueco que este módulo existe para cerrar.
@@ -27,6 +27,8 @@ export class PisoEnNegativo extends Error {}
 // Una fila por (remisión, lote, fecha del lote, clase, talla, peso del master). La fecha del lote
 // entra al agrupado a propósito: el mismo texto de lote puede traer dos fechas de producción
 // distintas —  G220EM00-E00 tiene 11 y 12 de mayo—  y colapsarlas perdería la diferencia.
+// Solo las líneas que YA LLEGARON al área: las de una remisión confirmada (confirmar es la entrega)
+// y, en un borrador, las que el área recibió polín por polín (RecibidoEn).
 const SQL_LINEAS = `
   SELECT oe.Lote,
          DATE_FORMAT(oe.FechaProduccion, '%Y-%m-%d') AS FechaLote,
@@ -35,12 +37,14 @@ const SQL_LINEAS = `
          ROUND(pre.PesoKG * pre.CajasXMaster, 3) AS KgPorMaster,
          ROUND(COUNT(*) * pre.PesoKG * pre.CajasXMaster, 2) AS Kg
   FROM RemisionDetalle rd
+  JOIN Remisiones r ON r.RemisionId = rd.RemisionId
   JOIN Masters m  ON m.MasterId = rd.MasterId
   JOIN EtiquetaImpresa e ON e.EtiquetaId = m.EtiquetaId
   JOIN OrdenEtiquetado oe ON oe.OrdenId = e.OrdenId
   JOIN DetallePedido dp ON dp.DetalleId = oe.DetalleId
   JOIN Presentacion pre ON pre.Codigo = dp.Presentacion
   WHERE rd.RemisionId = ? AND rd.Vigente = 1
+    AND (r.Estatus = 'Confirmada' OR rd.RecibidoEn IS NOT NULL)
   GROUP BY oe.Lote, oe.FechaProduccion, dp.Clase, dp.Talla, pre.PesoKG, pre.CajasXMaster
 `;
 
@@ -98,9 +102,9 @@ export async function registrarIngresoDesdeRemision(
 }
 
 /**
- * Deja el ingreso al piso de una remisión igual a lo que la remisión trae. Se llama al CONFIRMAR, que
- * es la entrega: normalmente no hay nada en el piso todavía y mete todo. Si ya había algo —  una
- * confirmada que se regresó a borrador a mano y se vuelve a confirmar—  lo iguala sin duplicar.
+ * Deja el ingreso al piso de una remisión igual a lo que de ella ya llegó al área (ver SQL_LINEAS).
+ * Se llama cuando el área RECIBE polines de un borrador y al CONFIRMAR, que es la entrega de todo
+ * lo demás. Lo que ya estaba en el piso —  lo recibido antes—  se iguala sin duplicar.
  *
  * Una fila de INGRESO por llave (bodega, lote, fecha del lote, clase, talla, peso del master), que se
  * ACTUALIZA en vez de sumarle filas: cada fila redondea sus kilos por su lado, y con varias por llave

@@ -8,12 +8,14 @@ import { fmtNum } from "../utils/numero.js";
 // polín en una confirmada, Quitar polín en un borrador—  para que salga del piso del área.
 export default function PisoDeRemision({ piso, borrador }) {
   if (!piso) return null;
-  // Un borrador no le ha entregado nada al área: entra a su piso al confirmar (28 oct 2026).
+  // A un borrador el área todavía no le ha recibido nada: lo ve "aún en bodega" hasta que lo reciba
+  // en su pantalla o se confirme la entrega (28 oct 2026).
   if (!piso.Lineas?.length) {
     return borrador ? (
       <p className="mb-4 px-3 py-2 rounded-lg border border-amber-200 bg-amber-50 text-xs text-amber-800">
-        {piso.NombreBodega} todavía no tiene nada de esta remisión: lo ve como <b>aún en bodega</b> y lo puede
-        trabajar cuando confirmes la entrega. Lo que no se lleven, quítalo antes de confirmar.
+        {piso.NombreBodega} todavía no tiene nada de esta remisión: lo ve como <b>aún en bodega</b>. Lo puede
+        recibir en su pantalla polín por polín, o entra a su piso cuando confirmes la entrega. Lo que no se
+        lleven, quítalo antes de confirmar.
       </p>
     ) : null;
   }

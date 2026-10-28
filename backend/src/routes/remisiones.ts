@@ -330,7 +330,8 @@ router.get("/:id", requireAuth, requirePerm("remisiones", "ver"), async (req: Re
     const remision = rows[0];
 
     const detalle: any[] = await prisma.$queryRawUnsafe(`
-      SELECT rd.DetalleId AS RemisionDetalleId, rd.LineaContenedor, rd.AgregadoPor, rd.AgregadoEn, sub2.*
+      SELECT rd.DetalleId AS RemisionDetalleId, rd.LineaContenedor, rd.AgregadoPor, rd.AgregadoEn,
+             DATE_FORMAT(rd.RecibidoEn, '%Y-%m-%d %H:%i') AS RecibidoEnArea, rd.RecibidoPor AS RecibidoPorArea, sub2.*
       FROM RemisionDetalle rd
       JOIN (${MASTER_SELECT}) sub2 ON rd.MasterId = sub2.MasterId
       WHERE rd.RemisionId = ? AND rd.Vigente = 1
@@ -347,6 +348,9 @@ router.get("/:id", requireAuth, requirePerm("remisiones", "ver"), async (req: Re
         ...m,
         RemisionDetalleId: Number(d.RemisionDetalleId),
         LineaContenedor: d.LineaContenedor == null ? null : Number(d.LineaContenedor),
+        // Quién la recibió en el área y cuándo, si el área la recibió antes de que bodega confirmara.
+        RecibidoEnArea: d.RecibidoEnArea ?? null,
+        RecibidoPorArea: d.RecibidoPorArea ?? null,
         CalzaConDestino: remision.CodigoCliente == null ? null : Number(remision.CodigoCliente) === m.CodigoCliente,
       };
     });
@@ -525,9 +529,9 @@ router.put("/:id", requireAuth, requirePerm("remisiones", "editar"), async (req:
 // Confirmada no se elimina: se anula (deja rastro en el kardex).
 export async function eliminarBorrador(tx: any, remisionId: number, operador: string) {
   const remision = await exigirBorrador(tx, remisionId);
-  const lineas: any[] = await tx.$queryRaw`SELECT MasterId FROM RemisionDetalle WHERE RemisionId = ${remisionId} FOR UPDATE`;
+  const lineas: any[] = await tx.$queryRaw`SELECT MasterId, RecibidoEn FROM RemisionDetalle WHERE RemisionId = ${remisionId} FOR UPDATE`;
   const masterIds = lineas.map(l => Number(l.MasterId));
-  await descontarPiso(tx, remisionId, remision, masterIds);
+  await descontarPiso(tx, remisionId, remision, lineas.filter(l => l.RecibidoEn != null).map(l => Number(l.MasterId)));
   await regresarABodega(tx, remisionId, masterIds, operador);
   await tx.$executeRaw`DELETE FROM RemisionDetalle WHERE RemisionId = ${remisionId}`;
   await tx.$executeRaw`DELETE FROM Remisiones WHERE RemisionId = ${remisionId}`;
@@ -629,12 +633,12 @@ function validarProforma(remision: { Folio: string; CodigoPedido: string | null;
 // confirme salida"). Antes un borrador olvidado dejaba sus masters contados en existencias, en el
 // avance del pedido y en su posición del rack, con el producto ya en el camión o en el área.
 //
-// El piso del área, en cambio, lo recibe AL CONFIRMAR: confirmar es la ENTREGA física (usuario, mismo
-// 28 oct). Se probó que entrara al escanear y se descartó ese día: el área veía producto que seguía
-// en bodega (RS-0106: el 31/35 nunca se lo llevaron) y, si lo trabajaba, bodega ya no podía quitarlo
-// del borrador sin chocar. Mientras es borrador, el área lo ve en AL PISO como "aún en bodega" y no lo
-// puede trabajar (exigirEntregadas en descongelado.ts). Confirmada, ya no se le agregan ni quitan
-// líneas y empieza a correr el plazo para anular.
+// El piso del área, en cambio, lo recibe cuando LLEGA: confirmar es la ENTREGA física (usuario, mismo
+// 28 oct), y como de madrugada bodega no está, el área también puede RECIBIR polín por polín lo que
+// le dejaron (recibirPolines en descongelado.ts, RemisionDetalle.RecibidoEn). Se probó que entrara
+// al escanear y se descartó ese día: el área veía producto que seguía en bodega (RS-0106: el 31/35
+// nunca se lo llevaron). Lo no recibido el área lo ve "aún en bodega" y no lo puede trabajar.
+// Confirmada, ya no se le agregan ni quitan líneas y empieza a correr el plazo para anular.
 
 type RemisionDestino = { RemisionId: number; BodegaDestino?: string | null; AreaDestino?: string | null };
 
@@ -906,24 +910,25 @@ router.post("/:id/agregar-master", requireAuth, requirePerm("remisiones", "edita
 });
 
 // Quita líneas del borrador —  una suelta (detalleId) o todas las de un polín (palletId)—  y lo que
-// habían sacado vuelve a bodega. Como el área no recibe nada hasta que se confirma, no hay con qué
-// chocar. Devuelve cuántas quitó.
+// habían sacado vuelve a bodega. Si el área ya había recibido alguno de esos polines, sale también
+// de su piso, y se niega si ya lo trabajó. Devuelve cuántas quitó.
 export async function quitarLineas(
   tx: any, remisionId: number, filtro: { detalleId?: number; palletId?: number }, operador: string,
 ): Promise<number> {
   const remision = await exigirBorrador(tx, remisionId);
   const lineas: any[] = filtro.detalleId != null
     ? await tx.$queryRaw`
-        SELECT DetalleId, MasterId FROM RemisionDetalle
+        SELECT DetalleId, MasterId, RecibidoEn FROM RemisionDetalle
         WHERE DetalleId = ${filtro.detalleId} AND RemisionId = ${remisionId} FOR UPDATE`
     : await tx.$queryRaw`
-        SELECT rd.DetalleId, rd.MasterId FROM RemisionDetalle rd
+        SELECT rd.DetalleId, rd.MasterId, rd.RecibidoEn FROM RemisionDetalle rd
         JOIN Masters m ON rd.MasterId = m.MasterId
         WHERE rd.RemisionId = ${remisionId} AND m.PalletId = ${filtro.palletId ?? 0} FOR UPDATE`;
   if (!lineas.length) return 0;
 
+  // Del piso del área solo sale lo que el área ya RECIBIÓ: lo demás nunca le llegó.
   const masterIds = lineas.map(l => Number(l.MasterId));
-  await descontarPiso(tx, remisionId, remision, masterIds);
+  await descontarPiso(tx, remisionId, remision, lineas.filter(l => l.RecibidoEn != null).map(l => Number(l.MasterId)));
   await regresarABodega(tx, remisionId, masterIds, operador);
   const detalles = lineas.map(l => Number(l.DetalleId));
   await tx.$executeRawUnsafe(
@@ -973,8 +978,8 @@ router.post("/:id/quitar-pallet", requireAuth, requirePerm("remisiones", "editar
 // POST /api/remisiones/:id/confirmar
 // Es la ENTREGA. Bodega ya se rebajó al escanear; aquí se revalida la proforma, se marca Confirmada
 // —  desde ahí corre el plazo para anular—, el borrador deja de aceptar cambios y, si va a un área,
-// el producto entra a su piso: desde ese momento el área lo puede trabajar. La jornada del ingreso
-// es el día de la confirmación, que es cuando el área lo recibe de verdad.
+// lo que el área todavía no había recibido entra a su piso: desde ese momento lo puede trabajar. Lo
+// que ya recibió polín por polín no se duplica. La jornada del ingreso es el día de la confirmación.
 // Los borradores armados ANTES del 28 oct 2026 todavía traen líneas en bodega: esas salen aquí, como
 // salían siempre.
 export async function confirmarRemision(tx: any, remisionId: number, operador: string) {
