@@ -795,7 +795,12 @@ function PorEntregar({ filas, puedeRecibir, puedeDeshacer, onRecibir, onDeshacer
               )}
             </div>
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+              {/* Ancho fijo para que las columnas de una remisión calcen con las de la siguiente. */}
+              <table className="w-full text-sm table-fixed min-w-[760px]">
+                <colgroup>
+                  <col className="w-10" /><col className="w-20" /><col className="w-32" /><col />
+                  <col className="w-20" /><col className="w-16" /><col className="w-24" /><col className="w-72" />
+                </colgroup>
                 <tbody className="divide-y divide-gray-100">
                   {rem.polines.map(p => {
                     const marcado = !!marcados[clave(rem, p)];
@@ -807,21 +812,24 @@ function PorEntregar({ filas, puedeRecibir, puedeDeshacer, onRecibir, onDeshacer
                             <input type="checkbox" checked={marcado} onChange={() => alternar(rem, p)} className="w-4 h-4 cursor-pointer" />
                           )}
                         </td>
-                        <td className="px-3 py-1.5 font-mono text-xs font-bold text-gray-800 whitespace-nowrap cursor-pointer"
+                        <td className="px-3 py-1.5 font-mono text-xs font-bold text-gray-800 truncate cursor-pointer"
                           onClick={() => !p.Recibido && puedeRecibir && alternar(rem, p)}>
                           {i === 0 ? p.Codigo : ""}
                         </td>
-                        <td className="px-3 py-1.5 font-mono text-xs">{l.Lote}</td>
-                        <td className="px-3 py-1.5 text-xs"><span className="font-mono text-gray-500">{l.Clase}</span> {l.DescripcionClase}</td>
+                        <td className="px-3 py-1.5 font-mono text-xs truncate" title={l.Lote}>{l.Lote}</td>
+                        <td className="px-3 py-1.5 text-xs truncate" title={`${l.Clase} ${l.DescripcionClase}`}><span className="font-mono text-gray-500">{l.Clase}</span> {l.DescripcionClase}</td>
                         <td className="px-3 py-1.5 text-xs">{l.DescripcionTalla}</td>
                         <td className="px-3 py-1.5 text-right tabular-nums font-semibold">{l.Masters}</td>
                         <td className="px-3 py-1.5 text-right tabular-nums">{fmtNum(l.Kg)}</td>
-                        <td className="px-3 py-1.5 text-xs whitespace-nowrap">
+                        <td className="px-3 py-1.5 text-xs">
                           {i === 0 && (p.Recibido ? (
-                            <span className="text-green-700">
-                              recibido {p.RecibidoEn ? p.RecibidoEn.slice(11) : ""}{p.RecibidoPor ? ` · ${p.RecibidoPor}` : ""}
+                            // El enlace no se recorta aunque el nombre de quien recibió sea largo.
+                            <span className="flex items-center gap-2 min-w-0 text-green-700">
+                              <span className="truncate" title={p.RecibidoPor || ""}>
+                                recibido {p.RecibidoEn ? p.RecibidoEn.slice(11) : ""}{p.RecibidoPor ? ` · ${p.RecibidoPor}` : ""}
+                              </span>
                               {puedeDeshacer && (
-                                <button onClick={() => onDeshacer(rem, p)} className="ml-2 text-gray-400 hover:text-red-600 underline"
+                                <button onClick={() => onDeshacer(rem, p)} className="shrink-0 text-gray-400 hover:text-red-600 underline"
                                   title="Se marcó por error: vuelve a 'aún en bodega' y sale del piso">
                                   deshacer
                                 </button>
