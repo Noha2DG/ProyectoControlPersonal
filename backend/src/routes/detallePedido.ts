@@ -316,18 +316,15 @@ router.delete("/:id", requireAuth, requirePerm("pedidos", "eliminar"), async (re
 
 // GET /api/detalle-pedido/avance?pedido=2026-016
 //
-// Lo que hay escaneado DENTRO de bodega contra lo que pide la proforma, por línea y en master
-// (decisión del usuario, 28 oct 2026). Lo agrupado no entra: es intención, no producto. Lo que ya
-// salió tampoco —ni despachos ni traslados a reempaque/reetiquetado/reproceso—: 56 master de
-// 020-2026 mandados a reetiquetar se veían como avance del pedido sin estar en bodega.
+// Por línea y en master: lo que pide la proforma, lo que sigue en bodega y lo DESPACHADO al cliente
+// (solo remisiones de una serie con Destino 'Cliente'). Desde el 28 oct 2026 la pestaña Avance de
+// Pedidos ya no lo usa —pinta GET /cuadre, que trae kg y master en la misma vista—; lo consume el
+// aviso de PanelRemision, que compara lo que va saliendo contra el objetivo.
 //
-// Es MEDICIÓN, no candado: Diferencia > 0 se muestra en ámbar y nada se bloquea. El techo del
-// escaneo (calcularTechoLinea) sigue contando lo despachado al cliente, a propósito: si contara solo
-// lo que está en bodega, cada contenedor despachado reabriría el cupo de la línea. Lo que salió en
-// traslado interno sí libera cupo (ver SALIO_EN_TRASLADO en lib/masters.ts).
-//
-// Despachado (solo remisiones a Cliente) no se pinta aquí: lo consume el aviso de PanelRemision,
-// que compara lo que va saliendo contra el objetivo.
+// Es MEDICIÓN, no candado: nada se bloquea aquí. El techo del escaneo (calcularTechoLinea) sigue
+// contando lo despachado al cliente, a propósito: si contara solo lo que está en bodega, cada
+// contenedor despachado reabriría el cupo de la línea. Lo que salió en traslado interno sí libera
+// cupo (ver SALIO_EN_TRASLADO en lib/masters.ts).
 router.get("/avance", requireAuth, requireAnyPerm([["pedidos", "ver"], ["etiquetado", "ver"], ["remisiones", "ver"]]), async (req: Request, res: Response) => {
   try {
     const pedido = req.query.pedido as string | undefined;
@@ -491,11 +488,14 @@ router.post("/granel", requireAuth, requirePerm("etiquetado", "crear"), async (r
   }
 });
 
-// GET /api/detalle-pedido/cuadre?pedido=016-2026 — kg en bodega contra kg pedidos, por presentación.
+// GET /api/detalle-pedido/cuadre?pedido=016-2026 — la pestaña Avance de Pedidos: kg en bodega contra
+// kg pedidos, por presentación, y los master que faltan por línea.
 //
-// Igual que el avance, solo cuenta lo escaneado que sigue DENTRO de bodega: ni lo agrupado ni lo que
-// ya salió (despachos y traslados). Lo que agrega es el peso: en kg sí se pueden sumar líneas de
-// distinta presentación, y con eso sale el % de avance de todo el pedido.
+// Solo cuenta lo escaneado que sigue DENTRO de bodega: ni lo agrupado ni lo que ya salió (despachos
+// y traslados) — decisión del usuario, 28 oct 2026. En kg se pueden sumar líneas de distinta
+// presentación, y con eso sale el % de avance de todo el pedido; los master faltantes dicen cuánto
+// hay que producir todavía en la unidad con que se trabaja en planta. El 28 oct se juntaron aquí
+// las pestañas Avance (master) y Cuadre (kg), a pedido del usuario.
 //
 // Una fila por (Proceso, Talla, Presentación), que es la llave UNIQUE de DetallePedido: cada fila
 // es una línea de la proforma. Hasta el 28 oct 2026 se agrupaba solo por (Proceso, Talla) para sumar
@@ -516,6 +516,8 @@ router.get("/cuadre", requireAuth, requireAnyPerm([["pedidos", "ver"], ["etiquet
     // project_rendimiento_consultas_destajo).
     const filas: any[] = await prisma.$queryRaw`
       SELECT dp.DetalleId, dp.Proceso, dp.Clase, dp.Talla, dp.Presentacion, dp.EsGranel, dp.KgPedido,
+             dp.CantidadCajas, pr.CajasXMaster,
+             COALESCE(f.enBodega, 0) AS EnBodegaMaster,
              COALESCE(f.enBodega, 0) * pr.PesoKG * pr.CajasXMaster AS EnBodegaKg
       FROM DetallePedido dp
       JOIN Presentacion pr ON pr.Codigo = dp.Presentacion
@@ -539,6 +541,10 @@ router.get("/cuadre", requireAuth, requireAnyPerm([["pedidos", "ver"], ["etiquet
       // peso de una caja — un número sin significado. Una línea de granel no está en la proforma.
       const objetivo = esGeneral || Number(r.EsGranel) === 1 ? null : r3(r.KgPedido);
       const enBodega = r3(r.EnBodegaKg);
+      // En master el pedido es el mismo objetivo que topa el escaneo (cajas ÷ cajas por master,
+      // redondeado hacia arriba). Lo que sobra no resta: una línea pasada no tapa lo que le falta a otra.
+      const objetivoMaster = objetivoDeLinea({ ...r, EsGeneral: esGeneral ? 1 : 0 });
+      const enBodegaMaster = Number(r.EnBodegaMaster);
       return {
         DetalleId: Number(r.DetalleId),
         Proceso: Number(r.Proceso),
@@ -549,6 +555,9 @@ router.get("/cuadre", requireAuth, requireAnyPerm([["pedidos", "ver"], ["etiquet
         ObjetivoKg: objetivo,
         EnBodegaKg: enBodega,
         DiferenciaKg: objetivo === null ? null : r3(enBodega - objetivo),
+        ObjetivoMaster: objetivoMaster,
+        EnBodegaMaster: enBodegaMaster,
+        FaltanMaster: objetivoMaster === null ? null : Math.max(0, objetivoMaster - enBodegaMaster),
       };
     }));
   } catch (err: any) {

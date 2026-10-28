@@ -7,6 +7,10 @@ import { useColWidths, useOrden, ordenarFilas, Th, Colgroup } from "../component
 // planta, no el del navegador.
 const hoy = () => new Date().toLocaleDateString("sv-SE", { timeZone: "America/Guatemala" });
 
+// Desde aquí la línea está por completarse y el resumen lo avisa en verde (mismo 85 % que la pestaña
+// Avance de Pedidos).
+const AVISO_AVANCE = 0.85;
+
 const COL_DEFAULTS = { fecha: 100, lote: 140, area: 100, origen: 110, congelacion: 120, masters: 90, impresion: 140, acciones: 130 };
 const COLS = Object.keys(COL_DEFAULTS);
 
@@ -21,6 +25,7 @@ export default function EtiquetadoPage() {
   const puedeEditar = usePuede("etiquetado", "editar");
   const puedeEliminar = usePuede("etiquetado", "eliminar");
   const [pedidos, setPedidos] = useState([]);
+  const [busquedaPedido, setBusquedaPedido] = useState("");
   const [busquedaLinea, setBusquedaLinea] = useState("");
   const [pedidoSel, setPedidoSel] = useState(null);
   const [detalles, setDetalles] = useState([]);
@@ -195,7 +200,10 @@ export default function EtiquetadoPage() {
     ? componerCodigoLote(piscinaSel.Nombre, form.FechaProduccion, requiereCiclo ? form.Ciclo : "")
     : null;
 
-  const pedidosFiltrados = pedidos.filter(p => p.Estatus === "Proceso");
+  // Por número o por nombre: el operador busca el pedido por cliente, y la lista ya pasa de 20.
+  const qPedido = busquedaPedido.trim().toLowerCase();
+  const pedidosFiltrados = pedidos.filter(p => p.Estatus === "Proceso" && (!qPedido ||
+    String(p.CodigoPedido).toLowerCase().includes(qPedido) || String(p.Descripcion ?? "").toLowerCase().includes(qPedido)));
 
   // Un pedido general de tienda trae decenas de líneas (1205070 pasó de 2 a 18 en un día), y en esta
   // pantalla se busca UNA para capturar. Se filtra por lo mismo que se ve en la fila —proceso, talla
@@ -214,7 +222,13 @@ export default function EtiquetadoPage() {
       {/* Columna 1: Pedidos */}
       <div className="w-full lg:w-64 shrink-0">
         <h3 className="text-sm font-medium text-gray-600 mb-3">Pedidos</h3>
-        <div className="bg-white rounded-xl shadow overflow-y-auto max-h-[70vh]">
+        {/* El buscador va dentro de la tarjeta y fuera del área que hace scroll, igual que el de líneas. */}
+        <div className="bg-white rounded-xl shadow max-h-[70vh] flex flex-col">
+          <div className="p-2 border-b border-gray-100 shrink-0">
+            <input type="text" placeholder="Buscar pedido o cliente…" value={busquedaPedido} onChange={e => setBusquedaPedido(e.target.value)}
+              className="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
+          </div>
+          <div className="overflow-y-auto">
           {pedidosFiltrados.map(p => (
             <button key={p.CodigoPedido} onClick={() => seleccionarPedido(p)}
               className={`w-full text-left px-3 py-2.5 border-b border-gray-100 transition ${pedidoSel?.CodigoPedido === p.CodigoPedido ? "bg-blue-50" : "hover:bg-gray-50"}`}>
@@ -232,7 +246,12 @@ export default function EtiquetadoPage() {
               </div>
             </button>
           ))}
-          {pedidosFiltrados.length === 0 && <div className="px-3 py-8 text-center text-gray-400 text-sm">Sin pedidos</div>}
+          {pedidosFiltrados.length === 0 && (
+            <div className="px-3 py-8 text-center text-gray-400 text-sm">
+              {qPedido ? `Ningún pedido coincide con “${busquedaPedido}”` : "Sin pedidos"}
+            </div>
+          )}
+          </div>
         </div>
       </div>
 
@@ -305,16 +324,30 @@ export default function EtiquetadoPage() {
                 // cambios (ver calcularResumen en ordenEtiquetado.ts), esto es solo visualización.
                 const pendienteEscaneado = resumen.Objetivo - resumen.EnBodega;
                 const pct = resumen.EnBodega / Math.max(1, resumen.Objetivo);
-                const colorBarra = pct >= 1 ? "bg-green-500" : pct >= 0.5 ? "bg-yellow-400" : "bg-red-500";
+                // Desde el 85 % la barra va en verde con el aviso de que la línea está por completarse,
+                // el mismo umbral que la pestaña Avance de Pedidos (UMBRAL_AVISO_AVANCE).
+                const aviso = pct >= AVISO_AVANCE;
+                const colorBarra = aviso ? "bg-green-500" : pct >= 0.5 ? "bg-yellow-400" : "bg-red-500";
+                const pctTexto = (pct * 100).toLocaleString("es-GT", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
                 return (
-                  <div className="flex items-center gap-4 text-sm">
-                    <span><span className="font-semibold text-gray-800">{resumen.Objetivo}</span> <span className="text-gray-400">pedido</span></span>
-                    <span title="Master escaneados que siguen en bodega; lo que ya salió no cuenta"><span className="font-semibold text-blue-700">{resumen.EnBodega}</span> <span className="text-gray-400">en bodega</span></span>
-                    <span><span className={`font-semibold ${pendienteEscaneado <= 0 ? "text-green-600" : "text-orange-600"}`}>{pendienteEscaneado}</span> <span className="text-gray-400">pendientes</span></span>
-                    <div className="flex-1 h-2 bg-gray-100 rounded-full overflow-hidden">
-                      <div className={`h-full transition-colors ${colorBarra}`} style={{ width: `${Math.min(100, pct * 100)}%` }} />
+                  <>
+                    <div className="flex items-center gap-4 text-sm">
+                      <span><span className="font-semibold text-gray-800">{resumen.Objetivo}</span> <span className="text-gray-400">pedido</span></span>
+                      <span title="Master escaneados que siguen en bodega; lo que ya salió no cuenta"><span className="font-semibold text-blue-700">{resumen.EnBodega}</span> <span className="text-gray-400">en bodega</span></span>
+                      <span><span className={`font-semibold ${pendienteEscaneado <= 0 ? "text-green-600" : "text-orange-600"}`}>{pendienteEscaneado}</span> <span className="text-gray-400">pendientes</span></span>
+                      <div className="flex-1 h-2 bg-gray-100 rounded-full overflow-hidden">
+                        <div className={`h-full transition-colors ${colorBarra}`} style={{ width: `${Math.min(100, pct * 100)}%` }} />
+                      </div>
+                      <span className={`font-bold tabular-nums ${aviso ? "text-green-700" : "text-gray-700"}`}>{pctTexto} %</span>
                     </div>
-                  </div>
+                    {aviso && (
+                      <div className="mt-3 rounded-lg bg-green-100 border border-green-300 px-3 py-2 text-sm font-semibold text-green-800">
+                        {pendienteEscaneado <= 0
+                          ? "Esta línea ya está completa en bodega."
+                          : `Esta línea ya lleva el ${pctTexto} %: está por llegar a su totalidad. Faltan ${pendienteEscaneado} master.`}
+                      </div>
+                    )}
+                  </>
                 );
               })()}
             </div>
