@@ -23,6 +23,7 @@ import AvisoModal from "../components/AvisoModal.jsx";
 import EmpleadoAutocomplete from "../components/EmpleadoAutocomplete.jsx";
 import HojaDescongeladoModal, { origenDe } from "../components/HojaDescongeladoModal.jsx";
 import ReporteDescongeladoModal from "../components/ReporteDescongeladoModal.jsx";
+import InventarioDescongeladoModal from "../components/InventarioDescongeladoModal.jsx";
 
 const API = "/api/descongelado";
 
@@ -690,7 +691,7 @@ const claveDeLinea = r => `${r.RemisionId ?? "-"}|${r.Lote}|${r.Clase}|${r.Talla
 
 // `onAbrirHoja` llega solo cuando no hay hoja abierta y el usuario puede abrirla: en ese caso no se
 // marca nada (puedeCrear viene en false) y la barra pide abrir la hoja primero.
-function InventarioPiso({ saldo, resumen, puedeCrear, marcadas, setMarcadas, onDescongelar, onDevolver, onAbrirHoja }) {
+function InventarioPiso({ saldo, resumen, puedeCrear, marcadas, setMarcadas, onDescongelar, onDevolver, onAbrirHoja, onImprimir }) {
   const [abierto, setAbierto] = useState(true);
   const totalKg = saldo.reduce((s, r) => s + r.Kg, 0);
   const totalM  = saldo.reduce((s, r) => s + (r.Masters || 0), 0);
@@ -752,6 +753,12 @@ function InventarioPiso({ saldo, resumen, puedeCrear, marcadas, setMarcadas, onD
             {fmtNum(totalKg)} kg {totalM > 0 && <span className="font-normal text-gray-500">· {totalM} masters</span>}
           </span>
         </span>
+        {saldo.length > 0 && (
+          <button onClick={onImprimir} title="Imprimir o guardar como PDF lo que está al piso, para contarlo"
+            className="border border-blue-300 text-blue-700 bg-white rounded px-3 py-1 text-xs font-semibold hover:bg-blue-50">
+            Imprimir
+          </button>
+        )}
       </header>
 
       {abierto && onAbrirHoja && saldo.length > 0 && (
@@ -799,14 +806,15 @@ function InventarioPiso({ saldo, resumen, puedeCrear, marcadas, setMarcadas, onD
                 <th className="px-3 py-2 text-left font-semibold">Talla</th>
                 <th className="px-3 py-2 text-left font-semibold">Entró</th>
                 <th className="px-3 py-2 text-right font-semibold">Días</th>
-                <th className="px-3 py-2 text-right font-semibold">Al piso</th>
+                <th className="px-3 py-2 text-right font-semibold">Masters</th>
+                <th className="px-3 py-2 text-right font-semibold">Kg</th>
                 {puedeCrear && <th className="px-3 py-2 text-right font-semibold">Bajar</th>}
                 <th className="px-3 py-2 w-24"></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
               {saldo.length === 0 ? (
-                <tr><td colSpan={9} className="px-4 py-8 text-center text-gray-400 text-xs">
+                <tr><td colSpan={10} className="px-4 py-8 text-center text-gray-400 text-xs">
                   Nada al piso. El producto aparece aquí cuando bodega confirma una remisión al área.</td></tr>
               ) : grupos.map(g => {
                 const todas = g.lineas.every(r => marcadas[claveDeLinea(r)] != null);
@@ -826,9 +834,8 @@ function InventarioPiso({ saldo, resumen, puedeCrear, marcadas, setMarcadas, onD
                         {g.ConfirmadaEn && <span className="font-normal text-blue-600 ml-2">confirmada {g.ConfirmadaEn}</span>}
                         <span className="font-normal text-blue-600 ml-2">· {g.lineas.length} línea{g.lineas.length !== 1 ? "s" : ""}</span>
                       </td>
-                      <td className="px-3 py-1.5 text-right tabular-nums text-xs font-bold text-blue-900 whitespace-nowrap">
-                        {g.Masters ? `${g.Masters} m · ` : ""}{fmtNum(g.Kg)}
-                      </td>
+                      <td className="px-3 py-1.5 text-right tabular-nums text-xs font-bold text-blue-900">{g.Masters || ""}</td>
+                      <td className="px-3 py-1.5 text-right tabular-nums text-xs font-bold text-blue-900">{fmtNum(g.Kg)}</td>
                       {puedeCrear && <td></td>}
                       <td className="px-3 py-1.5 text-center whitespace-nowrap">
                         {/* Devolver va SOLO a nivel de remisión: se rastrea por las cajas que ella
@@ -862,9 +869,8 @@ function InventarioPiso({ saldo, resumen, puedeCrear, marcadas, setMarcadas, onD
                           <td className={`px-3 py-1.5 text-right tabular-nums text-xs ${r.DiasAlPiso > 2 ? "text-amber-600 font-bold" : "text-gray-500"}`}>
                             {r.DiasAlPiso ?? "—"}
                           </td>
-                          <td className="px-3 py-1.5 text-right tabular-nums whitespace-nowrap">
-                            {conMasters(r) ? <>{r.Masters} m · </> : ""}<span className="font-semibold">{fmtNum(r.Kg)}</span>
-                          </td>
+                          <td className="px-3 py-1.5 text-right tabular-nums font-semibold">{conMasters(r) ? r.Masters : ""}</td>
+                          <td className="px-3 py-1.5 text-right tabular-nums">{fmtNum(r.Kg)}</td>
                           {puedeCrear && (
                             <td className="px-3 py-1.5 text-right">
                               {marcada && (
@@ -1179,6 +1185,7 @@ export default function DescongeladoPage() {
   const [cierre, setCierre] = useState(false);   // modal de cerrar la hoja
   const [imprimir, setImprimir] = useState(false); // vista previa de la hoja para imprimir / PDF
   const [reporte, setReporte] = useState(false);   // reporte de la jornada completa
+  const [imprimirPiso, setImprimirPiso] = useState(false); // inventario al piso para imprimir / PDF
   const [inicioSug, setInicioSug] = useState(null);   // { Hora, Motivo } del turno que sigue
   const [abriendoHoja, setAbriendoHoja] = useState(false);   // modal de abrir la hoja del turno
 
@@ -1383,6 +1390,7 @@ export default function DescongeladoPage() {
           onConfirmar={confirmarDescongelar} onCerrar={() => setModal(null)} />
       )}
       {reporte && <ReporteDescongeladoModal fecha={fecha} onCerrar={() => setReporte(false)} />}
+      {imprimirPiso && <InventarioDescongeladoModal fecha={fecha} saldo={saldo} onCerrar={() => setImprimirPiso(false)} />}
       {imprimir && sel && (
         <HojaDescongeladoModal hoja={sel} filas={filasDeHoja(sel)} onCerrar={() => setImprimir(false)} />
       )}
@@ -1432,7 +1440,8 @@ export default function DescongeladoPage() {
         marcadas={marcadas} setMarcadas={setMarcadas}
         onDescongelar={(seleccion) => setModal({ seleccion })}
         onDevolver={abrirDevolver}
-        onAbrirHoja={puedeCrear && !hojaAbierta ? () => setAbriendoHoja(true) : null} />
+        onAbrirHoja={puedeCrear && !hojaAbierta ? () => setAbriendoHoja(true) : null}
+        onImprimir={() => setImprimirPiso(true)} />
 
       {/* Con más de una hoja (OROPSA y maquila no se mezclan) hay que escoger cuál se ve. Con una
           sola no se dibuja nada: ya está abierta abajo. */}
