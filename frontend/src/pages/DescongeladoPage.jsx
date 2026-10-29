@@ -801,28 +801,51 @@ function PorEntregar({ filas, puedeRecibir, puedeDeshacer, onRecibir, onDeshacer
                   <col className="w-10" /><col className="w-20" /><col className="w-32" /><col />
                   <col className="w-20" /><col className="w-16" /><col className="w-24" /><col className="w-72" />
                 </colgroup>
-                <tbody className="divide-y divide-gray-100">
+                <thead className="bg-gray-50 text-[11px] text-gray-500 uppercase">
+                  <tr>
+                    <th className="px-3 py-1.5"></th>
+                    <th className="px-3 py-1.5 text-left font-semibold">Polín</th>
+                    <th className="px-3 py-1.5 text-left font-semibold">Lote</th>
+                    <th className="px-3 py-1.5 text-left font-semibold">Producto</th>
+                    <th className="px-3 py-1.5 text-left font-semibold">Talla</th>
+                    <th className="px-3 py-1.5 text-right font-semibold">Masters</th>
+                    <th className="px-3 py-1.5 text-right font-semibold">Kg</th>
+                    <th className="px-3 py-1.5 text-left font-semibold">Estado</th>
+                  </tr>
+                </thead>
+                <tbody>
                   {rem.polines.map(p => {
                     const marcado = !!marcados[clave(rem, p)];
+                    // Un polín puede traer varios lotes (B0307 trae dos): la casilla, el código y el
+                    // estado abarcan todas sus líneas, porque se recibe el polín entero, no una línea.
+                    const n = p.lineas.length;
+                    const puede = !p.Recibido && puedeRecibir;
                     return p.lineas.map((l, i) => (
                       <tr key={`${p.PalletId}-${p.Recibido}-${i}`}
-                        className={p.Recibido ? "bg-green-50/40" : marcado ? "bg-green-50" : "hover:bg-gray-50"}>
-                        <td className="px-3 py-1.5 w-8">
-                          {i === 0 && !p.Recibido && puedeRecibir && (
-                            <input type="checkbox" checked={marcado} onChange={() => alternar(rem, p)} className="w-4 h-4 cursor-pointer" />
-                          )}
-                        </td>
-                        <td className="px-3 py-1.5 font-mono text-xs font-bold text-gray-800 truncate cursor-pointer"
-                          onClick={() => !p.Recibido && puedeRecibir && alternar(rem, p)}>
-                          {i === 0 ? p.Codigo : ""}
-                        </td>
+                        onClick={() => puede && alternar(rem, p)}
+                        className={`${i === 0 ? "border-t border-gray-200" : ""} ${puede ? "cursor-pointer" : ""}
+                          ${p.Recibido ? "bg-green-50/40" : marcado ? "bg-green-50" : "hover:bg-gray-50"}`}>
+                        {i === 0 && (
+                          <td rowSpan={n} className="px-3 py-1.5 align-top">
+                            {puede && (
+                              <input type="checkbox" checked={marcado} onChange={() => alternar(rem, p)}
+                                onClick={e => e.stopPropagation()} className="w-4 h-4 cursor-pointer" />
+                            )}
+                          </td>
+                        )}
+                        {i === 0 && (
+                          <td rowSpan={n} className="px-3 py-1.5 align-top font-mono text-xs font-bold text-gray-800 truncate" title={p.Codigo}>
+                            {p.Codigo}
+                            {n > 1 && <span className="block font-sans font-normal text-[11px] text-gray-400">{n} lotes · {p.Masters} m</span>}
+                          </td>
+                        )}
                         <td className="px-3 py-1.5 font-mono text-xs truncate" title={l.Lote}>{l.Lote}</td>
                         <td className="px-3 py-1.5 text-xs truncate" title={`${l.Clase} ${l.DescripcionClase}`}><span className="font-mono text-gray-500">{l.Clase}</span> {l.DescripcionClase}</td>
                         <td className="px-3 py-1.5 text-xs">{l.DescripcionTalla}</td>
                         <td className="px-3 py-1.5 text-right tabular-nums font-semibold">{l.Masters}</td>
                         <td className="px-3 py-1.5 text-right tabular-nums">{fmtNum(l.Kg)}</td>
-                        <td className="px-3 py-1.5 text-xs">
-                          {i === 0 && (p.Recibido ? (
+                        {i === 0 && <td rowSpan={n} className="px-3 py-1.5 align-top text-xs" onClick={e => e.stopPropagation()}>
+                          {(p.Recibido ? (
                             // El enlace no se recorta aunque el nombre de quien recibió sea largo.
                             <span className="flex items-center gap-2 min-w-0 text-green-700">
                               <span className="truncate" title={p.RecibidoPor || ""}>
@@ -836,7 +859,7 @@ function PorEntregar({ filas, puedeRecibir, puedeDeshacer, onRecibir, onDeshacer
                               )}
                             </span>
                           ) : <span className="text-amber-700">aún en bodega</span>)}
-                        </td>
+                        </td>}
                       </tr>
                     ));
                   })}
