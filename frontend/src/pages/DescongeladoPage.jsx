@@ -795,13 +795,15 @@ function PorEntregar({ filas, puedeRecibir, puedeDeshacer, onRecibir, onDeshacer
               )}
             </div>
             <div className="overflow-x-auto">
-              {/* Ancho fijo para que las columnas de una remisión calcen con las de la siguiente. */}
+              {/* Ancho fijo para que las columnas de una remisión calcen con las de la siguiente. El
+                  ancho mínimo deja lugar a Producto (la única columna libre): con menos, en la tablet
+                  se quedaba en cero y su título salía letra por letra. Más angosto, se desliza. */}
               <table className="w-full text-sm table-fixed min-w-[760px]">
                 <colgroup>
                   <col className="w-10" /><col className="w-20" /><col className="w-32" /><col />
-                  <col className="w-20" /><col className="w-16" /><col className="w-24" /><col className="w-72" />
+                  <col className="w-20" /><col className="w-20" /><col className="w-20" /><col className="w-36" />
                 </colgroup>
-                <thead className="bg-gray-50 text-[11px] text-gray-500 uppercase">
+                <thead className="bg-gray-50 text-[11px] text-gray-500 uppercase whitespace-nowrap">
                   <tr>
                     <th className="px-3 py-1.5"></th>
                     <th className="px-3 py-1.5 text-left font-semibold">Polín</th>
@@ -839,24 +841,24 @@ function PorEntregar({ filas, puedeRecibir, puedeDeshacer, onRecibir, onDeshacer
                             {n > 1 && <span className="block font-sans font-normal text-[11px] text-gray-400">{n} lotes · {p.Masters} m</span>}
                           </td>
                         )}
-                        <td className="px-3 py-1.5 font-mono text-xs truncate" title={l.Lote}>{l.Lote}</td>
-                        <td className="px-3 py-1.5 text-xs truncate" title={`${l.Clase} ${l.DescripcionClase}`}><span className="font-mono text-gray-500">{l.Clase}</span> {l.DescripcionClase}</td>
-                        <td className="px-3 py-1.5 text-xs">{l.DescripcionTalla}</td>
-                        <td className="px-3 py-1.5 text-right tabular-nums font-semibold">{l.Masters}</td>
-                        <td className="px-3 py-1.5 text-right tabular-nums">{fmtNum(l.Kg)}</td>
+                        {/* Lote y producto pasan a otra línea en vez de recortarse: en la tablet no caben. */}
+                        <td className="px-3 py-1.5 align-top font-mono text-xs break-all">{l.Lote}</td>
+                        <td className="px-3 py-1.5 align-top text-xs break-words"><span className="font-mono text-gray-500">{l.Clase}</span> {l.DescripcionClase}</td>
+                        <td className="px-3 py-1.5 align-top text-xs">{l.DescripcionTalla}</td>
+                        <td className="px-3 py-1.5 align-top text-right tabular-nums font-semibold">{l.Masters}</td>
+                        <td className="px-3 py-1.5 align-top text-right tabular-nums">{fmtNum(l.Kg)}</td>
                         {i === 0 && <td rowSpan={n} className="px-3 py-1.5 align-top text-xs" onClick={e => e.stopPropagation()}>
                           {(p.Recibido ? (
                             // El enlace no se recorta aunque el nombre de quien recibió sea largo.
-                            <span className="flex items-center gap-2 min-w-0 text-green-700">
-                              <span className="truncate" title={p.RecibidoPor || ""}>
-                                recibido {p.RecibidoEn ? p.RecibidoEn.slice(11) : ""}{p.RecibidoPor ? ` · ${p.RecibidoPor}` : ""}
-                              </span>
+                            <span className="flex flex-wrap items-center gap-x-2 min-w-0 text-green-700">
+                              <span className="whitespace-nowrap">recibido {p.RecibidoEn ? p.RecibidoEn.slice(11) : ""}</span>
                               {puedeDeshacer && (
                                 <button onClick={() => onDeshacer(rem, p)} className="shrink-0 text-gray-400 hover:text-red-600 underline"
                                   title="Se marcó por error: vuelve a 'aún en bodega' y sale del piso">
                                   deshacer
                                 </button>
                               )}
+                              {p.RecibidoPor && <span className="block w-full truncate text-[11px] text-green-600" title={p.RecibidoPor}>{p.RecibidoPor}</span>}
                             </span>
                           ) : <span className="text-amber-700">aún en bodega</span>)}
                         </td>}
