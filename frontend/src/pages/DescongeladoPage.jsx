@@ -234,11 +234,60 @@ function ResumenAuxiliares({ datos, cargando, oscuro = false }) {
   );
 }
 
+// La lista del marcaje en la ventana de la hoja, cada uno con su casilla. Se cuentan los marcados.
+function ElegirAuxiliares({ datos, cargando, marcado, onAlternar }) {
+  if (!datos) return <span className="text-xs text-gray-400">{cargando ? "Contando…" : "—"}</span>;
+  const elegidos = datos.lista.filter(marcado);
+  const minutos = elegidos.reduce((t, a) => t + a.Minutos, 0);
+  return (
+    <div className="min-w-0">
+      <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-sm">
+        <span className="text-gray-600">Auxiliares de esta hoja</span>
+        <b className="text-lg tabular-nums text-gray-900">{elegidos.length}</b>
+        <span className="text-xs text-gray-400">de {datos.lista.length} que marcaron · {fmtHoras(minutos)}</span>
+        {cargando && <span className="text-xs text-gray-400">actualizando…</span>}
+      </div>
+      <p className="text-xs text-gray-400 mt-0.5">
+        de {datos.Desde.slice(11)} a {datos.Hasta.slice(11)}
+        {datos.Hasta.slice(0, 10) !== datos.Desde.slice(0, 10) && " del día siguiente"}
+        {" · sin contar al encargado · marque quiénes trabajaron en esta hoja"}
+      </p>
+      {datos.lista.length > 0 && (
+        <div className="mt-2 border border-gray-200 rounded divide-y divide-gray-100 max-h-72 overflow-y-auto">
+          {datos.lista.map(a => (
+            <label key={a.Codigo} className={`flex items-center gap-2 px-3 py-1.5 text-sm cursor-pointer ${marcado(a) ? "" : "bg-gray-50 text-gray-400"}`}>
+              <input type="checkbox" checked={marcado(a)} onChange={() => onAlternar(a)} className="w-4 h-4 shrink-0" />
+              <span className="truncate">{a.Nombre}</span>
+              <span className="font-mono text-xs text-gray-400 shrink-0">{a.Codigo}</span>
+              {a.EnOtraHoja && (
+                <span className="shrink-0 text-[11px] font-semibold px-1.5 py-0.5 rounded bg-amber-100 text-amber-800"
+                  title="El encargado de esa hoja ya lo contó al cerrarla">
+                  va en la hoja #{a.EnOtraHoja}
+                </span>
+              )}
+              <span className="ml-auto text-xs tabular-nums font-semibold w-20 text-right whitespace-nowrap shrink-0">
+                {a.Desde}–{a.Hasta}
+              </span>
+              <span className="text-xs tabular-nums w-16 text-right whitespace-nowrap shrink-0">{fmtHoras(a.Minutos)}</span>
+            </label>
+          ))}
+        </div>
+      )}
+      {datos.lista.length > 0 && elegidos.length === 0 && (
+        <p className="text-xs text-red-700 mt-1">Marque al menos a una persona.</p>
+      )}
+    </div>
+  );
+}
+
 /* ── Modal: cerrar la hoja ────────────────────────────────────────── */
-// El cierre es cuando se sabe entero quién trabajó el turno. Las personas no se teclean ni se
-// marcan: salen del marcaje en la ventana de la hoja, y el número que ve el encargado es el que el
-// servidor va a guardar —  la cuenta la rehace él mismo al cerrar, con la misma hora de fin.
+// El cierre es cuando se sabe entero quién trabajó el turno. Las personas no se teclean: salen del
+// marcaje en la ventana de la hoja. Pero el marcaje dice quién estuvo en el ÁREA, no en qué hoja, y
+// con dos hojas abiertas a la vez (los dos turnos juntos, usuario 29 oct 2026) la misma gente caía en
+// las dos: el encargado marca de la lista quiénes trabajaron en la suya. Quien ya va en otra hoja de
+// la jornada llega sin marcar, con el aviso.
 function ModalCerrarHoja({ hoja, onConfirmar, onCerrar }) {
+  const [marca, setMarca] = useState({});   // Codigo → true/false; lo que no se tocó toma a.Elegido
   const inicioOriginal = hoja.HoraInicio ? hoja.HoraInicio.slice(11, 16) : "";
   const [horaInicio, setHoraInicio] = useState(inicioOriginal);
   const [horaFin, setHoraFin] = useState(horaGT());
@@ -262,10 +311,14 @@ function ModalCerrarHoja({ hoja, onConfirmar, onCerrar }) {
 
   const merma = Number((hoja.KgEntrada - hoja.KgDescongelado - hoja.KgDevuelto).toFixed(2));
 
+  const lista = aux?.lista ?? [];
+  const marcado = a => marca[a.Codigo] ?? a.Elegido;
+  const elegidos = lista.filter(marcado);
+
   const confirmar = async () => {
     setGuardando(true);
     try {
-      await onConfirmar({ HoraFin: horaFin,
+      await onConfirmar({ HoraFin: horaFin, Auxiliares: elegidos.map(a => a.Codigo),
                           ...(horaInicio && horaInicio !== inicioOriginal ? { HoraInicio: horaInicio } : {}) });
     }
     finally { setGuardando(false); }
@@ -315,7 +368,8 @@ function ModalCerrarHoja({ hoja, onConfirmar, onCerrar }) {
             </div>
           )}
 
-          <ResumenAuxiliares datos={aux} cargando={cargando} />
+          <ElegirAuxiliares datos={aux} cargando={cargando} marcado={marcado}
+            onAlternar={a => setMarca(m => ({ ...m, [a.Codigo]: !marcado(a) }))} />
 
           {/* La merma ya no se enseña al cerrar (usuario, 27 oct 2026): sin báscula, lo descongelado
               es lo declarado y la cuenta da cero. Solo se avisa si una hoja vieja no cuadra. */}
@@ -329,13 +383,13 @@ function ModalCerrarHoja({ hoja, onConfirmar, onCerrar }) {
 
         <div className="px-5 py-3 border-t flex flex-wrap items-center gap-x-3 gap-y-2 shrink-0">
           <span className="text-xs text-gray-500 w-full">
-            Al cerrar, el turno que sigue abre su propia hoja con su encargado y su hora de inicio.
+            Cada turno cierra su propia hoja, con su encargado y la gente que trabajó en ella.
           </span>
           <button onClick={onCerrar}
             className="ml-auto shrink-0 border border-gray-300 rounded px-4 py-1.5 text-sm text-gray-600 hover:bg-gray-50">
             Cancelar
           </button>
-          <button onClick={confirmar} disabled={guardando || merma < -0.004}
+          <button onClick={confirmar} disabled={guardando || merma < -0.004 || !aux || (lista.length > 0 && elegidos.length === 0)}
             className="shrink-0 whitespace-nowrap bg-green-600 hover:bg-green-700 text-white rounded px-5 py-1.5 text-sm font-semibold disabled:opacity-40">
             {guardando ? "Cerrando…" : "Cerrar hoja"}
           </button>
@@ -374,8 +428,11 @@ function fechaCorta(f) {
 // uno de los lotes y todo llega al destino como ese lote. Por omisión cada lote conserva su código.
 // Las clases de entero (C20, C26, P28…) cuentan como un mismo producto. Las demás reglas (misma
 // finca, sin maquila, sin sifón ni genéricos) las revisa el servidor.
-function ModalDescongelar({ seleccion, hojaAbierta, destinos, destinoSugerido, onConfirmar, onCerrar }) {
+// Con dos hojas abiertas (los dos turnos juntos) se escoge a cuál va; arranca en la que se está viendo.
+function ModalDescongelar({ seleccion, hojasAbiertas, hojaInicial, destinos, destinoSugerido, onConfirmar, onCerrar }) {
   const [destino, setDestino] = useState(destinoSugerido || "");
+  const [hojaId, setHojaId] = useState(hojaInicial);
+  const hoja = hojasAbiertas.find(h => h.HojaId === hojaId) || null;
   const [base, setBase] = useState("");   // lote en que se unifica; "" = cada lote con su código
   const [guardando, setGuardando] = useState(false);
 
@@ -407,7 +464,7 @@ function ModalDescongelar({ seleccion, hojaAbierta, destinos, destinoSugerido, o
           FechaLote: x.linea.FechaLote, KgPorMaster: x.linea.KgPorMaster, UM: "KG",
           ...(x.masters != null ? { Masters: x.masters } : { Peso: x.kg }),
         })),
-      });
+      }, hojaId);
     } finally { setGuardando(false); }
   };
 
@@ -501,14 +558,26 @@ function ModalDescongelar({ seleccion, hojaAbierta, destinos, destinoSugerido, o
         </div>
 
         <div className="px-5 py-3 border-t flex flex-wrap items-center gap-x-3 gap-y-2 shrink-0">
-          <span className="text-xs text-gray-500 w-full sm:w-auto">
-            Se agrega a la hoja <b>#{hojaAbierta.HojaId}</b>{hojaAbierta.NombreEncargado ? ` · ${hojaAbierta.NombreEncargado}` : ""}
-          </span>
+          {hojasAbiertas.length > 1 ? (
+            <label className="text-xs text-gray-500 w-full sm:w-auto flex items-center gap-2">
+              Se agrega a la hoja
+              <select value={hojaId ?? ""} onChange={e => setHojaId(Number(e.target.value))}
+                className="border border-gray-300 rounded px-2 py-1 text-xs font-semibold text-gray-800">
+                {hojasAbiertas.map(h => (
+                  <option key={h.HojaId} value={h.HojaId}>#{h.HojaId}{h.NombreEncargado ? ` · ${h.NombreEncargado}` : ""}</option>
+                ))}
+              </select>
+            </label>
+          ) : (
+            <span className="text-xs text-gray-500 w-full sm:w-auto">
+              Se agrega a la hoja <b>#{hoja?.HojaId}</b>{hoja?.NombreEncargado ? ` · ${hoja.NombreEncargado}` : ""}
+            </span>
+          )}
           <button onClick={onCerrar}
             className="ml-auto shrink-0 border border-gray-300 rounded px-4 py-1.5 text-sm text-gray-600 hover:bg-gray-50">
             Cancelar
           </button>
-          <button onClick={confirmar} disabled={!destino || guardando}
+          <button onClick={confirmar} disabled={!destino || !hoja || guardando}
             className="shrink-0 whitespace-nowrap bg-blue-600 hover:bg-blue-700 text-white rounded px-5 py-1.5 text-sm font-semibold disabled:opacity-40">
             {guardando ? "Guardando…" : `Descongelar ${fmtNum(kg)} kg`}
           </button>
@@ -1198,8 +1267,11 @@ export default function DescongeladoPage() {
   const [abriendoHoja, setAbriendoHoja] = useState(false);   // modal de abrir la hoja del turno
 
   // La hoja se abre a mano ANTES de descongelar (ver ModalAbrirHoja) y todo lo del turno se agrega
-  // a ella. Sin hoja abierta no se descongela.
-  const hojaAbierta = hojas.find(h => h.Estatus === "Abierta") || null;
+  // a ella. Sin hoja abierta no se descongela. Puede haber dos abiertas a la vez: en ciertos horarios
+  // los dos turnos trabajan juntos (usuario, 29 oct 2026). Lo descongelado va, de entrada, a la que
+  // se está viendo; si se ve una cerrada, a la abierta más reciente.
+  const hojasAbiertas = hojas.filter(h => h.Estatus === "Abierta");
+  const hojaAbierta = hojasAbiertas.find(h => h.HojaId === selId) || hojasAbiertas[hojasAbiertas.length - 1] || null;
 
   const fetchHojas = useCallback(async () => {
     setCargando(true);
@@ -1292,8 +1364,7 @@ export default function DescongeladoPage() {
 
   // Descongelar: UN viaje al servidor con todo lo marcado. Si algo falla, el modal se queda abierto
   // con lo capturado para corregirlo en su sitio.
-  const confirmarDescongelar = async (datos) => {
-    const hojaId = hojaAbierta?.HojaId;
+  const confirmarDescongelar = async (datos, hojaId) => {
     if (!hojaId) { await mostrarAlerta("No hay hoja abierta: ábrala primero con su encargado y hora de inicio."); return; }
     const out = await post(`${API}/hojas/${hojaId}/descongelar-marcado`, datos);
     if (!out) return;
@@ -1367,9 +1438,9 @@ export default function DescongeladoPage() {
     return () => { vigente = false; };
   }, [fecha, hojas]);
 
-  const cerrarHoja = async ({ HoraFin, HoraInicio }) => {
+  const cerrarHoja = async ({ HoraFin, HoraInicio, Auxiliares }) => {
     const out = await post(`${API}/hojas/${sel.HojaId}/cerrar`,
-      { HoraFin: HoraFin || horaGT(), ...(HoraInicio ? { HoraInicio } : {}) });
+      { HoraFin: HoraFin || horaGT(), Auxiliares, ...(HoraInicio ? { HoraInicio } : {}) });
     if (!out) return;
     setCierre(false);
     await recargar(sel.HojaId);
@@ -1403,7 +1474,7 @@ export default function DescongeladoPage() {
       )}
       {modal && hojaAbierta && (
         <ModalDescongelar seleccion={modal.seleccion}
-          hojaAbierta={hojaAbierta} destinos={destinos} destinoSugerido={ultimoDestino}
+          hojasAbiertas={hojasAbiertas} hojaInicial={hojaAbierta.HojaId} destinos={destinos} destinoSugerido={ultimoDestino}
           onConfirmar={confirmarDescongelar} onCerrar={() => setModal(null)} />
       )}
       {reporte && <ReporteDescongeladoModal fecha={fecha} onCerrar={() => setReporte(false)} />}
@@ -1433,18 +1504,24 @@ export default function DescongeladoPage() {
           className="border border-blue-300 text-blue-700 rounded px-3 py-1.5 text-xs font-semibold hover:bg-blue-50">
           Reporte del día
         </button>
-        {hojaAbierta ? (
-          <span className="ml-auto text-xs text-gray-500">
-            Hoja abierta <b className="font-mono">#{hojaAbierta.HojaId}</b>
-            {hojaAbierta.NombreEncargado ? ` · ${hojaAbierta.NombreEncargado}` : ""}
-            {hojaAbierta.HoraInicio ? ` · desde ${hojaAbierta.HoraInicio.slice(11)}` : ""}
-          </span>
-        ) : puedeCrear && (
-          <button onClick={() => setAbriendoHoja(true)}
-            className="ml-auto bg-blue-600 text-white rounded px-4 py-1.5 text-sm font-semibold hover:bg-blue-700">
-            Abrir hoja
-          </button>
-        )}
+        <div className="ml-auto flex flex-wrap items-center justify-end gap-x-3 gap-y-1">
+          {hojasAbiertas.map(h => (
+            <span key={h.HojaId} className="text-xs text-gray-500">
+              Hoja abierta <b className="font-mono">#{h.HojaId}</b>
+              {h.NombreEncargado ? ` · ${h.NombreEncargado}` : ""}
+              {h.HoraInicio ? ` · desde ${h.HoraInicio.slice(11)}` : ""}
+            </span>
+          ))}
+          {/* Con una ya abierta se puede abrir otra: el otro turno que llega a trabajar junto. */}
+          {puedeCrear && (
+            <button onClick={() => setAbriendoHoja(true)}
+              className={hojasAbiertas.length
+                ? "border border-blue-300 text-blue-700 rounded px-3 py-1.5 text-xs font-semibold hover:bg-blue-50"
+                : "bg-blue-600 text-white rounded px-4 py-1.5 text-sm font-semibold hover:bg-blue-700"}>
+              {hojasAbiertas.length ? "Abrir otra hoja" : "Abrir hoja"}
+            </button>
+          )}
+        </div>
       </div>
 
       {error && <div className="bg-red-50 border border-red-300 text-red-700 text-sm px-4 py-2 rounded">⚠ {error}</div>}
@@ -1460,7 +1537,7 @@ export default function DescongeladoPage() {
       <PorEntregar filas={porEntregar} puedeRecibir={puedeCrear} puedeDeshacer={puedeEditar}
         onRecibir={recibirPolines} onDeshacer={deshacerRecepcion} />
 
-      {/* Con más de una hoja (OROPSA y maquila no se mezclan) hay que escoger cuál se ve. Con una
+      {/* Con más de una hoja (dos turnos, u OROPSA y maquila) hay que escoger cuál se ve. Con una
           sola no se dibuja nada: ya está abierta abajo. */}
       {hojas.length > 1 && (
         <div className="bg-white border border-gray-300 rounded-lg px-4 py-2 flex flex-wrap items-center gap-2">
