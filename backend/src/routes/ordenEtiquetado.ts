@@ -3,7 +3,7 @@ import jwt from "jsonwebtoken";
 import prisma from "../lib/prisma.ts";
 import { requireAuth, requirePerm } from "../middleware/auth.ts";
 import { componerCodigoLote, piscinaRequiereCiclo } from "../lib/codigoLote.ts";
-import { calcularTechoLineaBatch, trasladadosDeLinea } from "../lib/masters.ts";
+import { calcularTechoLineaBatch, trasladadosDeLinea, SALIO_EN_TRASLADO } from "../lib/masters.ts";
 
 const router = Router();
 
@@ -227,10 +227,19 @@ router.get("/", requireAuth, requirePerm("etiquetado", "ver"), async (req: Reque
 // Objetivo = CEILING(CantidadCajas / CajasXMaster) de la línea de pedido.
 // Acumulado = suma de CantidadMaster ya declarados en otras capturas de esa misma línea, MENOS los
 // masters de la línea que salieron en traslado interno (Trasladado — ver SALIO_EN_TRASLADO en
-// lib/masters.ts: el área puede cambiarlos de cliente, así que dejan de ocupar cupo). El candado
-// real que bloquea declarar de más SIGUE siendo este (declarado): revisado jul 2026 con el usuario y
-// se dejó así a propósito, para no acoplar cuánto se puede trabajar cada día al ritmo de escaneo de
-// bodega. EnBodega se agrega aparte, solo informativo: masters de la línea escaneados que
+// lib/masters.ts: el área puede cambiarlos de cliente, así que dejan de ocupar cupo). Ya NO es el
+// candado: queda como dato de pantalla.
+//
+// El candado que bloquea declarar de más es EscaneadoOtras + la cantidad de esta captura contra el
+// Objetivo — decisión del usuario, 29 oct 2026 (antes, desde jul 2026, era contra lo declarado). Con
+// lo declarado, una captura con etiquetas sin escanear o un master declarado que nunca se imprimió
+// trababan la línea: 020-2026 26/30 pedía 160, tenía 158 escaneados y no dejaba capturar los 2 que
+// faltaban porque ya había 160 declarados. EscaneadoOtras se cuenta igual que el techo de escaneo
+// (calcularTechoLinea): sin lo trasladado y CON lo despachado, si no cada contenedor cargado dejaría
+// producir la línea entera otra vez. Las etiquetas impresas sin escanear ya no frenan aquí; el techo
+// de escaneo sigue impidiendo que entren a bodega más master de los pedidos.
+//
+// EnBodega se agrega aparte, solo informativo: masters de la línea escaneados que
 // SIGUEN en bodega, el mismo número que la pestaña Avance de Pedidos (decisión del usuario, 28 oct
 // 2026). Lo que ya salió —despachos y traslados a reempaque/reetiquetado/reproceso— no cuenta. No
 // es el número del techo de escaneo (calcularTechoLinea), que sí cuenta lo despachado al cliente.
@@ -268,19 +277,28 @@ async function calcularResumen(detalleId: number, excluirOrdenId?: number) {
     JOIN OrdenEtiquetado oe ON ei.OrdenId = oe.OrdenId
     WHERE oe.DetalleId = ${detalleId} AND m.Estatus <> 'Salido'
   `;
+  // Lo escaneado de la captura que se edita no cuenta: su nueva cantidad ya lo incluye.
+  const escaneadoOtrasRows: any[] = await prisma.$queryRawUnsafe(`
+    SELECT COUNT(*) AS n FROM Masters m
+    JOIN EtiquetaImpresa ei ON m.EtiquetaId = ei.EtiquetaId
+    JOIN OrdenEtiquetado oe ON ei.OrdenId = oe.OrdenId
+    WHERE oe.DetalleId = ? AND oe.OrdenId <> ? AND NOT ${SALIO_EN_TRASLADO}`, detalleId, excluirOrdenId ?? 0);
   return {
     Objetivo: objetivo,
     Acumulado: acumulado,
     Trasladado: trasladado,
     Pendiente: objetivo === null ? null : objetivo - acumulado,
     EnBodega: Number(enBodegaRows[0].n),
+    EscaneadoOtras: Number(escaneadoOtrasRows[0].n),
   };
 }
 
-// Mensaje del candado de lo declarado, igual en alta y en edición.
-function mensajeExcedeDeclarado(resumen: { Objetivo: number | null; Acumulado: number; Trasladado: number }, cantidad: number) {
-  const trasl = resumen.Trasladado ? `, sin contar ${resumen.Trasladado} que salieron en traslado` : "";
-  return `Esta captura dejaría ${resumen.Acumulado + cantidad} masters declarados, pero la línea del pedido solo necesita ${resumen.Objetivo} (ya lleva ${resumen.Acumulado} en otras capturas${trasl}).`;
+// Candado de cupo, igual en alta y en edición: lo escaneado en las otras capturas de la línea más lo
+// que declara esta no puede pasar de lo pedido. null = cabe.
+function excedeEscaneado(resumen: { Objetivo: number | null; EscaneadoOtras: number }, cantidad: number): string | null {
+  if (resumen.Objetivo === null || resumen.EscaneadoOtras + cantidad <= resumen.Objetivo) return null;
+  const disponible = Math.max(0, resumen.Objetivo - resumen.EscaneadoOtras);
+  return `La línea del pedido necesita ${resumen.Objetivo} masters y ya hay ${resumen.EscaneadoOtras} escaneados en otras capturas: esta captura puede llevar hasta ${disponible}, no ${cantidad}.`;
 }
 
 // GET /api/orden-etiquetado/resumen/:detalleId
@@ -339,8 +357,9 @@ router.post("/", requireAuth, requirePerm("etiquetado", "crear"), async (req: Re
     const resumen = await calcularResumen(Number(DetalleId));
     if (!resumen) { res.status(404).json({ error: "Línea de pedido no encontrada" }); return; }
     // Objetivo null = pedido general: se declara cuanto vaya saliendo, sin techo.
-    if (resumen.Objetivo !== null && resumen.Acumulado + cantidad > resumen.Objetivo) {
-      res.status(400).json({ error: mensajeExcedeDeclarado(resumen, cantidad) });
+    const excede = excedeEscaneado(resumen, cantidad);
+    if (excede) {
+      res.status(400).json({ error: excede });
       return;
     }
 
@@ -428,8 +447,9 @@ router.put("/:id", requireAuth, requirePerm("etiquetado", "editar"), async (req:
     const lote = componerCodigoLote(String(piscina.Nombre), FechaProduccion, cicloEfectivo);
 
     const resumen = await calcularResumen(Number(actuales[0].DetalleId), id);
-    if (resumen && resumen.Objetivo !== null && resumen.Acumulado + cantidad > resumen.Objetivo) {
-      res.status(400).json({ error: mensajeExcedeDeclarado(resumen, cantidad) });
+    const excede = resumen && excedeEscaneado(resumen, cantidad);
+    if (excede) {
+      res.status(400).json({ error: excede });
       return;
     }
 
