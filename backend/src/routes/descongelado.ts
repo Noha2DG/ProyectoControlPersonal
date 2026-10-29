@@ -216,25 +216,62 @@ async function remisionPorRecibir(tx: any, remisionId: number, bodega: string) {
 
 const aPiso = (e: any) => { if (e instanceof PisoEnNegativo) throw new ErrorNegocio(400, e.message); throw e; };
 
+// Un renglón de "Por entregar": un lote y talla dentro de un polín (B0357 trae 35 de 71/90 y 1 de
+// 51/60 del mismo lote). Se recibe y se deshace renglón por renglón, no el polín entero (usuario,
+// 29 oct 2026): un master que se coló en el polín no tiene por qué entrar al piso con los demás.
+// Sin Lote, el renglón es el polín completo.
+type Renglon = { PalletId: number; Lote?: string; Clase?: string; Talla?: number; FechaLote?: string | null };
+
+function leerRenglones(crudos: any[]): Renglon[] {
+  const out = new Map<string, Renglon>();
+  for (const c of crudos) {
+    const PalletId = Number(c?.PalletId);
+    if (!Number.isInteger(PalletId) || PalletId <= 0) continue;
+    const r: Renglon = c?.Lote == null ? { PalletId } : {
+      PalletId, Lote: String(c.Lote), Clase: String(c.Clase ?? ""), Talla: Number(c.Talla),
+      FechaLote: c.FechaLote ? String(c.FechaLote) : null,
+    };
+    out.set(JSON.stringify(r), r);
+  }
+  return [...out.values()];
+}
+
+// Las cajas vigentes de la remisión que caen en esos renglones; las mismas llaves que agrupa porEntregar.
+async function cajasDeRenglones(tx: any, remisionId: number, renglones: Renglon[], recibidas: boolean) {
+  const args: any[] = [];
+  const filtro = renglones.map(r => {
+    if (r.Lote == null) { args.push(r.PalletId); return "m.PalletId = ?"; }
+    args.push(r.PalletId, r.Lote, r.Clase, r.Talla, r.FechaLote);
+    return "(m.PalletId = ? AND oe.Lote = ? AND dp.Clase = ? AND dp.Talla = ? AND DATE_FORMAT(oe.FechaProduccion, '%Y-%m-%d') <=> ?)";
+  }).join(" OR ");
+  return tx.$queryRawUnsafe(`
+    SELECT rd.DetalleId, rd.MasterId, m.PalletId
+    FROM RemisionDetalle rd
+    JOIN Masters m ON m.MasterId = rd.MasterId
+    JOIN EtiquetaImpresa e ON e.EtiquetaId = m.EtiquetaId
+    JOIN OrdenEtiquetado oe ON oe.OrdenId = e.OrdenId
+    JOIN DetallePedido dp ON dp.DetalleId = oe.DetalleId
+    WHERE rd.RemisionId = ? AND rd.Vigente = 1 AND rd.RecibidoEn IS ${recibidas ? "NOT NULL" : "NULL"} AND (${filtro})
+    FOR UPDATE`, remisionId, ...args) as Promise<any[]>;
+}
+
 /**
- * POST /api/descongelado/recibir  { RemisionId, PalletIds, Bodega? }
- * El área recibe los polines que le llegaron de una remisión en borrador: sus cajas de ESA remisión
+ * POST /api/descongelado/recibir  { RemisionId, Lineas: [{PalletId, Lote, Clase, Talla, FechaLote}], Bodega? }
+ * El área recibe los renglones que le llegaron de una remisión en borrador: sus cajas de ESA remisión
  * quedan recibidas (quién y cuándo) y entran a su piso, con la jornada de hoy. La remisión sigue en
  * borrador: la cierra bodega al confirmar (decisión del usuario), y lo que no se recibió lo quita o lo
- * entrega ahí.
+ * entrega ahí. Con PalletIds en vez de Lineas recibe polines enteros.
  */
-export async function recibirPolines(tx: any, p: { RemisionId?: any; PalletIds?: any; Bodega?: any }, operador: string) {
+export async function recibirPolines(tx: any, p: { RemisionId?: any; Lineas?: any; PalletIds?: any; Bodega?: any }, operador: string) {
   const remisionId = Number(p.RemisionId);
-  const palletIds = [...new Set((Array.isArray(p.PalletIds) ? p.PalletIds : []).map(Number).filter(n => Number.isInteger(n) && n > 0))];
+  const renglones = leerRenglones(Array.isArray(p.Lineas) ? p.Lineas
+    : Array.isArray(p.PalletIds) ? p.PalletIds.map((PalletId: any) => ({ PalletId })) : []);
   if (!Number.isInteger(remisionId) || remisionId <= 0) throw new ErrorNegocio(400, "Falta la remisión");
-  if (!palletIds.length) throw new ErrorNegocio(400, "Marque los polines que le llegaron");
+  if (!renglones.length) throw new ErrorNegocio(400, "Marque lo que le llegó");
   const r = await remisionPorRecibir(tx, remisionId, String(p.Bodega || "DESCONGELADO"));
 
-  const lineas: any[] = await tx.$queryRawUnsafe(`
-    SELECT rd.DetalleId FROM RemisionDetalle rd JOIN Masters m ON m.MasterId = rd.MasterId
-    WHERE rd.RemisionId = ? AND rd.Vigente = 1 AND rd.RecibidoEn IS NULL AND m.PalletId IN (${palletIds.map(() => "?").join(",")})
-    FOR UPDATE`, remisionId, ...palletIds);
-  if (!lineas.length) throw new ErrorNegocio(400, `Esos polines ya se recibieron o no son de la remisión ${r.Folio}. Recargue la pantalla (F5).`);
+  const lineas = await cajasDeRenglones(tx, remisionId, renglones, false);
+  if (!lineas.length) throw new ErrorNegocio(400, `Eso ya se recibió o no es de la remisión ${r.Folio}. Recargue la pantalla (F5).`);
 
   const ids = lineas.map(l => Number(l.DetalleId));
   await tx.$executeRawUnsafe(
@@ -242,24 +279,23 @@ export async function recibirPolines(tx: any, p: { RemisionId?: any; PalletIds?:
     operador, ...ids);
   // El piso queda igual a lo recibido de la remisión: lo de hoy se suma a lo que ya se hubiera recibido.
   const piso = await sincronizarIngresoDeRemision(tx, remisionId, r, hoyGT(), operador).catch(aPiso);
-  return { ok: true, Folio: r.Folio, Polines: palletIds.length, Masters: ids.length, KgAlPiso: piso.kg };
+  return { ok: true, Folio: r.Folio, Polines: new Set(lineas.map(l => Number(l.PalletId))).size, Masters: ids.length, KgAlPiso: piso.kg };
 }
 
 /**
- * POST /api/descongelado/deshacer-recepcion  { RemisionId, PalletId, Bodega? }
- * Se marcó por error un polín que no llegó: vuelve a "aún en bodega" y sale del piso. Se niega si el
- * área ya trabajó ese producto, igual que cuando bodega devuelve. Revisa antes de escribir.
+ * POST /api/descongelado/deshacer-recepcion  { RemisionId, PalletId, Lote?, Clase?, Talla?, FechaLote?, Bodega? }
+ * Se marcó por error un renglón que no llegó (sin Lote, el polín entero): vuelve a "aún en bodega" y
+ * sale del piso. Se niega si el área ya trabajó ese producto, igual que cuando bodega devuelve. Revisa
+ * antes de escribir.
  */
-export async function deshacerRecepcion(tx: any, p: { RemisionId?: any; PalletId?: any; Bodega?: any }) {
-  const remisionId = Number(p.RemisionId), palletId = Number(p.PalletId);
-  if (!Number.isInteger(remisionId) || !Number.isInteger(palletId)) throw new ErrorNegocio(400, "Falta la remisión o el polín");
+export async function deshacerRecepcion(tx: any, p: { RemisionId?: any; PalletId?: any; Lote?: any; Clase?: any; Talla?: any; FechaLote?: any; Bodega?: any }) {
+  const remisionId = Number(p.RemisionId);
+  const renglones = leerRenglones([p]);
+  if (!Number.isInteger(remisionId) || !renglones.length) throw new ErrorNegocio(400, "Falta la remisión o el polín");
   const r = await remisionPorRecibir(tx, remisionId, String(p.Bodega || "DESCONGELADO"));
 
-  const lineas: any[] = await tx.$queryRawUnsafe(`
-    SELECT rd.DetalleId, rd.MasterId FROM RemisionDetalle rd JOIN Masters m ON m.MasterId = rd.MasterId
-    WHERE rd.RemisionId = ? AND rd.Vigente = 1 AND rd.RecibidoEn IS NOT NULL AND m.PalletId = ?
-    FOR UPDATE`, remisionId, palletId);
-  if (!lineas.length) throw new ErrorNegocio(400, "Ese polín no está recibido en esta remisión. Recargue la pantalla (F5).");
+  const lineas = await cajasDeRenglones(tx, remisionId, renglones, true);
+  if (!lineas.length) throw new ErrorNegocio(400, "Eso no está recibido en esta remisión. Recargue la pantalla (F5).");
 
   await descontarDevolucionDelPiso(tx, remisionId, r, lineas.map(l => Number(l.MasterId))).catch(aPiso);
   const ids = lineas.map(l => Number(l.DetalleId));
