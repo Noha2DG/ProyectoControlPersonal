@@ -736,33 +736,38 @@ function InventarioPiso({ saldo, porLlegarM = 0, resumen, puedeCrear, marcadas, 
 /* ── Por entregar: lo que bodega dejó y el área recibe ────────────── */
 // Lo que bodega ya escaneó para el área y todavía no confirma (usuario, 28 oct 2026). Confirmar es la
 // entrega física, pero de madrugada Cindy no está cuando Descongelado empieza: por eso el área marca
-// los polines que le llegaron y usa "Recibir"; esos entran al piso de arriba y ya se pueden trabajar.
-// Lo que no se marca sigue "aún en bodega" hasta que bodega lo quite de la remisión o la confirme.
+// lo que le llegó y usa "Recibir"; eso entra al piso de arriba y ya se puede trabajar. Lo que no se
+// marca sigue "aún en bodega" hasta que bodega lo quite de la remisión o la confirme.
 //
-// Polín por polín, no por lote: es lo que se mueve, y así queda exacto aunque de un mismo lote y talla
-// llegue solo uno de dos polines. No hay lector: el código del polín está impreso en su hoja (B0349).
-// Un polín recibido por error se deshace mientras no se haya trabajado.
+// Renglón por renglón (un lote y talla de un polín), no el polín entero (usuario, 29 oct 2026): B0357
+// trae 35 de 71/90 y 1 de 51/60, y ese master no tiene por qué entrar al piso con los demás. Tocar el
+// código del polín marca todos sus renglones de una vez. No hay lector: el código está impreso en su
+// hoja (B0349). Un renglón recibido por error se deshace mientras no se haya trabajado.
 function PorEntregar({ filas, puedeRecibir, puedeDeshacer, onRecibir, onDeshacer }) {
-  const [marcados, setMarcados] = useState({});   // `${RemisionId}|${PalletId}` → true
+  const [marcados, setMarcados] = useState({});   // claveRenglon → true
 
-  // Remisión → polín → líneas (un polín puede traer más de un lote o talla).
+  // Remisión → polín → renglones.
   const remisiones = [];
   for (const r of filas) {
     let rem = remisiones.find(x => x.RemisionId === r.RemisionId);
     if (!rem) { rem = { RemisionId: r.RemisionId, Folio: r.FolioRemision, polines: [] }; remisiones.push(rem); }
-    let p = rem.polines.find(x => x.PalletId === r.PalletId && x.Recibido === r.Recibido);
-    if (!p) {
-      p = { PalletId: r.PalletId, Codigo: r.PalletCodigo, Recibido: r.Recibido, RecibidoEn: r.RecibidoEn, RecibidoPor: r.RecibidoPor, lineas: [], Masters: 0, Kg: 0 };
-      rem.polines.push(p);
-    }
-    p.lineas.push(r); p.Masters += r.Masters || 0; p.Kg += r.Kg;
+    let p = rem.polines.find(x => x.PalletId === r.PalletId);
+    if (!p) { p = { PalletId: r.PalletId, Codigo: r.PalletCodigo, lineas: [], Masters: 0 }; rem.polines.push(p); }
+    p.lineas.push(r); p.Masters += r.Masters || 0;
   }
   if (!remisiones.length) return null;
 
-  const clave = (rem, p) => `${rem.RemisionId}|${p.PalletId}`;
-  const alternar = (rem, p) => setMarcados(m => {
-    const n = { ...m }; const k = clave(rem, p);
+  const clave = l => `${l.RemisionId}|${l.PalletId}|${l.Lote}|${l.Clase}|${l.Talla}|${l.FechaLote ?? ""}`;
+  const alternar = l => setMarcados(m => {
+    const n = { ...m }; const k = clave(l);
     if (n[k]) delete n[k]; else n[k] = true;
+    return n;
+  });
+  // El polín entero: si ya están todos sus pendientes marcados los desmarca, si no los marca.
+  const alternarPolin = p => setMarcados(m => {
+    const pend = p.lineas.filter(l => !l.Recibido).map(clave);
+    const n = { ...m }; const todos = pend.every(k => n[k]);
+    for (const k of pend) { if (todos) delete n[k]; else n[k] = true; }
     return n;
   });
 
@@ -771,26 +776,28 @@ function PorEntregar({ filas, puedeRecibir, puedeDeshacer, onRecibir, onDeshacer
       <header className="bg-amber-50 border-b border-amber-200 px-4 py-2 flex flex-wrap items-baseline gap-x-3 gap-y-1">
         <h3 className="font-bold text-sm text-amber-900">POR ENTREGAR</h3>
         <span className="text-xs text-amber-800">
-          bodega lo escaneó para el área y no ha confirmado. Marque los polines que ya le llegaron y use <b>Recibir</b>.
+          bodega lo escaneó para el área y no ha confirmado. Marque lo que ya le llegó y use <b>Recibir</b>.
         </span>
       </header>
       {remisiones.map(rem => {
-        const pendientes = rem.polines.filter(p => !p.Recibido);
-        const marc = pendientes.filter(p => marcados[clave(rem, p)]);
-        const mMarc = marc.reduce((s, p) => s + p.Masters, 0), kgMarc = marc.reduce((s, p) => s + p.Kg, 0);
+        const lineas = rem.polines.flatMap(p => p.lineas);
+        const marc = lineas.filter(l => !l.Recibido && marcados[clave(l)]);
+        const mMarc = marc.reduce((s, l) => s + (l.Masters || 0), 0), kgMarc = marc.reduce((s, l) => s + l.Kg, 0);
+        const enBodega = rem.polines.filter(p => p.lineas.some(l => !l.Recibido)).length;
+        const recibidos = rem.polines.length - enBodega;
         return (
           <div key={rem.RemisionId} className="border-t border-amber-100 first:border-t-0">
             <div className="px-4 py-2 flex flex-wrap items-center gap-2 bg-white">
               <span className="text-sm font-semibold text-gray-800">{rem.Folio}</span>
               <span className="text-[11px] font-semibold px-1.5 py-0.5 rounded bg-amber-100 text-amber-800">sin confirmar</span>
               <span className="text-xs text-gray-500">
-                {pendientes.length} polín{pendientes.length !== 1 ? "es" : ""} aún en bodega
-                {rem.polines.length > pendientes.length && ` · ${rem.polines.length - pendientes.length} recibido${rem.polines.length - pendientes.length !== 1 ? "s" : ""}`}
+                {enBodega} polín{enBodega !== 1 ? "es" : ""} con algo aún en bodega
+                {recibidos > 0 && ` · ${recibidos} recibido${recibidos !== 1 ? "s" : ""}`}
               </span>
               {puedeRecibir && marc.length > 0 && (
                 <button onClick={async () => { if (await onRecibir(rem, marc)) setMarcados({}); }}
                   className="ml-auto bg-green-600 text-white rounded px-4 py-1.5 text-xs font-semibold hover:bg-green-700">
-                  Recibir {marc.length} polín{marc.length !== 1 ? "es" : ""} · {mMarc} masters · {fmtNum(kgMarc)} kg
+                  Recibir {marc.length} renglón{marc.length !== 1 ? "es" : ""} · {mMarc} masters · {fmtNum(kgMarc)} kg
                 </button>
               )}
             </div>
@@ -817,53 +824,58 @@ function PorEntregar({ filas, puedeRecibir, puedeDeshacer, onRecibir, onDeshacer
                 </thead>
                 <tbody>
                   {rem.polines.map(p => {
-                    const marcado = !!marcados[clave(rem, p)];
-                    // Un polín puede traer varios lotes (B0307 trae dos): la casilla, el código y el
-                    // estado abarcan todas sus líneas, porque se recibe el polín entero, no una línea.
                     const n = p.lineas.length;
-                    const puede = !p.Recibido && puedeRecibir;
-                    return p.lineas.map((l, i) => (
-                      <tr key={`${p.PalletId}-${p.Recibido}-${i}`}
-                        onClick={() => puede && alternar(rem, p)}
-                        className={`${i === 0 ? "border-t border-gray-200" : ""} ${puede ? "cursor-pointer" : ""}
-                          ${p.Recibido ? "bg-green-50/40" : marcado ? "bg-green-50" : "hover:bg-gray-50"}`}>
-                        {i === 0 && (
-                          <td rowSpan={n} className="px-3 py-1.5 align-top">
+                    const hayPendientes = puedeRecibir && p.lineas.some(l => !l.Recibido);
+                    // Qué trae mezclado: B0357 es un solo lote en dos tallas, B0307 dos lotes de una talla.
+                    const nLotes = new Set(p.lineas.map(l => l.Lote)).size;
+                    const nTallas = new Set(p.lineas.map(l => l.DescripcionTalla)).size;
+                    const mezcla = [nLotes > 1 && `${nLotes} lotes`, nTallas > 1 && `${nTallas} tallas`].filter(Boolean).join(", ");
+                    return p.lineas.map((l, i) => {
+                      const puede = !l.Recibido && puedeRecibir;
+                      const marcado = puede && !!marcados[clave(l)];
+                      return (
+                        <tr key={`${p.PalletId}-${i}`}
+                          onClick={() => puede && alternar(l)}
+                          className={`${i === 0 ? "border-t border-gray-200" : "border-t border-dashed border-gray-100"} ${puede ? "cursor-pointer" : ""}
+                            ${l.Recibido ? "bg-green-50/40" : marcado ? "bg-green-50" : "hover:bg-gray-50"}`}>
+                          <td className="px-3 py-1.5 align-top">
                             {puede && (
-                              <input type="checkbox" checked={marcado} onChange={() => alternar(rem, p)}
+                              <input type="checkbox" checked={marcado} onChange={() => alternar(l)}
                                 onClick={e => e.stopPropagation()} className="w-4 h-4 cursor-pointer" />
                             )}
                           </td>
-                        )}
-                        {i === 0 && (
-                          <td rowSpan={n} className="px-3 py-1.5 align-top font-mono text-xs font-bold text-gray-800 truncate" title={p.Codigo}>
-                            {p.Codigo}
-                            {n > 1 && <span className="block font-sans font-normal text-[11px] text-gray-400">{n} lotes · {p.Masters} m</span>}
+                          {i === 0 && (
+                            <td rowSpan={n} onClick={e => { e.stopPropagation(); if (hayPendientes) alternarPolin(p); }}
+                              title={hayPendientes && n > 1 ? "Marcar todo el polín" : p.Codigo}
+                              className={`px-3 py-1.5 align-top font-mono text-xs font-bold text-gray-800 truncate ${hayPendientes ? "cursor-pointer hover:text-green-700" : ""}`}>
+                              {p.Codigo}
+                              {n > 1 && <span className="block font-sans font-normal text-[11px] text-gray-400">{mezcla || `${n} renglones`} · {p.Masters} m</span>}
+                            </td>
+                          )}
+                          {/* Lote y producto pasan a otra línea en vez de recortarse: en la tablet no caben. */}
+                          <td className="px-3 py-1.5 align-top font-mono text-xs break-all">{l.Lote}</td>
+                          <td className="px-3 py-1.5 align-top text-xs break-words"><span className="font-mono text-gray-500">{l.Clase}</span> {l.DescripcionClase}</td>
+                          <td className="px-3 py-1.5 align-top text-xs">{l.DescripcionTalla}</td>
+                          <td className="px-3 py-1.5 align-top text-right tabular-nums font-semibold">{l.Masters}</td>
+                          <td className="px-3 py-1.5 align-top text-right tabular-nums">{fmtNum(l.Kg)}</td>
+                          <td className="px-3 py-1.5 align-top text-xs" onClick={e => e.stopPropagation()}>
+                            {(l.Recibido ? (
+                              // El enlace no se recorta aunque el nombre de quien recibió sea largo.
+                              <span className="flex flex-wrap items-center gap-x-2 min-w-0 text-green-700">
+                                <span className="whitespace-nowrap">recibido {l.RecibidoEn ? l.RecibidoEn.slice(11) : ""}</span>
+                                {puedeDeshacer && (
+                                  <button onClick={() => onDeshacer(rem, p, l)} className="shrink-0 text-gray-400 hover:text-red-600 underline"
+                                    title="Se marcó por error: vuelve a 'aún en bodega' y sale del piso">
+                                    deshacer
+                                  </button>
+                                )}
+                                {l.RecibidoPor && <span className="block w-full truncate text-[11px] text-green-600" title={l.RecibidoPor}>{l.RecibidoPor}</span>}
+                              </span>
+                            ) : <span className="text-amber-700">aún en bodega</span>)}
                           </td>
-                        )}
-                        {/* Lote y producto pasan a otra línea en vez de recortarse: en la tablet no caben. */}
-                        <td className="px-3 py-1.5 align-top font-mono text-xs break-all">{l.Lote}</td>
-                        <td className="px-3 py-1.5 align-top text-xs break-words"><span className="font-mono text-gray-500">{l.Clase}</span> {l.DescripcionClase}</td>
-                        <td className="px-3 py-1.5 align-top text-xs">{l.DescripcionTalla}</td>
-                        <td className="px-3 py-1.5 align-top text-right tabular-nums font-semibold">{l.Masters}</td>
-                        <td className="px-3 py-1.5 align-top text-right tabular-nums">{fmtNum(l.Kg)}</td>
-                        {i === 0 && <td rowSpan={n} className="px-3 py-1.5 align-top text-xs" onClick={e => e.stopPropagation()}>
-                          {(p.Recibido ? (
-                            // El enlace no se recorta aunque el nombre de quien recibió sea largo.
-                            <span className="flex flex-wrap items-center gap-x-2 min-w-0 text-green-700">
-                              <span className="whitespace-nowrap">recibido {p.RecibidoEn ? p.RecibidoEn.slice(11) : ""}</span>
-                              {puedeDeshacer && (
-                                <button onClick={() => onDeshacer(rem, p)} className="shrink-0 text-gray-400 hover:text-red-600 underline"
-                                  title="Se marcó por error: vuelve a 'aún en bodega' y sale del piso">
-                                  deshacer
-                                </button>
-                              )}
-                              {p.RecibidoPor && <span className="block w-full truncate text-[11px] text-green-600" title={p.RecibidoPor}>{p.RecibidoPor}</span>}
-                            </span>
-                          ) : <span className="text-amber-700">aún en bodega</span>)}
-                        </td>}
-                      </tr>
-                    ));
+                        </tr>
+                      );
+                    });
                   })}
                 </tbody>
               </table>
@@ -1268,21 +1280,29 @@ export default function DescongeladoPage() {
   };
 
   // Recibir lo que bodega dejó y ya llegó al área: entra al piso y se puede descongelar.
-  const recibirPolines = async (rem, polines) => {
-    const m = polines.reduce((s, p) => s + p.Masters, 0), kg = polines.reduce((s, p) => s + p.Kg, 0);
+  const recibirPolines = async (rem, lineas) => {
+    const m = lineas.reduce((s, l) => s + (l.Masters || 0), 0), kg = lineas.reduce((s, l) => s + l.Kg, 0);
+    const detalle = lineas.map(l => `${l.PalletCodigo} · ${l.Lote} ${l.DescripcionTalla} · ${l.Masters} m`).join("\n");
     if (!(await pedirConfirmacion(
-      `¿Ya le llegaron físicamente estos polines de ${rem.Folio}?\n\n${polines.map(p => p.Codigo).join(", ")} — ${m} masters, ${fmtNum(kg)} kg.\n\n` +
-      `Entran a su piso y se pueden descongelar. Bodega verá que usted los recibió.`, { textoConfirmar: "Recibir" }))) return false;
-    const out = await post(`${API}/recibir`, { RemisionId: rem.RemisionId, PalletIds: polines.map(p => p.PalletId), Bodega: "DESCONGELADO" });
+      `¿Ya le llegó físicamente esto de ${rem.Folio}?\n\n${detalle}\n\nTotal: ${m} masters, ${fmtNum(kg)} kg.\n\n` +
+      `Entra a su piso y se puede descongelar. Bodega verá que usted lo recibió.`, { textoConfirmar: "Recibir" }))) return false;
+    const out = await post(`${API}/recibir`, {
+      RemisionId: rem.RemisionId, Bodega: "DESCONGELADO",
+      Lineas: lineas.map(l => ({ PalletId: l.PalletId, Lote: l.Lote, Clase: l.Clase, Talla: l.Talla, FechaLote: l.FechaLote })),
+    });
     if (!out) return false;
     await recargar(sel?.HojaId);
     return true;
   };
 
-  const deshacerRecepcion = async (rem, p) => {
+  const deshacerRecepcion = async (rem, p, l) => {
     if (!(await pedirConfirmacion(
-      `¿Deshacer la recepción del polín ${p.Codigo} de ${rem.Folio}? Vuelve a "aún en bodega" y sale de su piso.`, { textoConfirmar: "Deshacer" }))) return;
-    if (!(await post(`${API}/deshacer-recepcion`, { RemisionId: rem.RemisionId, PalletId: p.PalletId, Bodega: "DESCONGELADO" }))) return;
+      `¿Deshacer la recepción de ${l.Lote} ${l.DescripcionTalla} (${l.Masters} m) del polín ${p.Codigo}, ${rem.Folio}? ` +
+      `Vuelve a "aún en bodega" y sale de su piso.`, { textoConfirmar: "Deshacer" }))) return;
+    if (!(await post(`${API}/deshacer-recepcion`, {
+      RemisionId: rem.RemisionId, PalletId: l.PalletId, Lote: l.Lote, Clase: l.Clase, Talla: l.Talla, FechaLote: l.FechaLote,
+      Bodega: "DESCONGELADO",
+    }))) return;
     await recargar(sel?.HojaId);
   };
 

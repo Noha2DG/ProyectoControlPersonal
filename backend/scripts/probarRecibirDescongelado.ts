@@ -70,8 +70,8 @@ async function main() {
                  VALUES (?, 'Cerrado', ?, 10, ?, 'prueba')`, codigo, org[0].Codigo, bv[0].Codigo);
         return { palletId: await id(), codigo };
       };
-      const nuevoMaster = async (palletId: number) => {
-        await x(`INSERT INTO EtiquetaImpresa (OrdenId, Estatus, RegistradoPor, Correlativo) VALUES (?, 'Activa', 'prueba', UUID_SHORT())`, ordenId);
+      const nuevoMaster = async (palletId: number, orden = ordenId) => {
+        await x(`INSERT INTO EtiquetaImpresa (OrdenId, Estatus, RegistradoPor, Correlativo) VALUES (?, 'Activa', 'prueba', UUID_SHORT())`, orden);
         const etiquetaId = await id();
         await x(`UPDATE EtiquetaImpresa SET Correlativo = ? WHERE EtiquetaId = ?`, "E" + etiquetaId, etiquetaId);
         await x(`INSERT INTO Masters (PalletId, EtiquetaId, Estatus, IngresadoPor) VALUES (?, ?, 'EnBodega', 'prueba')`, palletId, etiquetaId);
@@ -104,10 +104,10 @@ async function main() {
       const d1 = await de(P1);
       check("5. P1 queda recibido, con quién y cuándo", d1?.Recibido === true && d1?.RecibidoPor === OP && !!d1?.RecibidoEn, JSON.stringify(d1));
       check("6. P2, del MISMO lote y talla, sigue aún en bodega", (await de(P2))?.Recibido === false);
-      await esperarError("7. no se recibe dos veces", () => recibirPolines(tx, { RemisionId: R, PalletIds: [P1.palletId] }, OP), "ya se recibieron");
+      await esperarError("7. no se recibe dos veces", () => recibirPolines(tx, { RemisionId: R, PalletIds: [P1.palletId] }, OP), "ya se recibió");
       await esperarError("8. no se recibe una remisión que va a otra área",
         () => recibirPolines(tx, { RemisionId: R, PalletIds: [P2.palletId], Bodega: "REEMPAQUE" }, OP), "no viene para esta área");
-      await esperarError("9. hay que marcar algún polín", () => recibirPolines(tx, { RemisionId: R, PalletIds: [] }, OP), "Marque los polines");
+      await esperarError("9. hay que marcar algún polín", () => recibirPolines(tx, { RemisionId: R, PalletIds: [] }, OP), "Marque lo que le llegó");
 
       await recibirPolines(tx, { RemisionId: R, PalletIds: [P2.palletId] }, OP);
       ing = await ingreso(R);
@@ -148,6 +148,49 @@ async function main() {
       await esperarError("20. no se recibe de una remisión confirmada",
         () => recibirPolines(tx, { RemisionId: R, PalletIds: [P3.palletId] }, OP), "ya confirmó");
 
+      // ── Un polín con dos tallas se recibe renglón por renglón (B0357, 29 oct 2026) ──────────────
+      const otraTalla = (await q(`SELECT Codigo FROM Tallas WHERE Codigo <> ? LIMIT 1`, det[0].Talla))[0].Codigo;
+      await x(`INSERT INTO DetallePedido (CodigoPedido, Clase, Proceso, Talla, Presentacion, EmpaqueMaster, CantidadCajas, KgPedido, LibrasPedido)
+               VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0)`,
+        PEDIDO, det[0].Clase, det[0].Proceso, otraTalla, det[0].Presentacion, emp[0].Codigo, Number(det[0].CajasXMaster) * 100);
+      const detalleB = await id();
+      await x(`INSERT INTO OrdenEtiquetado (Lote, PiscinaId, Ciclo, DetalleId, AreaCodigo, FechaProduccion, Color, Origen, Congelacion, CantidadMaster, Estatus, RegistradoPor)
+               VALUES ('ZZPRUEBA', ?, '1', ?, ?, CURDATE(), 'sc', ?, ?, 50, 'Pendiente', 'prueba')`,
+        pis[0].PiscinaId, detalleB, area[0].Codigo, org[0].Codigo, cong[0].Codigo);
+      const ordenB = await id();
+      const P4 = await nuevoPallet();
+      const m4a = [await nuevoMaster(P4.palletId), await nuevoMaster(P4.palletId)];
+      const m4b = await nuevoMaster(P4.palletId, ordenB);
+      await x(`INSERT INTO Remisiones (Folio, Tipo, Estatus, Fecha, BodegaDestino, CreadoPor)
+               VALUES (?, ?, 'Borrador', CURDATE(), 'DESCONGELADO', 'prueba')`, "ZZ-REC-" + Math.random().toString(36).slice(2, 6), serieArea[0].Tipo);
+      const R2 = await id();
+      await agregarPallet(tx, R2, { Codigo: P4.codigo }, OP);
+      const deR2 = async () => (await porEntregar(tx, "DESCONGELADO")).filter((r: any) => r.RemisionId === R2);
+      const renglon = (r: any) => ({ PalletId: r.PalletId, Lote: r.Lote, Clase: r.Clase, Talla: r.Talla, FechaLote: r.FechaLote });
+      pe = await deR2();
+      const filaB = pe.find((r: any) => r.Talla === Number(otraTalla));
+      check("22. el polín mixto sale en dos renglones (2 + 1 masters)",
+        pe.length === 2 && !!filaB && filaB.Masters === 1 && pe.some((r: any) => r.Masters === 2), JSON.stringify(pe));
+      const r22: any = await recibirPolines(tx, { RemisionId: R2, Lineas: [renglon(filaB)] }, OP);
+      check("23. recibir solo el renglón de la otra talla: 1 master", r22.Masters === 1 && (await pisoM(R2)) === 1, JSON.stringify(r22));
+      pe = await deR2();
+      check("24. ... el otro renglón del MISMO polín sigue aún en bodega",
+        pe.filter((r: any) => r.Recibido).length === 1 && pe.find((r: any) => !r.Recibido)?.Masters === 2, JSON.stringify(pe));
+      const rd4 = await q(`SELECT MasterId, RecibidoEn IS NOT NULL AS rec FROM RemisionDetalle WHERE RemisionId = ? ORDER BY MasterId`, R2);
+      check("25. solo el master de la otra talla quedó recibido",
+        rd4.filter(r => Number(r.rec)).map(r => Number(r.MasterId)).join() === String(m4b) &&
+        m4a.every(m => rd4.some(r => Number(r.MasterId) === m && !Number(r.rec))), JSON.stringify(rd4));
+      const filaA = pe.find((r: any) => !r.Recibido);
+      await recibirPolines(tx, { RemisionId: R2, Lineas: [renglon(filaA)] }, OP);
+      check("26. luego recibe el otro renglón: 3 masters al piso", (await pisoM(R2)) === 3);
+      await deshacerRecepcion(tx, { RemisionId: R2, ...renglon(filaB) });
+      pe = await deR2();
+      check("27. deshacer solo el renglón de la otra talla: queda 2 en el piso y ese vuelve a aún en bodega",
+        (await pisoM(R2)) === 2 && pe.find((r: any) => r.Talla === Number(otraTalla))?.Recibido === false &&
+        pe.find((r: any) => r.Talla !== Number(otraTalla))?.Recibido === true, JSON.stringify(pe));
+      await esperarError("28. un renglón que no está en la remisión no se recibe",
+        () => recibirPolines(tx, { RemisionId: R2, Lineas: [{ ...renglon(filaB), Lote: "NOEXISTE" }] }, OP), "ya se recibió o no es");
+
       throw new Error(ROLLBACK);
     }, { timeout: 180_000 });
   } catch (err: any) {
@@ -155,7 +198,7 @@ async function main() {
   }
 
   const sobras: any[] = await p.$queryRawUnsafe(`SELECT CodigoPedido FROM Pedidos WHERE CodigoPedido = 'ZZPRUEBA_REC'`);
-  check("21. la transacción revirtió TODO el fixture", sobras.length === 0);
+  check("29. la transacción revirtió TODO el fixture", sobras.length === 0);
 
   console.log(`\n${ok} OK, ${fallos} fallas`);
   await p.$disconnect();
