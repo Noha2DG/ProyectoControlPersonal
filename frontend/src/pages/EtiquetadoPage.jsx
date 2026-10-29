@@ -319,9 +319,9 @@ export default function EtiquetadoPage() {
               )}
               {resumen && resumen.Objetivo != null && (() => {
                 // Este resumen muestra lo que hay escaneado DENTRO de bodega, igual que la pestaña
-                // Avance de Pedidos: ni lo declarado ni lo que ya salió (despachos y traslados). El
-                // candado que bloquea declarar de más sigue comparando contra lo declarado sin
-                // cambios (ver calcularResumen en ordenEtiquetado.ts), esto es solo visualización.
+                // Avance de Pedidos: ni lo declarado ni lo que ya salió (despachos y traslados). Es solo
+                // visualización: el candado que bloquea declarar de más compara lo escaneado en las otras
+                // capturas, contando lo despachado (ver calcularResumen en ordenEtiquetado.ts).
                 const pendienteEscaneado = resumen.Objetivo - resumen.EnBodega;
                 const pct = resumen.EnBodega / Math.max(1, resumen.Objetivo);
                 // Desde el 85 % la barra va en verde con el aviso de que la línea está por completarse,
