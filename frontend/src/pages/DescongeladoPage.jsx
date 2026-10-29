@@ -743,19 +743,32 @@ function InventarioPiso({ saldo, porLlegarM = 0, resumen, puedeCrear, marcadas, 
 // trae 35 de 71/90 y 1 de 51/60, y ese master no tiene por qué entrar al piso con los demás. Tocar el
 // código del polín marca todos sus renglones de una vez. No hay lector: el código está impreso en su
 // hoja (B0349). Un renglón recibido por error se deshace mientras no se haya trabajado.
+//
+// Lo ya recibido no se queda aquí (usuario, 29 oct 2026): ya está arriba, en el piso, y repetirlo
+// llenaba la sección de renglones verdes. Se esconde, con "ver recibidos" para deshacer un error.
 function PorEntregar({ filas, puedeRecibir, puedeDeshacer, onRecibir, onDeshacer }) {
   const [marcados, setMarcados] = useState({});   // claveRenglon → true
+  const [verRecibidos, setVerRecibidos] = useState(false);
+  const nRecibidos = filas.filter(r => r.Recibido).length;
+  const visibles = verRecibidos ? filas : filas.filter(r => !r.Recibido);
 
-  // Remisión → polín → renglones.
-  const remisiones = [];
+  // Remisión → polín → renglones. Los conteos de cada remisión salen de todas sus filas, no solo
+  // de las que se ven.
+  const cuenta = {};
   for (const r of filas) {
+    const c = cuenta[r.RemisionId] ??= { enBodega: new Set(), todos: new Set() };
+    c.todos.add(r.PalletId);
+    if (!r.Recibido) c.enBodega.add(r.PalletId);
+  }
+  const remisiones = [];
+  for (const r of visibles) {
     let rem = remisiones.find(x => x.RemisionId === r.RemisionId);
     if (!rem) { rem = { RemisionId: r.RemisionId, Folio: r.FolioRemision, polines: [] }; remisiones.push(rem); }
     let p = rem.polines.find(x => x.PalletId === r.PalletId);
     if (!p) { p = { PalletId: r.PalletId, Codigo: r.PalletCodigo, lineas: [], Masters: 0 }; rem.polines.push(p); }
     p.lineas.push(r); p.Masters += r.Masters || 0;
   }
-  if (!remisiones.length) return null;
+  if (!filas.length) return null;
 
   const clave = l => `${l.RemisionId}|${l.PalletId}|${l.Lote}|${l.Clase}|${l.Talla}|${l.FechaLote ?? ""}`;
   const alternar = l => setMarcados(m => {
@@ -778,13 +791,24 @@ function PorEntregar({ filas, puedeRecibir, puedeDeshacer, onRecibir, onDeshacer
         <span className="text-xs text-amber-800">
           bodega lo escaneó para el área y no ha confirmado. Marque lo que ya le llegó y use <b>Recibir</b>.
         </span>
+        {nRecibidos > 0 && (
+          <button onClick={() => setVerRecibidos(v => !v)}
+            className="ml-auto text-xs font-semibold text-amber-800 hover:underline whitespace-nowrap">
+            {verRecibidos ? "ocultar recibidos" : `ver recibidos (${nRecibidos})`}
+          </button>
+        )}
       </header>
+      {!remisiones.length && (
+        <p className="px-4 py-3 text-xs text-gray-500">
+          Todo lo que bodega dejó ya está en su piso, arriba. Falta que bodega confirme la remisión.
+        </p>
+      )}
       {remisiones.map(rem => {
         const lineas = rem.polines.flatMap(p => p.lineas);
         const marc = lineas.filter(l => !l.Recibido && marcados[clave(l)]);
         const mMarc = marc.reduce((s, l) => s + (l.Masters || 0), 0), kgMarc = marc.reduce((s, l) => s + l.Kg, 0);
-        const enBodega = rem.polines.filter(p => p.lineas.some(l => !l.Recibido)).length;
-        const recibidos = rem.polines.length - enBodega;
+        const enBodega = cuenta[rem.RemisionId].enBodega.size;
+        const recibidos = cuenta[rem.RemisionId].todos.size - enBodega;
         return (
           <div key={rem.RemisionId} className="border-t border-amber-100 first:border-t-0">
             <div className="px-4 py-2 flex flex-wrap items-center gap-2 bg-white">
