@@ -446,7 +446,15 @@ export function finDesdeHora(ini: string, hhmm: string): string {
 //
 // Primero manda el cierre de la hoja anterior de la misma jornada —  el turno anterior terminó ahí,
 // así que este empezó ahí— ; si no hay, el primer marcaje del área en la jornada.
+//
+// Si hay otra hoja de la jornada todavía abierta, no hay sugerencia: los dos turnos están trabajando
+// juntos, y este no empezó ni con el primer marcaje del área ni con un cierre que aún no ocurre.
 export async function inicioSugerido(client: any, bodega: string, fecha: string, antesDeHoja?: number | null) {
+  const [juntos]: any[] = await client.$queryRawUnsafe(`
+    SELECT 1 AS x FROM HojaProceso
+     WHERE BodegaCodigo = ? AND FechaProduccion = ? AND Estatus = 'Abierta'
+       AND (? IS NULL OR HojaId < ?) LIMIT 1`, bodega, fecha, antesDeHoja ?? null, antesDeHoja ?? null);
+  if (juntos) return null;
   const [prev]: any[] = await client.$queryRawUnsafe(`
     SELECT DATE_FORMAT(MAX(HoraFin), '%Y-%m-%d %H:%i:%s') AS t FROM HojaProceso
      WHERE BodegaCodigo = ? AND FechaProduccion = ? AND Estatus = 'Cerrada' AND HoraFin IS NOT NULL
@@ -465,11 +473,19 @@ export async function inicioSugerido(client: any, bodega: string, fecha: string,
 // arrancó el turno, aunque cruce la medianoche.
 const inicioDesdeHora = (fecha: string, hhmm: string) => `${fecha} ${hhmm}:00`;
 
+// Mientras no exista la tabla HojaAuxiliar (scripts/crearHojaAuxiliar.ts) la lectura no truena: sin
+// listas guardadas, cada hoja cuenta a todos los del marcaje, como antes. Así el código se puede
+// desplegar antes o después de crearla. Guardar una lista sí la exige (ver el cierre).
+const faltaTablaAuxiliar = (e: any) => String(e?.meta?.code ?? "") === "1146" || /HojaAuxiliar' doesn't exist/.test(String(e?.message));
+async function sinTablaAuxiliar(consulta: Promise<any>): Promise<any[]> {
+  try { return await consulta; } catch (e) { if (faltaTablaAuxiliar(e)) return []; throw e; }
+}
+
 export async function auxiliaresDeHoja(client: any, hojaId: number, hasta?: string | null, desde?: string | null) {
   // Las fechas viajan como texto armado por la base: un DATETIME leído por Prisma trae una Z que
   // miente, y cualquier cuenta en JavaScript lo corre seis horas.
   const [h]: any[] = await client.$queryRawUnsafe(`
-    SELECT BodegaCodigo, Encargado, DATE_FORMAT(FechaProduccion, '%Y-%m-%d') AS Fecha,
+    SELECT BodegaCodigo, Encargado, Estatus, DATE_FORMAT(FechaProduccion, '%Y-%m-%d') AS Fecha,
            DATE_FORMAT(COALESCE(HoraInicio, TIMESTAMP(FechaProduccion)), '%Y-%m-%d %H:%i:%s') AS Ini,
            -- Una hoja ABIERTA sigue sumando hasta ahora aunque tenga HoraFin: puede ser una que se
            -- cerró y se reabrió, y esa hora vieja ya no es el final de nada.
@@ -498,20 +514,59 @@ export async function auxiliaresDeHoja(client: any, hojaId: number, hasta?: stri
     HAVING Minutos > 0
      ORDER BY MIN(tr.FechaHora)`, ini, fin, h.BodegaCodigo, h.Encargado);
 
-  const lista = rows.map(r => ({
+  // Dos hojas abiertas a la vez (los dos turnos juntos, usuario 29 oct 2026): el marcaje dice quién
+  // estuvo en el ÁREA, no en qué hoja. Al cerrar, el encargado escoge quiénes van en la suya
+  // (HojaAuxiliar). Cerrada con esa lista, la hoja cuenta solo a esa gente; las cerradas antes, sin
+  // lista, siguen contando a todos. A quien ya va en otra hoja de la jornada se le avisa y llega sin
+  // marcar, para no contarlo dos veces.
+  const elegidos: any[] = await sinTablaAuxiliar(client.$queryRawUnsafe(
+    `SELECT Codigo, Minutos FROM HojaAuxiliar WHERE HojaId = ?`, hojaId));
+  const enOtra: any[] = await sinTablaAuxiliar(client.$queryRawUnsafe(`
+    SELECT ha.Codigo, MIN(ha.HojaId) AS HojaId
+      FROM HojaAuxiliar ha JOIN HojaProceso hp ON hp.HojaId = ha.HojaId
+     WHERE hp.BodegaCodigo = ? AND hp.FechaProduccion = ? AND ha.HojaId <> ?
+     GROUP BY ha.Codigo`, h.BodegaCodigo, h.Fecha, hojaId));
+  const otraDe = new Map(enOtra.map(r => [String(r.Codigo), Number(r.HojaId)]));
+  const elegido = new Map(elegidos.map(r => [String(r.Codigo), Number(r.Minutos)]));
+  const conLista = elegidos.length > 0;
+
+  const todos = rows.map(r => ({
     Codigo: r.Codigo, Nombre: r.Nombre, Desde: r.Desde, Hasta: r.Hasta,
     Minutos: Number(r.Minutos), Horas: Number((Number(r.Minutos) / 60).toFixed(2)),
     Presente: Number(r.Presente) === 1,
+    EnOtraHoja: otraDe.get(String(r.Codigo)) ?? null,
+    Elegido: conLista ? elegido.has(String(r.Codigo)) : !otraDe.has(String(r.Codigo)),
   }));
-  const minutos = lista.reduce((t, r) => t + r.Minutos, 0);
+  // Cerrada con lista: solo los elegidos, con los minutos que tenían al cerrar.
+  const cerradaConLista = conLista && h.Estatus === "Cerrada";
+  const lista = cerradaConLista
+    ? todos.filter(a => a.Elegido).map(a => ({ ...a, Minutos: elegido.get(String(a.Codigo))!, Horas: Number((elegido.get(String(a.Codigo))! / 60).toFixed(2)) }))
+    : todos;
+  const contados = cerradaConLista ? lista : lista.filter(a => a.Elegido);
+  const minutos = contados.reduce((t, r) => t + r.Minutos, 0);
   const sug = await inicioSugerido(client, h.BodegaCodigo, h.Fecha, hojaId);
   return {
     Desde: ini.slice(0, 16), Hasta: fin.slice(0, 16),
     // Se ofrece solo si es ANTERIOR al inicio que tiene la hoja: es la señal de que se abrió tarde.
     InicioSugerido: sug && sug.Inicio < ini ? { Hora: sug.Inicio.slice(11, 16), Motivo: sug.Motivo } : null,
-    Personas: lista.length, Minutos: minutos, Horas: Number((minutos / 60).toFixed(2)),
-    Presentes: lista.filter(r => r.Presente).length, lista,
+    Personas: contados.length, Minutos: minutos, Horas: Number((minutos / 60).toFixed(2)),
+    Presentes: contados.filter(r => r.Presente).length, lista,
   };
+}
+
+// Quiénes trabajaron en ESTA hoja, marcados por el encargado al cerrar de la lista del marcaje (ver
+// auxiliaresDeHoja). Solo se puede escoger a alguien de esa lista. Sin el campo —  una pestaña
+// anterior al despliegue—  cuentan los que la lista trae marcados.
+export function elegirAuxiliares(lista: any[], pedidos: any): { escogidos: any[] } | { error: string } {
+  let escogidos = lista.filter(a => a.Elegido);
+  if (Array.isArray(pedidos)) {
+    const codigos = new Set(pedidos.map((c: any) => String(c)));
+    const ajenos = [...codigos].filter(c => !lista.some(a => String(a.Codigo) === c));
+    if (ajenos.length) return { error: `No marcaron en el área dentro del horario de la hoja: ${ajenos.join(", ")}. Recargue la lista.` };
+    escogidos = lista.filter(a => codigos.has(String(a.Codigo)));
+  }
+  if (lista.length > 0 && escogidos.length === 0) return { error: "Marque quiénes trabajaron en esta hoja" };
+  return { escogidos };
 }
 
 // GET /api/descongelado/hojas/:id/auxiliares?desde=HH:MM&hasta=HH:MM
@@ -773,14 +828,16 @@ router.post("/hojas", requireAuth, requirePerm("descongelado", "crear"), async (
     // La hoja se abre a mano antes de descongelar, con su cabecera completa (usuario, 26 oct 2026).
     if (!Encargado) { res.status(400).json({ error: "El encargado es requerido" }); return; }
     if (!HoraInicio) { res.status(400).json({ error: "La hora de inicio es requerida" }); return; }
-    // Una hoja abierta por jornada: la pantalla agrega todo a LA hoja abierta, y con dos no sabría a
-    // cuál. El turno que sigue abre la suya después de cerrar la anterior.
+    // Puede haber más de una hoja abierta en la jornada: en ciertos horarios los dos turnos trabajan
+    // juntos (usuario, 29 oct 2026), y al descongelar se escoge a cuál va. Lo que no puede haber es
+    // dos abiertas con el MISMO encargado: cada hoja es el turno de alguien.
     const [abierta]: any[] = await prisma.$queryRaw`
       SELECT HojaId FROM HojaProceso
-       WHERE BodegaCodigo = ${bodega} AND FechaProduccion = ${fecha} AND Propiedad = ${propiedad} AND Estatus = 'Abierta'
+       WHERE BodegaCodigo = ${bodega} AND FechaProduccion = ${fecha} AND Propiedad = ${propiedad}
+         AND Encargado = ${Encargado} AND Estatus = 'Abierta'
        LIMIT 1`;
     if (abierta) {
-      res.status(400).json({ error: `Ya está abierta la hoja #${abierta.HojaId} de esta jornada: ciérrela antes de abrir otra.` });
+      res.status(400).json({ error: `Ese encargado ya tiene abierta la hoja #${abierta.HojaId} de esta jornada.` });
       return;
     }
 
@@ -1820,6 +1877,17 @@ router.post("/hojas/:id/cerrar", requireAuth, requirePerm("descongelado", "cerra
     // necesita el candado de la hoja. Dentro, la transacción vencía y el cierre fallaba con
     // "Transaction not found". Con `desde` sale la misma ventana que tendrá la hoja ya corregida.
     const gente = await auxiliaresDeHoja(prisma, id, /^\d{2}:\d{2}$/.test(horaFin) ? horaFin : null, horaInicio);
+    const eleccion = elegirAuxiliares(gente?.lista ?? [], req.body.Auxiliares);
+    if ("error" in eleccion) { res.status(400).json({ error: eleccion.error }); return; }
+    // La lista se guarda en HojaAuxiliar: sin la tabla se avisa antes de tocar nada, en vez de cerrar
+    // la hoja perdiendo a quién marcó el encargado.
+    try { await prisma.$queryRawUnsafe(`SELECT 1 FROM HojaAuxiliar LIMIT 0`); }
+    catch (e) {
+      if (!faltaTablaAuxiliar(e)) throw e;
+      res.status(400).json({ error: "Falta crear la tabla HojaAuxiliar en la base (scripts/crearHojaAuxiliar.ts). La hoja no se cerró." });
+      return;
+    }
+    const escogidos = eleccion.escogidos;
 
     const out = await prisma.$transaction(async (tx) => {
       const [h]: any[] = await tx.$queryRaw`
@@ -1870,9 +1938,15 @@ router.post("/hojas/:id/cerrar", requireAuth, requirePerm("descongelado", "cerra
         `;
       }
 
+      await tx.$executeRaw`DELETE FROM HojaAuxiliar WHERE HojaId = ${id}`;
+      if (escogidos.length) {
+        await tx.$executeRawUnsafe(
+          `INSERT INTO HojaAuxiliar (HojaId, Codigo, Minutos) VALUES ${escogidos.map(() => "(?, ?, ?)").join(",")}`,
+          ...escogidos.flatMap(a => [id, a.Codigo, a.Minutos]));
+      }
       await tx.$executeRaw`
         UPDATE HojaProceso SET Estatus = 'Cerrada', HoraFin = ${fin},
-                               Personas = ${gente?.Personas ?? null},
+                               Personas = ${gente ? escogidos.length : null},
                                CerradaPor = ${operador}, CerradaEn = NOW()
         WHERE HojaId = ${id}
       `;

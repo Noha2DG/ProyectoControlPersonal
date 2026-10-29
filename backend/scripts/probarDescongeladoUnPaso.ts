@@ -461,6 +461,9 @@ async function main() {
         // ── La hoja #49: el turno empezó con el primer marcaje, pero la hoja se abrió cuando se
         // capturó el primer descongelado, horas después. Con la ventana arrancando ahí, el cierre
         // contaba cero. Se simula el turno A abierto en el sistema a las 13:00.
+        // Con A, B y C abiertas a la vez el sistema entiende que los turnos trabajan juntos y no sugiere
+        // (dos hojas abiertas, 29 oct 2026): para este caso se sacan de la jornada mientras se mira.
+        await tx.$executeRawUnsafe(`UPDATE HojaProceso SET FechaProduccion = '2031-01-14' WHERE HojaId IN (?, ?, ?)`, A, B, C);
         const tarde = await hoja(`${D} 13:00:00`, E1);
         const t: any = await auxiliaresDeHoja(tx, tarde, "14:00");
         check(t.Minutos < a.Minutos,
@@ -471,6 +474,8 @@ async function main() {
         check(corregida.Personas === 3 && corregida.Minutos === 545,
           `con el inicio corregido cuenta el turno entero: ${corregida.Personas} auxiliares, ${corregida.Minutos} min`);
         check(corregida.InicioSugerido == null, "ya corregida, deja de sugerir");
+        await tx.$executeRawUnsafe(`DELETE FROM HojaProceso WHERE HojaId = ?`, tarde);
+        await tx.$executeRawUnsafe(`UPDATE HojaProceso SET FechaProduccion = ? WHERE HojaId IN (?, ?, ?)`, D, A, B, C);
 
         // Cerrado el turno A, el turno siguiente empieza donde terminó: no en el primer marcaje del día.
         await tx.$executeRawUnsafe(
