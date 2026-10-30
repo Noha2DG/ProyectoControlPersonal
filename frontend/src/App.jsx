@@ -175,6 +175,7 @@ function EmpleadosSection({ canCrear, canEditar, canBaja }) {
       </div>
 
       <EmpleadosTable empleados={filtrados} loading={loading} isAdmin={canEditar || canBaja}
+        mostrarBaja={filtroEstado === "Baja"}
         onEdit={canEditar ? (emp => setModal({ open: true, empleado: emp })) : null}
         onBaja={canBaja ? (emp => setBajaModal({ open: true, empleado: emp })) : null}
         onReactivar={canEditar ? abrirReactivar : null} />

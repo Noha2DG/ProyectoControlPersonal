@@ -9,7 +9,6 @@ import authRouter from "./routes/auth.ts";
 import empleadosRouter from "./routes/empleados.ts";
 import usuariosRouter from "./routes/usuarios.ts";
 import movimientosRouter from "./routes/movimientos.ts";
-import fotosRouter from "./routes/fotos.ts";
 import areasRouter from "./routes/areas.ts";
 import transferenciasRouter from "./routes/transferencias.ts";
 import planificacionRouter from "./routes/planificacion.ts";
@@ -73,13 +72,11 @@ const PORT = process.env.PORT || 3001;
 app.use(cors());
 app.use(compression());
 app.use(express.json());
-app.use("/uploads", express.static(path.join(RAIZ_BACKEND, "uploads")));
 
 app.use("/api/auth", authRouter);
 app.use("/api/empleados", requireAuth, empleadosRouter);
 app.use("/api/usuarios", usuariosRouter);
 app.use("/api/movimientos", movimientosRouter);
-app.use("/api/fotos", fotosRouter);
 app.use("/api/areas", areasRouter);
 app.use("/api/transferencias", transferenciasRouter);
 app.use("/api/planificacion", planificacionRouter);
@@ -140,7 +137,7 @@ app.use(express.static(frontendDist));
 const PARECE_ARCHIVO = /\.[a-z0-9]+$/i;
 
 app.use((req, res, next) => {
-  if (req.method !== "GET" || req.path.startsWith("/api") || req.path.startsWith("/uploads")) { next(); return; }
+  if (req.method !== "GET" || req.path.startsWith("/api")) { next(); return; }
 
   // Devolver index.html para esos archivos es lo que rompía la aplicación entera: el navegador pedía
   // /assets/index-<hash viejo>.js, recibía 200 con el HTML dentro, intentaba leer HTML como

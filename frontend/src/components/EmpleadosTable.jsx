@@ -1,9 +1,10 @@
 import { useColWidths, useOrden, ordenarFilas, Th, Colgroup } from "./ResizableTh.jsx";
 
-const COL_DEFAULTS = { codigo: 110, nombre: 220, ingreso: 110, sexo: 90, civil: 130, dpi: 150, etalent: 110, estado: 100, acciones: 130 };
+const COL_DEFAULTS = { codigo: 110, nombre: 220, ingreso: 110, baja: 110, sexo: 90, civil: 130, dpi: 150, etalent: 110, estado: 100, acciones: 130 };
 const BASE_COLS = ["codigo", "nombre", "ingreso", "sexo", "civil", "dpi", "etalent", "estado"];
+const BAJA_COLS = ["codigo", "nombre", "ingreso", "baja", "sexo", "civil", "dpi", "etalent", "estado"];
 
-const fmt = (dateStr) => {
+const fmt =(dateStr) => {
   if (!dateStr) return "-";
   const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(dateStr));
   if (!m) return "-";
@@ -12,17 +13,18 @@ const fmt = (dateStr) => {
   return `${d}/${mo}/${y}`;
 };
 
-export default function EmpleadosTable({ empleados, loading, isAdmin, onEdit, onBaja, onReactivar }) {
+export default function EmpleadosTable({ empleados, loading, isAdmin, onEdit, onBaja, onReactivar, mostrarBaja }) {
   const [widths, startResize] = useColWidths("empleados", COL_DEFAULTS);
   const [orden, alternarOrden] = useOrden();
   // DPI se compara como número: son 13 dígitos y como texto se ordenaría raro con los
   // registros incompletos (0 o vacío).
   const filas = ordenarFilas(empleados, orden, {
-    codigo: e => e.Codigo, nombre: e => e.NombreCompleto, ingreso: e => e.FechaIngreso,
+    codigo: e => e.Codigo, nombre: e => e.NombreCompleto, ingreso: e => e.FechaIngreso, baja: e => e.FechaBaja,
     sexo: e => e.Sexo, civil: e => e.EstadoCivil, dpi: e => Number(e.DPI) || null,
     etalent: e => e.CodigoEtalent, estado: e => e.Estado,
   });
-  const COLS = isAdmin ? [...BASE_COLS, "acciones"] : BASE_COLS;
+  const columnas = mostrarBaja ? BAJA_COLS : BASE_COLS;
+  const COLS = isAdmin ? [...columnas, "acciones"] : columnas;
 
   if (loading) {
     return (
@@ -42,14 +44,15 @@ export default function EmpleadosTable({ empleados, loading, isAdmin, onEdit, on
 
   return (
     <div className="bg-white rounded-xl shadow overflow-hidden">
-      <div className="overflow-x-auto">
+      <div className="overflow-x-auto overflow-y-auto max-h-[70vh]">
         <table className="w-full text-sm table-fixed">
           <Colgroup columns={COLS} widths={widths} />
-          <thead>
-            <tr className="bg-gray-100 text-gray-600 uppercase text-xs tracking-wider">
+          <thead className="sticky top-0 z-10 bg-gray-100">
+            <tr className="text-gray-600 uppercase text-xs tracking-wider">
               <Th width={widths.codigo} onResizeStart={startResize("codigo")} sortKey="codigo" orden={orden} onOrdenar={alternarOrden} className="px-4 py-3 text-left">Código</Th>
               <Th width={widths.nombre} onResizeStart={startResize("nombre")} sortKey="nombre" orden={orden} onOrdenar={alternarOrden} className="px-4 py-3 text-left">Nombre Completo</Th>
               <Th width={widths.ingreso} onResizeStart={startResize("ingreso")} sortKey="ingreso" orden={orden} onOrdenar={alternarOrden} className="px-4 py-3 text-left">F. Ingreso</Th>
+              {mostrarBaja && <Th width={widths.baja} onResizeStart={startResize("baja")} sortKey="baja" orden={orden} onOrdenar={alternarOrden} className="px-4 py-3 text-left">F. Baja</Th>}
               <Th width={widths.sexo} onResizeStart={startResize("sexo")} sortKey="sexo" orden={orden} onOrdenar={alternarOrden} className="px-4 py-3 text-left">Sexo</Th>
               <Th width={widths.civil} onResizeStart={startResize("civil")} sortKey="civil" orden={orden} onOrdenar={alternarOrden} className="px-4 py-3 text-left">Estado Civil</Th>
               <Th width={widths.dpi} onResizeStart={startResize("dpi")} sortKey="dpi" orden={orden} onOrdenar={alternarOrden} className="px-4 py-3 text-left">DPI</Th>
@@ -64,6 +67,7 @@ export default function EmpleadosTable({ empleados, loading, isAdmin, onEdit, on
                 <td className="px-4 py-3 font-mono text-gray-700">{emp.Codigo}</td>
                 <td className="px-4 py-3 font-medium text-gray-900">{emp.NombreCompleto}</td>
                 <td className="px-4 py-3 text-gray-600">{fmt(emp.FechaIngreso)}</td>
+                {mostrarBaja && <td className="px-4 py-3 text-gray-600">{fmt(emp.FechaBaja)}</td>}
                 <td className="px-4 py-3 text-gray-600">{emp.Sexo || "-"}</td>
                 <td className="px-4 py-3 text-gray-600">{emp.EstadoCivil || "-"}</td>
                 <td className="px-4 py-3 font-mono text-gray-600">{emp.DPI > 0 ? emp.DPI : "-"}</td>
