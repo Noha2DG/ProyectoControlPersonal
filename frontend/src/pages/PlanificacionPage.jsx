@@ -170,11 +170,11 @@ export default function PlanificacionPage() {
           <div className="w-8 h-8 border-4 border-blue-800 border-t-transparent rounded-full animate-spin" />
         </div>
       ) : (
-        <div className="bg-white rounded-xl shadow overflow-hidden">
+        <div className="bg-white rounded-xl shadow overflow-x-auto overflow-y-auto max-h-[60vh]">
           <table className="w-full text-sm table-fixed">
             <Colgroup columns={PLAN_COLS} widths={widths} />
-            <thead>
-              <tr className="bg-gray-100 text-gray-600 uppercase text-xs tracking-wider">
+            <thead className="sticky top-0 z-10 bg-gray-100">
+              <tr className="text-gray-600 uppercase text-xs tracking-wider">
                 <Th width={widths.area} onResizeStart={startResize("area")} className="px-5 py-3 text-left">Área</Th>
                 <Th width={widths.nombre} onResizeStart={startResize("nombre")} className="px-5 py-3 text-left">Nombre</Th>
                 <Th width={widths.cupos} onResizeStart={startResize("cupos")} className="px-5 py-3 text-center">Cupos</Th>

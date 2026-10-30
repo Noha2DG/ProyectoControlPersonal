@@ -331,11 +331,11 @@ export default function TransferenciasAdminPage() {
       {loading ? (
         <div className="flex justify-center py-16"><div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" /></div>
       ) : (
-        <div className="bg-white rounded-xl shadow overflow-x-auto">
+        <div className="bg-white rounded-xl shadow overflow-x-auto overflow-y-auto max-h-[70vh]">
           <table className="w-full text-sm table-fixed">
             <Colgroup columns={COLS} widths={widths} />
-            <thead>
-              <tr className="bg-gray-100 text-gray-600 uppercase text-xs tracking-wider">
+            <thead className="sticky top-0 z-10 bg-gray-100">
+              <tr className="text-gray-600 uppercase text-xs tracking-wider">
                 <Th width={widths.fecha} onResizeStart={startResize("fecha")} sortKey="fecha" orden={orden} onOrdenar={alternarOrden} className="px-4 py-3 text-left">Fecha</Th>
                 <Th width={widths.codigo} onResizeStart={startResize("codigo")} sortKey="codigo" orden={orden} onOrdenar={alternarOrden} className="px-4 py-3 text-left">Código</Th>
                 <Th width={widths.nombre} onResizeStart={startResize("nombre")} sortKey="nombre" orden={orden} onOrdenar={alternarOrden} className="px-4 py-3 text-left">Nombre</Th>

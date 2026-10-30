@@ -96,12 +96,6 @@ export default function KioscoPage() {
 
   const esEntrada = resultado?.tipo === "Entrada";
 
-  const fotoBorde = resultado
-    ? esEntrada
-      ? "border-green-500 shadow-[0_0_0_4px_rgba(34,197,94,0.25)]"
-      : "border-red-500 shadow-[0_0_0_4px_rgba(239,68,68,0.25)]"
-    : "border-gray-200";
-
   // Mantener el foco siempre en el input al hacer clic en cualquier parte
   const handlePageClick = () => inputRef.current?.focus();
 
@@ -133,37 +127,6 @@ export default function KioscoPage() {
         </div>
 
         <div className="p-6 flex flex-col items-center gap-5">
-
-          {/* Foto */}
-          <div className={`w-44 h-52 rounded-xl overflow-hidden border-4 transition-all duration-300 bg-gray-100 flex items-center justify-center ${fotoBorde}`}>
-            {resultado ? (
-              <>
-                <img
-                  src={`/uploads/fotos/${resultado.empleado.Codigo}.jpg`}
-                  alt={resultado.empleado.NombreCompleto}
-                  className="w-full h-full object-cover"
-                  onError={e => {
-                    e.currentTarget.style.display = "none";
-                    e.currentTarget.nextSibling.style.display = "flex";
-                  }}
-                />
-                <div className="hidden w-full h-full items-center justify-center bg-gray-200">
-                  <svg className="w-20 h-20 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
-                      d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-                  </svg>
-                </div>
-              </>
-            ) : (
-              <div className="flex flex-col items-center justify-center text-gray-300 gap-2">
-                <svg className="w-16 h-16 opacity-40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
-                    d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-                </svg>
-                <span className="text-xs text-gray-400">Esperando...</span>
-              </div>
-            )}
-          </div>
 
           {/* Info empleado o reloj */}
           {resultado ? (
