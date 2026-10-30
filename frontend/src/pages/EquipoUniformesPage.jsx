@@ -20,6 +20,26 @@ const ESTADO_CLS = {
   Incompleto: "bg-red-100 text-red-700",
 };
 
+function EstadoPill({ estado }) {
+  return (
+    <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${ESTADO_CLS[estado] || "bg-gray-100 text-gray-600"}`}>
+      {estado}
+    </span>
+  );
+}
+
+function PrendasChips({ items }) {
+  return (
+    <div className="flex flex-wrap gap-1">
+      {items.map(it => (
+        <span key={it.Nombre} className={`px-1.5 py-0.5 rounded text-xs ${it.Devuelto ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-600"}`}>
+          {it.Nombre}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 export default function EquipoUniformesPage() {
   const { logout } = useAuth();
   const [fecha, setFecha]   = useState(fechaLarga());
@@ -242,17 +262,17 @@ export default function EquipoUniformesPage() {
     <div className="min-h-screen bg-gray-200 flex flex-col select-none font-sans">
 
       {/* Encabezado */}
-      <div className="bg-gray-300 border-b border-gray-400 px-6 py-3 flex items-center justify-between shadow shrink-0">
-        <div>
-          <h1 className="text-3xl font-black tracking-wide text-gray-800 uppercase">Entrega de Uniformes</h1>
-          <div className="flex items-center gap-2 mt-1">
+      <div className="bg-gray-300 border-b border-gray-400 px-4 sm:px-6 py-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-3 shadow shrink-0">
+        <div className="min-w-0">
+          <h1 className="text-2xl sm:text-3xl font-black tracking-wide text-gray-800 uppercase">Entrega de Uniformes</h1>
+          <div className="flex flex-wrap items-center gap-2 mt-1">
             <span className="text-xs font-semibold text-gray-600 bg-white border border-gray-400 px-3 py-0.5 rounded">Fecha</span>
             <span className="text-xs font-bold text-gray-800 bg-white border border-gray-400 px-3 py-0.5 rounded">{fecha}</span>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
           <button onClick={() => { fetchTipos(); fetchRegistros(); }}
-            className="bg-gray-100 border border-gray-400 rounded px-3 py-1.5 text-xs font-semibold text-gray-700 hover:bg-white transition flex items-center gap-1">
+            className="flex-1 sm:flex-none min-h-11 xl:min-h-0 bg-gray-100 border border-gray-400 rounded px-3 py-1.5 text-xs font-semibold text-gray-700 hover:bg-white transition flex items-center justify-center gap-1">
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
                 d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
@@ -260,11 +280,11 @@ export default function EquipoUniformesPage() {
             Actualizar
           </button>
           <button onClick={limpiarSesion}
-            className="bg-gray-100 border border-gray-400 rounded px-3 py-1.5 text-xs font-semibold text-gray-700 hover:bg-white transition">
+            className="flex-1 sm:flex-none min-h-11 xl:min-h-0 bg-gray-100 border border-gray-400 rounded px-3 py-1.5 text-xs font-semibold text-gray-700 hover:bg-white transition">
             Limpiar
           </button>
           <button onClick={() => { logout(); window.location.hash = ""; }}
-            className="bg-red-600 text-white border border-red-700 rounded px-3 py-1.5 text-xs font-semibold hover:bg-red-700 transition flex items-center gap-1">
+            className="flex-1 sm:flex-none min-h-11 xl:min-h-0 bg-red-600 text-white border border-red-700 rounded px-3 py-1.5 text-xs font-semibold hover:bg-red-700 transition flex items-center justify-center gap-1 whitespace-nowrap">
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
             </svg>
@@ -275,23 +295,23 @@ export default function EquipoUniformesPage() {
 
       {/* Aviso de conexión/sesión — visible para no ocultar fallas como listas vacías silenciosas */}
       {(avisoTipos || avisoRegistros) && (
-        <div className="bg-red-600 text-white text-sm font-semibold px-6 py-2 flex flex-col gap-0.5 shrink-0">
+        <div className="bg-red-600 text-white text-sm font-semibold px-4 sm:px-6 py-2 flex flex-col gap-0.5 shrink-0">
           {avisoTipos && <span>⚠ {avisoTipos}</span>}
           {avisoRegistros && <span>⚠ {avisoRegistros}</span>}
         </div>
       )}
 
       {/* Cuerpo */}
-      <div className="flex gap-4 px-6 py-4 shrink-1 overflow-x-auto">
+      <div className="px-4 sm:px-6 py-4">
 
         {/* Formulario */}
-        <div className="w-[600px] shrink-0">
+        <div className="w-full xl:w-[600px]">
           <div className="bg-white border border-gray-400 rounded shadow-sm">
 
             {/* Carnet */}
-            <div className="flex items-center border-b border-gray-300 px-4 py-3 gap-3">
-              <span className="w-28 text-sm font-semibold text-gray-700 shrink-0">Carnet</span>
-              <div className="relative w-56">
+            <div className="flex flex-wrap items-center border-b border-gray-300 px-4 py-3 gap-2 sm:gap-3">
+              <span className="w-full sm:w-28 text-sm font-semibold text-gray-700 shrink-0">Carnet</span>
+              <div className="relative w-full sm:w-56">
                 <input
                   ref={codigoRef}
                   value={codigoInput}
@@ -303,13 +323,13 @@ export default function EquipoUniformesPage() {
                   autoFocus
                   autoComplete="off"
                   disabled={escaneando}
-                  className="w-full border border-gray-400 rounded px-2 py-1 text-sm font-mono text-center uppercase focus:outline-none focus:ring-2 focus:ring-blue-400 disabled:opacity-50"
+                  className="w-full border border-gray-400 rounded px-2 py-2.5 xl:py-1 text-base xl:text-sm font-mono text-center uppercase focus:outline-none focus:ring-2 focus:ring-blue-400 disabled:opacity-50"
                 />
                 {sugerenciasAbiertas && sugerencias.length > 0 && (
                   <ul className="absolute z-20 w-full mt-1 bg-white border border-gray-300 rounded-lg shadow-lg max-h-56 overflow-y-auto text-left">
                     {sugerencias.map(e => (
                       <li key={e.Codigo} onMouseDown={() => handleSelectSugerencia(e)}
-                        className="px-3 py-2 text-xs hover:bg-blue-50 cursor-pointer border-b border-gray-100 last:border-b-0">
+                        className="px-3 py-3 xl:py-2 text-sm xl:text-xs hover:bg-blue-50 cursor-pointer border-b border-gray-100 last:border-b-0">
                         <span className="font-mono font-bold text-gray-700">{e.Codigo}</span>
                         <span className="text-gray-600"> — {e.NombreCompleto}</span>
                       </li>
@@ -317,7 +337,10 @@ export default function EquipoUniformesPage() {
                   </ul>
                 )}
               </div>
-              <div className={`flex-1 border rounded px-3 py-1 text-sm min-h-[32px] flex items-center ${
+              {/* Vacío no dice nada: en teléfono se oculta hasta que haya a quién mostrar. */}
+              <div className={`w-full sm:w-auto sm:flex-1 min-w-0 border rounded px-3 py-1 text-sm min-h-[32px] items-center ${
+                !empleado && !escaneando ? "hidden sm:flex" : "flex"
+              } ${
                 empleado ? "border-blue-300 bg-blue-50 text-blue-900 font-semibold" : "border-gray-300 bg-gray-50 text-gray-400"
               }`}>
                 {escaneando
@@ -336,7 +359,7 @@ export default function EquipoUniformesPage() {
                 ) : (
                   <div className="grid grid-cols-2 gap-2">
                     {tipos.map(t => (
-                      <label key={t.Codigo} className="flex items-center gap-2 border border-gray-200 rounded-lg px-3 py-2 text-sm cursor-pointer hover:bg-blue-50">
+                      <label key={t.Codigo} className="flex items-center gap-2 border border-gray-200 rounded-lg px-3 py-3 xl:py-2 text-sm cursor-pointer hover:bg-blue-50">
                         <input type="checkbox" checked={!!seleccion[t.Codigo]} onChange={() => toggleItem(t.Codigo)}
                           className="w-4 h-4 accent-blue-600 cursor-pointer" />
                         {t.Nombre}
@@ -345,7 +368,7 @@ export default function EquipoUniformesPage() {
                   </div>
                 )}
                 <button onClick={handleAsignar} disabled={guardando || tipos.length === 0}
-                  className="mt-3 w-full bg-blue-600 text-white font-semibold py-2 rounded-lg hover:bg-blue-700 transition disabled:opacity-50">
+                  className="mt-3 w-full bg-blue-600 text-white font-semibold py-3 xl:py-2 rounded-lg hover:bg-blue-700 transition disabled:opacity-50">
                   {guardando ? "Guardando..." : "Guardar asignación"}
                 </button>
               </div>
@@ -356,7 +379,7 @@ export default function EquipoUniformesPage() {
                 <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Confirmar devolución de equipo</p>
                 <div className="grid grid-cols-2 gap-2">
                   {entrega.items.map(it => (
-                    <label key={it.CodigoTipoEquipo} className="flex items-center gap-2 border border-gray-200 rounded-lg px-3 py-2 text-sm cursor-pointer hover:bg-green-50">
+                    <label key={it.CodigoTipoEquipo} className="flex items-center gap-2 border border-gray-200 rounded-lg px-3 py-3 xl:py-2 text-sm cursor-pointer hover:bg-green-50">
                       <input type="checkbox" checked={!!seleccion[it.CodigoTipoEquipo]} onChange={() => toggleItem(it.CodigoTipoEquipo)}
                         className="w-4 h-4 accent-green-600 cursor-pointer" />
                       {it.Nombre}
@@ -365,7 +388,7 @@ export default function EquipoUniformesPage() {
                 </div>
                 <p className="text-xs text-gray-400 mt-2">Desmarque las prendas que no fueron devueltas.</p>
                 <button onClick={handleDevolucion} disabled={guardando}
-                  className="mt-3 w-full bg-green-600 text-white font-semibold py-2 rounded-lg hover:bg-green-700 transition disabled:opacity-50">
+                  className="mt-3 w-full bg-green-600 text-white font-semibold py-3 xl:py-2 rounded-lg hover:bg-green-700 transition disabled:opacity-50">
                   {guardando ? "Guardando..." : "Confirmar devolución"}
                 </button>
 
@@ -376,7 +399,7 @@ export default function EquipoUniformesPage() {
                     </p>
                     <div className="grid grid-cols-2 gap-2">
                       {itemsDisponiblesParaAgregar.map(t => (
-                        <label key={t.Codigo} className="flex items-center gap-2 border border-gray-200 rounded-lg px-3 py-2 text-sm cursor-pointer hover:bg-blue-50">
+                        <label key={t.Codigo} className="flex items-center gap-2 border border-gray-200 rounded-lg px-3 py-3 xl:py-2 text-sm cursor-pointer hover:bg-blue-50">
                           <input type="checkbox" checked={!!extraSeleccion[t.Codigo]} onChange={() => toggleExtra(t.Codigo)}
                             className="w-4 h-4 accent-blue-600 cursor-pointer" />
                           {t.Nombre}
@@ -384,7 +407,7 @@ export default function EquipoUniformesPage() {
                       ))}
                     </div>
                     <button onClick={handleAgregar} disabled={agregando}
-                      className="mt-3 w-full bg-blue-600 text-white font-semibold py-2 rounded-lg hover:bg-blue-700 transition disabled:opacity-50">
+                      className="mt-3 w-full bg-blue-600 text-white font-semibold py-3 xl:py-2 rounded-lg hover:bg-blue-700 transition disabled:opacity-50">
                       {agregando ? "Agregando..." : "Agregar equipo"}
                     </button>
                   </div>
@@ -431,10 +454,35 @@ export default function EquipoUniformesPage() {
       </div>
 
       {/* Tabla + panel de incompletos */}
-      <div className="flex gap-4 px-6 pb-6 flex-1 overflow-auto">
+      <div className="flex flex-col xl:flex-row gap-4 px-4 sm:px-6 pb-6 flex-1">
 
-        <div className="flex-1 min-w-0 bg-white border border-gray-400 rounded shadow-sm overflow-hidden self-start">
-          <table className="w-full text-xs">
+        <div className="xl:flex-1 min-w-0 bg-white border border-gray-400 rounded shadow-sm overflow-hidden xl:self-start">
+          {/* Teléfono: tarjetas. Seis columnas no caben en 360 px sin obligar a desplazar de lado. */}
+          <ul className="md:hidden divide-y divide-gray-200">
+            {cargando && registros.length === 0 ? (
+              <li className="px-4 py-8 text-center text-xs text-gray-400">Cargando...</li>
+            ) : registros.length === 0 ? (
+              <li className="px-4 py-8 text-center text-xs text-gray-400">Sin entregas de equipo hoy</li>
+            ) : registros.map(r => (
+              <li key={r.id} className="px-4 py-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium text-gray-900 leading-tight">{r.NombreCompleto}</p>
+                    <p className="font-mono text-xs text-gray-500 mt-0.5">{r.Codigo}</p>
+                  </div>
+                  <div className="shrink-0"><EstadoPill estado={r.Estado} /></div>
+                </div>
+                <div className="mt-2"><PrendasChips items={r.items} /></div>
+                <p className="mt-2 text-xs text-gray-500">
+                  Entrega <span className="font-mono text-gray-700">{r.HoraEntrega}</span>
+                  <span className="mx-2 text-gray-300">·</span>
+                  Devolución <span className="font-mono text-gray-700">{r.HoraDevolucion || "—"}</span>
+                </p>
+              </li>
+            ))}
+          </ul>
+
+          <table className="hidden md:table w-full text-xs">
             <thead>
               <tr className="bg-gray-200 border-b border-gray-400">
                 <th className="px-3 py-2 text-left font-semibold text-gray-600 border-r border-gray-300 whitespace-nowrap">Empleado</th>
@@ -453,23 +501,11 @@ export default function EquipoUniformesPage() {
               ) : registros.map((r, i) => (
                 <tr key={r.id} className={`${i % 2 === 0 ? "bg-white" : "bg-gray-50"}`}>
                   <td className="px-3 py-1.5 font-mono text-gray-700 border-r border-gray-200 whitespace-nowrap">{r.Codigo}</td>
-                  <td className="px-3 py-1.5 text-gray-900 border-r border-gray-200 whitespace-nowrap">{r.NombreCompleto}</td>
-                  <td className="px-3 py-1.5 border-r border-gray-200">
-                    <div className="flex flex-wrap gap-1">
-                      {r.items.map(it => (
-                        <span key={it.Nombre} className={`px-1.5 py-0.5 rounded text-xs ${it.Devuelto ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-600"}`}>
-                          {it.Nombre}
-                        </span>
-                      ))}
-                    </div>
-                  </td>
+                  <td className="px-3 py-1.5 text-gray-900 border-r border-gray-200">{r.NombreCompleto}</td>
+                  <td className="px-3 py-1.5 border-r border-gray-200"><PrendasChips items={r.items} /></td>
                   <td className="px-3 py-1.5 text-center font-mono text-gray-600 border-r border-gray-200 whitespace-nowrap">{r.HoraEntrega}</td>
                   <td className="px-3 py-1.5 text-center font-mono text-gray-600 border-r border-gray-200 whitespace-nowrap">{r.HoraDevolucion || "—"}</td>
-                  <td className="px-3 py-1.5 text-center whitespace-nowrap">
-                    <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${ESTADO_CLS[r.Estado] || "bg-gray-100 text-gray-600"}`}>
-                      {r.Estado}
-                    </span>
-                  </td>
+                  <td className="px-3 py-1.5 text-center whitespace-nowrap"><EstadoPill estado={r.Estado} /></td>
                 </tr>
               ))}
             </tbody>
@@ -482,12 +518,13 @@ export default function EquipoUniformesPage() {
         </div>
 
         {/* Panel: equipo incompleto del día */}
-        <div className="w-80 shrink-0 bg-white border border-red-300 rounded shadow-sm overflow-hidden self-start">
+        {/* Bajo xl va arriba de las entregas: lo que falta devolver no debe quedar al fondo de la lista. */}
+        <div className="-order-1 xl:order-none xl:w-80 shrink-0 bg-white border border-red-300 rounded shadow-sm overflow-hidden xl:self-start">
           <div className="bg-red-50 border-b border-red-300 px-3 py-2 flex items-center justify-between">
             <span className="text-xs font-bold text-red-700 uppercase tracking-wide">Equipo incompleto · {fechaCorta()}</span>
             <span className="bg-red-600 text-white text-xs font-bold rounded-full px-2 py-0.5">{incompletos.length}</span>
           </div>
-          <div className="divide-y divide-gray-100 max-h-[420px] overflow-y-auto">
+          <div className="divide-y divide-gray-100 max-h-64 xl:max-h-[420px] overflow-y-auto">
             {incompletos.length === 0 ? (
               <p className="px-3 py-6 text-center text-gray-400 text-xs">Sin pendientes — todo el equipo fue devuelto</p>
             ) : incompletos.map(r => (
