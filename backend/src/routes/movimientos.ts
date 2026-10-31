@@ -25,6 +25,30 @@ function getOperador(req: Request): string {
   }
 }
 
+// Una Salida corregida a mano cierra el área abierta igual que la del kiosco: sin esto la transferencia
+// seguía "En curso" y la cerraba el primer escaneo del día siguiente, con horas de más (30 oct 2026).
+// La que empezó después de la Salida no se toca, quedaría con duración negativa. Solo se avisa si esa
+// Salida es lo último que marcó la persona; con una Entrada posterior, el área abierta es de otro turno.
+export async function cerrarTransferenciaAbierta(
+  codigo: string, salida: string, db: Pick<typeof prisma, "$executeRaw" | "$queryRaw"> = prisma,
+): Promise<string | null> {
+  await db.$executeRaw`
+    UPDATE Transferencias SET FechaSalida = ${salida}
+    WHERE Codigo = ${codigo} AND FechaSalida IS NULL AND FechaHora <= ${salida}
+  `;
+  const posterior = await db.$queryRaw`
+    SELECT t.CodigoArea, DATE_FORMAT(t.FechaHora, '%d/%m/%Y %H:%i') AS Inicio
+    FROM Transferencias t
+    WHERE t.Codigo = ${codigo} AND t.FechaSalida IS NULL AND t.FechaHora > ${salida}
+      AND NOT EXISTS (SELECT 1 FROM Movimientos m WHERE m.Codigo = ${codigo} AND m.FechaHora > ${salida})
+    ORDER BY t.FechaHora DESC
+    LIMIT 1
+  ` as any[];
+  return posterior.length
+    ? `La salida quedó guardada, pero sigue abierta el área ${posterior[0].CodigoArea}, que empezó el ${posterior[0].Inicio}, después de esa salida. Corrígela en Transferencias.`
+    : null;
+}
+
 // POST /api/movimientos/registrar  { Codigo }  (terminal de kiosco — sin sesión, dispositivo físico fijo)
 router.post("/registrar", async (req: Request, res: Response) => {
   const { Codigo } = req.body;
@@ -201,7 +225,8 @@ router.post("/", requireAuth, requirePerm("movimientos", "editar"), async (req: 
       if (esDuplicado(err)) { res.status(400).json({ error: "Ya existe un registro idéntico para ese empleado, fecha/hora y tipo" }); return; }
       throw err;
     }
-    res.status(201).json({ ok: true });
+    const aviso = Tipo === "Salida" ? await cerrarTransferenciaAbierta(Codigo, fh) : null;
+    res.status(201).json({ ok: true, aviso });
   } catch (err: any) { res.status(500).json({ error: err.message }); }
 });
 
@@ -234,7 +259,8 @@ router.put("/:id", requireAuth, requirePerm("movimientos", "editar"), async (req
       if (esDuplicado(err)) { res.status(400).json({ error: "Ya existe un registro idéntico para ese empleado, fecha/hora y tipo" }); return; }
       throw err;
     }
-    res.json({ ok: true });
+    const aviso = Tipo === "Salida" ? await cerrarTransferenciaAbierta(Codigo, fh) : null;
+    res.json({ ok: true, aviso });
   } catch (err: any) { res.status(500).json({ error: err.message }); }
 });
 
