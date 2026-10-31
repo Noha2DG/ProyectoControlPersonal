@@ -11,14 +11,18 @@ const COLS = Object.keys(COL_DEFAULTS);
 // del Lb/hr del destajo.
 const EMPTY = { Codigo: "", Nombre: "", Grupo: "", GeneraPaga: true, BodegaVirtualCodigo: "" };
 
-function AreaModal({ area, grupos, bodegas, onSave, onClose }) {
+function AreaModal({ area, areas, grupos, bodegas, onSave, onClose }) {
   const isEdit = !!area;
   const [form, setForm] = useState(isEdit
     ? { ...area, Grupo: area.Grupo || "", GeneraPaga: area.GeneraPaga !== false, BodegaVirtualCodigo: area.BodegaVirtualCodigo || "" }
     : EMPTY);
   const set = f => e => setForm(p => ({ ...p, [f]: e.target.value }));
 
-  const handleSubmit = e => { e.preventDefault(); onSave(form); };
+  // `areas` trae también las inactivas: su código tampoco se puede reutilizar.
+  const codigoNormal = form.Codigo.trim().toUpperCase();
+  const areaConCodigo = isEdit ? null : areas.find(a => a.Codigo.toUpperCase() === codigoNormal);
+
+  const handleSubmit = e => { e.preventDefault(); if (!areaConCodigo) onSave(form); };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
@@ -39,6 +43,11 @@ function AreaModal({ area, grupos, bodegas, onSave, onClose }) {
               className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono uppercase focus:outline-none focus:ring-2 focus:ring-blue-400 disabled:bg-gray-100"
               placeholder="Ej: DS"
             />
+            {areaConCodigo && (
+              <p className="text-xs text-red-600 mt-1">
+                El código {areaConCodigo.Codigo} ya es del área {areaConCodigo.Nombre}{areaConCodigo.Activa ? "" : " (inactiva)"}. Escribe otro.
+              </p>
+            )}
           </div>
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1">Nombre *</label>
@@ -98,7 +107,7 @@ function AreaModal({ area, grupos, bodegas, onSave, onClose }) {
             <button type="button" onClick={onClose} className="px-4 py-2 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 transition">
               Cancelar
             </button>
-            <button type="submit" className="px-5 py-2 text-sm bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 transition">
+            <button type="submit" disabled={!!areaConCodigo} className="px-5 py-2 text-sm bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 transition disabled:opacity-50 disabled:cursor-not-allowed">
               {isEdit ? "Guardar" : "Crear"}
             </button>
           </div>
@@ -135,7 +144,9 @@ export default function AreasPage() {
   }, []);
 
   const handleSave = async (form) => {
-    const isEdit = !!form.Codigo && areas.some(a => a.Codigo === form.Codigo);
+    // Decide el botón con que se abrió el modal, no si el código existe: deducirlo del código convirtió
+    // "Nueva Área" con un código repetido en una edición que sobrescribió EP (30 oct 2026).
+    const isEdit = !!modal.area;
     const res = await fetch(isEdit ? `${API}/${form.Codigo}` : API, {
       method: isEdit ? "PUT" : "POST",
       headers: { "Content-Type": "application/json", ...authHeader() },
@@ -256,7 +267,7 @@ export default function AreasPage() {
       )}
 
       {modal.open && (
-        <AreaModal area={modal.area} grupos={grupos} bodegas={bodegas} onSave={handleSave} onClose={() => setModal({ open: false, area: null })} />
+        <AreaModal area={modal.area} areas={areas} grupos={grupos} bodegas={bodegas} onSave={handleSave} onClose={() => setModal({ open: false, area: null })} />
       )}
     </div>
   );
