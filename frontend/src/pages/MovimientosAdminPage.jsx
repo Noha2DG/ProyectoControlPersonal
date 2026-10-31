@@ -134,7 +134,11 @@ export default function MovimientosAdminPage() {
       headers: { "Content-Type": "application/json", ...authHeader() },
       body: JSON.stringify(form),
     });
-    if (res.ok) { setModal({ open: false, registro: null, cierre: null }); fetchData(); fetchCiclosAbiertos(); }
+    if (res.ok) {
+      const { aviso } = await res.json();
+      setModal({ open: false, registro: null, cierre: null }); fetchData(); fetchCiclosAbiertos();
+      if (aviso) alert(aviso);
+    }
     else { const e = await res.json(); alert("Error: " + e.error); }
   };
 
