@@ -46,15 +46,17 @@ router.get("/", async (_req: Request, res: Response) => {
 router.post("/", requireAuth, requirePerm("areas", "crear"), async (req: Request, res: Response) => {
   try {
     const { Codigo, Nombre, Grupo, GeneraPaga, BodegaVirtualCodigo } = req.body;
-    if (!Codigo || !Nombre) { res.status(400).json({ error: "Código y Nombre son requeridos" }); return; }
+    const codigo = String(Codigo ?? "").trim().toUpperCase();
+    if (!codigo || !Nombre) { res.status(400).json({ error: "Código y Nombre son requeridos" }); return; }
     await prisma.$executeRaw`
       INSERT INTO Areas (Codigo, Nombre, Grupo, GeneraPaga, BodegaVirtualCodigo)
-      VALUES (${Codigo.toUpperCase()}, ${Nombre}, ${normalizarGrupo(Grupo)}, ${generaPaga(GeneraPaga)},
+      VALUES (${codigo}, ${Nombre}, ${normalizarGrupo(Grupo)}, ${generaPaga(GeneraPaga)},
               ${BodegaVirtualCodigo || null})
     `;
     res.status(201).json({ ok: true });
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    if (err.message?.includes("Duplicate")) res.status(400).json({ error: "Ese código de área ya existe" });
+    else res.status(500).json({ error: err.message });
   }
 });
 
