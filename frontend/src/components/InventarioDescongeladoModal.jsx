@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { createPortal } from "react-dom";
 import { fmtNum } from "../utils/numero.js";
+import { LB_POR_KG } from "../utils/destajo.js";
 
 // El inventario al piso de Descongelado, para imprimir o guardar como PDF y contar el piso con él
 // ("Imprimir / PDF" usa el diálogo del navegador, igual que la hoja de Descongelado).
@@ -12,6 +13,19 @@ import { fmtNum } from "../utils/numero.js";
 // suma. Va aparte al final, polín por polín, para que quien cuenta sepa que viene y no lo busque. Lo
 // ya recibido está en el saldo y se cuenta como lo demás.
 const pendiente = r => r.PorEntregar === true && !r.Recibido;
+
+// Quién pasó la línea al piso (usuario, 29 oct 2026): el área que la recibió en su pantalla o bodega
+// al confirmar sin que nadie la recibiera (envío directo). Si llegó por las dos vías, se dicen las dos.
+export function entregaDe(r) {
+  const hora = t => (t ? t.slice(11, 16) : "");
+  const recibidos = r.RecibidosM ?? 0, total = r.TotalM ?? 0;
+  const directo = r.ConfirmadaPor ? `envío directo · ${r.ConfirmadaPor} ${hora(r.ConfirmadaEn)}`.trim() : null;
+  if (recibidos > 0) {
+    const rec = `recibió ${r.RecibidoPor ?? "el área"} ${hora(r.RecibidoEn)}`.trim();
+    return recibidos < total && directo ? `${rec} · ${total - recibidos} m por ${directo}` : rec;
+  }
+  return directo;
+}
 
 // Fechas puras (YYYY-MM-DD) partidas a mano: new Date() las lee como medianoche UTC y en Guatemala
 // las muestra un día antes (ver utils/fecha.js).
@@ -55,7 +69,7 @@ function ContenidoInventario({ fecha, saldo, porEntregar = [] }) {
 
       <div className="border-y-2 border-gray-800 py-2 mb-4 grid grid-cols-4 gap-x-6 text-sm">
         <div><span className="text-gray-500">Masters:</span> <b>{totalM}</b></div>
-        <div><span className="text-gray-500">Kg al piso:</span> <b>{fmtNum(totalKg)}</b></div>
+        <div><span className="text-gray-500">Kg al piso:</span> <b>{fmtNum(totalKg)}</b> <span className="text-gray-500">· {fmtNum(totalKg * LB_POR_KG)} lb</span></div>
         <div><span className="text-gray-500">Remisiones:</span> <b>{grupos.length}</b></div>
         <div><span className="text-gray-500">Líneas:</span> <b>{saldo.length}</b></div>
       </div>
@@ -69,7 +83,7 @@ function ContenidoInventario({ fecha, saldo, porEntregar = [] }) {
               {g.Folio || "Sin remisión (ajuste)"}
               {g.ConfirmadaEn && <span className="text-xs font-normal text-gray-500 ml-2">confirmada {g.ConfirmadaEn}</span>}
             </h2>
-            <p className="text-sm font-bold tabular-nums">{g.Masters ? `${g.Masters} masters · ` : ""}{fmtNum(g.Kg)} kg</p>
+            <p className="text-sm font-bold tabular-nums">{g.Masters ? `${g.Masters} masters · ` : ""}{fmtNum(g.Kg)} kg · {fmtNum(g.Kg * LB_POR_KG)} lb</p>
           </div>
           <table className="w-full text-xs print-table">
             <thead>
@@ -81,7 +95,8 @@ function ContenidoInventario({ fecha, saldo, porEntregar = [] }) {
                 <th className="py-1 pr-2 font-medium">Entró</th>
                 <th className="py-1 pr-2 font-medium text-right">Días al piso</th>
                 <th className="py-1 pr-2 font-medium text-right">Masters</th>
-                <th className="py-1 font-medium text-right">Kg</th>
+                <th className="py-1 pr-2 font-medium text-right">Kg</th>
+                <th className="py-1 font-medium text-right">Lb</th>
               </tr>
             </thead>
             <tbody>
@@ -91,10 +106,14 @@ function ContenidoInventario({ fecha, saldo, porEntregar = [] }) {
                   <td className="py-1 pr-2">{fmtDia(r.FechaLote)}</td>
                   <td className="py-1 pr-2"><span className="font-mono text-gray-500">{r.Clase}</span> {r.DescripcionClase}</td>
                   <td className="py-1 pr-2">{r.DescripcionTalla}</td>
-                  <td className="py-1 pr-2">{fmtDia(r.FechaIngreso)}</td>
+                  <td className="py-1 pr-2">
+                    {fmtDia(r.FechaIngreso)}
+                    {entregaDe(r) && <span className="block text-[10px] text-gray-500">{entregaDe(r)}</span>}
+                  </td>
                   <td className="py-1 pr-2 text-right tabular-nums">{r.DiasAlPiso === 0 ? "hoy" : r.DiasAlPiso ?? "—"}</td>
                   <td className="py-1 pr-2 text-right tabular-nums font-semibold">{r.Masters || ""}</td>
-                  <td className="py-1 text-right tabular-nums font-semibold">{fmtNum(r.Kg)}</td>
+                  <td className="py-1 pr-2 text-right tabular-nums font-semibold">{fmtNum(r.Kg)}</td>
+                  <td className="py-1 text-right tabular-nums">{fmtNum(r.Kg * LB_POR_KG)}</td>
                 </tr>
               ))}
             </tbody>
@@ -103,7 +122,8 @@ function ContenidoInventario({ fecha, saldo, porEntregar = [] }) {
                 <tr className="border-t border-gray-400 font-semibold">
                   <td className="py-1 pr-2" colSpan={6}>Subtotal {g.Folio || "ajuste"}</td>
                   <td className="py-1 pr-2 text-right tabular-nums">{g.Masters || ""}</td>
-                  <td className="py-1 text-right tabular-nums">{fmtNum(g.Kg)}</td>
+                  <td className="py-1 pr-2 text-right tabular-nums">{fmtNum(g.Kg)}</td>
+                  <td className="py-1 text-right tabular-nums">{fmtNum(g.Kg * LB_POR_KG)}</td>
                 </tr>
               </tfoot>
             )}
@@ -121,8 +141,8 @@ function ContenidoInventario({ fecha, saldo, porEntregar = [] }) {
       {llegan.length > 0 && (
         <div className="mt-6" style={{ breakInside: "avoid-page" }}>
           <h2 className="text-sm font-bold border-b border-gray-400 pb-0.5 mb-1">
-            Por entregar — sigue en bodega, no se cuenta
-            <span className="text-xs font-normal text-gray-500 ml-2">bodega lo escaneó y el área todavía no lo recibe</span>
+            Por entregar o por regresar — no se cuenta
+            <span className="text-xs font-normal text-gray-500 ml-2">bodega lo escaneó y el área no lo recibió, o no lo usó y regresa a bodega</span>
           </h2>
           <table className="w-full text-xs print-table text-gray-600">
             <tbody>
@@ -134,7 +154,8 @@ function ContenidoInventario({ fecha, saldo, porEntregar = [] }) {
                   <td className="py-1 pr-2"><span className="font-mono">{r.Clase}</span> {r.DescripcionClase}</td>
                   <td className="py-1 pr-2">{r.DescripcionTalla}</td>
                   <td className="py-1 pr-2 text-right tabular-nums">{r.Masters || ""}</td>
-                  <td className="py-1 text-right tabular-nums">{fmtNum(r.Kg)} kg</td>
+                  <td className="py-1 pr-2 text-right tabular-nums">{fmtNum(r.Kg)} kg</td>
+                  <td className="py-1">{r.PorRegresar ? "por regresar" : "aún en bodega"}</td>
                 </tr>
               )))}
             </tbody>

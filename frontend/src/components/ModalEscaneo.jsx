@@ -51,9 +51,22 @@ export default function ModalEscaneo({
     else lineaRef.current?.focus();
   }, [historial, lineaLista, motivoFijo]);
 
+  // El lector escribe donde esté el foco y termina con Enter: si se escanea la hoja del polín antes
+  // de escribir el motivo, "B0381" quedaba como motivo, el modal pasaba al lector vacío y no se enviaba
+  // nada (RP-0053, 2 nov 2026). Un código de polín o de master no es un motivo: se rechaza y se avisa.
+  const [avisoMotivo, setAvisoMotivo] = useState("");
+  const pareceCodigo = t => /^[A-Z]{1,3}\s?[A-Z]?\d{3,}$/i.test(t);
   const fijarMotivo = (e) => {
     e.preventDefault();
-    if (motivo.trim()) setMotivoFijo(true);
+    const t = motivo.trim();
+    if (!t) return;
+    if (pareceCodigo(t)) {
+      setAvisoMotivo(`${t} es el código que se escaneó, no el motivo. Escriba por qué regresa, toque Continuar y después escanee el polín.`);
+      setMotivo("");
+      return;
+    }
+    setAvisoMotivo("");
+    setMotivoFijo(true);
   };
 
   const handleSubmit = async (e) => {
@@ -106,12 +119,15 @@ export default function ModalEscaneo({
                   Continuar
                 </button>
               </div>
+              {avisoMotivo && <p className="mt-1.5 text-xs font-medium text-red-700">{avisoMotivo}</p>}
             </form>
           )}
           {pideMotivo && motivoFijo && (
             <p className="mb-3 text-xs text-gray-600">
               Por qué regresa: <b>{motivo.trim()}</b>{" "}
               <button type="button" onClick={() => setMotivoFijo(false)} className="text-blue-600 hover:underline">cambiar</button>
+              {/* Que se note que falta el paso que de verdad hace algo: escanear. */}
+              {historial.length === 0 && <span className="block mt-1 font-semibold text-amber-700">Ahora escanee la hoja del polín.</span>}
             </p>
           )}
           {pideLinea && (

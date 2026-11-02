@@ -449,7 +449,7 @@ function PanelRemision({ remisionId, onClose, onCambio }) {
   const [loading, setLoading] = useState(true);
   // Las dos formas de cargar producto se escanean, no se eligen de una lista: el operador tiene el
   // polín o la caja enfrente. null = ningún modal abierto.
-  const [escaneando, setEscaneando] = useState(null); // "pallet" | "master" | "devolver" | null
+  const [escaneando, setEscaneando] = useState(null); // "pallet" | "master" | null
   const [modalAnular, setModalAnular] = useState(false);
   const [mostrarHoja, setMostrarHoja] = useState(false);
   const [avance, setAvance] = useState({}); // DetalleId -> avance de esa línea de la proforma
@@ -497,22 +497,6 @@ function PanelRemision({ remisionId, onClose, onCambio }) {
     return `Polín ${data.PalletCodigo} — ${data.Agregados} master(s) agregados${sufijoLinea}`;
   };
 
-  // El polín que no se llevaron (se quedó al piso de bodega) vuelve entero con UN escaneo de su hoja:
-  // es el mismo polín, sin crear uno de devolución, y sale del piso del área.
-  const devolverPolin = async (codigo, _linea, motivo) => {
-    const res = await fetch(`${API}/${remisionId}/devolver-polin`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...authHeader() },
-      body: JSON.stringify({ Codigo: codigo, Motivo: motivo }),
-    });
-    const data = await leerJSON(res);
-    if (!res.ok) throw new Error(data.error || "No se pudo devolver el polín");
-    await fetchDetalle();
-    onCambio?.();
-    const piso = data.PisoKg > 0 ? ` · ${fmtNum(data.PisoKg)} kg salieron del piso de ${remision?.Piso?.NombreBodega ?? "el área"}` : "";
-    return `Polín ${data.PalletCodigo} — ${data.Masters} master(s) regresaron a bodega${piso}. Queda sin posición: ubíquelo.`;
-  };
-
   const handleQuitar = async (detalleId, correlativoTexto) => {
     const confirmado = await pedirConfirmacion(`¿Quitar ${correlativoTexto} de esta remisión? Regresa a bodega.`, { textoConfirmar: "Quitar" });
     if (!confirmado) return;
@@ -545,8 +529,18 @@ function PanelRemision({ remisionId, onClose, onCambio }) {
     // Si el área ya recibió parte en su pantalla, lo que falta se le entrega al confirmar: se avisa
     // cuáles son, para que lo que se quedó en bodega se quite antes.
     const recibidos = new Set(), faltan = new Set();
-    for (const l of remision.Lineas ?? []) (l.RecibidoEnArea ? recibidos : faltan).add(l.PalletCodigo);
+    for (const l of remision.Lineas ?? []) {
+      if (l.PorRegresarEnArea) continue;
+      (l.RecibidoEnArea ? recibidos : faltan).add(l.PalletCodigo);
+    }
     const parcial = aArea && recibidos.size > 0 && faltan.size > 0;
+    // Lo que el área no usó se resuelve antes de cerrar (2 nov 2026): el servidor también lo exige.
+    if (aArea && remision.PorRegresar > 0) {
+      await mostrarAlerta(`${lugar} no usó ${remision.PorRegresar} master(s) de ${remision.Folio}.
+
+Antes de confirmar, quita de la remisión las cajas que regresaron, por el correlativo de su etiqueta (o Quitar polín si no se usó nada), o escanéalas en un polín nuevo de devolución en Pallets.`);
+      return;
+    }
     const confirmado = await pedirConfirmacion(aArea
       ? (parcial
           ? `¿Confirmar la entrega de ${remision.Folio}?\n\n${lugar} ya recibió ${recibidos.size} polín(es). Estos todavía no los recibe: ${[...faltan].join(", ")}. Al confirmar se le entregan y entran a su piso; si se quedaron en bodega, quítalos antes de confirmar. Después de esto solo se puede anular.`
@@ -716,6 +710,25 @@ function PanelRemision({ remisionId, onClose, onCambio }) {
 
                 <PisoDeRemision piso={remision?.Piso} borrador={borrador} />
 
+                {/* El área se llevó todo pero no lo usó todo (2 nov 2026): lo que dejó por regresar
+                    vuelve a bodega escaneado en un polín de devolución, no al polín de origen. */}
+                {aArea && (remision?.PorRegresar > 0 || remision?.Regresados > 0) && (
+                  <div className="mb-4 text-xs px-3 py-2 rounded-lg bg-orange-50 text-orange-900 border border-orange-200">
+                    {remision.PorRegresar > 0 && (
+                      <p>
+                        <b>El área no usó {remision.PorRegresar} master(s).</b> Antes de confirmar, quita de la remisión las cajas que
+                        regresaron, por el correlativo de su etiqueta (o <b>Quitar polín</b> si no se usó nada), o escanéalas en un polín
+                        nuevo con origen <b>Devolución</b> en Pallets. Cualquier caja del mismo producto sirve: el sistema ajusta cuáles quedan.
+                      </p>
+                    )}
+                    {remision.Regresados > 0 && (
+                      <p className={remision.PorRegresar > 0 ? "mt-1 text-orange-700" : ""}>
+                        Ya regresaron {remision.Regresados} master(s) de esta remisión.
+                      </p>
+                    )}
+                  </div>
+                )}
+
                 {grupos.length === 0 ? (
                   <p className="text-gray-400 text-sm py-8 text-center border border-gray-200 rounded-lg">
                     Sin producto todavía. Escanea un <span className="font-semibold">Pallet</span> completo
@@ -727,8 +740,16 @@ function PanelRemision({ remisionId, onClose, onCambio }) {
                       <span className="text-xs font-semibold text-gray-500">
                         Polín <span className="font-mono text-gray-700">{g.PalletCodigo}</span> · {g.lineas.length} master(s)
                         {/* En un borrador a un área: si el área ya recibió este polín en su pantalla. */}
+                        {/* Lo que el área dejó por regresar: se ve aun con la remisión confirmada, hasta que vuelve. */}
+                        {aArea && g.lineas.some(l => l.PorRegresarEnArea) && (
+                          <span className="ml-2 font-semibold px-1.5 py-0.5 rounded bg-orange-100 text-orange-800"
+                            title="El área no los usó: quítalos de la remisión o escanéalos en un polín nuevo antes de confirmar">
+                            {g.lineas.filter(l => l.PorRegresarEnArea).length} sin usar
+                          </span>
+                        )}
                         {borrador && aArea && (() => {
                           const rec = g.lineas.filter(l => l.RecibidoEnArea);
+                          if (!rec.length && g.lineas.every(l => l.PorRegresarEnArea)) return null;
                           if (!rec.length) return <span className="ml-2 font-semibold px-1.5 py-0.5 rounded bg-amber-100 text-amber-800">aún en bodega</span>;
                           const ultimo = rec.map(l => l.RecibidoEnArea).sort().slice(-1)[0];
                           return (
@@ -835,13 +856,6 @@ function PanelRemision({ remisionId, onClose, onCambio }) {
                 solo un administrador puede anularla.
               </span>
             )}
-            {remision?.Estatus === "Confirmada" && puedeAnular && (!remision.AnulacionVencida || esAdmin) && remision.CantidadMasters > 0 && (
-              <button onClick={() => setEscaneando("devolver")}
-                title="Un polín de esta remisión no se lo llevaron: vuelve a bodega con un escaneo de su hoja"
-                className="px-4 py-2 rounded-lg text-sm font-semibold text-amber-700 bg-amber-50 border border-amber-300 hover:bg-amber-100 transition">
-                Devolver polín
-              </button>
-            )}
             {remision?.Estatus === "Confirmada" && puedeAnular && (!remision.AnulacionVencida || esAdmin) && (
               <button onClick={() => setModalAnular(true)}
                 className="px-4 py-2 rounded-lg text-sm font-semibold bg-red-600 text-white hover:bg-red-700 transition">
@@ -869,12 +883,6 @@ function PanelRemision({ remisionId, onClose, onCambio }) {
           descripcion="Apunta el lector al QR de la caja. El polín conserva su posición y las cajas que no se lleven."
           placeholder="QR del master (ej. E120)"
           onEscanear={escanearMaster} onCerrar={() => setEscaneando(null)} />
-      )}
-      {escaneando === "devolver" && (
-        <ModalEscaneo titulo="Devolver polín a bodega" Icono={IconoPallet} tono="ambar" verbo="devuelto" pideMotivo
-          descripcion="Escanea la hoja del polín que no se llevaron. Vuelve el mismo polín, con todas sus cajas de esta remisión, y sale del piso del área."
-          placeholder="QR del polín (ej. B0309)"
-          onEscanear={devolverPolin} onCerrar={() => setEscaneando(null)} />
       )}
       {modalAnular && (
         <ModalAnularRemision remision={remision} onConfirmar={handleAnular} onCerrar={() => setModalAnular(false)} />
@@ -958,7 +966,11 @@ export default function RemisionesPage() {
     if (!confirmado) return;
     const res = await fetch(`${API}/${r.RemisionId}`, { method: "DELETE", headers: authHeader() });
     const data = await leerJSON(res);
-    if (res.ok) fetchRemisiones();
+    if (res.ok) {
+      // Con masters que ya regresaron por devolución el documento existió: queda anulado, no borrado.
+      if (data.Anulada) await mostrarAlerta(`${r.Folio} quedó anulada en vez de eliminarse: ya habían regresado ${data.Regresados} master(s) a bodega y eso queda en el kardex.`);
+      fetchRemisiones();
+    }
     else await mostrarAlerta("Error: " + (data.error || "No se pudo eliminar"));
   };
 

@@ -80,7 +80,7 @@ function num(rows: any[], campos: string[]) {
 // su sección 1 —  en blanco en las tres hojas reales, porque a mano no hay cómo seguirla.
 const SQL_SALDO = `
   SELECT t.Bodega, b.Nombre AS NombreBodega, t.RemisionId, rm.Folio AS FolioRemision,
-         DATE_FORMAT(rm.ConfirmadaEn, '%Y-%m-%d %H:%i') AS ConfirmadaEn,
+         DATE_FORMAT(rm.ConfirmadaEn, '%Y-%m-%d %H:%i') AS ConfirmadaEn, rm.ConfirmadaPor,
          -- Lo de una remisión entra al piso cuando el área lo RECIBE o bodega la confirma (28 oct
          -- 2026). En borrador, lo que se ve aquí es lo ya recibido: la pantalla avisa que a la
          -- remisión todavía le falta la confirmación de bodega.
@@ -131,15 +131,47 @@ export async function saldoAlPiso(bodega: string | undefined, hasta: string) {
   // viejo primero. Ese es el orden en que hay que bajar el producto.
   const rows: any[] = await prisma.$queryRawUnsafe(
     `${SQL_SALDO} ${filtro}
-     GROUP BY t.Bodega, b.Nombre, t.RemisionId, rm.Folio, rm.ConfirmadaEn, rm.Estatus,
+     GROUP BY t.Bodega, b.Nombre, t.RemisionId, rm.Folio, rm.ConfirmadaEn, rm.ConfirmadaPor, rm.Estatus,
               t.Lote, t.Clase, cl.Descripcion, t.Talla, ta.Descripcion, t.FechaLote
      HAVING ABS(Kg) > 0.001
      ORDER BY t.Bodega, rm.ConfirmadaEn IS NULL, rm.ConfirmadaEn ASC, t.RemisionId,
               t.FechaLote IS NULL, t.FechaLote ASC, t.Lote, t.Talla`, ...args);
   // GrupoProducto: con qué otras líneas se puede unificar (ver grupoDeProducto). Lo manda el servidor
   // para que la pantalla avise con la misma regla con que se rechaza.
+  const entrega = await entregaDeLineas(rows.map(r => r.RemisionId).filter(id => id != null).map(Number));
   return num(rows, ["Kg", "Talla", "Masters", "KgPorMaster", "DiasAlPiso", "RemisionId"])
-    .map((r: any) => ({ ...r, GrupoProducto: grupoDeProducto(String(r.Clase)) }));
+    .map((r: any) => ({
+      ...r, GrupoProducto: grupoDeProducto(String(r.Clase)),
+      ...(entrega.get(`${r.RemisionId}|${r.Lote}|${r.Clase}|${r.Talla}|${r.FechaLote ?? ""}`) ?? {}),
+    }));
+}
+
+// Quién pasó cada línea al piso (usuario, 29 oct 2026): el área que la RECIBIÓ en su pantalla, o
+// bodega al confirmar sin que nadie la recibiera (envío directo). Sale de las cajas de la remisión,
+// con la misma llave que el ingreso al piso (lote, fecha del lote, clase y talla; ver SQL_LINEAS en
+// lib/inventarioPiso). RecibidosM < TotalM es una línea que llegó por las dos vías.
+async function entregaDeLineas(remisionIds: number[]) {
+  const out = new Map<string, any>();
+  const ids = [...new Set(remisionIds)];
+  if (!ids.length) return out;
+  const rows: any[] = await prisma.$queryRawUnsafe(`
+    SELECT rd.RemisionId, oe.Lote, dp.Clase, dp.Talla, DATE_FORMAT(oe.FechaProduccion, '%Y-%m-%d') AS FechaLote,
+           COUNT(*) AS TotalM, SUM(rd.RecibidoEn IS NOT NULL) AS RecibidosM,
+           MAX(rd.RecibidoPor) AS RecibidoPor, DATE_FORMAT(MAX(rd.RecibidoEn), '%Y-%m-%d %H:%i') AS RecibidoEn
+      FROM RemisionDetalle rd
+      JOIN Masters m ON m.MasterId = rd.MasterId
+      JOIN EtiquetaImpresa e ON e.EtiquetaId = m.EtiquetaId
+      JOIN OrdenEtiquetado oe ON oe.OrdenId = e.OrdenId
+      JOIN DetallePedido dp ON dp.DetalleId = oe.DetalleId
+     WHERE rd.Vigente = 1 AND rd.PorRegresarEn IS NULL AND rd.RemisionId IN (${ids.map(() => "?").join(",")})
+     GROUP BY rd.RemisionId, oe.Lote, dp.Clase, dp.Talla, oe.FechaProduccion`, ...ids);
+  for (const r of rows) {
+    out.set(`${r.RemisionId}|${r.Lote}|${r.Clase}|${r.Talla}|${r.FechaLote ?? ""}`, {
+      RecibidoPor: r.RecibidoPor, RecibidoEn: r.RecibidoEn,
+      RecibidosM: Number(r.RecibidosM), TotalM: Number(r.TotalM),
+    });
+  }
+  return out;
 }
 
 router.get("/saldo", requireAuth, requirePerm("descongelado", "ver"), async (req: Request, res: Response) => {
@@ -163,8 +195,10 @@ router.get("/saldo", requireAuth, requirePerm("descongelado", "ver"), async (req
 // Una fila por (remisión, polín, lote, fecha, clase, talla, peso del master), con Recibido = 1 si ya
 // se recibió. Solo de remisiones en borrador: una confirmada ya está toda en el piso.
 export async function porEntregar(client: any, bodega: string) {
+  // De los borradores: lo que el área no ha recibido y lo que dejó pendiente (2 nov 2026). Una remisión
+  // no se confirma con pendientes (ver confirmarRemision), así que de una confirmada no queda nada.
   const rows: any[] = await client.$queryRawUnsafe(`
-    SELECT r.RemisionId, r.Folio AS FolioRemision, p.PalletId, p.Codigo AS PalletCodigo,
+    SELECT r.RemisionId, r.Folio AS FolioRemision, r.Estatus AS EstatusRemision, p.PalletId, p.Codigo AS PalletCodigo,
            oe.Lote, dp.Clase, cl.Descripcion AS DescripcionClase, dp.Talla, ta.Descripcion AS DescripcionTalla,
            DATE_FORMAT(oe.FechaProduccion, '%Y-%m-%d') AS FechaLote,
            COUNT(*) AS Masters,
@@ -172,7 +206,10 @@ export async function porEntregar(client: any, bodega: string) {
            ROUND(COUNT(*) * pre.PesoKG * pre.CajasXMaster, 2) AS Kg,
            MAX(CASE WHEN rd.RecibidoEn IS NULL THEN 0 ELSE 1 END) AS Recibido,
            DATE_FORMAT(MAX(rd.RecibidoEn), '%Y-%m-%d %H:%i') AS RecibidoEn,
-           MAX(rd.RecibidoPor) AS RecibidoPor
+           MAX(rd.RecibidoPor) AS RecibidoPor,
+           MAX(CASE WHEN rd.PorRegresarEn IS NULL THEN 0 ELSE 1 END) AS PorRegresar,
+           DATE_FORMAT(MAX(rd.PorRegresarEn), '%Y-%m-%d %H:%i') AS PorRegresarEn,
+           MAX(rd.PorRegresarPor) AS PorRegresarPor
     FROM Remisiones r
     LEFT JOIN Areas a ON a.Codigo = r.AreaDestino
     JOIN RemisionDetalle rd ON rd.RemisionId = r.RemisionId AND rd.Vigente = 1
@@ -185,11 +222,11 @@ export async function porEntregar(client: any, bodega: string) {
     JOIN Clase cl ON cl.Clase = dp.Clase
     JOIN Tallas ta ON ta.Codigo = dp.Talla
     WHERE r.Estatus = 'Borrador' AND COALESCE(r.BodegaDestino, a.BodegaVirtualCodigo) = ?
-    GROUP BY r.RemisionId, r.Folio, p.PalletId, p.Codigo, oe.Lote, dp.Clase, cl.Descripcion, dp.Talla, ta.Descripcion,
-             oe.FechaProduccion, pre.PesoKG, pre.CajasXMaster, rd.RecibidoEn IS NULL
+    GROUP BY r.RemisionId, r.Folio, r.Estatus, p.PalletId, p.Codigo, oe.Lote, dp.Clase, cl.Descripcion, dp.Talla, ta.Descripcion,
+             oe.FechaProduccion, pre.PesoKG, pre.CajasXMaster, rd.RecibidoEn IS NULL, rd.PorRegresarEn IS NULL
     ORDER BY r.RemisionId, p.Codigo, oe.FechaProduccion, oe.Lote, ta.Descripcion`, bodega);
   return num(rows, ["RemisionId", "PalletId", "Talla", "Masters", "KgPorMaster", "Kg"])
-    .map((r: any) => ({ ...r, Recibido: Number(r.Recibido) === 1, PorEntregar: true }));
+    .map((r: any) => ({ ...r, Recibido: Number(r.Recibido) === 1, PorRegresar: Number(r.PorRegresar) === 1, PorEntregar: true }));
 }
 
 router.get("/por-entregar", requireAuth, requirePerm("descongelado", "ver"), async (req: Request, res: Response) => {
@@ -220,7 +257,11 @@ const aPiso = (e: any) => { if (e instanceof PisoEnNegativo) throw new ErrorNego
 // 51/60 del mismo lote). Se recibe y se deshace renglón por renglón, no el polín entero (usuario,
 // 29 oct 2026): un master que se coló en el polín no tiene por qué entrar al piso con los demás.
 // Sin Lote, el renglón es el polín completo.
-type Renglon = { PalletId: number; Lote?: string; Clase?: string; Talla?: number; FechaLote?: string | null };
+//
+// Masters (2 nov 2026, RS-0112): cuántos del renglón acepta el área. Bodega entrega el polín entero y
+// el área se lo lleva, pero según el plan del día usa solo una parte (21 de 40); el resto queda "por
+// regresar" a bodega: queda pendiente y bodega lo resuelve antes de cerrar. Sin Masters, el renglón entero.
+type Renglon = { PalletId: number; Lote?: string; Clase?: string; Talla?: number; FechaLote?: string | null; Masters?: number | null };
 
 function leerRenglones(crudos: any[]): Renglon[] {
   const out = new Map<string, Renglon>();
@@ -231,13 +272,18 @@ function leerRenglones(crudos: any[]): Renglon[] {
       PalletId, Lote: String(c.Lote), Clase: String(c.Clase ?? ""), Talla: Number(c.Talla),
       FechaLote: c.FechaLote ? String(c.FechaLote) : null,
     };
-    out.set(JSON.stringify(r), r);
+    // La cantidad no entra a la llave: el mismo renglón mandado dos veces es uno, con la última.
+    const k = JSON.stringify(r);
+    if (r.Lote != null && c?.Masters != null && c.Masters !== "") r.Masters = Number(c.Masters);
+    out.set(k, r);
   }
   return [...out.values()];
 }
 
-// Las cajas vigentes de la remisión que caen en esos renglones; las mismas llaves que agrupa porEntregar.
-async function cajasDeRenglones(tx: any, remisionId: number, renglones: Renglon[], recibidas: boolean) {
+// Las cajas vigentes de la remisión que caen en esos renglones (las mismas llaves que agrupa
+// porEntregar) y cumplen `condicion` sobre rd. Primero las que no estaban por regresar: al aceptar N,
+// esas son las que se toman.
+async function cajasDeRenglones(tx: any, remisionId: number, renglones: Renglon[], condicion: string) {
   const args: any[] = [];
   const filtro = renglones.map(r => {
     if (r.Lote == null) { args.push(r.PalletId); return "m.PalletId = ?"; }
@@ -245,22 +291,30 @@ async function cajasDeRenglones(tx: any, remisionId: number, renglones: Renglon[
     return "(m.PalletId = ? AND oe.Lote = ? AND dp.Clase = ? AND dp.Talla = ? AND DATE_FORMAT(oe.FechaProduccion, '%Y-%m-%d') <=> ?)";
   }).join(" OR ");
   return tx.$queryRawUnsafe(`
-    SELECT rd.DetalleId, rd.MasterId, m.PalletId
+    SELECT rd.DetalleId, rd.MasterId, m.PalletId, rd.RecibidoEn, rd.PorRegresarEn
     FROM RemisionDetalle rd
     JOIN Masters m ON m.MasterId = rd.MasterId
     JOIN EtiquetaImpresa e ON e.EtiquetaId = m.EtiquetaId
     JOIN OrdenEtiquetado oe ON oe.OrdenId = e.OrdenId
     JOIN DetallePedido dp ON dp.DetalleId = oe.DetalleId
-    WHERE rd.RemisionId = ? AND rd.Vigente = 1 AND rd.RecibidoEn IS ${recibidas ? "NOT NULL" : "NULL"} AND (${filtro})
+    WHERE rd.RemisionId = ? AND rd.Vigente = 1 AND ${condicion} AND (${filtro})
+    ORDER BY rd.PorRegresarEn IS NOT NULL, rd.DetalleId
     FOR UPDATE`, remisionId, ...args) as Promise<any[]>;
 }
 
+const enLista = (ids: number[]) => ids.map(() => "?").join(",");
+
 /**
- * POST /api/descongelado/recibir  { RemisionId, Lineas: [{PalletId, Lote, Clase, Talla, FechaLote}], Bodega? }
- * El área recibe los renglones que le llegaron de una remisión en borrador: sus cajas de ESA remisión
- * quedan recibidas (quién y cuándo) y entran a su piso, con la jornada de hoy. La remisión sigue en
- * borrador: la cierra bodega al confirmar (decisión del usuario), y lo que no se recibió lo quita o lo
- * entrega ahí. Con PalletIds en vez de Lineas recibe polines enteros.
+ * POST /api/descongelado/recibir  { RemisionId, Lineas: [{PalletId, Lote, Clase, Talla, FechaLote, Masters?}], Bodega? }
+ * El área recibe lo que le llegó de una remisión en borrador: esas cajas de ESA remisión quedan
+ * recibidas (quién y cuándo) y entran a su piso, con la jornada de hoy. La remisión sigue en
+ * borrador: la cierra bodega al confirmar (decisión del usuario). Con PalletIds en vez de Lineas
+ * recibe polines enteros.
+ *
+ * Con Masters, el área acepta solo esa cantidad del renglón y el resto queda PENDIENTE (por regresar a
+ * bodega): no entra a su piso y la remisión no se confirma hasta que bodega lo quite de ella o lo
+ * escanee en un polín nuevo de devolución (ver quitarLineas y devolverMaster en routes/remisiones).
+ * Mientras siga pendiente, el área todavía puede aceptarlo si el plan cambia.
  */
 export async function recibirPolines(tx: any, p: { RemisionId?: any; Lineas?: any; PalletIds?: any; Bodega?: any }, operador: string) {
   const remisionId = Number(p.RemisionId);
@@ -270,23 +324,47 @@ export async function recibirPolines(tx: any, p: { RemisionId?: any; Lineas?: an
   if (!renglones.length) throw new ErrorNegocio(400, "Marque lo que le llegó");
   const r = await remisionPorRecibir(tx, remisionId, String(p.Bodega || "DESCONGELADO"));
 
-  const lineas = await cajasDeRenglones(tx, remisionId, renglones, false);
-  if (!lineas.length) throw new ErrorNegocio(400, `Eso ya se recibió o no es de la remisión ${r.Folio}. Recargue la pantalla (F5).`);
+  // Primero el plan de todos los renglones, después se escribe: una cantidad inválida no deja nada a medias.
+  const recibir: number[] = [], regresa: number[] = [];
+  const polines = new Set<number>();
+  for (const g of renglones) {
+    const cajas = await cajasDeRenglones(tx, remisionId, [g], "rd.RecibidoEn IS NULL");
+    if (!cajas.length) continue;
+    const n = g.Masters == null ? cajas.length : g.Masters;
+    if (!Number.isInteger(n) || n < 0 || n > cajas.length) {
+      throw new ErrorNegocio(400, `De ${g.Lote} quedan ${cajas.length} masters por recibir: escriba de 0 a ${cajas.length}.`);
+    }
+    cajas.slice(0, n).forEach(c => recibir.push(Number(c.DetalleId)));
+    cajas.slice(n).forEach(c => regresa.push(Number(c.DetalleId)));
+    if (n > 0) polines.add(Number(cajas[0].PalletId));
+  }
+  if (!recibir.length && !regresa.length) {
+    throw new ErrorNegocio(400, `Eso ya se recibió o no es de la remisión ${r.Folio}. Recargue la pantalla (F5).`);
+  }
 
-  const ids = lineas.map(l => Number(l.DetalleId));
-  await tx.$executeRawUnsafe(
-    `UPDATE RemisionDetalle SET RecibidoEn = NOW(), RecibidoPor = ? WHERE DetalleId IN (${ids.map(() => "?").join(",")})`,
-    operador, ...ids);
+  if (recibir.length) {
+    await tx.$executeRawUnsafe(
+      `UPDATE RemisionDetalle SET RecibidoEn = NOW(), RecibidoPor = ?, PorRegresarEn = NULL, PorRegresarPor = NULL
+        WHERE DetalleId IN (${enLista(recibir)})`, operador, ...recibir);
+  }
+  if (regresa.length) {
+    // Si ya estaba por regresar conserva cuándo y quién lo dejó.
+    await tx.$executeRawUnsafe(
+      `UPDATE RemisionDetalle SET PorRegresarEn = COALESCE(PorRegresarEn, NOW()), PorRegresarPor = COALESCE(PorRegresarPor, ?)
+        WHERE DetalleId IN (${enLista(regresa)})`, operador, ...regresa);
+  }
   // El piso queda igual a lo recibido de la remisión: lo de hoy se suma a lo que ya se hubiera recibido.
-  const piso = await sincronizarIngresoDeRemision(tx, remisionId, r, hoyGT(), operador).catch(aPiso);
-  return { ok: true, Folio: r.Folio, Polines: new Set(lineas.map(l => Number(l.PalletId))).size, Masters: ids.length, KgAlPiso: piso.kg };
+  const piso = recibir.length
+    ? await sincronizarIngresoDeRemision(tx, remisionId, r, hoyGT(), operador).catch(aPiso)
+    : { kg: 0 };
+  return { ok: true, Folio: r.Folio, Polines: polines.size, Masters: recibir.length, PorRegresar: regresa.length, KgAlPiso: piso.kg };
 }
 
 /**
  * POST /api/descongelado/deshacer-recepcion  { RemisionId, PalletId, Lote?, Clase?, Talla?, FechaLote?, Bodega? }
- * Se marcó por error un renglón que no llegó (sin Lote, el polín entero): vuelve a "aún en bodega" y
- * sale del piso. Se niega si el área ya trabajó ese producto, igual que cuando bodega devuelve. Revisa
- * antes de escribir.
+ * Se marcó por error un renglón (sin Lote, el polín entero): todo el renglón vuelve a "aún en bodega",
+ * lo recibido sale del piso y lo que se había dejado por regresar deja de estarlo. Solo en borrador. Se
+ * niega si el área ya trabajó ese producto, igual que cuando bodega devuelve. Revisa antes de escribir.
  */
 export async function deshacerRecepcion(tx: any, p: { RemisionId?: any; PalletId?: any; Lote?: any; Clase?: any; Talla?: any; FechaLote?: any; Bodega?: any }) {
   const remisionId = Number(p.RemisionId);
@@ -294,14 +372,16 @@ export async function deshacerRecepcion(tx: any, p: { RemisionId?: any; PalletId
   if (!Number.isInteger(remisionId) || !renglones.length) throw new ErrorNegocio(400, "Falta la remisión o el polín");
   const r = await remisionPorRecibir(tx, remisionId, String(p.Bodega || "DESCONGELADO"));
 
-  const lineas = await cajasDeRenglones(tx, remisionId, renglones, true);
+  const lineas = await cajasDeRenglones(tx, remisionId, renglones, "(rd.RecibidoEn IS NOT NULL OR rd.PorRegresarEn IS NOT NULL)");
   if (!lineas.length) throw new ErrorNegocio(400, "Eso no está recibido en esta remisión. Recargue la pantalla (F5).");
 
-  await descontarDevolucionDelPiso(tx, remisionId, r, lineas.map(l => Number(l.MasterId))).catch(aPiso);
+  const recibidas = lineas.filter(l => l.RecibidoEn != null);
+  await descontarDevolucionDelPiso(tx, remisionId, r, recibidas.map(l => Number(l.MasterId))).catch(aPiso);
   const ids = lineas.map(l => Number(l.DetalleId));
   await tx.$executeRawUnsafe(
-    `UPDATE RemisionDetalle SET RecibidoEn = NULL, RecibidoPor = NULL WHERE DetalleId IN (${ids.map(() => "?").join(",")})`, ...ids);
-  return { ok: true, Folio: r.Folio, Masters: ids.length };
+    `UPDATE RemisionDetalle SET RecibidoEn = NULL, RecibidoPor = NULL, PorRegresarEn = NULL, PorRegresarPor = NULL
+      WHERE DetalleId IN (${enLista(ids)})`, ...ids);
+  return { ok: true, Folio: r.Folio, Masters: recibidas.length, PorRegresar: lineas.length - recibidas.length };
 }
 
 router.post("/recibir", requireAuth, requirePerm("descongelado", "crear"), async (req: Request, res: Response) => {

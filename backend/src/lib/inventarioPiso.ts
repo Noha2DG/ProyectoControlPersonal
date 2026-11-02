@@ -28,7 +28,8 @@ export class PisoEnNegativo extends Error {}
 // entra al agrupado a propósito: el mismo texto de lote puede traer dos fechas de producción
 // distintas —  G220EM00-E00 tiene 11 y 12 de mayo—  y colapsarlas perdería la diferencia.
 // Solo las líneas que YA LLEGARON al área: las de una remisión confirmada (confirmar es la entrega)
-// y, en un borrador, las que el área recibió polín por polín (RecibidoEn).
+// y, en un borrador, las que el área recibió polín por polín (RecibidoEn). Nunca las que el área dejó
+// "por regresar" a bodega (PorRegresarEn, 2 nov 2026): no las usó, aunque la remisión esté confirmada.
 const SQL_LINEAS = `
   SELECT oe.Lote,
          DATE_FORMAT(oe.FechaProduccion, '%Y-%m-%d') AS FechaLote,
@@ -43,7 +44,7 @@ const SQL_LINEAS = `
   JOIN OrdenEtiquetado oe ON oe.OrdenId = e.OrdenId
   JOIN DetallePedido dp ON dp.DetalleId = oe.DetalleId
   JOIN Presentacion pre ON pre.Codigo = dp.Presentacion
-  WHERE rd.RemisionId = ? AND rd.Vigente = 1
+  WHERE rd.RemisionId = ? AND rd.Vigente = 1 AND rd.PorRegresarEn IS NULL
     AND (r.Estatus = 'Confirmada' OR rd.RecibidoEn IS NOT NULL)
   GROUP BY oe.Lote, oe.FechaProduccion, dp.Clase, dp.Talla, pre.PesoKG, pre.CajasXMaster
 `;
