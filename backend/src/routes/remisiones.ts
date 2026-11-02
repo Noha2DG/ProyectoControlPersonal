@@ -331,7 +331,8 @@ router.get("/:id", requireAuth, requirePerm("remisiones", "ver"), async (req: Re
 
     const detalle: any[] = await prisma.$queryRawUnsafe(`
       SELECT rd.DetalleId AS RemisionDetalleId, rd.LineaContenedor, rd.AgregadoPor, rd.AgregadoEn,
-             DATE_FORMAT(rd.RecibidoEn, '%Y-%m-%d %H:%i') AS RecibidoEnArea, rd.RecibidoPor AS RecibidoPorArea, sub2.*
+             DATE_FORMAT(rd.RecibidoEn, '%Y-%m-%d %H:%i') AS RecibidoEnArea, rd.RecibidoPor AS RecibidoPorArea,
+             DATE_FORMAT(rd.PorRegresarEn, '%Y-%m-%d %H:%i') AS PorRegresarEnArea, rd.PorRegresarPor AS PorRegresarPorArea, sub2.*
       FROM RemisionDetalle rd
       JOIN (${MASTER_SELECT}) sub2 ON rd.MasterId = sub2.MasterId
       WHERE rd.RemisionId = ? AND rd.Vigente = 1
@@ -351,6 +352,9 @@ router.get("/:id", requireAuth, requirePerm("remisiones", "ver"), async (req: Re
         // Quién la recibió en el área y cuándo, si el área la recibió antes de que bodega confirmara.
         RecibidoEnArea: d.RecibidoEnArea ?? null,
         RecibidoPorArea: d.RecibidoPorArea ?? null,
+        // El área no la usó y la dejó por regresar: bodega la escanea de vuelta con Devolver master.
+        PorRegresarEnArea: d.PorRegresarEnArea ?? null,
+        PorRegresarPorArea: d.PorRegresarPorArea ?? null,
         CalzaConDestino: remision.CodigoCliente == null ? null : Number(remision.CodigoCliente) === m.CodigoCliente,
       };
     });
@@ -359,6 +363,10 @@ router.get("/:id", requireAuth, requirePerm("remisiones", "ver"), async (req: Re
     // que no lo tiene, qué se quedó en bodega y hay que devolver.
     const piso = remision.Estatus === "Anulada" ? null
       : await pisoDeRemision(prisma, remisionId, { BodegaDestino: remision.BodegaDestino, AreaDestino: remision.AreaDestino });
+    // Cuántas cajas ya regresaron con Devolver master (las líneas dejan de ser vigentes). En una
+    // anulada son todas, así que no se informa.
+    const [dev]: any[] = remision.Estatus === "Anulada" ? [{ n: 0 }] : await prisma.$queryRawUnsafe(
+      `SELECT COUNT(*) AS n FROM RemisionDetalle WHERE RemisionId = ? AND Vigente IS NULL`, remisionId);
 
     res.json({
       ...remision,
@@ -379,6 +387,8 @@ router.get("/:id", requireAuth, requirePerm("remisiones", "ver"), async (req: Re
       PesoKg: lineas.reduce((acc, l) => acc + l.PesoMasterKG, 0),
       PesoLb: lineas.reduce((acc, l) => acc + l.PesoMasterLb, 0),
       Piso: piso,
+      PorRegresar: lineas.filter(l => l.PorRegresarEnArea).length,
+      Regresados: Number(dev?.n ?? 0),
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -529,12 +539,25 @@ router.put("/:id", requireAuth, requirePerm("remisiones", "editar"), async (req:
 // Confirmada no se elimina: se anula (deja rastro en el kardex).
 export async function eliminarBorrador(tx: any, remisionId: number, operador: string) {
   const remision = await exigirBorrador(tx, remisionId);
-  const lineas: any[] = await tx.$queryRaw`SELECT MasterId, RecibidoEn FROM RemisionDetalle WHERE RemisionId = ${remisionId} FOR UPDATE`;
+  const todas: any[] = await tx.$queryRaw`SELECT MasterId, RecibidoEn, Vigente FROM RemisionDetalle WHERE RemisionId = ${remisionId} FOR UPDATE`;
+  const lineas = todas.filter(l => Number(l.Vigente) === 1);
   const masterIds = lineas.map(l => Number(l.MasterId));
   await descontarPiso(tx, remisionId, remision, lineas.filter(l => l.RecibidoEn != null).map(l => Number(l.MasterId)));
   await regresarABodega(tx, remisionId, masterIds, operador);
-  await tx.$executeRaw`DELETE FROM RemisionDetalle WHERE RemisionId = ${remisionId}`;
+  await tx.$executeRaw`DELETE FROM RemisionDetalle WHERE RemisionId = ${remisionId} AND Vigente = 1`;
+
+  // Si ya regresaron masters por Devolver master (el área los dejó por regresar), su salida y su
+  // devolución están en el kardex con este folio: el documento ya existió. Se anula en vez de borrarse.
+  const regresados = todas.length - lineas.length;
+  if (regresados > 0) {
+    await tx.$executeRaw`
+      UPDATE Remisiones SET Estatus = 'Anulada', AnuladaPor = ${operador}, AnuladaEn = NOW(),
+             MotivoAnulacion = ${`Borrador eliminado: ya habían regresado ${regresados} master(s) a bodega`}
+      WHERE RemisionId = ${remisionId}`;
+    return { anulada: true, regresados };
+  }
   await tx.$executeRaw`DELETE FROM Remisiones WHERE RemisionId = ${remisionId}`;
+  return { anulada: false, regresados: 0 };
 }
 
 router.delete("/:id", requireAuth, requirePerm("remisiones", "eliminar"), async (req: Request, res: Response) => {
@@ -548,8 +571,8 @@ router.delete("/:id", requireAuth, requirePerm("remisiones", "eliminar"), async 
     }
 
     const operador = getOperador(req);
-    await prisma.$transaction((tx) => eliminarBorrador(tx, remisionId, operador), { timeout: 60_000 });
-    res.json({ ok: true });
+    const out = await prisma.$transaction((tx) => eliminarBorrador(tx, remisionId, operador), { timeout: 60_000 });
+    res.json({ ok: true, Anulada: out.anulada, Regresados: out.regresados });
   } catch (err: any) {
     if (err instanceof ErrorNegocio) { res.status(err.status).json({ error: err.message }); return; }
     // Algo del piso todavía apunta a la remisión aunque el saldo cuadre (el área movió producto y lo
@@ -909,28 +932,79 @@ router.post("/:id/agregar-master", requireAuth, requirePerm("remisiones", "edita
   }
 });
 
+// Una caja que bodega saca de la remisión mientras el área dejó PENDIENTE (por regresar) algo del
+// mismo producto (2 nov 2026, RS-0112). Descongelado no escanea: aceptó "21 de 40" y el sistema marcó
+// 19 cajas cualesquiera. La que bodega tiene en la mano puede no ser una de esas: entonces una marcada
+// del mismo producto en esta remisión (lote, clase, talla, presentación y fecha; primero del mismo
+// polín) toma el estado de la que sale. Así lo que queda en la remisión son las cajas que de verdad
+// usó el área y el piso no cambia. Devuelve true si la caja sale como pendiente (no toca el piso).
+// `excluir`: las líneas que salen en la misma operación, que no pueden tomar el lugar de otra.
+async function salePendiente(tx: any, remisionId: number, detalleId: number, excluir: number[]): Promise<boolean> {
+  const [l]: any[] = await tx.$queryRaw`
+    SELECT rd.DetalleId, rd.PorRegresarEn, m.PalletId, oe.Lote, dp.Clase, dp.Talla, dp.Presentacion,
+           DATE_FORMAT(oe.FechaProduccion, '%Y-%m-%d') AS FechaLote
+    FROM RemisionDetalle rd
+    JOIN Masters m ON m.MasterId = rd.MasterId
+    JOIN EtiquetaImpresa e ON e.EtiquetaId = m.EtiquetaId
+    JOIN OrdenEtiquetado oe ON oe.OrdenId = e.OrdenId
+    JOIN DetallePedido dp ON dp.DetalleId = oe.DetalleId
+    WHERE rd.DetalleId = ${detalleId} FOR UPDATE`;
+  if (!l) return false;
+  if (l.PorRegresarEn != null) return true;
+  const fuera = excluir.length ? excluir : [0];
+  const otra: any[] = await tx.$queryRawUnsafe(`
+    SELECT rd.DetalleId FROM RemisionDetalle rd
+    JOIN Masters m ON m.MasterId = rd.MasterId
+    JOIN EtiquetaImpresa e ON e.EtiquetaId = m.EtiquetaId
+    JOIN OrdenEtiquetado oe ON oe.OrdenId = e.OrdenId
+    JOIN DetallePedido dp ON dp.DetalleId = oe.DetalleId
+    WHERE rd.RemisionId = ? AND rd.Vigente = 1 AND rd.PorRegresarEn IS NOT NULL
+      AND rd.DetalleId NOT IN (${fuera.map(() => "?").join(",")})
+      AND oe.Lote = ? AND dp.Clase = ? AND dp.Talla = ? AND dp.Presentacion = ?
+      AND DATE_FORMAT(oe.FechaProduccion, '%Y-%m-%d') <=> ?
+    ORDER BY m.PalletId = ? DESC, rd.DetalleId LIMIT 1 FOR UPDATE`,
+    remisionId, ...fuera, l.Lote, l.Clase, l.Talla, l.Presentacion, l.FechaLote, Number(l.PalletId));
+  if (!otra.length) return false;
+  // La fecha se copia en la base, no pasando por JavaScript: un DATETIME leído por Prisma trae una Z
+  // que miente y volvería corrido.
+  await tx.$executeRaw`
+    UPDATE RemisionDetalle t JOIN RemisionDetalle s ON s.DetalleId = ${detalleId}
+       SET t.PorRegresarEn = NULL, t.PorRegresarPor = NULL, t.RecibidoEn = s.RecibidoEn, t.RecibidoPor = s.RecibidoPor
+     WHERE t.DetalleId = ${Number(otra[0].DetalleId)}`;
+  return true;
+}
+
 // Quita líneas del borrador —  una suelta (detalleId) o todas las de un polín (palletId)—  y lo que
 // habían sacado vuelve a bodega. Si el área ya había recibido alguno de esos polines, sale también
-// de su piso, y se niega si ya lo trabajó. Devuelve cuántas quitó.
+// de su piso, y se niega si ya lo trabajó. Lo que el área dejó pendiente sale sin tocar el piso (ver
+// salePendiente). Devuelve cuántas quitó.
 export async function quitarLineas(
   tx: any, remisionId: number, filtro: { detalleId?: number; palletId?: number }, operador: string,
 ): Promise<number> {
   const remision = await exigirBorrador(tx, remisionId);
+  // Solo líneas vigentes: las que ya regresaron por Devolver master (lo que el área dejó por regresar)
+  // se quedan como historia; su master ya está en otro polín.
   const lineas: any[] = filtro.detalleId != null
     ? await tx.$queryRaw`
         SELECT DetalleId, MasterId, RecibidoEn FROM RemisionDetalle
-        WHERE DetalleId = ${filtro.detalleId} AND RemisionId = ${remisionId} FOR UPDATE`
+        WHERE DetalleId = ${filtro.detalleId} AND RemisionId = ${remisionId} AND Vigente = 1 FOR UPDATE`
     : await tx.$queryRaw`
         SELECT rd.DetalleId, rd.MasterId, rd.RecibidoEn FROM RemisionDetalle rd
         JOIN Masters m ON rd.MasterId = m.MasterId
-        WHERE rd.RemisionId = ${remisionId} AND m.PalletId = ${filtro.palletId ?? 0} FOR UPDATE`;
+        WHERE rd.RemisionId = ${remisionId} AND m.PalletId = ${filtro.palletId ?? 0} AND rd.Vigente = 1 FOR UPDATE`;
   if (!lineas.length) return 0;
 
-  // Del piso del área solo sale lo que el área ya RECIBIÓ: lo demás nunca le llegó.
-  const masterIds = lineas.map(l => Number(l.MasterId));
-  await descontarPiso(tx, remisionId, remision, lineas.filter(l => l.RecibidoEn != null).map(l => Number(l.MasterId)));
-  await regresarABodega(tx, remisionId, masterIds, operador);
+  // Del piso del área solo sale lo que el área ya RECIBIÓ: lo demás nunca le llegó. Y de lo recibido,
+  // no lo que sale en lugar de algo pendiente.
   const detalles = lineas.map(l => Number(l.DetalleId));
+  const delPiso: number[] = [];
+  for (const l of lineas) {
+    if (await salePendiente(tx, remisionId, Number(l.DetalleId), detalles)) continue;
+    if (l.RecibidoEn != null) delPiso.push(Number(l.MasterId));
+  }
+  const masterIds = lineas.map(l => Number(l.MasterId));
+  await descontarPiso(tx, remisionId, remision, delPiso);
+  await regresarABodega(tx, remisionId, masterIds, operador);
   await tx.$executeRawUnsafe(
     `DELETE FROM RemisionDetalle WHERE DetalleId IN (${detalles.map(() => "?").join(",")})`, ...detalles);
   return lineas.length;
@@ -993,6 +1067,21 @@ export async function confirmarRemision(tx: any, remisionId: number, operador: s
     FOR UPDATE
   `;
   if (!lineas.length) throw new ErrorNegocio(400, "Esta remisión no tiene líneas — agrega al menos un master antes de confirmarla");
+
+  // Lo que el área dejó pendiente se resuelve ANTES de cerrar (usuario, 2 nov 2026): bodega lo quita de
+  // la remisión o lo escanea en un polín nuevo de devolución. Así la remisión cierra solo con lo que el
+  // área usó.
+  const pendientes: any[] = await tx.$queryRaw`
+    SELECT p.Codigo, COUNT(*) AS n FROM RemisionDetalle rd
+    JOIN Masters m ON m.MasterId = rd.MasterId JOIN Pallets p ON p.PalletId = m.PalletId
+    WHERE rd.RemisionId = ${remisionId} AND rd.Vigente = 1 AND rd.PorRegresarEn IS NOT NULL
+    GROUP BY p.Codigo ORDER BY p.Codigo`;
+  if (pendientes.length) {
+    const total = pendientes.reduce((t, p) => t + Number(p.n), 0);
+    throw new ErrorNegocio(400,
+      `El área no usó ${total} master(s): ${pendientes.map(p => `${Number(p.n)} de ${p.Codigo}`).join(", ")}. ` +
+      `Antes de confirmar, quítalos de la remisión o escanéalos en un polín nuevo de devolución.`);
+  }
 
   // Último respaldo del amarre con la proforma: las líneas se validan al agregarse, pero entre
   // medio se pudo haber apagado la casilla de mixta. Revalidar aquí evita confirmar un documento
@@ -1238,17 +1327,35 @@ export async function devolverMaster(
   }
 
   const rdRows: any[] = await tx.$queryRaw`
-    SELECT rd.RemisionId, r.Folio, r.Estatus, r.ConfirmadaEn, r.BodegaDestino, r.AreaDestino
-    FROM RemisionDetalle rd JOIN Remisiones r ON rd.RemisionId = r.RemisionId
+    SELECT rd.DetalleId, rd.RemisionId, rd.RecibidoEn, rd.RecibidoPor, rd.PorRegresarEn,
+           r.Folio, r.Estatus, r.ConfirmadaEn, r.BodegaDestino, r.AreaDestino,
+           oe.Lote, dp.Clase, dp.Talla, dp.Presentacion, DATE_FORMAT(oe.FechaProduccion, '%Y-%m-%d') AS FechaLote
+    FROM RemisionDetalle rd
+    JOIN Remisiones r ON rd.RemisionId = r.RemisionId
+    JOIN Masters m ON m.MasterId = rd.MasterId
+    JOIN EtiquetaImpresa e ON e.EtiquetaId = m.EtiquetaId
+    JOIN OrdenEtiquetado oe ON oe.OrdenId = e.OrdenId
+    JOIN DetallePedido dp ON dp.DetalleId = oe.DetalleId
     WHERE rd.MasterId = ${masterId} AND rd.Vigente = 1 LIMIT 1 FOR UPDATE
   `;
   if (!rdRows.length) throw new ErrorNegocio(400, "Este master está Salido pero no tiene una remisión vigente que lo explique — repórtalo antes de forzar nada");
-  if (rdRows[0].Estatus !== "Confirmada") throw new ErrorNegocio(400, "La remisión de este master no está Confirmada");
-  const remisionId = Number(rdRows[0].RemisionId);
+  const linea = rdRows[0];
+  const remisionId = Number(linea.RemisionId);
+  const origenPalletId = Number(masterRows[0].PalletId);
+
+  // Lo que el área dejó PENDIENTE (por regresar, 2 nov 2026): bodega lo escanea en un polín nuevo de
+  // devolución antes de cerrar la remisión. Es el regreso esperado, no una corrección: vale en
+  // borrador, sin plazo, y no toca el piso. Si la caja no era de las marcadas, se intercambia (ver
+  // salePendiente).
+  const porRegresar = await salePendiente(tx, remisionId, Number(linea.DetalleId), [Number(linea.DetalleId)]);
+  if (!porRegresar && linea.Estatus !== "Confirmada") {
+    throw new ErrorNegocio(400,
+      `Este master va en el borrador ${linea.Folio} y el área no lo dejó por regresar. Si no se lo llevaron, quítalo desde Remisiones.`);
+  }
 
   // Mismo límite de tiempo que anular, con el mismo criterio: pasado el plazo, es una decisión
   // que alguien tiene que autorizar, no algo que se corrige solo.
-  if (anulacionVencida(rdRows[0].ConfirmadaEn) && !params.esAdmin) {
+  if (!porRegresar && anulacionVencida(rdRows[0].ConfirmadaEn) && !params.esAdmin) {
     const dias = diasDesdeConfirmada(rdRows[0].ConfirmadaEn);
     throw new ErrorNegocio(403,
       `La remisión ${rdRows[0].Folio} se confirmó hace ${dias} días y el plazo para devolver producto de ahí es de ${DIAS_PARA_ANULAR}. ` +
@@ -1270,20 +1377,25 @@ export async function devolverMaster(
     }
   }
 
-  const origenPalletId = Number(masterRows[0].PalletId);
-
   // Si la remisión fue a un área con piso, la caja sale también de ahí (28 oct 2026, RS-0106): si no,
-  // queda contada dos veces. Va primero: si el área ya la trabajó, se rechaza sin tocar bodega.
-  const piso = await descontarPiso(tx, remisionId, rdRows[0], [masterId]);
+  // queda contada dos veces. Va primero: si el área ya la trabajó, se rechaza sin tocar bodega. Lo
+  // que el área dejó por regresar nunca entró a su piso: no hay nada que descontar.
+  const piso = porRegresar ? { kg: 0 } : await descontarPiso(tx, remisionId, rdRows[0], [masterId]);
 
   await tx.$executeRaw`UPDATE RemisionDetalle SET Vigente = NULL WHERE RemisionId = ${remisionId} AND MasterId = ${masterId}`;
   await tx.$executeRaw`UPDATE Masters SET Estatus = 'EnBodega', PalletId = ${palletDestinoId} WHERE MasterId = ${masterId}`;
+  const texto = porRegresar
+    ? `Regresó sin usar de la remisión ${rdRows[0].Folio}: ${motivo}`
+    : `Devolución de la remisión ${rdRows[0].Folio}: ${motivo}`;
   await tx.$executeRaw`
     INSERT INTO MovimientosBodega (PalletId, PalletOrigenId, MasterId, RemisionId, Tipo, PosicionOrigenId, PosicionDestinoId, Usuario, Motivo)
-    VALUES (${palletDestinoId}, ${origenPalletId}, ${masterId}, ${remisionId}, 'DEVOLUCION', NULL, NULL, ${params.operador}, ${`Devolución de la remisión ${rdRows[0].Folio}: ${motivo}`.slice(0, 200)})
+    VALUES (${palletDestinoId}, ${origenPalletId}, ${masterId}, ${remisionId}, 'DEVOLUCION', NULL, NULL, ${params.operador}, ${texto.slice(0, 200)})
   `;
 
-  return { ok: true, Correlativo: etiqueta.Correlativo, RemisionFolio: rdRows[0].Folio, PalletDestino: dest[0].Codigo, PisoKg: piso.kg };
+  return {
+    ok: true, Correlativo: etiqueta.Correlativo, RemisionFolio: rdRows[0].Folio, PalletDestino: dest[0].Codigo,
+    PisoKg: piso.kg, PorRegresar: porRegresar,
+  };
 }
 
 // POST /api/remisiones/:id/devolver-polin  { Codigo, Motivo }
@@ -1337,7 +1449,7 @@ export async function devolverPolin(
   const palletId = Number(pallet.PalletId);
 
   const masters: any[] = await tx.$queryRaw`
-    SELECT m.MasterId FROM Masters m
+    SELECT m.MasterId, rd.PorRegresarEn FROM Masters m
     JOIN RemisionDetalle rd ON rd.MasterId = m.MasterId AND rd.RemisionId = ${params.remisionId} AND rd.Vigente = 1
     WHERE m.PalletId = ${palletId} AND m.Estatus = 'Salido'
     FOR UPDATE
@@ -1351,7 +1463,9 @@ export async function devolverPolin(
   const ids = masters.map(m => Number(m.MasterId));
   const marcas = ids.map(() => "?").join(",");
 
-  const piso = await descontarPiso(tx, params.remisionId, remision, ids);
+  // Lo que el área dejó por regresar nunca entró a su piso: solo se descuenta lo demás.
+  const piso = await descontarPiso(tx, params.remisionId, remision,
+    masters.filter(m => m.PorRegresarEn == null).map(m => Number(m.MasterId)));
 
   await tx.$executeRawUnsafe(
     `UPDATE RemisionDetalle SET Vigente = NULL WHERE RemisionId = ? AND MasterId IN (${marcas})`, params.remisionId, ...ids);

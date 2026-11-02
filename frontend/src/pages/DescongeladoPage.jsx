@@ -1,12 +1,6 @@
-// Descongelado de Materia Prima — la versión en pantalla del formulario FR-7.13-13.
-//
-// La pantalla ya NO copia la forma del papel. El papel tiene dos secciones —  lo que entró y lo que
-// salió pesado—  porque una hoja no puede restar sola: hay que escribir los dos números para poder
+// Descongelado de Materia Prima — la versión en pantalla 
 // compararlos después. Acá el sistema resta, así que pedir la misma línea dos veces (una para
 // declararla y otra para buscarla en un combo y ponerle peso y destino) era trabajo que solo
-// existía para imitar una limitación del papel. Una jornada de dieciséis lotes eran treinta y dos
-// capturas para dieciséis movimientos reales.
-//
 // Ahora es un solo gesto: en el inventario al piso se elige qué bajar, se dice a dónde va y con eso
 // queda descongelado. La hoja se muestra en UNA tabla donde lo declarado y lo pesado son dos
 // columnas de la misma fila, con su diferencia al lado — que es la pregunta que el papel obliga a
@@ -17,13 +11,14 @@
 // lugar por el que el producto pasa. Cambió la pantalla, no el inventario.
 import { useState, useEffect, useCallback, useMemo, Fragment } from "react";
 import { fmtNum } from "../utils/numero.js";
+import { LB_POR_KG } from "../utils/destajo.js";
 import { authHeader, usePuede } from "../context/AuthContext.jsx";
 import { useAviso } from "../hooks/useAviso.js";
 import AvisoModal from "../components/AvisoModal.jsx";
 import EmpleadoAutocomplete from "../components/EmpleadoAutocomplete.jsx";
 import HojaDescongeladoModal, { origenDe } from "../components/HojaDescongeladoModal.jsx";
 import ReporteDescongeladoModal from "../components/ReporteDescongeladoModal.jsx";
-import InventarioDescongeladoModal from "../components/InventarioDescongeladoModal.jsx";
+import InventarioDescongeladoModal, { entregaDe } from "../components/InventarioDescongeladoModal.jsx";
 
 const API = "/api/descongelado";
 
@@ -403,18 +398,12 @@ function ModalCerrarHoja({ hoja, onConfirmar, onCerrar }) {
 // Confirma tres cosas a la vez —  cuántos masters bajaron de verdad, a dónde van y (si alguien lo
 // pesó) cuánto pesaron—  y con eso el producto queda descongelado. No hay un segundo paso:
 // presionar el botón ES la confirmación de que ya se hizo.
-//
-// Se elige, no se teclea. Esto se llena en el teléfono del área, donde escribir a mano
-// "G430TM03-E02-9", el producto y la talla es una errata garantizada — y una errata acá inventa un
-// lote que no existe y rompe la trazabilidad del despacho.
-//
 // Los kilos declarados se DERIVAN de los masters y no se teclean nunca: si se pudieran escribir
 // habría dos verdades sobre el mismo peso y el cuadre del día dejaría de significar algo.
 //
 // Sirve para una remisión entera o para una línea suelta. En el primer caso el destino se pone una
 // vez arriba y baja a todas las líneas, porque lo normal es que una remisión entera vaya al mismo
 // lado; la que no, se corrige en su propia fila.
-// "2026-08-13" → "13-08-26": la fecha de producción del lote, para distinguir dos líneas del mismo lote.
 function fechaCorta(f) {
   const [a, m, d] = String(f).slice(0, 10).split("-");
   return `${d}-${m}-${a.slice(2)}`;
@@ -423,7 +412,6 @@ function fechaCorta(f) {
 // Descongelar lo marcado del piso. No se llevan termos ni canastas y no hay báscula (usuario, 27 oct
 // 2026): lo que sale pesa lo declarado, masters × kg por master, y aquí solo se dice a dónde va. Todo
 // lo marcado va a un solo destino; las remisiones y los productos se pueden mezclar.
-//
 // Con varios lotes del mismo producto se puede UNIFICAR, como en Materia Prima: el encargado escoge
 // uno de los lotes y todo llega al destino como ese lote. Por omisión cada lote conserva su código.
 // Las clases de entero (C20, C26, P28…) cuentan como un mismo producto. Las demás reglas (misma
@@ -666,7 +654,7 @@ function InventarioPiso({ saldo, porLlegarM = 0, resumen, puedeCrear, marcadas, 
             </span>
           )}
           <span className="font-mono tabular-nums font-bold text-gray-800">
-            {fmtNum(totalKg)} kg {totalM > 0 && <span className="font-normal text-gray-500">· {totalM} masters</span>}
+            {fmtNum(totalKg)} kg <span className="font-normal text-gray-500">· {fmtNum(totalKg * LB_POR_KG)} lb</span> {totalM > 0 && <span className="font-normal text-gray-500">· {totalM} masters</span>}
           </span>
         </span>
         {(saldo.length > 0 || porLlegarM > 0) && (
@@ -724,12 +712,14 @@ function InventarioPiso({ saldo, porLlegarM = 0, resumen, puedeCrear, marcadas, 
                 <th className="px-3 py-2 text-right font-semibold">Días</th>
                 <th className="px-3 py-2 text-right font-semibold">Masters</th>
                 <th className="px-3 py-2 text-right font-semibold">Kg</th>
+                {/* Las libras se derivan de los kilos (usuario, 29 oct 2026): no se capturan. */}
+                <th className="px-3 py-2 text-right font-semibold">Lb</th>
                 {puedeCrear && <th className="px-3 py-2 text-right font-semibold">Bajar</th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
               {saldo.length === 0 ? (
-                <tr><td colSpan={9} className="px-4 py-8 text-center text-gray-400 text-xs">
+                <tr><td colSpan={10} className="px-4 py-8 text-center text-gray-400 text-xs">
                   Nada al piso. El producto aparece aquí cuando el área lo recibe o bodega confirma la remisión.</td></tr>
               ) : grupos.map(g => {
                 const todas = g.lineas.every(r => marcadas[claveDeLinea(r)] != null);
@@ -753,6 +743,7 @@ function InventarioPiso({ saldo, porLlegarM = 0, resumen, puedeCrear, marcadas, 
                       </td>
                       <td className="px-3 py-1.5 text-right tabular-nums text-xs font-bold text-blue-900">{g.Masters || ""}</td>
                       <td className="px-3 py-1.5 text-right tabular-nums text-xs font-bold text-blue-900">{fmtNum(g.Kg)}</td>
+                      <td className="px-3 py-1.5 text-right tabular-nums text-xs font-bold text-blue-900">{fmtNum(g.Kg * LB_POR_KG)}</td>
                       {puedeCrear && <td></td>}
                     </tr>
                     {g.lineas.map(r => {
@@ -771,12 +762,21 @@ function InventarioPiso({ saldo, porLlegarM = 0, resumen, puedeCrear, marcadas, 
                           </td>
                           <td className="px-3 py-1.5 text-xs"><span className="font-mono text-gray-500">{r.Clase}</span> {r.DescripcionClase}</td>
                           <td className="px-3 py-1.5 text-xs">{r.DescripcionTalla}</td>
-                          <td className="px-3 py-1.5 text-xs text-gray-500">{fmtDia(r.FechaIngreso)}</td>
+                          <td className="px-3 py-1.5 text-xs text-gray-500">
+                            {fmtDia(r.FechaIngreso)}
+                            {/* Quién lo pasó al piso: el área al recibir (verde) o bodega al confirmar (envío directo). */}
+                            {entregaDe(r) && (
+                              <span className={`block text-[11px] ${r.RecibidosM > 0 ? "text-green-700" : "text-blue-600"}`}>
+                                {entregaDe(r)}
+                              </span>
+                            )}
+                          </td>
                           <td className={`px-3 py-1.5 text-right tabular-nums text-xs ${r.DiasAlPiso > 2 ? "text-amber-600 font-bold" : "text-gray-500"}`}>
                             {r.DiasAlPiso ?? "—"}
                           </td>
                           <td className="px-3 py-1.5 text-right tabular-nums font-semibold">{conMasters(r) ? r.Masters : ""}</td>
                           <td className="px-3 py-1.5 text-right tabular-nums">{fmtNum(r.Kg)}</td>
+                          <td className="px-3 py-1.5 text-right tabular-nums text-gray-600">{fmtNum(r.Kg * LB_POR_KG)}</td>
                           {puedeCrear && (
                             <td className="px-3 py-1.5 text-right">
                               {marcada && (
@@ -815,8 +815,14 @@ function InventarioPiso({ saldo, porLlegarM = 0, resumen, puedeCrear, marcadas, 
 //
 // Lo ya recibido no se queda aquí (usuario, 29 oct 2026): ya está arriba, en el piso, y repetirlo
 // llenaba la sección de renglones verdes. Se esconde, con "ver recibidos" para deshacer un error.
+//
+// Cuántos acepta (2 nov 2026, RS-0112): bodega entrega el polín entero y el área se lo lleva, pero según
+// el plan usa solo una parte. Al marcar un renglón se escribe cuántos masters acepta (de entrada, todos);
+// el resto queda "por regresar a bodega" y bodega lo escanea de vuelta en un polín de devolución. Lo
+// por regresar sigue aquí —  aun con la remisión confirmada—  hasta que regresa, y se puede aceptar si
+// el plan cambia.
 function PorEntregar({ filas, puedeRecibir, puedeDeshacer, onRecibir, onDeshacer }) {
-  const [marcados, setMarcados] = useState({});   // claveRenglon → true
+  const [marcados, setMarcados] = useState({});   // claveRenglon → masters que acepta (texto del campo)
   const [verRecibidos, setVerRecibidos] = useState(false);
   const nRecibidos = filas.filter(r => r.Recibido).length;
   const visibles = verRecibidos ? filas : filas.filter(r => !r.Recibido);
@@ -825,40 +831,49 @@ function PorEntregar({ filas, puedeRecibir, puedeDeshacer, onRecibir, onDeshacer
   // de las que se ven.
   const cuenta = {};
   for (const r of filas) {
-    const c = cuenta[r.RemisionId] ??= { enBodega: new Set(), todos: new Set() };
+    const c = cuenta[r.RemisionId] ??= { enBodega: new Set(), todos: new Set(), porRegresarM: 0 };
     c.todos.add(r.PalletId);
-    if (!r.Recibido) c.enBodega.add(r.PalletId);
+    if (!r.Recibido && !r.PorRegresar) c.enBodega.add(r.PalletId);
+    if (r.PorRegresar) c.porRegresarM += r.Masters || 0;
   }
   const remisiones = [];
   for (const r of visibles) {
     let rem = remisiones.find(x => x.RemisionId === r.RemisionId);
-    if (!rem) { rem = { RemisionId: r.RemisionId, Folio: r.FolioRemision, polines: [] }; remisiones.push(rem); }
+    if (!rem) { rem = { RemisionId: r.RemisionId, Folio: r.FolioRemision, Estatus: r.EstatusRemision, polines: [] }; remisiones.push(rem); }
     let p = rem.polines.find(x => x.PalletId === r.PalletId);
     if (!p) { p = { PalletId: r.PalletId, Codigo: r.PalletCodigo, lineas: [], Masters: 0 }; rem.polines.push(p); }
     p.lineas.push(r); p.Masters += r.Masters || 0;
   }
   if (!filas.length) return null;
 
-  const clave = l => `${l.RemisionId}|${l.PalletId}|${l.Lote}|${l.Clase}|${l.Talla}|${l.FechaLote ?? ""}`;
+  // Recibida, por regresar o aún en bodega: cada estado es su propia fila (ver porEntregar).
+  const clave = l => `${l.RemisionId}|${l.PalletId}|${l.Lote}|${l.Clase}|${l.Talla}|${l.FechaLote ?? ""}|${l.PorRegresar ? "r" : "b"}`;
   const alternar = l => setMarcados(m => {
     const n = { ...m }; const k = clave(l);
-    if (n[k]) delete n[k]; else n[k] = true;
+    if (n[k] != null) delete n[k]; else n[k] = String(l.Masters);
     return n;
   });
-  // El polín entero: si ya están todos sus pendientes marcados los desmarca, si no los marca.
+  // El polín entero: lo que sigue aún en bodega (no lo que ya quedó por regresar). Si ya está todo
+  // marcado lo desmarca, si no lo marca completo.
   const alternarPolin = p => setMarcados(m => {
-    const pend = p.lineas.filter(l => !l.Recibido).map(clave);
-    const n = { ...m }; const todos = pend.every(k => n[k]);
-    for (const k of pend) { if (todos) delete n[k]; else n[k] = true; }
+    const pend = p.lineas.filter(l => !l.Recibido && !l.PorRegresar);
+    const n = { ...m }; const todos = pend.every(l => n[clave(l)] != null);
+    for (const l of pend) { if (todos) delete n[clave(l)]; else n[clave(l)] = String(l.Masters); }
     return n;
   });
+  // Lo que acepta de un renglón marcado: un entero de 0 a lo que trae; cualquier otra cosa es inválida.
+  const aceptaDe = l => {
+    const t = String(marcados[clave(l)] ?? "").trim();
+    const v = Number(t);
+    return t !== "" && Number.isInteger(v) && v >= 0 && v <= (l.Masters || 0) ? v : null;
+  };
 
   return (
     <section className="bg-white border border-amber-300 rounded-lg overflow-hidden">
       <header className="bg-amber-50 border-b border-amber-200 px-4 py-2 flex flex-wrap items-baseline gap-x-3 gap-y-1">
         <h3 className="font-bold text-sm text-amber-900">POR ENTREGAR</h3>
         <span className="text-xs text-amber-800">
-          bodega lo escaneó para el área y no ha confirmado. Marque lo que ya le llegó y use <b>Recibir</b>.
+          bodega lo escaneó para el área. Marque lo que va a usar, escriba cuántos masters y use <b>Recibir</b>; lo demás regresa a bodega.
         </span>
         {nRecibidos > 0 && (
           <button onClick={() => setVerRecibidos(v => !v)}
@@ -874,23 +889,32 @@ function PorEntregar({ filas, puedeRecibir, puedeDeshacer, onRecibir, onDeshacer
       )}
       {remisiones.map(rem => {
         const lineas = rem.polines.flatMap(p => p.lineas);
-        const marc = lineas.filter(l => !l.Recibido && marcados[clave(l)]);
-        const mMarc = marc.reduce((s, l) => s + (l.Masters || 0), 0), kgMarc = marc.reduce((s, l) => s + l.Kg, 0);
-        const enBodega = cuenta[rem.RemisionId].enBodega.size;
-        const recibidos = cuenta[rem.RemisionId].todos.size - enBodega;
+        const marc = lineas.filter(l => !l.Recibido && marcados[clave(l)] != null);
+        const invalida = marc.some(l => aceptaDe(l) == null);
+        const sel = marc.map(l => ({ ...l, Acepta: aceptaDe(l) ?? 0 }));
+        const mAcepta = sel.reduce((s, l) => s + l.Acepta, 0);
+        const kgAcepta = sel.reduce((s, l) => s + l.Acepta * (l.KgPorMaster || 0), 0);
+        const mRegresa = sel.reduce((s, l) => s + (l.Masters - l.Acepta), 0);
+        const c = cuenta[rem.RemisionId];
+        const enBodega = c.enBodega.size;
+        const recibidos = c.todos.size - enBodega;
+        const confirmada = rem.Estatus === "Confirmada";
         return (
           <div key={rem.RemisionId} className="border-t border-amber-100 first:border-t-0">
             <div className="px-4 py-2 flex flex-wrap items-center gap-2 bg-white">
               <span className="text-sm font-semibold text-gray-800">{rem.Folio}</span>
-              <span className="text-[11px] font-semibold px-1.5 py-0.5 rounded bg-amber-100 text-amber-800">sin confirmar</span>
+              {confirmada
+                ? <span className="text-[11px] font-semibold px-1.5 py-0.5 rounded bg-blue-100 text-blue-800">confirmada</span>
+                : <span className="text-[11px] font-semibold px-1.5 py-0.5 rounded bg-amber-100 text-amber-800">sin confirmar</span>}
               <span className="text-xs text-gray-500">
-                {enBodega} polín{enBodega !== 1 ? "es" : ""} con algo aún en bodega
-                {recibidos > 0 && ` · ${recibidos} recibido${recibidos !== 1 ? "s" : ""}`}
+                {!confirmada && `${enBodega} polín${enBodega !== 1 ? "es" : ""} con algo aún en bodega`}
+                {!confirmada && recibidos > 0 && ` · ${recibidos} recibido${recibidos !== 1 ? "s" : ""}`}
+                {c.porRegresarM > 0 && <span className="text-orange-700">{!confirmada && " · "}{c.porRegresarM} master{c.porRegresarM !== 1 ? "s" : ""} por regresar a bodega</span>}
               </span>
               {puedeRecibir && marc.length > 0 && (
-                <button onClick={async () => { if (await onRecibir(rem, marc)) setMarcados({}); }}
-                  className="ml-auto bg-green-600 text-white rounded px-4 py-1.5 text-xs font-semibold hover:bg-green-700">
-                  Recibir {marc.length} renglón{marc.length !== 1 ? "es" : ""} · {mMarc} masters · {fmtNum(kgMarc)} kg
+                <button onClick={async () => { if (await onRecibir(rem, sel)) setMarcados({}); }} disabled={invalida}
+                  className="ml-auto bg-green-600 text-white rounded px-4 py-1.5 text-xs font-semibold hover:bg-green-700 disabled:opacity-40">
+                  Recibir {mAcepta} masters · {fmtNum(kgAcepta)} kg{mRegresa > 0 ? ` · ${mRegresa} ${mRegresa === 1 ? "regresa" : "regresan"}` : ""}
                 </button>
               )}
             </div>
@@ -901,7 +925,7 @@ function PorEntregar({ filas, puedeRecibir, puedeDeshacer, onRecibir, onDeshacer
               <table className="w-full text-sm table-fixed min-w-[760px]">
                 <colgroup>
                   <col className="w-10" /><col className="w-20" /><col className="w-32" /><col />
-                  <col className="w-20" /><col className="w-20" /><col className="w-20" /><col className="w-36" />
+                  <col className="w-20" /><col className="w-24" /><col className="w-20" /><col className="w-36" />
                 </colgroup>
                 <thead className="bg-gray-50 text-[11px] text-gray-500 uppercase whitespace-nowrap">
                   <tr>
@@ -918,23 +942,25 @@ function PorEntregar({ filas, puedeRecibir, puedeDeshacer, onRecibir, onDeshacer
                 <tbody>
                   {rem.polines.map(p => {
                     const n = p.lineas.length;
-                    const hayPendientes = puedeRecibir && p.lineas.some(l => !l.Recibido);
+                    const hayPendientes = puedeRecibir && p.lineas.some(l => !l.Recibido && !l.PorRegresar);
                     // Qué trae mezclado: B0357 es un solo lote en dos tallas, B0307 dos lotes de una talla.
                     const nLotes = new Set(p.lineas.map(l => l.Lote)).size;
                     const nTallas = new Set(p.lineas.map(l => l.DescripcionTalla)).size;
                     const mezcla = [nLotes > 1 && `${nLotes} lotes`, nTallas > 1 && `${nTallas} tallas`].filter(Boolean).join(", ");
                     return p.lineas.map((l, i) => {
                       const puede = !l.Recibido && puedeRecibir;
-                      const marcado = puede && !!marcados[clave(l)];
+                      const marcado = puede && marcados[clave(l)] != null;
+                      const acepta = marcado ? aceptaDe(l) : null;
                       return (
                         <tr key={`${p.PalletId}-${i}`}
                           onClick={() => puede && alternar(l)}
                           className={`${i === 0 ? "border-t border-gray-200" : "border-t border-dashed border-gray-100"} ${puede ? "cursor-pointer" : ""}
-                            ${l.Recibido ? "bg-green-50/40" : marcado ? "bg-green-50" : "hover:bg-gray-50"}`}>
+                            ${l.Recibido ? "bg-green-50/40" : marcado ? "bg-green-50" : l.PorRegresar ? "bg-orange-50/50" : "hover:bg-gray-50"}`}>
                           <td className="px-3 py-1.5 align-top">
                             {puede && (
                               <input type="checkbox" checked={marcado} onChange={() => alternar(l)}
-                                onClick={e => e.stopPropagation()} className="w-4 h-4 cursor-pointer" />
+                                onClick={e => e.stopPropagation()} className="w-4 h-4 cursor-pointer"
+                                title={l.PorRegresar ? "Sí se va a usar: aceptarlo al piso" : "Marcar para recibir"} />
                             )}
                           </td>
                           {i === 0 && (
@@ -949,22 +975,51 @@ function PorEntregar({ filas, puedeRecibir, puedeDeshacer, onRecibir, onDeshacer
                           <td className="px-3 py-1.5 align-top font-mono text-xs break-all">{l.Lote}</td>
                           <td className="px-3 py-1.5 align-top text-xs break-words"><span className="font-mono text-gray-500">{l.Clase}</span> {l.DescripcionClase}</td>
                           <td className="px-3 py-1.5 align-top text-xs">{l.DescripcionTalla}</td>
-                          <td className="px-3 py-1.5 align-top text-right tabular-nums font-semibold">{l.Masters}</td>
-                          <td className="px-3 py-1.5 align-top text-right tabular-nums">{fmtNum(l.Kg)}</td>
+                          <td className="px-3 py-1.5 align-top text-right tabular-nums font-semibold" onClick={e => marcado && e.stopPropagation()}>
+                            {/* Marcado, se escribe cuántos acepta; de entrada todos. */}
+                            {marcado ? (
+                              <span className="inline-flex items-center gap-1">
+                                <input type="number" inputMode="numeric" min="0" max={l.Masters} step="1"
+                                  value={marcados[clave(l)]}
+                                  onChange={e => setMarcados(m => ({ ...m, [clave(l)]: e.target.value }))}
+                                  title="Masters que acepta al piso; el resto regresa a bodega"
+                                  className={`w-12 border rounded px-1 py-0.5 text-sm text-right tabular-nums focus:outline-none focus:ring-2 focus:ring-green-400
+                                    ${acepta == null ? "border-red-400 bg-red-50" : "border-green-400"}`} />
+                                <span className="text-[11px] font-normal text-gray-500">/{l.Masters}</span>
+                              </span>
+                            ) : l.Masters}
+                          </td>
+                          <td className="px-3 py-1.5 align-top text-right tabular-nums">
+                            {fmtNum(marcado && acepta != null ? acepta * (l.KgPorMaster || 0) : l.Kg)}
+                          </td>
                           <td className="px-3 py-1.5 align-top text-xs" onClick={e => e.stopPropagation()}>
-                            {(l.Recibido ? (
+                            {l.Recibido ? (
                               // El enlace no se recorta aunque el nombre de quien recibió sea largo.
                               <span className="flex flex-wrap items-center gap-x-2 min-w-0 text-green-700">
                                 <span className="whitespace-nowrap">recibido {l.RecibidoEn ? l.RecibidoEn.slice(11) : ""}</span>
-                                {puedeDeshacer && (
+                                {puedeDeshacer && !confirmada && (
                                   <button onClick={() => onDeshacer(rem, p, l)} className="shrink-0 text-gray-400 hover:text-red-600 underline"
-                                    title="Se marcó por error: vuelve a 'aún en bodega' y sale del piso">
+                                    title="Se marcó por error: el renglón vuelve a 'aún en bodega' y sale del piso">
                                     deshacer
                                   </button>
                                 )}
                                 {l.RecibidoPor && <span className="block w-full truncate text-[11px] text-green-600" title={l.RecibidoPor}>{l.RecibidoPor}</span>}
                               </span>
-                            ) : <span className="text-amber-700">aún en bodega</span>)}
+                            ) : l.PorRegresar ? (
+                              <span className="flex flex-wrap items-center gap-x-2 min-w-0 text-orange-700">
+                                <span className="whitespace-nowrap">por regresar a bodega</span>
+                                {marcado && acepta != null && acepta < l.Masters && <span className="whitespace-nowrap">· {l.Masters - acepta} siguen</span>}
+                                {puedeDeshacer && !confirmada && !marcado && (
+                                  <button onClick={() => onDeshacer(rem, p, l)} className="shrink-0 text-gray-400 hover:text-red-600 underline"
+                                    title="Se marcó por error: el renglón vuelve a 'aún en bodega'">
+                                    deshacer
+                                  </button>
+                                )}
+                                {l.PorRegresarPor && <span className="block w-full truncate text-[11px] text-orange-600" title={l.PorRegresarPor}>{l.PorRegresarPor}</span>}
+                              </span>
+                            ) : marcado && acepta != null && acepta < l.Masters ? (
+                              <span className="text-orange-700">{l.Masters - acepta} {l.Masters - acepta === 1 ? "regresa" : "regresan"} a bodega</span>
+                            ) : <span className="text-amber-700">aún en bodega</span>}
                           </td>
                         </tr>
                       );
@@ -1374,16 +1429,20 @@ export default function DescongeladoPage() {
     await recargar(hojaId);
   };
 
-  // Recibir lo que bodega dejó y ya llegó al área: entra al piso y se puede descongelar.
+  // Recibir lo que bodega dejó y el área va a usar: entra al piso y se puede descongelar. De cada
+  // renglón, la cantidad que escribió (Acepta); el resto queda por regresar a bodega.
   const recibirPolines = async (rem, lineas) => {
-    const m = lineas.reduce((s, l) => s + (l.Masters || 0), 0), kg = lineas.reduce((s, l) => s + l.Kg, 0);
-    const detalle = lineas.map(l => `${l.PalletCodigo} · ${l.Lote} ${l.DescripcionTalla} · ${l.Masters} m`).join("\n");
+    const m = lineas.reduce((s, l) => s + l.Acepta, 0), kg = lineas.reduce((s, l) => s + l.Acepta * (l.KgPorMaster || 0), 0);
+    const regresan = lineas.reduce((s, l) => s + (l.Masters - l.Acepta), 0);
+    const detalle = lineas.map(l => `${l.PalletCodigo} · ${l.Lote} ${l.DescripcionTalla} · ${l.Acepta} de ${l.Masters} m` +
+      (l.Acepta < l.Masters ? ` (${l.Masters - l.Acepta} ${l.Masters - l.Acepta === 1 ? "regresa" : "regresan"})` : "")).join("\n");
     if (!(await pedirConfirmacion(
-      `¿Ya le llegó físicamente esto de ${rem.Folio}?\n\n${detalle}\n\nTotal: ${m} masters, ${fmtNum(kg)} kg.\n\n` +
-      `Entra a su piso y se puede descongelar. Bodega verá que usted lo recibió.`, { textoConfirmar: "Recibir" }))) return false;
+      `¿Recibe esto de ${rem.Folio} para usarlo?\n\n${detalle}\n\nAl piso: ${m} masters, ${fmtNum(kg)} kg.` +
+      (regresan ? `\nPor regresar a bodega: ${regresan} masters. No entran a su piso; bodega los escanea cuando vuelvan.` : "") +
+      `\n\nLo recibido se puede descongelar. Bodega verá que usted lo recibió.`, { textoConfirmar: "Recibir" }))) return false;
     const out = await post(`${API}/recibir`, {
       RemisionId: rem.RemisionId, Bodega: "DESCONGELADO",
-      Lineas: lineas.map(l => ({ PalletId: l.PalletId, Lote: l.Lote, Clase: l.Clase, Talla: l.Talla, FechaLote: l.FechaLote })),
+      Lineas: lineas.map(l => ({ PalletId: l.PalletId, Lote: l.Lote, Clase: l.Clase, Talla: l.Talla, FechaLote: l.FechaLote, Masters: l.Acepta })),
     });
     if (!out) return false;
     await recargar(sel?.HojaId);
@@ -1392,8 +1451,8 @@ export default function DescongeladoPage() {
 
   const deshacerRecepcion = async (rem, p, l) => {
     if (!(await pedirConfirmacion(
-      `¿Deshacer la recepción de ${l.Lote} ${l.DescripcionTalla} (${l.Masters} m) del polín ${p.Codigo}, ${rem.Folio}? ` +
-      `Vuelve a "aún en bodega" y sale de su piso.`, { textoConfirmar: "Deshacer" }))) return;
+      `¿Deshacer ${l.Lote} ${l.DescripcionTalla} del polín ${p.Codigo}, ${rem.Folio}? ` +
+      `Todo el renglón vuelve a "aún en bodega": lo recibido sale de su piso y lo que iba por regresar deja de estarlo.`, { textoConfirmar: "Deshacer" }))) return;
     if (!(await post(`${API}/deshacer-recepcion`, {
       RemisionId: rem.RemisionId, PalletId: l.PalletId, Lote: l.Lote, Clase: l.Clase, Talla: l.Talla, FechaLote: l.FechaLote,
       Bodega: "DESCONGELADO",
@@ -1527,7 +1586,7 @@ export default function DescongeladoPage() {
       {error && <div className="bg-red-50 border border-red-300 text-red-700 text-sm px-4 py-2 rounded">⚠ {error}</div>}
 
       <InventarioPiso saldo={saldo} resumen={resumen} puedeCrear={puedeCrear && !!hojaAbierta}
-        porLlegarM={porEntregar.filter(r => !r.Recibido).reduce((s, r) => s + (r.Masters || 0), 0)}
+        porLlegarM={porEntregar.filter(r => !r.Recibido && !r.PorRegresar).reduce((s, r) => s + (r.Masters || 0), 0)}
         marcadas={marcadas} setMarcadas={setMarcadas}
         onDescongelar={(seleccion) => setModal({ seleccion })}
         onAbrirHoja={puedeCrear && !hojaAbierta ? () => setAbriendoHoja(true) : null}

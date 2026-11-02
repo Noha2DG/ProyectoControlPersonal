@@ -67,8 +67,10 @@ export default function PisoDeRemision({ piso, borrador }) {
       </div>
       {hayQueda && (
         <p className="px-3 py-2 border-t border-gray-100 text-[11px] text-gray-500">
-          Lo que queda al piso debería estar en {piso.NombreBodega}. Si se quedó en bodega, sáquelo con{" "}
-          <b>{borrador ? "Quitar polín" : "Devolver polín"}</b> y sale del piso del área.
+          Lo que queda al piso debería estar en {piso.NombreBodega}. Si se quedó en bodega,{" "}
+          {borrador
+            ? <>sáquelo con <b>Quitar polín</b> y sale del piso del área.</>
+            : <>escanee sus cajas en un polín de devolución (Pallets) y salen del piso del área.</>}
         </p>
       )}
     </div>
