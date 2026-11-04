@@ -694,20 +694,17 @@ export default function PalletsPage() {
   const [bodegas, setBodegas] = useState([]);
   const [modalNuevo, setModalNuevo] = useState(false);
   const [busquedaPallet, setBusquedaPallet] = useState("");
+  // Lo que ya se mandó a buscar: va unos instantes detrás de lo que se escribe, para no pedir la
+  // lista al servidor con cada letra.
+  const [busquedaEnviada, setBusquedaEnviada] = useState("");
+  const ultimaPeticion = useRef(0);
   const [mostrarConsulta, setMostrarConsulta] = useState(false);
   const [widthsPallets, startResizePallets] = useColWidths("pallets", PALLETS_COL_DEFAULTS);
   const [ordenPallets, alternarOrdenPallets] = useOrden();
 
-  // Se busca por código de polín, que es lo que el operador tiene a mano (la hoja o el QR). El
-  // Origen y el Área entran también porque el mismo campo sirve para acotar "todo lo de BODEGA".
-  const qPallet = busquedaPallet.trim().toLowerCase();
-  const palletsFiltrados = qPallet
-    ? pallets.filter(p => `${p.Codigo} ${p.DescripcionOrigen ?? ""} ${p.NombreBodegaVirtual ?? ""}`.toLowerCase().includes(qPallet))
-    : pallets;
-
   // Masters ordena por lo que hay dentro (número), no por el texto "12 / 20"; Creado y Cerrado
   // por su fecha real y no por el "usuario · fecha" que se muestra.
-  const palletsOrdenados = ordenarFilas(palletsFiltrados, ordenPallets, {
+  const palletsOrdenados = ordenarFilas(pallets, ordenPallets, {
     pallet: p => p.Codigo, produccion: p => p.FechaProduccionMin, estatus: p => p.Estatus, area: p => p.NombreBodegaVirtual,
     origen: p => p.DescripcionOrigen, masters: p => p.CantidadMasters, cuadre: p => p.Cuadre,
     ubicacion: p => p.PosicionCodigo, creado: p => p.CreadoEn, cerrado: p => p.CerradoEn,
@@ -728,14 +725,26 @@ export default function PalletsPage() {
     setLoading(true);
     const params = new URLSearchParams();
     if (filtroEstatus) params.set("estatus", filtroEstatus);
-    if (filtroFecha) params.set("fecha", filtroFecha);
+    // Se busca por código de polín, que es lo que el operador tiene a mano (la hoja o el QR), casi
+    // nunca la fecha: mientras hay búsqueda la fecha no se aplica. El Origen y el Área entran
+    // también porque el mismo campo sirve para acotar "todo lo de BODEGA".
+    if (busquedaEnviada) params.set("q", busquedaEnviada);
+    else if (filtroFecha) params.set("fecha", filtroFecha);
+    // Si una búsqueda vieja responde después que la nueva, no debe pisarla.
+    const peticion = ++ultimaPeticion.current;
     const res = await fetch(`${API}?${params}`, { headers: authHeader() });
     const data = await res.json();
+    if (peticion !== ultimaPeticion.current) return;
     if (Array.isArray(data)) setPallets(data);
     setLoading(false);
-  }, [filtroEstatus, filtroFecha]);
+  }, [filtroEstatus, filtroFecha, busquedaEnviada]);
 
   useEffect(() => { fetchPallets(); }, [fetchPallets]);
+
+  useEffect(() => {
+    const id = setTimeout(() => setBusquedaEnviada(busquedaPallet.trim()), 300);
+    return () => clearTimeout(id);
+  }, [busquedaPallet]);
 
   const handleCrear = async ({ Origen, CantidadMaster, BodegaCodigo, Motivo }) => {
     const res = await fetch(API, {
@@ -781,9 +790,8 @@ export default function PalletsPage() {
           <option value="Cerrado">Cerrado</option>
         </select>
         <input type="date" value={filtroFecha} onChange={e => setFiltroFecha(e.target.value)}
-          className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
-        {/* Filtro local: la lista ya viene entera del backend (tope 500), así que buscar el código
-            aquí es instantáneo y no cuesta una consulta por tecla. */}
+          disabled={!!busquedaPallet.trim()} title={busquedaPallet.trim() ? "Al buscar un polín se busca en todas las fechas" : undefined}
+          className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 disabled:opacity-40 disabled:cursor-not-allowed" />
         <input type="text" value={busquedaPallet} onChange={e => setBusquedaPallet(e.target.value)}
           placeholder="Buscar polín (ej. T0010)"
           className="border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono w-48 focus:outline-none focus:ring-2 focus:ring-blue-400" />
@@ -792,8 +800,7 @@ export default function PalletsPage() {
           Consultar etiqueta
         </button>
         <span className="text-sm text-gray-500 ml-auto">
-          {palletsFiltrados.length}
-          {palletsFiltrados.length !== pallets.length ? ` de ${pallets.length}` : ""} pallet{palletsFiltrados.length !== 1 ? "s" : ""}
+          {pallets.length} pallet{pallets.length !== 1 ? "s" : ""}{busquedaEnviada ? " en todas las fechas" : ""}
         </span>
         {puedeEscanear && (
           <button onClick={() => setModalNuevo(true)} className="bg-blue-600 text-white font-semibold px-4 py-2 rounded-lg hover:bg-blue-700 transition text-sm">

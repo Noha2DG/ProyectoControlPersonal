@@ -148,7 +148,7 @@ export async function quitarMasterEscaneado(tx: any, palletId: number, correlati
   return { ...resultado, Correlativo: etiqueta.Correlativo };
 }
 
-// GET /api/pallets?estatus=Abierto&fecha=2026-07-14
+// GET /api/pallets?estatus=Abierto&fecha=2026-07-14&q=T0385
 router.get("/", requireAuth, requirePerm("bodega", "ver"), async (req: Request, res: Response) => {
   try {
     const estatus = req.query.estatus as string | undefined;
@@ -158,6 +158,13 @@ router.get("/", requireAuth, requirePerm("bodega", "ver"), async (req: Request, 
     if (estatus) { condiciones.push("p.Estatus = ?"); params.push(estatus); }
     // Rango y no DATE(p.CreadoEn): la función sobre la columna impide usar un índice si se agrega.
     if (fecha) { condiciones.push("p.CreadoEn >= ? AND p.CreadoEn < ? + INTERVAL 1 DAY"); params.push(fecha, fecha); }
+    // Buscar un polín no debe depender de la fecha: el operador tiene el código de la hoja, casi
+    // nunca el día en que se armó. La pantalla no manda `fecha` mientras hay búsqueda.
+    const busqueda = String(req.query.q ?? "").trim();
+    if (busqueda) {
+      condiciones.push("(p.Codigo LIKE ? OR org.Descripcion LIKE ? OR bv.Nombre LIKE ?)");
+      params.push(...Array(3).fill(`%${busqueda}%`));
+    }
     const where = condiciones.length ? `WHERE ${condiciones.join(" AND ")}` : "";
     const rows: any[] = await prisma.$queryRawUnsafe(`
       SELECT p.PalletId, p.Codigo, p.Estatus, p.Origen, org.Descripcion AS DescripcionOrigen, p.CantidadMaster,
