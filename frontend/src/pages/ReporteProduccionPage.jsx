@@ -16,7 +16,14 @@ const TERMO_DET_COLS = Object.keys(TERMO_DET_COL_DEFAULTS);
 const TALLA_DET_COL_DEFAULTS = { id: 100, nombre: 150, lb: 90, horas: 90, lbhora: 90, pesadas: 90 };
 const TALLA_DET_COLS = Object.keys(TALLA_DET_COL_DEFAULTS);
 
-const POR_LOTE_COL_DEFAULTS = { expand: 30, lote: 130, finca: 130, clase: 150, fecha: 100, ingreso: 100, procesado: 100, pendiente: 100, rend: 90, transac: 90 };
+const POR_LOTE_COL_DEFAULTS = { expand: 30, lote: 130, finca: 130, clase: 150, fecha: 100, ingreso: 100, procesado: 100, bajado: 90, descarte: 90, pendiente: 100, rend: 90, transac: 90 };
+
+// Rendimiento sobre lo TRABAJADO: lo bajado al piso no se trabajó en ese lote (se retoma en el del día
+// siguiente); el descarte sí, así que se queda dentro como merma. Igual que backend/src/lib/destajoPiso.ts.
+function rendimientoTrabajado(ingreso, bajado, procesado) {
+  const trabajado = ingreso - (bajado || 0);
+  return trabajado > 0 ? (procesado / trabajado * 100) : 0;
+}
 const POR_LOTE_COLS = Object.keys(POR_LOTE_COL_DEFAULTS);
 const POR_TALLA_GEN_COL_DEFAULTS = { talla: 220, kg: 100, pct: 90 };
 const POR_TALLA_GEN_COLS = Object.keys(POR_TALLA_GEN_COL_DEFAULTS);
@@ -50,9 +57,37 @@ const LBPERSONA_AREA_COL = { DU: "descabezado", DS: "pelado", DT: "pinchado", RD
 function hoy() { return new Date().toLocaleDateString("sv-SE", { timeZone: "America/Guatemala" }); }
 const fechaCorta = (f) => f ? f.split("-").reverse().join("/") : "";
 
-// Debe coincidir con MAX_NOTAS en backend/src/routes/lotes.ts, que es quien rechaza de verdad.
-// El límite es de espacio: más que esto no cabe en el recuadro de la hoja impresa.
-const MAX_NOTAS = 500;
+// Lo bajado al piso y lo descartado de un lote, renglón por renglón — reemplaza a las notas que se
+// escribían a mano ("se bajó 22 kg de 51/60…"). Una nota vieja se sigue mostrando, solo para leer.
+function AjustesLote({ l, compacto = false }) {
+  const ajustes = l.Ajustes ?? [];
+  const tam = compacto ? "text-[11px]" : "text-sm";
+  return (
+    <div className={compacto ? "border border-slate-400 rounded" : "border border-gray-400 rounded"}>
+      <p className={compacto ? "text-[9px] font-bold text-gray-500 px-2 pt-1" : "text-xs font-semibold text-gray-500 px-2 pt-1.5"}>
+        Bajado al piso y descarte
+      </p>
+      <div className={`px-2 py-1.5 ${compacto ? "min-h-[3rem]" : "min-h-[4rem]"}`}>
+        {ajustes.length === 0 ? (
+          <p className={`${tam} text-gray-400`}>Sin bajados ni descartes</p>
+        ) : ajustes.map((a, i) => (
+          <p key={i} className={`${tam} flex justify-between gap-3`}>
+            <span className="truncate">
+              <span className={a.Tipo === "DESCARTE" ? "text-red-700 font-semibold" : "font-semibold"}>
+                {a.Tipo === "DESCARTE" ? "Descarte" : "Bajado al piso"}
+              </span>
+              {a.Motivo ? ` · ${a.Motivo}` : ""}{a.Talla !== 900 ? ` · ${a.DescripcionTalla}` : ""}
+            </span>
+            <span className="tabular-nums whitespace-nowrap">{fmtNum(a.Peso)} {a.UM}</span>
+          </p>
+        ))}
+        {l.Notas && (
+          <p className={`${compacto ? "text-[10px]" : "text-xs"} text-gray-500 italic whitespace-pre-wrap mt-1`}>Nota anterior: {l.Notas}</p>
+        )}
+      </div>
+    </div>
+  );
+}
 
 const SUB_TABS = [
   { key: "general",     label: "Reporte General" },
@@ -231,6 +266,8 @@ function FilaLote({ l, detalle, abierta, onToggle }) {
         <td className="px-3 py-2.5 text-center text-gray-600">{l.Fecha?.slice(0, 10)}</td>
         <td className="px-3 py-2.5 text-right font-semibold text-gray-800">{fmtNum(l.PesoIngreso)} {l.UM}</td>
         <td className="px-3 py-2.5 text-right font-semibold text-blue-700">{fmtNum(l.Procesado)}</td>
+        <td className="px-3 py-2.5 text-right text-gray-600">{l.Bajado ? fmtNum(l.Bajado) : <span className="text-gray-300">—</span>}</td>
+        <td className="px-3 py-2.5 text-right text-red-600">{l.Descarte ? fmtNum(l.Descarte) : <span className="text-gray-300">—</span>}</td>
         <td className="px-3 py-2.5 text-right font-semibold text-amber-600">{fmtNum(l.Pendiente)}</td>
         <td className="px-3 py-2.5 text-right">
           <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${l.Rendimiento >= 50 ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-600"}`}>
@@ -241,7 +278,7 @@ function FilaLote({ l, detalle, abierta, onToggle }) {
       </tr>
       {abierta && (
         <tr>
-          <td colSpan={10} className="bg-gray-50 px-6 py-3">
+          <td colSpan={12} className="bg-gray-50 px-6 py-3">
             {detalle.length === 0 ? (
               <p className="text-sm text-gray-400">Sin transacciones para este lote</p>
             ) : (
@@ -393,7 +430,6 @@ export default function ReporteProduccionPage() {
   const { user } = useAuth();
   // El backend es quien bloquea de verdad; esto solo evita que alguien sin permiso escriba una nota
   // para descubrir al salir del campo que no se guardó.
-  const puedeEditarNotas = usePuede("destajo", "editar");
   const verMesas = usePuede("mesas", "reporte");
   const [desde, setDesde] = useState(hoy());
   const [hasta, setHasta] = useState(hoy());
@@ -402,8 +438,6 @@ export default function ReporteProduccionPage() {
   // texto de Lote puede repetirse entre Clases del mismo Piscina+Ciclo+Fecha.
   const [loteFiltro, setLoteFiltro] = useState("");
   const [areaLbHora, setAreaLbHora] = useState("");
-  const [notasHoja, setNotasHoja] = useState("");
-  const [guardandoNotas, setGuardandoNotas] = useState(false);
   const [reporte, setReporte] = useState(null);
   const [loading, setLoading] = useState(false);
   const [subTab, setSubTab] = useState("general");
@@ -492,10 +526,13 @@ export default function ReporteProduccionPage() {
     const totales = porLote.reduce((acc, l) => ({
       PesoIngreso: acc.PesoIngreso + l.PesoIngreso,
       Procesado: acc.Procesado + l.Procesado,
-    }), { PesoIngreso: 0, Procesado: 0 });
+      Bajado: acc.Bajado + (l.Bajado || 0),
+      Descarte: acc.Descarte + (l.Descarte || 0),
+    }), { PesoIngreso: 0, Procesado: 0, Bajado: 0, Descarte: 0 });
     return {
       ...reporte, porLote, porLoteTalla, porTermo, porPersona, porTalla,
-      totales: { ...totales, Pendiente: totales.PesoIngreso - totales.Procesado, Rendimiento: totales.PesoIngreso > 0 ? (totales.Procesado / totales.PesoIngreso * 100) : 0 },
+      totales: { ...totales, Pendiente: totales.PesoIngreso - totales.Bajado - totales.Descarte - totales.Procesado,
+                 Rendimiento: rendimientoTrabajado(totales.PesoIngreso, totales.Bajado, totales.Procesado) },
     };
   })();
 
@@ -527,44 +564,11 @@ export default function ReporteProduccionPage() {
   const totalPeladoHoja = termosHoja.reduce((s, t) => s + t.Procesado, 0);
 
   // Para el PDF: TODOS los lotes con producción en el rango Desde/Hasta, sin importar el Lote elegido
-  // en el selector (ese selector es solo para la vista/edición de notas en pantalla, ver más abajo).
+  // en el selector (ese selector es solo para la vista en pantalla, ver más abajo).
   // Se arma sobre `reporte` (sin recortar por loteFiltroObj) para que el botón imprima el lote
   // elegido y también todos los demás.
   const lotesParaImprimir = (reporte?.porLote ?? []).filter(l => l.Procesado > 0);
   const termosDeLote = (lote, clase) => (reporte?.porTermo ?? []).filter(t => t.Lote === lote && t.ClaseOrigen === clase);
-
-  // El textarea de Notas es local mientras se escribe (se guarda al salir del campo, no en cada
-  // tecla) — se resincroniza con lo que trae el Lote cada vez que cambia el Lote elegido, para no
-  // arrastrar la nota de un Lote hacia otro.
-  useEffect(() => { setNotasHoja(loteHoja?.Notas ?? ""); }, [loteHoja?.Lote, loteHoja?.Clase]);
-
-  const guardarNotasHoja = async () => {
-    if (!loteHoja || notasHoja === (loteHoja.Notas ?? "")) return;
-    setGuardandoNotas(true);
-    try {
-      const res = await fetch(`/api/lotes/${encodeURIComponent(loteHoja.Lote)}/${encodeURIComponent(loteHoja.Clase)}/notas`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json", ...authHeader() },
-        body: JSON.stringify({ Notas: notasHoja }),
-      });
-      // Si el servidor rechaza (sin permiso, nota muy larga), se devuelve el texto al valor guardado:
-      // dejarlo escrito en pantalla haría creer que quedó grabado cuando no fue así.
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        alert("No se pudo guardar la nota: " + (data.error || res.status));
-        setNotasHoja(loteHoja.Notas ?? "");
-        return;
-      }
-      // Refleja el guardado en `reporte` para que loteHoja.Notas quede al día sin recargar el
-      // reporte completo (evita que useEffect de arriba dispare otra vuelta al comparar contra sí mismo).
-      setReporte(r => r && {
-        ...r,
-        porLote: r.porLote.map(l => l.Lote === loteHoja.Lote && l.Clase === loteHoja.Clase ? { ...l, Notas: notasHoja } : l),
-      });
-    } finally {
-      setGuardandoNotas(false);
-    }
-  };
 
   const areasLbHora = [...new Set((datos?.porPersona ?? []).map(p => p.Area).filter(Boolean))].sort();
   // El filtro de Área se aplica ANTES de calcular los bloques (no después) para que, si un
@@ -684,8 +688,10 @@ export default function ReporteProduccionPage() {
   const sumar = (lotes) => lotes.reduce((acc, l) => ({
     PesoIngreso: acc.PesoIngreso + l.PesoIngreso,
     Procesado: acc.Procesado + l.Procesado,
+    Bajado: acc.Bajado + (l.Bajado || 0),
+    Descarte: acc.Descarte + (l.Descarte || 0),
     Pendiente: acc.Pendiente + l.Pendiente,
-  }), { PesoIngreso: 0, Procesado: 0, Pendiente: 0 });
+  }), { PesoIngreso: 0, Procesado: 0, Bajado: 0, Descarte: 0, Pendiente: 0 });
 
   const gruposPorTermo = () => {
     const mapa = new Map();
@@ -801,7 +807,7 @@ export default function ReporteProduccionPage() {
         <>
           {/* Totales */}
           {!SUB_TABS_SIN_TOTALES.includes(subTab) && (
-            <div className="grid grid-cols-4 gap-2 mb-3">
+            <div className="grid grid-cols-3 lg:grid-cols-6 gap-2 mb-3">
               <div className="bg-white rounded-lg shadow px-3 py-2 text-center">
                 <p className="text-xs text-gray-400">Materia Prima Recibida</p>
                 <p className="text-base font-bold text-gray-800">{fmtNum(datos.totales.PesoIngreso)} kg</p>
@@ -809,6 +815,14 @@ export default function ReporteProduccionPage() {
               <div className="bg-white rounded-lg shadow px-3 py-2 text-center">
                 <p className="text-xs text-gray-400">Procesado</p>
                 <p className="text-base font-bold text-blue-700">{fmtNum(datos.totales.Procesado)} kg</p>
+              </div>
+              <div className="bg-white rounded-lg shadow px-3 py-2 text-center" title="No se trabajó: no cuenta en el rendimiento">
+                <p className="text-xs text-gray-400">Bajado al piso</p>
+                <p className="text-base font-bold text-gray-700">{fmtNum(datos.totales.Bajado || 0)} kg</p>
+              </div>
+              <div className="bg-white rounded-lg shadow px-3 py-2 text-center" title="Merma: sí cuenta en el rendimiento">
+                <p className="text-xs text-gray-400">Descarte</p>
+                <p className="text-base font-bold text-red-600">{fmtNum(datos.totales.Descarte || 0)} kg</p>
               </div>
               <div className="bg-white rounded-lg shadow px-3 py-2 text-center">
                 <p className="text-xs text-gray-400">Pendiente</p>
@@ -839,6 +853,8 @@ export default function ReporteProduccionPage() {
                         <Th width={widthsPorLote.fecha} onResizeStart={startResizePorLote("fecha")} className="px-3 py-3 text-center">Fecha</Th>
                         <Th width={widthsPorLote.ingreso} onResizeStart={startResizePorLote("ingreso")} className="px-3 py-3 text-right">Ingreso</Th>
                         <Th width={widthsPorLote.procesado} onResizeStart={startResizePorLote("procesado")} className="px-3 py-3 text-right">Procesado</Th>
+                        <Th width={widthsPorLote.bajado} onResizeStart={startResizePorLote("bajado")} className="px-3 py-3 text-right">Bajado</Th>
+                        <Th width={widthsPorLote.descarte} onResizeStart={startResizePorLote("descarte")} className="px-3 py-3 text-right">Descarte</Th>
                         <Th width={widthsPorLote.pendiente} onResizeStart={startResizePorLote("pendiente")} className="px-3 py-3 text-right">Pendiente</Th>
                         <Th width={widthsPorLote.rend} onResizeStart={startResizePorLote("rend")} className="px-3 py-3 text-right">Rend.</Th>
                         <Th width={widthsPorLote.transac} onResizeStart={startResizePorLote("transac")} className="px-3 py-3 text-center">Transac.</Th>
@@ -847,7 +863,7 @@ export default function ReporteProduccionPage() {
                     <tbody className="divide-y divide-gray-100">
                       {gruposPorFinca().map(([nombreFinca, lotes]) => {
                         const sub = sumar(lotes);
-                        const rendSub = sub.PesoIngreso > 0 ? (sub.Procesado / sub.PesoIngreso * 100) : 0;
+                        const rendSub = rendimientoTrabajado(sub.PesoIngreso, sub.Bajado, sub.Procesado);
                         return (
                           <Fragment key={nombreFinca}>
                             {lotes.map(l => (
@@ -859,6 +875,8 @@ export default function ReporteProduccionPage() {
                               <td className="px-3 py-2" colSpan={5}>Subtotal — {nombreFinca}</td>
                               <td className="px-3 py-2 text-right text-gray-800">{fmtNum(sub.PesoIngreso)}</td>
                               <td className="px-3 py-2 text-right text-blue-700">{fmtNum(sub.Procesado)}</td>
+                              <td className="px-3 py-2 text-right text-gray-600">{fmtNum(sub.Bajado)}</td>
+                              <td className="px-3 py-2 text-right text-red-600">{fmtNum(sub.Descarte)}</td>
                               <td className="px-3 py-2 text-right text-amber-600">{fmtNum(sub.Pendiente)}</td>
                               <td className="px-3 py-2 text-right text-gray-600">{fmtNum(rendSub, 1)}%</td>
                               <td className="px-3 py-2"></td>
@@ -867,7 +885,7 @@ export default function ReporteProduccionPage() {
                         );
                       })}
                       {datos.porLote.length === 0 && (
-                        <tr><td colSpan={10} className="px-4 py-8 text-center text-gray-400">Sin lotes en este rango de fechas</td></tr>
+                        <tr><td colSpan={12} className="px-4 py-8 text-center text-gray-400">Sin lotes en este rango de fechas</td></tr>
                       )}
                     </tbody>
                     {datos.porLote.length > 0 && (
@@ -876,6 +894,8 @@ export default function ReporteProduccionPage() {
                           <td className="px-3 py-2.5" colSpan={5}>Total General</td>
                           <td className="px-3 py-2.5 text-right text-gray-900">{fmtNum(datos.totales.PesoIngreso)}</td>
                           <td className="px-3 py-2.5 text-right text-blue-800">{fmtNum(datos.totales.Procesado)}</td>
+                          <td className="px-3 py-2.5 text-right text-gray-700">{fmtNum(datos.totales.Bajado)}</td>
+                          <td className="px-3 py-2.5 text-right text-red-700">{fmtNum(datos.totales.Descarte)}</td>
                           <td className="px-3 py-2.5 text-right text-amber-700">{fmtNum(datos.totales.Pendiente)}</td>
                           <td className="px-3 py-2.5 text-right text-gray-800">{fmtNum(datos.totales.Rendimiento, 1)}%</td>
                           <td className="px-3 py-2.5"></td>
@@ -1046,10 +1066,20 @@ export default function ReporteProduccionPage() {
 
                 {/* Comparación contra la Materia Prima Ingresada del lote (loteHoja.PesoIngreso ya
                     viene del mismo endpoint que Materia Prima, así que siempre cuadra con esa pantalla). */}
-                <div className="grid grid-cols-3 gap-3 mb-4">
+                <div className="grid grid-cols-5 gap-3 mb-4">
                   <div className="border-2 border-gray-800 rounded px-3 py-2 text-center">
                     <p className="text-xs text-gray-500">Materia Prima Ingresada</p>
                     <p className="text-lg font-bold text-gray-800">{fmtNum(loteHoja.PesoIngreso)}</p>
+                  </div>
+                  {/* Lo bajado al piso (sobrante o rojo a revisar) no se trabajó en este lote y sale del
+                      rendimiento; el descarte es merma y se queda dentro. */}
+                  <div className="border-2 border-gray-800 rounded px-3 py-2 text-center">
+                    <p className="text-xs text-gray-500">Bajado al piso</p>
+                    <p className="text-lg font-bold text-gray-700">{fmtNum(loteHoja.Bajado || 0)}</p>
+                  </div>
+                  <div className="border-2 border-gray-800 rounded px-3 py-2 text-center">
+                    <p className="text-xs text-gray-500">Descarte</p>
+                    <p className="text-lg font-bold text-red-600">{fmtNum(loteHoja.Descarte || 0)}</p>
                   </div>
                   <div className="border-2 border-gray-800 rounded px-3 py-2 text-center">
                     <p className="text-xs text-gray-500">Total Pelado</p>
@@ -1067,21 +1097,7 @@ export default function ReporteProduccionPage() {
                   </p>
                 )}
 
-                <div className="border border-gray-400 rounded">
-                  <p className="text-xs font-semibold text-gray-500 px-2 pt-1.5">Notas</p>
-                  <textarea value={notasHoja} onChange={e => setNotasHoja(e.target.value)}
-                    onBlur={guardarNotasHoja}
-                    maxLength={MAX_NOTAS}
-                    disabled={!puedeEditarNotas}
-                    placeholder={puedeEditarNotas ? "Observaciones..." : "Sin permiso para editar la nota"}
-                    className="w-full h-20 px-2 py-1 text-sm text-gray-700 resize-none focus:outline-none disabled:bg-gray-50 disabled:text-gray-500" />
-                  <p className="text-[10px] text-gray-400 px-2 pb-1 flex justify-between">
-                    <span>{guardandoNotas ? "Guardando…" : puedeEditarNotas ? "Se guarda al salir del campo" : ""}</span>
-                    <span className={notasHoja.length >= MAX_NOTAS ? "text-amber-600 font-semibold" : ""}>
-                      {notasHoja.length}/{MAX_NOTAS}
-                    </span>
-                  </p>
-                </div>
+                <AjustesLote l={loteHoja} />
               </div>
             )}
             </>
@@ -1541,10 +1557,7 @@ export default function ReporteProduccionPage() {
                   </div>
                 </div>
 
-                <div className="border border-slate-400 rounded">
-                  <p className="text-[9px] font-bold text-gray-500 px-2 pt-1">Notas</p>
-                  <p className="px-2 py-1.5 text-[11px] whitespace-pre-wrap min-h-[3rem]">{l.Notas || " "}</p>
-                </div>
+                <AjustesLote l={l} compacto />
               </div>
             );
           })

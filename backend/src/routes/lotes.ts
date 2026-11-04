@@ -3,6 +3,7 @@ import jwt from "jsonwebtoken";
 import prisma from "../lib/prisma.ts";
 import { requireAuth, requirePerm } from "../middleware/auth.ts";
 import { componerCodigoLote, piscinaRequiereCiclo } from "../lib/codigoLote.ts";
+import { sqlAjustesLote } from "../lib/destajoPiso.ts";
 
 const router = Router();
 
@@ -53,12 +54,16 @@ async function generarCodigoLote(piscinaId: number, fechaProduccion: string, cic
   return componerCodigoLote(String(Nombre), fechaProduccion, secuencial);
 }
 
+// Lo bajado al piso y el descarte ya no están en la mesa: no cuentan como pendiente. Ver
+// lib/destajoPiso.ts.
 function formatear(rows: any[]) {
   return rows.map(r => ({
     ...r,
     PesoIngreso: Number(r.PesoIngreso),
     Procesado: Number(r.Procesado),
-    Pendiente: Number(r.PesoIngreso) - Number(r.Procesado),
+    Bajado: Number(r.Bajado),
+    Descarte: Number(r.Descarte),
+    Pendiente: Number(r.PesoIngreso) - Number(r.Bajado) - Number(r.Descarte) - Number(r.Procesado),
     Activo: Number(r.Activo) === 1,
   }));
 }
@@ -67,6 +72,7 @@ const SELECT_LOTES = `
   SELECT l.Lote, l.CicloId, l.PiscinaId, l.Clase, c.Descripcion AS DescripcionClase,
          l.TallaReferencia, t.Descripcion AS DescripcionTallaReferencia,
          l.Fecha, COALESCE(l.FechaProduccion, l.Fecha) AS FechaProduccion, l.PesoIngreso, l.UM, l.AlmacenCodigo, l.Activo, l.RegistradoPor, l.Notas,
+         l.Origen, ${sqlAjustesLote("l")},
          f.Codigo AS CodigoFinca, f.Descripcion AS NombreFinca, p.Nombre AS NombrePiscina,
          ci.Anio, ci.Ciclo,
          COALESCE((SELECT SUM(pd.Peso) FROM PesajeDetalle pd
@@ -175,16 +181,25 @@ router.put("/:lote/:clase", requireAuth, requirePerm("destajo", "editar"), async
     const lote = req.params.lote;
     const clase = req.params.clase;
 
-    // No se puede dejar el peso de ingreso por debajo de lo que ese lote ya tiene procesado —
-    // si no, el lote queda con Pendiente negativo y bloquea cualquier pesaje futuro sin explicación.
-    const procesado: any[] = await prisma.$queryRaw`
-      SELECT COALESCE(SUM(pd.Peso), 0) AS Procesado
-      FROM PesajeDetalle pd JOIN TransaccionesProduccion tp ON pd.TransaccionId = tp.TransaccionId
-      WHERE tp.Lote = ${lote} AND tp.ClaseOrigen = ${clase}
-    `;
-    const procesadoActual = Number(procesado[0].Procesado);
-    if (Number(PesoIngreso) < procesadoActual) {
-      res.status(400).json({ error: `El peso de ingreso no puede ser menor a lo ya procesado en este lote (${procesadoActual.toFixed(2)})` });
+    // No se puede dejar el peso de ingreso por debajo de lo que ese lote ya tiene procesado, bajado
+    // al piso o descartado — si no, el lote queda con Pendiente negativo y bloquea cualquier pesaje
+    // futuro sin explicación.
+    const [cuadre]: any[] = await prisma.$queryRawUnsafe(`
+      SELECT l.PesoIngreso, l.Origen,
+             COALESCE((SELECT SUM(pd.Peso) FROM PesajeDetalle pd JOIN TransaccionesProduccion tp ON pd.TransaccionId = tp.TransaccionId
+                        WHERE tp.Lote = l.Lote AND tp.ClaseOrigen = l.Clase), 0) AS Procesado,
+             ${sqlAjustesLote("l")}
+        FROM Lotes l WHERE l.Lote = ? AND l.Clase = ? LIMIT 1`, lote, clase);
+    if (!cuadre) { res.status(404).json({ error: "Lote no encontrado" }); return; }
+    // El peso de un lote tomado del piso es el de la báscula de Descongelado: no se teclea. Para
+    // corregirlo se deshace la toma en Materia Prima y se vuelve a tomar.
+    if (String(cuadre.Origen) !== "MANUAL" && Math.abs(Number(PesoIngreso) - Number(cuadre.PesoIngreso)) > 0.001) {
+      res.status(400).json({ error: "El peso de un lote tomado del piso no se edita: deshaga la toma y vuelva a tomarlo" });
+      return;
+    }
+    const comprometido = Number(cuadre.Procesado) + Number(cuadre.Bajado) + Number(cuadre.Descarte);
+    if (Number(PesoIngreso) < comprometido - 0.001) {
+      res.status(400).json({ error: `El peso de ingreso no puede ser menor a lo ya procesado, bajado o descartado en este lote (${comprometido.toFixed(2)})` });
       return;
     }
 
@@ -270,37 +285,9 @@ router.put("/:lote/:clase", requireAuth, requirePerm("destajo", "editar"), async
   }
 });
 
-// La nota se imprime dentro de un recuadro de la Hoja de Lote: más allá de esto no cabe en la hoja.
-// El textarea de la Hoja de Lote usa el mismo número, así que llegar aquí pasado del límite solo
-// ocurre llamando la API por fuera.
-export const MAX_NOTAS = 500;
-
-// PATCH /api/lotes/:lote/:clase/notas  { Notas }
-// Separado del PUT general porque ese exige mandar PesoIngreso/Fecha completos y validarlos contra
-// lo ya procesado; esto solo toca el texto de la observación.
-//
-// Pide "editar" y no "ver": escribir en la tabla es escribir, aunque el campo sea una observación.
-// Si hace falta que alguien pueda anotar sin poder tocar peso/fecha/ciclo de Materia Prima, eso es
-// un permiso propio del módulo, no reutilizar el de lectura.
-router.patch("/:lote/:clase/notas", requireAuth, requirePerm("destajo", "editar"), async (req: Request, res: Response) => {
-  try {
-    const { Notas } = req.body;
-    if (Notas != null && typeof Notas !== "string") {
-      res.status(400).json({ error: "Notas debe ser texto" });
-      return;
-    }
-    if (Notas && Notas.length > MAX_NOTAS) {
-      res.status(400).json({ error: `La nota no puede pasar de ${MAX_NOTAS} caracteres (tiene ${Notas.length})` });
-      return;
-    }
-    const lote = req.params.lote;
-    const clase = req.params.clase;
-    await prisma.$executeRaw`UPDATE Lotes SET Notas = ${Notas || null} WHERE Lote = ${lote} AND Clase = ${clase}`;
-    res.json({ ok: true });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
+// Las notas del lote ya no se escriben: lo que se anotaba ahí (bajados, descartes, rojo) lo lleva el
+// control de Materia Prima (lib/destajoPiso.ts). La columna Lotes.Notas se queda para el historial
+// y la Hoja de Lote la muestra solo para leer.
 
 // DELETE /api/lotes/:lote/:clase  (solo si no tiene transacciones de producción registradas — corrección de error de captura)
 router.delete("/:lote/:clase", requireAuth, requirePerm("destajo", "eliminar"), async (req: Request, res: Response) => {
@@ -310,6 +297,13 @@ router.delete("/:lote/:clase", requireAuth, requirePerm("destajo", "eliminar"), 
     const trans: any[] = await prisma.$queryRaw`SELECT COUNT(*) AS n FROM TransaccionesProduccion WHERE Lote = ${lote} AND ClaseOrigen = ${clase}`;
     if (Number(trans[0].n) > 0) {
       res.status(400).json({ error: "No se puede eliminar: este lote ya tiene transacciones de producción registradas" });
+      return;
+    }
+    // Un lote tomado del piso tiene su producto enlazado en el kardex: borrarlo a secas lo dejaría
+    // fuera del piso y fuera de Destajo. Se deshacen sus movimientos y el lote se va solo.
+    const piso: any[] = await prisma.$queryRaw`SELECT COUNT(*) AS n FROM MovimientoPiso WHERE LoteProceso = ${lote} AND ClaseProceso = ${clase}`;
+    if (Number(piso[0].n) > 0) {
+      res.status(400).json({ error: "Este lote se tomó del piso: no se elimina, se devuelve al piso" });
       return;
     }
     await prisma.$executeRaw`DELETE FROM Lotes WHERE Lote = ${lote} AND Clase = ${clase}`;

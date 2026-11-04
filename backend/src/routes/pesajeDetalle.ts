@@ -4,6 +4,7 @@ import { Prisma } from "@prisma/client";
 import prisma from "../lib/prisma.ts";
 import { requireAuth, requirePerm } from "../middleware/auth.ts";
 import { hoyGT } from "../lib/dateGT.ts";
+import { sqlAjustesLote } from "../lib/destajoPiso.ts";
 
 const router = Router();
 
@@ -87,9 +88,13 @@ async function bloquearTransaccionAbierta(tx: any, transaccionId: number) {
 // `lote` (texto) puede repetirse entre Clases del mismo Piscina+Ciclo+Fecha — `claseOrigen` es obligatorio
 // para identificar la fila real de Lotes (llave compuesta Lote+Clase).
 async function verificarDisponibilidad(tx: any, lote: string, claseOrigen: string, pesoNuevo: number, excluirPesajeId?: number) {
-  const lotes: any[] = await tx.$queryRaw`SELECT PesoIngreso, UM FROM Lotes WHERE Lote = ${lote} AND Clase = ${claseOrigen} LIMIT 1 FOR UPDATE`;
+  // Lo bajado al piso y el descarte ya salieron de la mesa: no se pueden pesar (lib/destajoPiso.ts).
+  const lotes: any[] = await tx.$queryRawUnsafe(
+    `SELECT l.PesoIngreso, l.UM, ${sqlAjustesLote("l")} FROM Lotes l WHERE l.Lote = ? AND l.Clase = ? LIMIT 1 FOR UPDATE`,
+    lote, claseOrigen);
   if (!lotes.length) return { ok: false, error: "Lote no encontrado", status: 404 };
   const { PesoIngreso, UM } = lotes[0];
+  const fueraDeMesa = Number(lotes[0].Bajado) + Number(lotes[0].Descarte);
   const procesado: any[] = await tx.$queryRaw`
     SELECT COALESCE(SUM(pd.Peso), 0) AS Procesado
     FROM PesajeDetalle pd
@@ -97,7 +102,7 @@ async function verificarDisponibilidad(tx: any, lote: string, claseOrigen: strin
     WHERE tp.Lote = ${lote} AND tp.ClaseOrigen = ${claseOrigen} ${excluirPesajeId ? Prisma.sql`AND pd.PesajeId != ${excluirPesajeId}` : Prisma.empty}
   `;
   const procesadoActual = Number(procesado[0].Procesado);
-  const disponible = Number(PesoIngreso) - procesadoActual;
+  const disponible = Number(PesoIngreso) - fueraDeMesa - procesadoActual;
   if (pesoNuevo > disponible) {
     return {
       ok: false, status: 400,
