@@ -49,6 +49,10 @@ export interface Permisos {
   liberar_mp?:     { ver?: boolean; liberar?: boolean };
   // Gerencia: el panorama de planta (recorrido del producto por área, ver lib/panoramaPlanta.ts).
   gerencia?:       { ver?: boolean };
+  // Importaciones de materia prima: `crear` registra solicitudes y envía su reporte por correo;
+  // `editar` las corrige, las marca recibidas/pagadas, las anula y lleva los ajustes del módulo;
+  // `eliminar` solo borra lo que nunca se envió.
+  importaciones?:  { ver?: boolean; crear?: boolean; editar?: boolean; eliminar?: boolean };
 }
 
 export interface AuthPayload {

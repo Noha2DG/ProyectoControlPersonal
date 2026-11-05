@@ -43,6 +43,7 @@ import descongeladoRouter from "./routes/descongelado.ts";
 import tratamientoRouter from "./routes/tratamiento.ts";
 import mesasRouter from "./routes/mesas.ts";
 import tarifasRouter from "./routes/tarifas.ts";
+import importacionesRouter from "./routes/importaciones.ts";
 import { requireAuth } from "./middleware/auth.ts";
 import { barridoCorteMedianoche } from "./lib/corteMedianoche.ts";
 import { barridoEtiquetasVencidas } from "./lib/etiquetasVencidas.ts";
@@ -125,6 +126,7 @@ app.use("/api/descongelado", descongeladoRouter);
 app.use("/api/tratamiento", tratamientoRouter);
 app.use("/api/mesas", mesasRouter);
 app.use("/api/tarifas", tarifasRouter);
+app.use("/api/importaciones", importacionesRouter);
 
 // Sirve el frontend ya compilado (frontend/dist) desde este mismo proceso: así el despliegue es un
 // solo servicio, sin un servidor web aparte para los archivos estáticos.

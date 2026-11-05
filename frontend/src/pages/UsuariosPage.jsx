@@ -50,6 +50,10 @@ const MODULOS = [
   // clientes. Con `catalogos` venía de regalo Presentaciones, donde CajasXMaster define el objetivo
   // de todos los pedidos.
   { key: "pedidos",       label: "Pedidos y Clientes",               acciones: ["ver","crear","editar","eliminar"], grupo: "Operación" },
+  // Importaciones de materia prima: "crear" registra solicitudes y envía el reporte por correo;
+  // "editar" las corrige, marca recibidas/pagadas, anula y lleva los ajustes; "eliminar" solo borra
+  // lo que nunca se envió.
+  { key: "importaciones", label: "Importaciones de Materia Prima",   acciones: ["ver","crear","editar","eliminar"], grupo: "Operación" },
   // ── Configuración
   { key: "areas",          label: "Áreas",                          acciones: ["ver","crear","editar","eliminar"], grupo: "Config"   },
   { key: "permisos",       label: "Permisos",                       acciones: ["ver","crear","editar","eliminar"], grupo: "Config"   },

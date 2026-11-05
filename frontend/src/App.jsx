@@ -25,6 +25,7 @@ import ExistenciaBodegaPage from "./pages/ExistenciaBodegaPage.jsx";
 import RemisionesPage from "./pages/RemisionesPage.jsx";
 import LiberarMateriaPrimaPage from "./pages/LiberarMateriaPrimaPage.jsx";
 import ReportesPage from "./pages/ReportesPage.jsx";
+import ImportacionesPage from "./pages/ImportacionesPage.jsx";
 import EmpleadosTable from "./components/EmpleadosTable.jsx";
 import { exportarEmpleados } from "./utils/exportExcel.js";
 import EmpleadoModal from "./components/EmpleadoModal.jsx";
@@ -77,6 +78,8 @@ const Icon = {
   gerencia: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M3 3v18h18M7 15l4-4 3 3 6-6" />,
   // Candado abierto: liberar el contenedor importado.
   liberar: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M13.5 10.5V6.75a4.5 4.5 0 119 0v3.75M3.75 21.75h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H3.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z" />,
+  // Barco: la materia prima que llega importada en contenedor.
+  importaciones: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M3 15l1.5 4.5h15L21 15M3 15h18M3 15l2-6h14l2 6M8 9V5h8v4M12 5V3" />,
   remisiones: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M8.25 18.75a1.5 1.5 0 01-3 0m3 0a1.5 1.5 0 00-3 0m3 0h6m-9 0H3.375a1.125 1.125 0 01-1.125-1.125V14.25m17.25 4.5a1.5 1.5 0 01-3 0m3 0a1.5 1.5 0 00-3 0m3 0h1.125c.621 0 1.129-.504 1.09-1.124a17.902 17.902 0 00-3.213-9.193 2.056 2.056 0 00-1.58-.86H14.25M16.5 18.75h-2.25m0-11.177v-.958c0-.568-.422-1.048-.987-1.106a48.554 48.554 0 00-10.026 0 1.106 1.106 0 00-.987 1.106v7.635m12-6.677v6.677m0 4.5v-4.5m0 0h-12" />,
 };
 
@@ -243,6 +246,7 @@ function Dashboard({ inicio }) {
   const verDestajo = perm("destajo", "ver") || perm("mesas", "reporte");
   if (verDestajo)                    nav.push({ key: "destajo",   label: "Destajo",             icon: "destajo"  });
   if (perm("pedidos",        "ver")) nav.push({ key: "pedidos",   label: "Pedidos",             icon: "pedidos" });
+  if (perm("importaciones",  "ver")) nav.push({ key: "importaciones", label: "Importaciones MP", icon: "importaciones" });
   if (perm("etiquetado",     "ver")) nav.push({ key: "etiquetado", label: "Agrupación",          icon: "etiquetado" });
   if (perm("etiquetado",     "imprimir")) nav.push({ key: "imprimirEtiquetas", label: "Impresión de Etiquetas", icon: "imprimir" });
   if (perm("bodega",        "ver")) nav.push({ key: "bodega",     label: "Bodega — Pallets",     icon: "bodega"   });
@@ -289,6 +293,7 @@ function Dashboard({ inicio }) {
     permisos:  "Permisos",
     usuarios:  "Usuarios",
     pedidos: "Pedidos y Clientes",
+    importaciones: "Importaciones de Materia Prima",
     catalogos: "Catálogos de Producción",
   };
 
@@ -432,6 +437,7 @@ function Dashboard({ inicio }) {
             {seccion === "tratamiento"  && perm("tratamiento",  "ver") && <TratamientoPage />}
             {seccion === "destajo"  && verDestajo && <DestajoPage tabInicial={inicio?.tab} />}
             {seccion === "pedidos"   && perm("pedidos",       "ver") && <PedidosClientesPage />}
+            {seccion === "importaciones" && perm("importaciones", "ver") && <ImportacionesPage />}
             {seccion === "etiquetado" && perm("etiquetado",    "ver") && <EtiquetadoPage />}
             {seccion === "imprimirEtiquetas" && perm("etiquetado", "imprimir") && <ImpresionEtiquetasPage />}
             {seccion === "bodega"   && perm("bodega",          "ver") && <PalletsPage />}
