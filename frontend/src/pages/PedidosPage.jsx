@@ -4,12 +4,13 @@ import { authHeader, usePuede, useAuth } from "../context/AuthContext.jsx";
 import { useColWidths, useOrden, ordenarFilas, Th, Colgroup } from "../components/ResizableTh.jsx";
 import { fechaDelBackend } from "../utils/fecha.js";
 import AvancePedidoModal from "../components/AvancePedidoModal.jsx";
+import ModalMotivo from "../components/ModalMotivo.jsx";
 
 const ESTATUS = ["Proceso", "Terminado"];
 
 const PEDIDOS_COL_DEFAULTS = { pedido: 130, descripcion: 220, estatus: 110, editar: 90 };
 const PEDIDOS_COLS = Object.keys(PEDIDOS_COL_DEFAULTS);
-const DETALLE_COL_DEFAULTS = { clase: 190, talla: 90, presentacion: 130, cajas: 90, kg: 90, acciones: 230 };
+const DETALLE_COL_DEFAULTS = { clase: 190, talla: 90, presentacion: 130, cajas: 90, kg: 90, acciones: 290 };
 const DETALLE_COLS = Object.keys(DETALLE_COL_DEFAULTS);
 // El avance va en su propia pestaña y no como columnas extra del detalle: el panel vive a media
 // pantalla, así que metidas junto a la proforma quedarían ilegibles. Compara solo lo escaneado que
@@ -40,7 +41,13 @@ const ACCION_BADGE = {
   Alta:   "bg-green-100 text-green-700",
   Cambio: "bg-blue-100 text-blue-700",
   Baja:   "bg-red-100 text-red-700",
+  Anulada:    "bg-red-100 text-red-700",
+  Reactivada: "bg-green-100 text-green-700",
 };
+
+// Quién, cuándo y por qué se anuló: va en el title de la insignia para no ensanchar la tabla.
+const detalleAnulacion = d =>
+  `Anulada${d.AnuladaPor ? ` por ${d.AnuladaPor}` : ""}${d.AnuladaEn ? ` el ${fmtFecha(d.AnuladaEn)}` : ""}${d.MotivoAnulacion ? ` — ${d.MotivoAnulacion}` : ""}`;
 
 // Combo de texto con búsqueda — para catálogos largos (Clase, Talla, Presentación, Empaques)
 function ComboBuscable({ options, value, onChange, placeholder, required }) {
@@ -494,6 +501,8 @@ export default function PedidosPage() {
   const [loadingAv, setLoadingAv] = useState(false);
   const [imprimiendoAvance, setImprimiendoAvance] = useState(false);
   const [historialId, setHistorialId] = useState(null);
+  const [lineaAnular, setLineaAnular] = useState(null);
+  const [ocultarAnuladas, setOcultarAnuladas] = useState(false);
   const [ordenPed, alternarOrdenPed] = useOrden();
   const [ordenDet, alternarOrdenDet] = useOrden();
   const [ordenAv, alternarOrdenAv] = useOrden();
@@ -583,8 +592,32 @@ export default function PedidosPage() {
     else { const e = await res.json(); alert("Error: " + e.error); }
   };
 
+  // ModalMotivo espera que esto lance para mostrar el error dentro del modal, sin cerrarlo.
+  const handleAnular = async (motivo) => {
+    const res = await fetch(`/api/detalle-pedido/${lineaAnular.DetalleId}/anular`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", ...authHeader() },
+      body: JSON.stringify({ Motivo: motivo }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || "No se pudo anular la línea");
+    setLineaAnular(null);
+    fetchDetalles(pedidoSel.CodigoPedido);
+    const partes = [];
+    if (data.CapturasCanceladas) partes.push(`Se cancelaron ${data.CapturasCanceladas} captura(s) de Agrupación sin etiquetas impresas.`);
+    if (data.CapturasConEtiquetas) partes.push(`${data.CapturasConEtiquetas} captura(s) ya tenían etiquetas impresas: se conservan con su producto, pero ya no pueden imprimir más.`);
+    if (partes.length) alert(partes.join("\n\n"));
+  };
+
+  const handleReactivar = async (d) => {
+    if (!confirm("¿Reactivar esta línea? Vuelve a contar en la proforma. Las capturas que se cancelaron al anularla siguen canceladas.")) return;
+    const res = await fetch(`/api/detalle-pedido/${d.DetalleId}/reactivar`, { method: "PUT", headers: authHeader() });
+    if (!res.ok) { const e = await res.json().catch(() => ({})); alert("Error: " + (e.error || res.statusText)); return; }
+    fetchDetalles(pedidoSel.CodigoPedido);
+  };
+
   const handleDeleteDetalle = async (d) => {
-    if (!confirm("¿Eliminar esta línea del pedido?")) return;
+    if (!confirm("¿Eliminar esta línea del pedido? Solo se puede si no tiene capturas de Agrupación; si el cliente ya no la quiere, usa Anular.")) return;
     const res = await fetch(`/api/detalle-pedido/${d.DetalleId}`, { method: "DELETE", headers: authHeader() });
     if (!res.ok) { const e = await res.json().catch(() => ({})); alert("Error: " + (e.error || res.statusText)); return; }
     fetchDetalles(pedidoSel.CodigoPedido);
@@ -822,8 +855,7 @@ export default function PedidosPage() {
                               {a.EsGranel && (
                                 <span className="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-gray-200 text-gray-600"
                                   title="Empacado a granel porque se acabó el material: no tiene pedido propio, suma al avance total">Granel</span>
-                              )}
-                            </div>
+                              )}                            </div>
                           </td>
                           <td className="px-3 py-3 text-gray-700 truncate" title={tallaDesc(a.Talla)}>{tallaDesc(a.Talla)}</td>
                           <td className="px-3 py-3 text-gray-700 truncate" title={presentacionDesc(a.Presentacion)}>{presentacionDesc(a.Presentacion)}</td>
@@ -907,11 +939,16 @@ export default function PedidosPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {ordenarFilas(detalles, ordenDet, VALORES_DET).map(d => (
-                  <tr key={d.DetalleId} className="hover:bg-gray-50 transition">
+                {ordenarFilas(ocultarAnuladas ? detalles.filter(d => !d.Anulada) : detalles, ordenDet, VALORES_DET).map(d => (
+                  <tr key={d.DetalleId} className={`transition ${d.Anulada ? "bg-gray-50 text-gray-400 [&_td]:text-gray-400" : "hover:bg-gray-50"}`}>
                     <td className="px-4 py-3 text-gray-700" title={`${d.Clase} — ${productoDesc(d.Clase)}`}>
                       <div className="flex items-center gap-1.5 min-w-0">
-                        <span className="truncate">{productoDesc(d.Clase)}</span>
+                        <span className={`truncate ${d.Anulada ? "line-through" : ""}`}>{productoDesc(d.Clase)}</span>
+                        {d.Anulada && (
+                          <span className="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-red-100 text-red-700" title={detalleAnulacion(d)}>
+                            Anulada
+                          </span>
+                        )}
                         {d.EsGranel && (
                           <span className={`shrink-0 px-1.5 py-0.5 rounded text-[10px] font-semibold ${d.Activo ? "bg-green-100 text-green-700" : "bg-gray-200 text-gray-600"}`}
                             title={d.Activo ? "Granel activo: se pueden imprimir etiquetas" : "Granel desactivado: un administrador debe activarla para imprimir"}>
@@ -943,10 +980,17 @@ export default function PedidosPage() {
                             {d.Activo ? "Desactivar" : "Activar"}
                           </button>
                         )}
-                        {puedeEditar && (
+                        {puedeEditar && !d.Anulada && (
                           <button onClick={() => setModalDetalle({ open: true, item: d })}
                             className="text-blue-600 hover:text-blue-800 text-xs font-medium px-2 py-1 rounded hover:bg-blue-50 transition">Editar</button>
                         )}
+                        {puedeEliminar && (d.Anulada ? (
+                          <button onClick={() => handleReactivar(d)} title="El cliente volvió a pedir esta línea"
+                            className="text-green-600 hover:text-green-800 text-xs font-medium px-2 py-1 rounded hover:bg-green-50 transition">Reactivar</button>
+                        ) : (
+                          <button onClick={() => setLineaAnular(d)} title="El cliente ya no la quiere: sale de la proforma y se conserva lo producido"
+                            className="text-amber-600 hover:text-amber-800 text-xs font-medium px-2 py-1 rounded hover:bg-amber-50 transition">Anular</button>
+                        ))}
                         {puedeEliminar && (
                           <button onClick={() => handleDeleteDetalle(d)}
                             className="text-red-500 hover:text-red-700 text-xs font-medium px-2 py-1 rounded hover:bg-red-50 transition">Eliminar</button>
@@ -963,9 +1007,20 @@ export default function PedidosPage() {
                     {/* El granel no es cantidad planificada — su Kg es lo que ya se produjo, no un
                         compromiso de la proforma. Sumarlo aquí infla el total con algo que no se
                         pidió; se excluye igual que el candado de Objetivo lo excluye del techo. */}
-                    <td colSpan={4} className="px-4 py-3 text-right text-gray-600 whitespace-nowrap">Total proforma</td>
+                    {/* Las anuladas tampoco: el cliente ya no las pide. */}
+                    <td colSpan={4} className="px-4 py-3 text-gray-600 whitespace-nowrap">
+                      <div className="flex items-center justify-between gap-3">
+                        {detalles.some(d => d.Anulada) ? (
+                          <label className="flex items-center gap-1.5 text-xs font-normal text-gray-500 cursor-pointer">
+                            <input type="checkbox" checked={ocultarAnuladas} onChange={e => setOcultarAnuladas(e.target.checked)} />
+                            Ocultar anuladas ({detalles.filter(d => d.Anulada).length})
+                          </label>
+                        ) : <span />}
+                        <span>Total proforma</span>
+                      </div>
+                    </td>
                     <td className="px-4 py-3 text-right text-gray-800 whitespace-nowrap">
-                      {Number(detalles.reduce((sum, d) => sum + (d.EsGranel ? 0 : Number(d.KgPedido) || 0), 0).toFixed(3))}
+                      {Number(detalles.reduce((sum, d) => sum + (d.EsGranel || d.Anulada ? 0 : Number(d.KgPedido) || 0), 0).toFixed(3))}
                     </td>
                     <td></td>
                   </tr>
@@ -978,6 +1033,14 @@ export default function PedidosPage() {
 
       {modalPedido.open && (
         <PedidoModal item={modalPedido.item} clientes={clientes} onSave={handleSavePedido} onClose={() => setModalPedido({ open: false, item: null })} />
+      )}
+      {lineaAnular && (
+        <ModalMotivo
+          titulo="Anular línea de la proforma"
+          descripcion={`${productoDesc(lineaAnular.Clase)} · ${tallaDesc(lineaAnular.Talla)} · ${presentacionDesc(lineaAnular.Presentacion)}. Sale del total y del avance; lo ya producido se conserva. Las capturas de Agrupación sin etiquetas impresas se cancelan.`}
+          textoConfirmar="Anular línea"
+          onConfirmar={handleAnular}
+          onCerrar={() => setLineaAnular(null)} />
       )}
       {historialId && (
         <HistorialModal detalleId={historialId} tallaDesc={tallaDesc} presentacionDesc={presentacionDesc}
