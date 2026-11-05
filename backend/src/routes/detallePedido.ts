@@ -20,6 +20,7 @@ function formatear(rows: any[]) {
     LibrasPedido: Number(r.LibrasPedido),
     EsGranel: Number(r.EsGranel) === 1,
     Activo: Number(r.Activo) === 1,
+    Anulada: Number(r.Anulada) === 1,
   }));
 }
 
@@ -65,7 +66,7 @@ function resolverCantidades(sinTecho: boolean, ctx: { PesoKG: number; PesoLb: nu
 async function registrarHistorial(
   client: any,
   datos: {
-    DetalleId: number; CodigoPedido: string; Accion: "Alta" | "Cambio" | "Baja";
+    DetalleId: number; CodigoPedido: string; Accion: "Alta" | "Cambio" | "Baja" | "Anulada" | "Reactivada";
     Clase: string; Proceso: number; Talla: number; Presentacion: string;
     EmpaqueMaster: string; EmpaqueAccesorio: string | null;
     CantidadCajas: number; KgPedido: number; LibrasPedido: number; EsGranel: boolean;
@@ -107,11 +108,13 @@ router.get("/", requireAuth, requireAnyPerm([["pedidos", "ver"], ["etiquetado", 
     // que sí existe (a diferencia de las capturas, donde ver las últimas alcanza).
     const rows: any[] = pedido
       ? await prisma.$queryRaw`
-          SELECT DetalleId, CodigoPedido, Clase, Proceso, Talla, Presentacion, EmpaqueMaster, EmpaqueAccesorio, CantidadCajas, KgPedido, LibrasPedido, EsGranel, Activo
+          SELECT DetalleId, CodigoPedido, Clase, Proceso, Talla, Presentacion, EmpaqueMaster, EmpaqueAccesorio, CantidadCajas, KgPedido, LibrasPedido, EsGranel, Activo,
+                 Anulada, AnuladaPor, AnuladaEn, MotivoAnulacion
           FROM DetallePedido WHERE CodigoPedido = ${pedido} ORDER BY DetalleId ASC LIMIT 2000
         `
       : await prisma.$queryRaw`
-          SELECT DetalleId, CodigoPedido, Clase, Proceso, Talla, Presentacion, EmpaqueMaster, EmpaqueAccesorio, CantidadCajas, KgPedido, LibrasPedido, EsGranel, Activo
+          SELECT DetalleId, CodigoPedido, Clase, Proceso, Talla, Presentacion, EmpaqueMaster, EmpaqueAccesorio, CantidadCajas, KgPedido, LibrasPedido, EsGranel, Activo,
+                 Anulada, AnuladaPor, AnuladaEn, MotivoAnulacion
           FROM DetallePedido ORDER BY DetalleId DESC LIMIT 500
         `;
     res.json(formatear(rows));
@@ -177,6 +180,20 @@ router.post("/", requireAuth, requirePerm("pedidos", "crear"), async (req: AuthR
 
     res.status(201).json({ ok: true, DetalleId: detalleId, EsGranel: esGranel, Activo: !!activo });
   } catch (err: any) {
+    // Una línea anulada sigue ocupando su (Proceso, Talla, Presentación): si el cliente la vuelve a
+    // pedir, lo que corresponde es reactivarla, no abrir otra al lado.
+    if (err.message?.includes("uq_detalle_producto")) {
+      const { CodigoPedido, Clase, Talla, Presentacion } = req.body;
+      const anulada: any[] = await prisma.$queryRaw`
+        SELECT dp.DetalleId FROM DetallePedido dp JOIN Clase cl ON cl.Clase = ${Clase}
+        WHERE dp.CodigoPedido = ${CodigoPedido} AND dp.Proceso = cl.Proceso AND dp.Talla = ${Number(Talla)}
+          AND dp.Presentacion = ${Presentacion} AND dp.Anulada = 1 LIMIT 1
+      `.catch(() => []);
+      if (anulada.length) {
+        res.status(400).json({ error: "Esa línea ya existe en el pedido, pero anulada. Reactívala en vez de crear otra." });
+        return;
+      }
+    }
     errorLinea(err, res);
   }
 });
@@ -221,9 +238,13 @@ router.put("/:id", requireAuth, requirePerm("pedidos", "editar"), async (req: Au
     // El pedido de la línea no viaja en el body: se lee de la fila, que es la única fuente confiable
     // (y es lo que determina si aplica el centinela de 1 caja).
     const actuales: any[] = await prisma.$queryRaw`
-      SELECT CodigoPedido, EsGranel FROM DetallePedido WHERE DetalleId = ${id} LIMIT 1
+      SELECT CodigoPedido, EsGranel, Anulada FROM DetallePedido WHERE DetalleId = ${id} LIMIT 1
     `;
     if (!actuales.length) { res.status(404).json({ error: "Línea de pedido no encontrada" }); return; }
+    if (Number(actuales[0].Anulada) === 1) {
+      res.status(400).json({ error: "La línea está anulada. Reactívala antes de editarla." });
+      return;
+    }
     // EsGranel sale de la fila y no del body a propósito: convertir una línea de proforma en granel
     // —o al revés— reinterpretaría retroactivamente el techo que ya se aplicó a lo declarado. Una
     // línea de granel se corrige o se borra, no se transforma. Misma regla que EsGeneral en Pedidos.
@@ -292,7 +313,7 @@ router.delete("/:id", requireAuth, requirePerm("pedidos", "eliminar"), async (re
     const nOrdenes = Number(ordenes[0].n);
     if (nOrdenes > 0) {
       res.status(409).json({
-        error: `La línea tiene ${nOrdenes} orden(es) de etiquetado. Elimina o anula esas órdenes antes de borrar la línea.`,
+        error: `La línea tiene ${nOrdenes} captura(s) de Agrupación, así que no se puede eliminar. Usa Anular: la saca de la proforma y conserva lo que ya se produjo.`,
       });
       return;
     }
@@ -308,6 +329,95 @@ router.delete("/:id", requireAuth, requirePerm("pedidos", "eliminar"), async (re
       EsGranel: Number(p.EsGranel) === 1,
     }, operadorDe(req));
 
+    res.json({ ok: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PUT /api/detalle-pedido/:id/anular  { Motivo } — el cliente ya no quiere la línea (5 nov 2026).
+//
+// Anular y no borrar: casi toda línea tiene capturas de Agrupación colgando, y las que ya tienen
+// producto escaneado lo dejarían sin línea. La anulada sale del total de la proforma, del objetivo
+// del avance, de las capturas nuevas y de la impresión; lo ya producido se sigue viendo en bodega.
+//
+// Las capturas SIN etiquetas activas se cancelan en la misma transacción —decisión del usuario—: son
+// solo una intención de producir, y dejarlas vivas permitiría imprimir contra algo que el cliente ya
+// no pidió. Las que ya imprimieron se quedan como están: su producto existe.
+router.put("/:id/anular", requireAuth, requirePerm("pedidos", "eliminar"), async (req: AuthRequest, res: Response) => {
+  try {
+    const id = Number(req.params.id);
+    const motivo = String(req.body?.Motivo ?? "").trim();
+    if (!motivo) { res.status(400).json({ error: "Escribe por qué se anula la línea" }); return; }
+    const operador = operadorDe(req);
+
+    const resultado = await prisma.$transaction(async tx => {
+      const filas: any[] = await tx.$queryRaw`
+        SELECT CodigoPedido, Clase, Proceso, Talla, Presentacion, EmpaqueMaster, EmpaqueAccesorio,
+               CantidadCajas, KgPedido, LibrasPedido, EsGranel, Anulada
+        FROM DetallePedido WHERE DetalleId = ${id} FOR UPDATE
+      `;
+      if (!filas.length) return { status: 404, error: "Línea de pedido no encontrada" };
+      if (Number(filas[0].Anulada) === 1) return { status: 400, error: "La línea ya está anulada" };
+
+      const canceladas = await tx.$executeRaw`
+        UPDATE OrdenEtiquetado oe SET oe.Estatus = 'Cancelada'
+        WHERE oe.DetalleId = ${id} AND oe.Estatus NOT IN ('Cancelada', 'Migrada')
+          AND NOT EXISTS (SELECT 1 FROM EtiquetaImpresa ei WHERE ei.OrdenId = oe.OrdenId AND ei.Estatus = 'Activa')
+      `;
+      const conEtiquetas: any[] = await tx.$queryRaw`
+        SELECT COUNT(*) AS n FROM OrdenEtiquetado WHERE DetalleId = ${id} AND Estatus NOT IN ('Cancelada', 'Migrada')
+      `;
+      await tx.$executeRaw`
+        UPDATE DetallePedido SET Anulada = 1, AnuladaPor = ${operador}, AnuladaEn = NOW(), MotivoAnulacion = ${motivo.slice(0, 300)}
+        WHERE DetalleId = ${id}
+      `;
+      return { status: 200, linea: filas[0], canceladas: Number(canceladas), conEtiquetas: Number(conEtiquetas[0].n) };
+    }, { timeout: 30_000 });
+
+    if (resultado.status !== 200) { res.status(resultado.status).json({ error: resultado.error }); return; }
+    const p = resultado.linea;
+    await registrarHistorial(prisma, {
+      DetalleId: id, CodigoPedido: String(p.CodigoPedido), Accion: "Anulada",
+      Clase: String(p.Clase), Proceso: Number(p.Proceso), Talla: Number(p.Talla),
+      Presentacion: String(p.Presentacion), EmpaqueMaster: String(p.EmpaqueMaster),
+      EmpaqueAccesorio: p.EmpaqueAccesorio ?? null, CantidadCajas: Number(p.CantidadCajas),
+      KgPedido: Number(p.KgPedido), LibrasPedido: Number(p.LibrasPedido),
+      EsGranel: Number(p.EsGranel) === 1,
+    }, operador);
+
+    res.json({ ok: true, CapturasCanceladas: resultado.canceladas, CapturasConEtiquetas: resultado.conEtiquetas });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PUT /api/detalle-pedido/:id/reactivar — el cliente volvió a pedir la línea. Las capturas que se
+// cancelaron al anular se quedan canceladas: se captura de nuevo lo que se vaya a producir.
+router.put("/:id/reactivar", requireAuth, requirePerm("pedidos", "eliminar"), async (req: AuthRequest, res: Response) => {
+  try {
+    const id = Number(req.params.id);
+    const filas: any[] = await prisma.$queryRaw`
+      SELECT CodigoPedido, Clase, Proceso, Talla, Presentacion, EmpaqueMaster, EmpaqueAccesorio,
+             CantidadCajas, KgPedido, LibrasPedido, EsGranel, Anulada
+      FROM DetallePedido WHERE DetalleId = ${id} LIMIT 1
+    `;
+    if (!filas.length) { res.status(404).json({ error: "Línea de pedido no encontrada" }); return; }
+    if (Number(filas[0].Anulada) !== 1) { res.status(400).json({ error: "La línea no está anulada" }); return; }
+
+    await prisma.$executeRaw`
+      UPDATE DetallePedido SET Anulada = 0, AnuladaPor = NULL, AnuladaEn = NULL, MotivoAnulacion = NULL
+      WHERE DetalleId = ${id}
+    `;
+    const p = filas[0];
+    await registrarHistorial(prisma, {
+      DetalleId: id, CodigoPedido: String(p.CodigoPedido), Accion: "Reactivada",
+      Clase: String(p.Clase), Proceso: Number(p.Proceso), Talla: Number(p.Talla),
+      Presentacion: String(p.Presentacion), EmpaqueMaster: String(p.EmpaqueMaster),
+      EmpaqueAccesorio: p.EmpaqueAccesorio ?? null, CantidadCajas: Number(p.CantidadCajas),
+      KgPedido: Number(p.KgPedido), LibrasPedido: Number(p.LibrasPedido),
+      EsGranel: Number(p.EsGranel) === 1,
+    }, operadorDe(req));
     res.json({ ok: true });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -332,7 +442,7 @@ router.get("/avance", requireAuth, requireAnyPerm([["pedidos", "ver"], ["etiquet
 
     const lineas: any[] = await prisma.$queryRaw`
       SELECT dp.DetalleId, dp.Clase, dp.Proceso, dp.Talla, dp.Presentacion,
-             dp.CantidadCajas, dp.KgPedido, dp.LibrasPedido, dp.EsGranel, pr.CajasXMaster, ped.EsGeneral
+             dp.CantidadCajas, dp.KgPedido, dp.LibrasPedido, dp.EsGranel, dp.Anulada, pr.CajasXMaster, ped.EsGeneral
       FROM DetallePedido dp
       JOIN Presentacion pr ON pr.Codigo = dp.Presentacion
       JOIN Pedidos ped ON ped.CodigoPedido = dp.CodigoPedido
@@ -369,15 +479,17 @@ router.get("/avance", requireAuth, requireAnyPerm([["pedidos", "ver"], ["etiquet
       const detalleId = Number(l.DetalleId);
       const f = porFisico.get(detalleId);
       const enBodega = f ? Number(f.enBodega) : 0;
-      // Objetivo null en pedidos generales (perpetuos, sin cantidad planificada) y en líneas de
-      // granel (no están en la proforma). Sin objetivo tampoco hay diferencia.
-      const objetivo = objetivoDeLinea(l);
+      // Objetivo null en pedidos generales (perpetuos, sin cantidad planificada), en líneas de
+      // granel y en las anuladas (no están en la proforma). Sin objetivo tampoco hay diferencia.
+      const anulada = Number(l.Anulada) === 1;
+      const objetivo = anulada ? null : objetivoDeLinea(l);
       return {
         DetalleId: detalleId,
         Clase: l.Clase, Proceso: Number(l.Proceso), Talla: Number(l.Talla), Presentacion: l.Presentacion,
         CantidadCajas: Number(l.CantidadCajas),
         CajasXMaster: Number(l.CajasXMaster),
         EsGranel: Number(l.EsGranel) === 1,
+        Anulada: anulada,
         Objetivo: objetivo,
         EnBodega: enBodega,
         Despachado: f ? Number(f.despachado) : 0,
@@ -437,7 +549,7 @@ router.post("/granel", requireAuth, requirePerm("etiquetado", "crear"), async (r
              MIN(cl.Descripcion) AS Descripcion
       FROM DetallePedido dp
       LEFT JOIN Clase cl ON cl.Clase = dp.Clase
-      WHERE dp.CodigoPedido = ${CodigoPedido} AND dp.Talla = ${talla} AND dp.EsGranel = 0
+      WHERE dp.CodigoPedido = ${CodigoPedido} AND dp.Talla = ${talla} AND dp.EsGranel = 0 AND dp.Anulada = 0
       GROUP BY dp.Proceso
     `;
     if (!candidatos.length) {
@@ -503,6 +615,9 @@ router.post("/granel", requireAuth, requirePerm("etiquetado", "crear"), async (r
 // el granel con su producto; el usuario pidió ver la presentación, así que el granel queda en su
 // propia fila, sin pedido propio (ObjetivoKg null). Sus kg sí entran al total del pedido: es producto
 // del pedido empacado distinto porque se acabó el material.
+//
+// Las líneas ANULADAS no salen (5 nov 2026, a pedido del usuario): el cliente ya no las pide, y lo
+// que tengan en bodega inflaría los kg y el % de avance del pedido.
 router.get("/cuadre", requireAuth, requireAnyPerm([["pedidos", "ver"], ["etiquetado", "ver"], ["remisiones", "ver"]]), async (req: Request, res: Response) => {
   try {
     const pedido = req.query.pedido as string | undefined;
@@ -528,10 +643,10 @@ router.get("/cuadre", requireAuth, requireAnyPerm([["pedidos", "ver"], ["etiquet
         JOIN EtiquetaImpresa ei ON ei.EtiquetaId = m.EtiquetaId
         JOIN OrdenEtiquetado oe ON oe.OrdenId = ei.OrdenId
         WHERE m.Estatus <> 'Salido'
-          AND oe.DetalleId IN (SELECT DetalleId FROM DetallePedido WHERE CodigoPedido = ${pedido})
+          AND oe.DetalleId IN (SELECT DetalleId FROM DetallePedido WHERE CodigoPedido = ${pedido} AND Anulada = 0)
         GROUP BY oe.DetalleId
       ) f ON f.DetalleId = dp.DetalleId
-      WHERE dp.CodigoPedido = ${pedido}
+      WHERE dp.CodigoPedido = ${pedido} AND dp.Anulada = 0
       ORDER BY dp.Proceso ASC, dp.Talla ASC, dp.EsGranel ASC, dp.Presentacion ASC
       LIMIT 2000
     `;

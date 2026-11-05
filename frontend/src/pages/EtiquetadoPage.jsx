@@ -275,7 +275,12 @@ export default function EtiquetadoPage() {
               {detallesFiltrados.map(d => (
                 <button key={d.DetalleId} onClick={() => seleccionarLinea(d)}
                   className={`w-full text-left px-3 py-2.5 border-b border-gray-100 transition ${detalleSel?.DetalleId === d.DetalleId ? "bg-blue-50" : "hover:bg-gray-50"}`}>
-                  <div className="text-sm font-semibold text-gray-800">{descProcesoDeClase(d.Clase)} · {descTalla(d.Talla)}</div>
+                  {/* La anulada sigue en la lista para poder ver sus capturas viejas; el backend ya no
+                      deja capturar ni imprimir contra ella. */}
+                  <div className={`text-sm font-semibold flex items-center gap-1.5 ${d.Anulada ? "text-gray-400" : "text-gray-800"}`}>
+                    <span className={d.Anulada ? "line-through" : ""}>{descProcesoDeClase(d.Clase)} · {descTalla(d.Talla)}</span>
+                    {d.Anulada && <span className="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-red-100 text-red-700" title={d.MotivoAnulacion || undefined}>Anulada</span>}
+                  </div>
                   {/* En un pedido general CantidadCajas es el centinela 1, no una cantidad pedida. */}
                   <div className="text-xs text-gray-500">
                     {descPresentacion(d.Presentacion)}{pedidoSel?.EsGeneral ? "" : ` — ${d.CantidadCajas} cajas`}

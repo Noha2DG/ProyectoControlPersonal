@@ -67,7 +67,7 @@ async function obtenerDatosOrden(ordenId: number) {
            -- código para que el cliente o la aduana la crucen contra su propio catálogo.
            dp.Clase, cl.Descripcion AS DescripcionClase,
            dp.Talla AS CodigoTalla, dp.Presentacion AS CodigoPresentacion,
-           dp.EsGranel, dp.Activo,
+           dp.EsGranel, dp.Activo, dp.Anulada,
            cli.RazonSocial AS NombreCliente, sub.RazonSocial AS NombreSubcliente,
            ped.CodigoCliente, ped.CodigoSubcliente,
            org.Descripcion AS DescripcionOrigen, cong.Descripcion AS DescripcionCongelacion,
@@ -151,6 +151,13 @@ router.post("/", requireAuth, requirePerm("etiquetado", "imprimir"), async (req:
     // la cola de BarTender — así que es aquí, no en Agrupación, donde tiene que frenar.
     if (Number(orden.EsGranel) === 1 && Number(orden.Activo) !== 1) {
       res.status(403).json({ error: "Esta línea es de granel y está desactivada. Un administrador debe activarla antes de imprimir etiquetas." });
+      return;
+    }
+
+    // Las capturas que ya habían impreso sobreviven a la anulación de su línea (su producto existe),
+    // pero no deben sacar etiquetas nuevas: el cliente ya no pidió ese producto.
+    if (Number(orden.Anulada) === 1) {
+      res.status(400).json({ error: "La línea de la proforma está anulada: no se pueden imprimir etiquetas nuevas para ella." });
       return;
     }
 

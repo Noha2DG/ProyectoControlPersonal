@@ -337,13 +337,17 @@ router.post("/", requireAuth, requirePerm("etiquetado", "crear"), async (req: Re
     const lote = componerCodigoLote(String(piscina.Nombre), FechaProduccion, cicloEfectivo);
 
     const pedidoRows: any[] = await prisma.$queryRaw`
-      SELECT p.Estatus, dp.EsGranel, dp.Activo
+      SELECT p.Estatus, dp.EsGranel, dp.Activo, dp.Anulada
       FROM DetallePedido dp JOIN Pedidos p ON dp.CodigoPedido = p.CodigoPedido
       WHERE dp.DetalleId = ${Number(DetalleId)} LIMIT 1
     `;
     if (!pedidoRows.length) { res.status(404).json({ error: "Línea de pedido no encontrada" }); return; }
     if (pedidoRows[0].Estatus !== "Proceso") {
       res.status(400).json({ error: "Ese pedido ya está Terminado, no se pueden agregar capturas nuevas" });
+      return;
+    }
+    if (Number(pedidoRows[0].Anulada) === 1) {
+      res.status(400).json({ error: "Esta línea de la proforma está anulada: el cliente ya no la pidió. Reactívala en Pedidos si vuelve." });
       return;
     }
     // El candado de emergencia del granel corta aquí también, no solo al imprimir: si nadie puede
@@ -382,7 +386,7 @@ router.put("/:id", requireAuth, requirePerm("etiquetado", "editar"), async (req:
     const { PiscinaId, Ciclo, BodegaCodigo, AreaCodigo, FechaProduccion, Color, Origen, Congelacion, CantidadMaster, Estatus } = req.body;
 
     const actuales: any[] = await prisma.$queryRaw`
-      SELECT oe.DetalleId, oe.CantidadMaster, dp.EsGranel, dp.Activo
+      SELECT oe.DetalleId, oe.CantidadMaster, dp.EsGranel, dp.Activo, dp.Anulada
       FROM OrdenEtiquetado oe JOIN DetallePedido dp ON oe.DetalleId = dp.DetalleId
       WHERE oe.OrdenId = ${id} LIMIT 1
     `;
@@ -401,6 +405,12 @@ router.put("/:id", requireAuth, requirePerm("etiquetado", "editar"), async (req:
     // la captura siguen permitidos aunque esté desactivada — es deshacer trabajo, no generar más.
     if (Number(actuales[0].EsGranel) === 1 && Number(actuales[0].Activo) !== 1 && cantidad > Number(actuales[0].CantidadMaster)) {
       res.status(403).json({ error: "Esta línea es de granel y está desactivada. Un administrador debe activarla antes de aumentar la cantidad capturada." });
+      return;
+    }
+
+    // Igual que el granel desactivado: sobre una línea anulada se puede corregir o cancelar, no crecer.
+    if (Number(actuales[0].Anulada) === 1 && cantidad > Number(actuales[0].CantidadMaster)) {
+      res.status(400).json({ error: "La línea de la proforma está anulada: no se puede aumentar la cantidad capturada." });
       return;
     }
 
