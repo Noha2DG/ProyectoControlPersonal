@@ -9,7 +9,8 @@ import "dotenv/config";
 import prisma from "../src/lib/prisma.ts";
 import {
   saldoParaDestajo, tomarDelPiso, bajarAlPiso, registrarDescarte, deshacerMovimiento, cuadreLote,
-  movimientosDeLote, rendimientoLote, devolverLoteAlPiso,
+  movimientosDeLote, rendimientoLote, devolverLoteAlPiso, registrarCola, rendimientosEntero,
+  esEntero, claseColaSugerida, infoCierre, cerrarTransaccion, reabrirTransaccion,
 } from "../src/lib/destajoPiso.ts";
 import { componerCodigoLote } from "../src/lib/codigoLote.ts";
 
@@ -219,6 +220,111 @@ const PISO = [
         { RemisionId: null, Lote: loteK, Clase: "D30", Talla: 900, FechaLote: HOY, Kg: 900 }] });
       await falla(() => devolverLoteAlPiso(tx, loteK, "D30"), /ya se volvió a tomar/,
         "no se devuelve un lote cuyo bajado ya tomó otro lote");
+
+      console.log("10. Cola de un lote entero (Descabezado → piso de Pelado)");
+      check(esEntero("C26") && esEntero("C20") && !esEntero("D30") && !esEntero("C10"),
+        "C26 (entero IQF) también se descabeza; D30 y C10 no");
+      check(claseColaSugerida("C26", "G343EM-SIFON") === "D35" && claseColaSugerida("C26", "G343TM04-E04-6") === "D30"
+        && claseColaSugerida("C24") === "D35" && claseColaSugerida("C25") === "D33",
+        "la cola sugerida: sifón (por clase o por piscina) → D35, entero-R → D33, el resto D30");
+      await tx.$executeRawUnsafe(`
+        INSERT INTO MovimientoPiso (Tipo, FechaProduccion, BodegaDestino, Lote, Clase, Talla, FechaLote, Peso, UM, PesoKg, RegistradoPor)
+        VALUES ('TRASLADO', ?, 'DESCABEZADO', 'G433TM04-E04-6', 'C20', 237, '2026-08-13', 100, 'KG', 100, ?)`, HOY, OP);
+      const re = await tomarDelPiso(tx, { bodega: "DESCABEZADO", unificar: false, fecha: HOY, operador: OP,
+        lineas: [{ RemisionId: null, Lote: "G433TM04-E04-6", Clase: "C20", Talla: 237, FechaLote: "2026-08-13", Kg: 100 }] });
+      const le = re.lotes[0].Lote;
+      const cola = (extra: any) => registrarCola(tx, { lote: le, clase: "C20", peso: 1, termo: "T-1", claseCola: "D30",
+        talla: 233, fecha: HOY, operador: OP, ...extra });
+      await falla(() => registrarCola(tx, { lote: loteK, clase: "D30", peso: 1, termo: "1", claseCola: "D30", fecha: HOY, operador: OP }),
+        /no es un lote entero/, "un lote que no es entero no produce cola");
+      await falla(() => cola({ claseCola: "E41" }), /La cola tiene que ser D30, D33, D34, D35/, "la cola solo puede ser D30, D33, D34 o D35");
+      await falla(() => cola({ termo: "  " }), /Falta el número de termo/, "el número de termo es obligatorio");
+      await cola({ peso: 40, termo: "T-5" });
+      await cola({ peso: 22.5, termo: "T-6" });
+      const ce = await cuadreLote(tx, le, "C20");
+      check(ce.Cola === 62.5 && ce.Pendiente === 100,
+        `la cola suma 62.5 en el lote y no toca el pendiente ni lo disponible para pesar (${ce.Pendiente})`);
+      check(!(await linea(le, 233)), "los termos quedan por trasladar: todavía no están en el piso de nadie");
+      await falla(() => cola({ peso: 40, termo: "T-7" }), /más que lo trabajado/, "la cola no puede pasar de lo trabajado");
+      const ren = rendimientosEntero(100, 0, 35, 62.5, 0);
+      check(Math.abs(ren.RendimientoCola - 62.5) < 0.01 && Math.abs(ren.RendimientoTotal - 97.5) < 0.01 && ren.Diferencia === 2.5,
+        `rendimientos: cola ${ren.RendimientoCola.toFixed(1)}%, cabeza + cola ${ren.RendimientoTotal.toFixed(1)}%, diferencia ${ren.Diferencia}`);
+
+      console.log("11. Cerrar la transacción de Descabezado: la cola pasa al siguiente proceso");
+      const nueva = async (lote: string, claseOrigen: string, proceso: number, clasePT: string, talla: number) => {
+        await tx.$executeRawUnsafe(`INSERT INTO TransaccionesProduccion (Lote, ClaseOrigen, Proceso, ClasePT, Talla, AlmacenOrigen, AlmacenDestino, RegistradoPor)
+          VALUES (?, ?, ?, ?, ?, 'PISO', 'PISO', ?)`, lote, claseOrigen, proceso, clasePT, talla, OP);
+        const [r]: any[] = await tx.$queryRawUnsafe(`SELECT LAST_INSERT_ID() AS id`);
+        return Number(r.id);
+      };
+      const enBodega = async (bodega: string, lote: string) => {
+        const [r]: any[] = await tx.$queryRawUnsafe(`SELECT COALESCE(SUM(PesoKg), 0) AS kg FROM MovimientoPiso WHERE BodegaDestino = ? AND LoteProceso = ?`, bodega, lote);
+        return Number(r.kg);
+      };
+      const tDU = await nueva(le, "C20", 16, "D16", 237);
+      const iDU = await infoCierre(tx, tDU);
+      check(iDU.Modo === "DESCABEZADO" && iDU.ColaPendiente.length === 2 && iDU.Destinos.map(d => d.Codigo).join(",") === "PELADO,CLASIFICADO_COLA",
+        `el cierre de Descabezado ofrece la cola por trasladar (${iDU.ColaPendiente.length} termos) a ${iDU.Destinos.map(d => d.Nombre).join(" o ")}`);
+      await falla(() => cerrarTransaccion(tx, tDU, { destinoCola: "TRATAMIENTO" }, HOY, OP), /La cola solo va a/, "la cola no puede ir a Tratamiento");
+      const t5 = iDU.ColaPendiente.find(c => c.NumeroTermo === "T-5")!, t6 = iDU.ColaPendiente.find(c => c.NumeroTermo === "T-6")!;
+      const cDU = await cerrarTransaccion(tx, tDU, { destinosCola: { [t5.MovimientoId]: "PELADO", [t6.MovimientoId]: "CLASIFICADO_COLA" } }, HOY, OP);
+      check(cDU.Trasladado.length === 2 && (await linea(le, 233))?.Kg === 40 && (await enBodega("CLASIFICADO_COLA", le)) === 22.5,
+        "al cerrar, T-5 (40 kg) entra al piso de Pelado y T-6 (22.5 kg) al de Clasificado Cola");
+      const [est]: any[] = await tx.$queryRawUnsafe(`SELECT Estado FROM TransaccionesProduccion WHERE TransaccionId = ?`, tDU);
+      check(est.Estado === "Cerrada", "la transacción queda cerrada");
+      const otra = await cerrarTransaccion(tx, tDU, {}, HOY, OP);
+      check(otra.YaCerrada === true && (await enBodega("PELADO", le)) === 40, "cerrarla otra vez no traslada dos veces");
+
+      const rp = await tomarDelPiso(tx, { bodega: "PELADO", unificar: false, fecha: HOY, operador: OP,
+        lineas: [{ RemisionId: null, Lote: le, Clase: "D30", Talla: 233, FechaLote: HOY, Kg: 40 }] });
+      check(rp.lotes[0].Lote === le && rp.lotes[0].Clase === "D30" && rp.lotes[0].Kg === 40,
+        `Pelado la toma: nace ${rp.lotes[0].Lote} D30 con 40 kg, el mismo código del entero`);
+      await falla(() => deshacerMovimiento(tx, t5.MovimientoId), /ya la tomó Pelado/, "una cola que Pelado ya tomó no se deshace");
+      await falla(() => reabrirTransaccion(tx, tDU), /ya lo tomó el siguiente proceso/, "ni se reabre la transacción cuya cola ya tomó Pelado");
+      await falla(() => devolverLoteAlPiso(tx, le, "C20"), /ya tiene|ya la tomó Pelado/, "ni se devuelve el entero cuya cola ya tomó Pelado");
+      await devolverLoteAlPiso(tx, le, "D30");
+      await reabrirTransaccion(tx, tDU);
+      check(!(await linea(le, 233)) && (await enBodega("CLASIFICADO_COLA", le)) === 0 && (await infoCierre(tx, tDU)).ColaPendiente.length === 2,
+        "devuelto el D30 de Pelado, reabrir deja la cola otra vez por trasladar (sale de Pelado y de Clasificado Cola)");
+      await deshacerMovimiento(tx, t5.MovimientoId);
+      check((await cuadreLote(tx, le, "C20")).Cola === 22.5, "un termo por trasladar se deshace sin más (queda T-6, 22.5 kg)");
+
+      console.log("12. Cerrar la transacción de Pelado: lo pelado pasa al proceso que se escoja");
+      await tx.$executeRawUnsafe(`
+        INSERT INTO MovimientoPiso (Tipo, FechaProduccion, BodegaDestino, Lote, Clase, Talla, FechaLote, Peso, UM, PesoKg, RegistradoPor)
+        VALUES ('TRASLADO', ?, 'PELADO', 'G442TM04-E01-7', 'D30', 233, '2026-09-20', 50, 'KG', 50, ?)`, HOY, OP);
+      const rpl = await tomarDelPiso(tx, { bodega: "PELADO", unificar: false, fecha: HOY, operador: OP,
+        lineas: [{ RemisionId: null, Lote: "G442TM04-E01-7", Clase: "D30", Talla: 233, FechaLote: "2026-09-20", Kg: 50 }] });
+      const lp = rpl.lotes[0].Lote;
+      const tDS = await nueva(lp, "D30", 41, "E41", 321);
+      await tx.$executeRawUnsafe(`INSERT INTO Termos (TransaccionId, NumeroTermo, AlmacenActual, Capacidad) VALUES (?, '01', 'PISO', 150)`, tDS);
+      const [termo]: any[] = await tx.$queryRawUnsafe(`SELECT LAST_INSERT_ID() AS id`);
+      const [emp]: any[] = await tx.$queryRawUnsafe(`SELECT Codigo FROM Empleados WHERE Estado = 'Activo' LIMIT 1`);
+      for (const peso of [20.5, 10]) {
+        await tx.$executeRawUnsafe(`INSERT INTO PesajeDetalle (TransaccionId, TermoId, Codigo, Peso, UM, FechaHora, RegistradoPor)
+          VALUES (?, ?, ?, ?, 'KG', NOW(), ?)`, tDS, Number(termo.id), emp.Codigo, peso, OP);
+      }
+      const iDS = await infoCierre(tx, tDS);
+      check(iDS.Modo === "PELADO" && iDS.Procesado === 30.5 && iDS.DestinoSugerido === null && iDS.Destinos.length > 0
+        && !iDS.Destinos.some(d => ["PELADO", "DESCONGELADO", "DESCABEZADO", "TRATAMIENTO"].includes(d.Codigo)),
+        `el cierre de Pelado ofrece ${iDS.Destinos.length} destinos sin proponer ninguno, ni hacia atrás ni Tratamiento (30.5 kg pelados)`);
+      await falla(() => cerrarTransaccion(tx, tDS, { destino: "DESCONGELADO" }, HOY, OP), /no es un destino válido/, "no se manda lo pelado hacia atrás");
+      await falla(() => cerrarTransaccion(tx, tDS, { destino: "TRATAMIENTO" }, HOY, OP), /no es un destino válido/, "Tratamiento aún no recibe");
+      await falla(() => cerrarTransaccion(tx, tDS, {}, HOY, OP), /Escoja a qué bodega/, "sin escoger bodega no se cierra");
+      await cerrarTransaccion(tx, tDS, { destino: "CLASIFICADO_COLA" }, HOY, OP);
+      const [pr]: any[] = await tx.$queryRawUnsafe(
+        `SELECT COUNT(*) n, MAX(BodegaDestino) b, MAX(Clase) c, MAX(Talla) t, SUM(PesoKg) kg FROM MovimientoPiso WHERE TransaccionId = ? AND Tipo = 'PROCESADO'`, tDS);
+      check(Number(pr.n) === 1 && pr.b === "CLASIFICADO_COLA" && pr.c === "E41" && Number(pr.t) === 321 && Number(pr.kg) === 30.5,
+        "lo pelado (E41 talla 321, 30.5 kg) entra al piso escogido (Clasificado Cola)");
+      const cl = await cuadreLote(tx, lp, "D30");
+      check(cl.Procesado === 30.5 && cl.Pendiente === 19.5, "el lote no cambia: el traslado sale de lo que el lote produjo");
+      await reabrirTransaccion(tx, tDS);
+      check((await enBodega("CLASIFICADO_COLA", lp)) === 0, "reabrir saca lo pelado del piso de Clasificado Cola");
+      await cerrarTransaccion(tx, tDS, { destino: "EMPINCHADO" }, HOY, OP);
+      check((await enBodega("EMPINCHADO", lp)) === 30.5, "según el cliente, se escoge otro proceso (Empinchado)");
+      const tVacia = await nueva(lp, "D30", 41, "E41", 321);
+      const cV = await cerrarTransaccion(tx, tVacia, {}, HOY, OP);
+      check(cV.Trasladado.length === 0, "una transacción sin nada pesado se cierra sin trasladar nada");
 
       throw new Revertir();
     }, { timeout: 180000, maxWait: 15000 });

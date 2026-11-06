@@ -3,6 +3,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { fmtNum } from "../utils/numero.js";
 import { authHeader } from "../context/AuthContext.jsx";
+import InventarioPisoModal from "./InventarioPisoModal.jsx";
 
 const API = "/api/destajo-piso";
 const enc = encodeURIComponent;
@@ -40,6 +41,7 @@ export function TomarDelPisoModal({ onHecho, onClose }) {
   const [piscinas, setPiscinas] = useState([]);
   const [guardando, setGuardando] = useState(false);
   const [hecho, setHecho] = useState(null);
+  const [imprimir, setImprimir] = useState(false);   // vista previa del inventario al piso
   const [unificando, setUnificando] = useState(false);   // paso de escoger el lote al unificar
   const [base, setBase] = useState("");                   // el lote de origen que da el código
 
@@ -215,6 +217,11 @@ export function TomarDelPisoModal({ onHecho, onClose }) {
           {bodegas.map(b => <option key={b.Codigo} value={b.Codigo}>{b.Nombre}</option>)}
         </select>
         <span className="text-xs text-gray-400">El peso es el de la báscula de Descongelado: no se teclea.</span>
+        <button onClick={() => setImprimir(true)} disabled={cargando || lineas.length === 0}
+          title="Lo que hay al piso de esta bodega, agrupado por clase"
+          className="ml-auto px-3 py-1.5 text-sm font-medium rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50 transition disabled:opacity-40 disabled:cursor-not-allowed">
+          Imprimir inventario
+        </button>
       </div>
 
       <div className="overflow-auto flex-1 min-h-0">
@@ -251,7 +258,9 @@ export function TomarDelPisoModal({ onHecho, onClose }) {
                     <td className="px-3 py-2 font-mono text-gray-700">{l.Clase}</td>
                     <td className="px-3 py-2 text-gray-700 whitespace-nowrap">{l.Talla === 900 ? <span className="text-gray-300">—</span> : l.DescripcionTalla}</td>
                     <td className="px-3 py-2 text-gray-600 whitespace-nowrap">
-                      {l.EsBajado ? <span className="text-amber-700">Bajado de la mesa{l.EsRojo ? " · rojo a revisar" : ""}</span> : (l.FolioRemision || "—")}
+                      {l.EsBajado ? <span className="text-amber-700">Bajado de la mesa{l.EsRojo ? " · rojo a revisar" : ""}</span>
+                        : l.EsCola ? <span className="text-emerald-700">Cola de Descabezado</span>
+                        : (l.FolioRemision || "—")}
                       <span className="block text-[11px] text-gray-400">{l.DiasAlPiso === 0 ? "hoy" : `${l.DiasAlPiso} día${l.DiasAlPiso !== 1 ? "s" : ""} al piso`}</span>
                     </td>
                     <td className="px-3 py-2 text-right font-semibold text-gray-800 whitespace-nowrap">{fmtNum(l.Kg)}</td>
@@ -318,6 +327,11 @@ export function TomarDelPisoModal({ onHecho, onClose }) {
           </button>
         </div>
       </div>
+
+      {imprimir && (
+        <InventarioPisoModal nombreBodega={bodegas.find(b => b.Codigo === bodega)?.Nombre ?? bodega}
+          lineas={lineas} onCerrar={() => setImprimir(false)} />
+      )}
     </Marco>
   );
 }
@@ -437,9 +451,229 @@ export function AjusteLoteModal({ tipo, lote, tallas, onHecho, onClose }) {
   );
 }
 
+// ── Cola de un lote entero ──────────────────────────────────────────────────────────────────────
+// En Descabezado lo que se pesa por persona es la CABEZA (el pago). La cola no va a nadie: se pesa el
+// termo lleno y entra al piso de Pelado. El número de termo se teclea (no es el del pesaje de cabeza).
+// El modal se queda abierto para seguir registrando termos durante el día.
+const CLASES_COLA = ["D30", "D33", "D34", "D35"];   // las mismas que valida backend/src/lib/destajoPiso.ts
+
+export function ColaModal({ lote, tallas, clases = [], onRegistrado, onClose }) {
+  // Se muestra la descripción de la clase ("CULTIVO COLA COLA SIFON"), no el código: es como la
+  // conoce el área.
+  const descr = c => clases.find(x => x.Clase === c)?.Descripcion ?? c;
+  const [termo, setTermo] = useState("");
+  const [peso, setPeso] = useState("");
+  const [claseCola, setClaseCola] = useState(lote.ClaseCola || CLASES_COLA[0]);
+  const [talla, setTalla] = useState("");
+  const [error, setError] = useState("");
+  const [guardando, setGuardando] = useState(false);
+  const [hechos, setHechos] = useState([]);   // los termos registrados con este modal abierto
+
+  const guardar = async (e) => {
+    e.preventDefault();
+    setGuardando(true); setError("");
+    try {
+      const res = await fetch(`${API}/lote/${enc(lote.Lote)}/${enc(lote.Clase)}/cola`, {
+        method: "POST", headers: { "Content-Type": "application/json", ...authHeader() },
+        body: JSON.stringify({ NumeroTermo: termo.trim(), Peso: Number(peso), ClaseCola: claseCola, Talla: talla || null }),
+      });
+      const d = await leerJSON(res);
+      if (!res.ok) { setError(d.error || "No se pudo registrar"); return; }
+      setHechos(h => [...h, { termo: termo.trim(), peso: Number(peso), claseCola }]);
+      setTermo(""); setPeso("");
+      onRegistrado();
+    } catch (err) {
+      setError(err.message || "No se pudo conectar con el servidor");
+    } finally { setGuardando(false); }
+  };
+
+  return (
+    <Marco titulo={`Cola — ${lote.Lote} ${lote.Clase}`} onClose={onClose}>
+      <form onSubmit={guardar} className="px-5 py-4 space-y-4">
+        <p className="text-xs text-gray-500">
+          Un registro por termo lleno. La cola queda <b>por trasladar</b>: al cerrar la transacción de Descabezado
+          se escoge si va al piso de Pelado o al de Clasificado Cola. Lo pesado por persona es la cabeza (el pago)
+          y no cambia.
+        </p>
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">N° de termo *</label>
+            <input required autoFocus type="text" maxLength={20} value={termo} onChange={e => setTermo(e.target.value)}
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-400" />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Peso ({lote.UM}) *</label>
+            <input required type="number" step="0.01" min="0.01" value={peso} onChange={e => setPeso(e.target.value)}
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
+          </div>
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-gray-500 mb-1">Clase de la cola *</label>
+          <div className="grid grid-cols-2 gap-1.5">
+            {CLASES_COLA.map(c => (
+              <button type="button" key={c} onClick={() => setClaseCola(c)}
+                className={`px-2.5 py-1.5 text-sm text-left rounded-lg border transition ${claseCola === c ? "bg-emerald-600 text-white border-emerald-600" : "border-gray-300 text-gray-600 hover:bg-gray-50"}`}>
+                {descr(c)}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-gray-500 mb-1">Talla</label>
+          <select value={talla} onChange={e => setTalla(e.target.value)}
+            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400">
+            <option value="">Sin talla</option>
+            {tallas.map(t => <option key={t.Codigo} value={t.Codigo}>{t.Descripcion}</option>)}
+          </select>
+        </div>
+        {hechos.length > 0 && (
+          <div className="text-xs bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2 space-y-0.5">
+            {hechos.map((h, i) => (
+              <p key={i} className="flex justify-between gap-3"><span>Termo <b className="font-mono">{h.termo}</b> · {descr(h.claseCola)}</span><span className="whitespace-nowrap">{fmtNum(h.peso)} {lote.UM}</span></p>
+            ))}
+          </div>
+        )}
+        {error && <p className="text-sm text-red-600">{error}</p>}
+        <div className="flex justify-end gap-3 pt-1">
+          <button type="button" onClick={onClose} className="px-4 py-2 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 transition">
+            {hechos.length ? "Listo" : "Cancelar"}
+          </button>
+          <button type="submit" disabled={guardando}
+            className="px-5 py-2 text-sm bg-emerald-600 hover:bg-emerald-700 text-white font-semibold rounded-lg transition disabled:opacity-50">
+            {guardando ? "Guardando…" : "Registrar termo"}
+          </button>
+        </div>
+      </form>
+    </Marco>
+  );
+}
+
+// ── Cerrar una transacción: lo producido pasa al piso del siguiente proceso ─────────────────────
+// Pelado: lo pesado de la transacción va al proceso que escoja el encargado (depende del cliente; no
+// se propone ninguno). Descabezado: lo pesado es cabeza y no se traslada; lo que sale es la cola de los
+// termos, cada uno a Pelado o a Clasificado Cola. Ver backend/src/lib/destajoPiso.ts.
+export function CerrarTransaccionModal({ transaccionId, onHecho, onClose }) {
+  const [info, setInfo] = useState(null);
+  const [error, setError] = useState("");
+  const [destino, setDestino] = useState("");
+  const [porTermo, setPorTermo] = useState({});   // MovimientoId → bodega
+  const [guardando, setGuardando] = useState(false);
+
+  useEffect(() => {
+    let vigente = true;
+    fetch(`${API}/transaccion/${transaccionId}/cierre`, { headers: authHeader() }).then(leerJSON).then(d => {
+      if (!vigente) return;
+      if (!d.Modo) { setError(d.error || "No se pudo leer la transacción"); return; }
+      setInfo(d);
+      setDestino(d.DestinoSugerido ?? "");
+      setPorTermo(Object.fromEntries(d.ColaPendiente.map(c => [c.MovimientoId, d.DestinoSugerido])));
+    });
+    return () => { vigente = false; };
+  }, [transaccionId]);
+
+  const cerrar = async () => {
+    setGuardando(true); setError("");
+    try {
+      const res = await fetch(`/api/transacciones-produccion/${transaccionId}`, {
+        method: "PUT", headers: { "Content-Type": "application/json", ...authHeader() },
+        body: JSON.stringify({ Estado: "Cerrada", ...(info.Modo === "PELADO" ? { Destino: destino } : { DestinosCola: porTermo }) }),
+      });
+      const d = await leerJSON(res);
+      if (!res.ok) { setError(d.error || "No se pudo cerrar"); return; }
+      onHecho(d);
+    } catch (e) {
+      setError(e.message || "No se pudo conectar con el servidor");
+    } finally { setGuardando(false); }
+  };
+
+  const nombre = c => info?.Destinos.find(d => d.Codigo === c)?.Nombre ?? c;
+  const kgCola = (info?.ColaPendiente ?? []).reduce((s, c) => s + c.Peso, 0);
+  const todosA = c => setPorTermo(Object.fromEntries(info.ColaPendiente.map(x => [x.MovimientoId, c])));
+
+  return (
+    <Marco titulo="Cerrar transacción" onClose={onClose}>
+      <div className="px-5 py-4 space-y-4 overflow-y-auto">
+        {!info ? (
+          error ? <p className="text-sm text-red-600">{error}</p>
+                : <div className="flex justify-center py-6"><div className="w-6 h-6 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" /></div>
+        ) : (
+          <>
+            <div className="text-sm text-gray-700">
+              <p><span className="font-mono font-bold">{info.Lote}</span> · {info.DescripcionProceso}</p>
+              <p className="text-gray-500">{info.DescripcionClasePT}{info.Talla !== 900 ? ` · ${info.DescripcionTalla}` : ""}</p>
+            </div>
+
+            {info.Modo === "PELADO" ? (
+              info.Procesado > 0 ? (
+                <div className="space-y-2">
+                  <p className="text-sm">Lo pelado, <b>{fmtNum(info.Procesado)} {info.UM}</b>, pasa al inventario al piso de:</p>
+                  <select value={destino} onChange={e => setDestino(e.target.value)}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400">
+                    <option value="" disabled>Escoja la bodega…</option>
+                    {info.Destinos.map(d => <option key={d.Codigo} value={d.Codigo}>{d.Nombre}</option>)}
+                  </select>
+                </div>
+              ) : (
+                <p className="text-sm text-gray-500">No hay nada pesado en esta transacción: se cierra sin trasladar nada.</p>
+              )
+            ) : (
+              <div className="space-y-2">
+                <p className="text-xs text-gray-500">Lo pesado aquí es cabeza y no se traslada. Lo que pasa al siguiente proceso es la cola de los termos.</p>
+                {info.ColaPendiente.length === 0 ? (
+                  <p className="text-sm text-amber-700">No hay cola por trasladar en este lote. Si faltan termos, regístrelos antes de cerrar (botón "Cola (termo)" del lote).</p>
+                ) : (
+                  <>
+                    <div className="flex flex-wrap items-center gap-2 text-xs text-gray-600">
+                      <span>Cola por trasladar: <b>{info.ColaPendiente.length}</b> termo{info.ColaPendiente.length !== 1 ? "s" : ""} · <b>{fmtNum(kgCola)} {info.UM}</b></span>
+                      <span className="ml-auto">Todos a:</span>
+                      {info.Destinos.map(d => (
+                        <button key={d.Codigo} type="button" onClick={() => todosA(d.Codigo)}
+                          className="px-2 py-1 rounded border border-emerald-300 text-emerald-700 hover:bg-emerald-50 transition">{d.Nombre}</button>
+                      ))}
+                    </div>
+                    <div className="border border-gray-200 rounded-lg divide-y divide-gray-100">
+                      {info.ColaPendiente.map(c => (
+                        <div key={c.MovimientoId} className="flex items-center gap-3 px-3 py-2 text-sm">
+                          <span className="flex-1 min-w-0 truncate">
+                            Termo <b className="font-mono">{c.NumeroTermo}</b> · {c.DescripcionClase}{c.Talla !== 900 ? ` · ${c.DescripcionTalla}` : ""}
+                          </span>
+                          <span className="whitespace-nowrap font-semibold">{fmtNum(c.Peso)} {c.UM}</span>
+                          <select value={porTermo[c.MovimientoId] ?? ""} onChange={e => setPorTermo(p => ({ ...p, [c.MovimientoId]: e.target.value }))}
+                            className="border border-gray-300 rounded px-2 py-1 text-sm">
+                            {info.Destinos.map(d => <option key={d.Codigo} value={d.Codigo}>{d.Nombre}</option>)}
+                          </select>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+
+            <p className="text-xs text-gray-400">Al cerrar ya no se pueden registrar pesajes en esta transacción.</p>
+            {error && <p className="text-sm text-red-600">{error}</p>}
+            <div className="flex justify-end gap-3 pt-1">
+              <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 transition">Cancelar</button>
+              <button onClick={cerrar} disabled={guardando || (info.Modo === "PELADO" && info.Procesado > 0 && !destino)}
+                className="px-5 py-2 text-sm bg-amber-600 hover:bg-amber-700 text-white font-semibold rounded-lg transition disabled:opacity-50">
+                {guardando ? "Cerrando…"
+                  : info.Modo === "PELADO" && info.Procesado > 0 ? (destino ? `Cerrar y trasladar a ${nombre(destino)}` : "Escoja la bodega")
+                  : info.Modo === "DESCABEZADO" && info.ColaPendiente.length ? "Cerrar y trasladar la cola"
+                  : "Cerrar"}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </Marco>
+  );
+}
+
 // ── Movimientos del piso de un lote ─────────────────────────────────────────────────────────────
-const TITULO = { DESTAJO: "Tomado del piso", BAJADO: "Bajado al piso", DESCARTE: "Descarte" };
-const DESHACER = { DESTAJO: "Devolver al piso", BAJADO: "Deshacer", DESCARTE: "Deshacer" };
+const TITULO = { DESTAJO: "Tomado del piso", COLA: "Cola (termos)", PROCESADO: "Trasladado al cerrar transacciones",
+                 BAJADO: "Bajado al piso", DESCARTE: "Descarte" };
+// Lo trasladado al cerrar no se deshace aquí: se deshace reabriendo la transacción.
+const DESHACER = { DESTAJO: "Devolver al piso", COLA: "Deshacer", PROCESADO: null, BAJADO: "Deshacer", DESCARTE: "Deshacer" };
 
 export function MovimientosPisoLote({ lote, recarga, puedeEditar, onCambio }) {
   const [movs, setMovs] = useState([]);
@@ -458,6 +692,8 @@ export function MovimientosPisoLote({ lote, recarga, puedeEditar, onCambio }) {
   const deshacer = async (m) => {
     const que = m.Tipo === "DESTAJO"
       ? `¿Devolver al piso ${fmtNum(m.PesoKg)} kg de ${m.LoteOrigen}? El lote baja su ingreso${movs.length === 1 ? " (y se elimina si se queda sin nada)" : ""}.`
+      : m.Tipo === "COLA"
+      ? `¿Deshacer el termo ${m.NumeroTermo} de cola (${fmtNum(m.Peso)} ${m.UM})? Sale del piso de Pelado.`
       : `¿Deshacer este ${TITULO[m.Tipo].toLowerCase()} de ${fmtNum(m.Peso)} ${m.UM}?`;
     if (!confirm(que)) return;
     const res = await fetch(`${API}/movimiento/${m.MovimientoId}`, { method: "DELETE", headers: authHeader() });
@@ -471,7 +707,7 @@ export function MovimientosPisoLote({ lote, recarga, puedeEditar, onCambio }) {
 
   return (
     <div className="bg-white rounded-xl shadow mb-4 divide-y divide-gray-100">
-      {["DESTAJO", "BAJADO", "DESCARTE"].map(tipo => {
+      {["DESTAJO", "COLA", "PROCESADO", "BAJADO", "DESCARTE"].map(tipo => {
         const lista = movs.filter(m => m.Tipo === tipo);
         if (!lista.length) return null;
         return (
@@ -483,12 +719,16 @@ export function MovimientosPisoLote({ lote, recarga, puedeEditar, onCambio }) {
                   {tipo === "DESTAJO" && <><span className="font-mono">{m.LoteOrigen}</span>{m.FolioRemision ? ` · ${m.FolioRemision}` : ""}</>}
                   {tipo === "BAJADO" && <>{m.Motivo ? `${m.Motivo} · ` : ""}{m.NombreBodega} · {m.Fecha}</>}
                   {tipo === "DESCARTE" && <>{m.Motivo || "Descarte"}</>}
+                  {tipo === "COLA" && <>Termo <span className="font-mono font-semibold">{m.NumeroTermo}</span> · {m.DescripcionClase || m.Clase} · {m.NombreBodega
+                    ? <span className="text-emerald-700">→ {m.NombreBodega}</span>
+                    : <span className="text-amber-700">por trasladar</span>}</>}
+                  {tipo === "PROCESADO" && <>{m.DescripcionClase || m.Clase} · <span className="text-emerald-700">→ {m.NombreBodega}</span> · {m.Fecha}</>}
                   {m.Talla !== 900 && <span className="text-gray-400"> · {m.DescripcionTalla}</span>}
                 </span>
                 <span className="font-semibold text-gray-800 whitespace-nowrap">
                   {tipo === "DESTAJO" ? `${fmtNum(m.PesoKg)} kg` : `${fmtNum(m.Peso)} ${m.UM}`}
                 </span>
-                {puedeEditar && (
+                {puedeEditar && DESHACER[tipo] && (
                   <button onClick={() => deshacer(m)}
                     className="text-xs text-gray-500 hover:text-red-600 px-2 py-0.5 rounded hover:bg-red-50 transition whitespace-nowrap">
                     {DESHACER[tipo]}

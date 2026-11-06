@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { fmtNum } from "../utils/numero.js";
 import { authHeader, usePuede } from "../context/AuthContext.jsx";
 import { useColWidths, Th, Colgroup } from "../components/ResizableTh.jsx";
+import { CerrarTransaccionModal } from "../components/MateriaPrimaPiso.jsx";
 
 const COL_DEFAULTS = { empleado: 110, nombre: 190, termo: 90, peso: 100, hora: 90, acciones: 110 };
 const COLS = Object.keys(COL_DEFAULTS);
@@ -239,24 +240,19 @@ export default function PesajePage() {
     }
   };
 
-  const handleCerrarTransaccion = async (t) => {
-    if (!confirm(`¿Cerrar la transacción del lote ${t.Lote} (${t.ClasePT})? Ya no podrá registrar pesajes en ella.`)) return;
-    try {
-      const res = await fetch(`/api/transacciones-produccion/${t.TransaccionId}`, {
-        method: "PUT", headers: { "Content-Type": "application/json", ...authHeader() },
-        body: JSON.stringify({ Estado: "Cerrada" }),
-      });
-      if (!res.ok) { const data = await res.json(); alert("Error: " + data.error); return; }
-      if (transSel?.TransaccionId === t.TransaccionId) {
-        setTransSel(null);
-        setLote(null);
-        setNumeroTermo("");
-      }
-      await fetchTransaccionesAbiertas();
-    } catch (err) {
-      console.error("Error al cerrar la transacción:", err);
-      alert("No se pudo conectar con el servidor.");
+  // Cerrar traslada lo producido al piso del siguiente proceso: el cuadro pregunta a dónde (ver
+  // CerrarTransaccionModal). Aquí solo se limpia la pantalla cuando quedó cerrada.
+  const [cerrando, setCerrando] = useState(null);
+  const handleCerrarTransaccion = (t) => setCerrando(t);
+  const trasCerrar = async () => {
+    const t = cerrando;
+    setCerrando(null);
+    if (transSel?.TransaccionId === t?.TransaccionId) {
+      setTransSel(null);
+      setLote(null);
+      setNumeroTermo("");
     }
+    await fetchTransaccionesAbiertas();
   };
 
   const codigoEscaneado = codigoInput.trim().toUpperCase();
@@ -264,8 +260,9 @@ export default function PesajePage() {
 
   const termoActual = termos.find(t => t.NumeroTermo === numeroTermo);
   // Sobre lo trabajado: lo bajado al piso no se trabajó en este lote (ver backend/src/lib/destajoPiso.ts).
+  // En un lote entero lo pesado es cabeza: el rendimiento es el de la cola, que se registra por termo.
   const trabajado = lote ? lote.PesoIngreso - (lote.Bajado || 0) : 0;
-  const rendimiento = trabajado > 0 ? (lote.Procesado / trabajado * 100) : 0;
+  const rendimiento = trabajado > 0 ? ((lote.EsEntero ? (lote.Cola || 0) : lote.Procesado) / trabajado * 100) : 0;
 
   return (
     <div>
@@ -293,9 +290,9 @@ export default function PesajePage() {
                 <p className={`text-sm font-bold ${lote.Pendiente < 0 ? "text-red-600" : "text-amber-600"}`}>{fmtNum(lote.Pendiente, 1)}</p>
               </div>
               <div className="text-center">
-                <p className="text-xs text-gray-400">Rendimiento</p>
+                <p className="text-xs text-gray-400">{lote.EsEntero ? "Rend. cola" : "Rendimiento"}</p>
                 <p className="text-xs font-mono font-semibold text-blue-600 truncate">&nbsp;</p>
-                <p className="text-sm font-bold text-gray-700">{rendimiento.toFixed(1)}%</p>
+                <p className="text-sm font-bold text-gray-700">{lote.EsEntero && !(lote.Cola > 0) ? "sin cola" : `${rendimiento.toFixed(1)}%`}</p>
               </div>
             </div>
             <div className="w-full bg-gray-200 rounded-full h-3 overflow-hidden">
@@ -442,6 +439,9 @@ export default function PesajePage() {
 
       {modalEditar && (
         <EditarPesajeModal item={modalEditar} onSave={handleGuardarEdicionPesaje} onClose={() => setModalEditar(null)} />
+      )}
+      {cerrando && (
+        <CerrarTransaccionModal transaccionId={cerrando.TransaccionId} onClose={() => setCerrando(null)} onHecho={trasCerrar} />
       )}
 
 

@@ -7,7 +7,7 @@ import { requireAuth, requirePerm } from "../middleware/auth.ts";
 import { hoyGT } from "../lib/dateGT.ts";
 import {
   BODEGAS_CON_DESTAJO, ErrorNegocio, saldoParaDestajo, tomarDelPiso, bajarAlPiso, registrarDescarte,
-  movimientosDeLote, deshacerMovimiento, cuadreLote, devolverLoteAlPiso,
+  movimientosDeLote, deshacerMovimiento, cuadreLote, devolverLoteAlPiso, registrarCola, infoCierre,
 } from "../lib/destajoPiso.ts";
 
 const router = Router();
@@ -109,11 +109,35 @@ router.post("/lote/:lote/:clase/descarte", requireAuth, requirePerm("destajo", "
   }
 });
 
+// POST /api/destajo-piso/lote/:lote/:clase/cola  { Peso, NumeroTermo, ClaseCola, Talla? }
+// Un termo de cola de un lote entero: entra al piso de Pelado.
+router.post("/lote/:lote/:clase/cola", requireAuth, requirePerm("destajo", "editar"), async (req: Request, res: Response) => {
+  try {
+    const out = await prisma.$transaction(tx => registrarCola(tx, {
+      lote: String(req.params.lote), clase: String(req.params.clase), peso: Number(req.body.Peso),
+      termo: String(req.body.NumeroTermo ?? ""), claseCola: String(req.body.ClaseCola ?? ""),
+      talla: req.body.Talla ? Number(req.body.Talla) : null, fecha: hoyGT(), operador: getOperador(req),
+    }), TX);
+    res.status(201).json(out);
+  } catch (err: any) {
+    responderError(res, err);
+  }
+});
+
 // POST /api/destajo-piso/lote/:lote/:clase/devolver — el lote completo regresa al piso y desaparece.
 // Reemplaza a "Eliminar" para los lotes tomados del piso.
 router.post("/lote/:lote/:clase/devolver", requireAuth, requirePerm("destajo", "editar"), async (req: Request, res: Response) => {
   try {
     res.json(await prisma.$transaction(tx => devolverLoteAlPiso(tx, String(req.params.lote), String(req.params.clase)), TX));
+  } catch (err: any) {
+    responderError(res, err);
+  }
+});
+
+// GET /api/destajo-piso/transaccion/:id/cierre — qué se traslada al cerrarla y a qué pisos puede ir.
+router.get("/transaccion/:id/cierre", requireAuth, requirePerm("destajo", "ver"), async (req: Request, res: Response) => {
+  try {
+    res.json(await infoCierre(prisma, Number(req.params.id)));
   } catch (err: any) {
     responderError(res, err);
   }
