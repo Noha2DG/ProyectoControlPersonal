@@ -15,6 +15,7 @@ const COLUMNS: { name: string; ddl: string }[] = [
   { name: "FechaNacimiento", ddl: "DATE NULL" },
   { name: "DepartamentoNacimiento", ddl: "VARCHAR(100)" },
   { name: "MunicipioNacimiento", ddl: "VARCHAR(100)" },
+  { name: "DireccionActual", ddl: "VARCHAR(255)" },
   { name: "NIT", ddl: "VARCHAR(20)" },
   { name: "SeguroSocial", ddl: "VARCHAR(20)" },
   { name: "Celular", ddl: "VARCHAR(20)" },

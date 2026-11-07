@@ -354,6 +354,7 @@ export function exportarEmpleados(empleados, filtroEstado) {
     "País Nacimiento":        e.PaisNacimiento ?? "",
     "Depto. Nacimiento":      e.DepartamentoNacimiento ?? "",
     "Municipio Nacimiento":   e.MunicipioNacimiento ?? "",
+    "Dirección Actual":       e.DireccionActual ?? "",
     "Celular":                e.Celular ?? "",
     "No. de Hijos":           e.NumeroHijos ?? 0,
     "Nivel Académico":        e.NivelAcademico ?? "",

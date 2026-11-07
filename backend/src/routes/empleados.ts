@@ -45,7 +45,7 @@ function safeDate(val: any): string | null {
 
 const DETALLE_CAMPOS = [
   "PrimerNombre", "SegundoNombre", "TercerNombre", "PrimerApellido", "SegundoApellido", "ApellidoCasada",
-  "PaisNacimiento", "FechaNacimiento", "DepartamentoNacimiento", "MunicipioNacimiento",
+  "PaisNacimiento", "FechaNacimiento", "DepartamentoNacimiento", "MunicipioNacimiento", "DireccionActual",
   "NIT", "SeguroSocial", "Celular",
   "NumeroHijos", "NivelAcademico", "Profesion",
 ] as const;
@@ -58,7 +58,7 @@ const SELECT_CAMPOS = `
   Sexo, EstadoCivil, Estado, CodigoEtalent, DPI,
   PrimerNombre, SegundoNombre, TercerNombre, PrimerApellido, SegundoApellido, ApellidoCasada,
   PaisNacimiento, CAST(FechaNacimiento AS CHAR) AS FechaNacimiento,
-  DepartamentoNacimiento, MunicipioNacimiento,
+  DepartamentoNacimiento, MunicipioNacimiento, DireccionActual,
   NIT, SeguroSocial, Celular,
   NumeroHijos, NivelAcademico, Profesion
 `;
