@@ -13,10 +13,9 @@ const EMPTY = {
 const EMPTY_DETALLE = {
   PrimerNombre: "", SegundoNombre: "", TercerNombre: "",
   PrimerApellido: "", SegundoApellido: "", ApellidoCasada: "",
-  PaisNacimiento: "", FechaNacimiento: "", DepartamentoNacimiento: "", MunicipioNacimiento: "", Etnia: "",
-  Nacionalidad: "", PaisDPI: "", DepartamentoDPI: "", MunicipioDPI: "", VencimientoDPI: "",
-  NIT: "", SeguroSocial: "", Celular: "", Telefono: "", PermisoTrabajo: "",
-  TituloPersonal: "", NumeroHijos: 0, NivelAcademico: "", TipoSangre: "", Beneficiario: "", Profesion: "",
+  PaisNacimiento: "", FechaNacimiento: "", DepartamentoNacimiento: "", MunicipioNacimiento: "",
+  NIT: "", SeguroSocial: "", Celular: "",
+  NumeroHijos: 0, NivelAcademico: "", Profesion: "",
 };
 
 const toInputDate = (val) => {
@@ -46,7 +45,6 @@ export default function EmpleadoModal({ empleado, onSave, onClose }) {
         ...EMPTY_DETALLE,
         ...Object.fromEntries(Object.keys(EMPTY_DETALLE).map(k => [k, empleado[k] ?? EMPTY_DETALLE[k]])),
         FechaNacimiento: toInputDate(empleado.FechaNacimiento),
-        VencimientoDPI: toInputDate(empleado.VencimientoDPI),
       });
     }
   }, [empleado]);
@@ -216,39 +214,9 @@ export default function EmpleadoModal({ empleado, onSave, onClose }) {
               <input value={detalle.MunicipioNacimiento} onChange={setD("MunicipioNacimiento")}
                 className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
             </div>
-            <div className="col-span-1">
-              <label className="block text-xs font-medium text-gray-500 mb-1">Etnia</label>
-              <input value={detalle.Etnia} onChange={setD("Etnia")}
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
-            </div>
 
             <div className="col-span-2 -mb-1 mt-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">Datos de Identificación</div>
 
-            <div className="col-span-1">
-              <label className="block text-xs font-medium text-gray-500 mb-1">Nacionalidad</label>
-              <input value={detalle.Nacionalidad} onChange={setD("Nacionalidad")}
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
-            </div>
-            <div className="col-span-1">
-              <label className="block text-xs font-medium text-gray-500 mb-1">País de DPI</label>
-              <input value={detalle.PaisDPI} onChange={setD("PaisDPI")}
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
-            </div>
-            <div className="col-span-1">
-              <label className="block text-xs font-medium text-gray-500 mb-1">Departamento de DPI</label>
-              <input value={detalle.DepartamentoDPI} onChange={setD("DepartamentoDPI")}
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
-            </div>
-            <div className="col-span-1">
-              <label className="block text-xs font-medium text-gray-500 mb-1">Municipio de DPI</label>
-              <input value={detalle.MunicipioDPI} onChange={setD("MunicipioDPI")}
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
-            </div>
-            <div className="col-span-1">
-              <label className="block text-xs font-medium text-gray-500 mb-1">Vencimiento DPI</label>
-              <input type="date" value={detalle.VencimientoDPI} onChange={setD("VencimientoDPI")}
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
-            </div>
             <div className="col-span-1">
               <label className="block text-xs font-medium text-gray-500 mb-1">NIT</label>
               <input value={detalle.NIT} onChange={setD("NIT")}
@@ -264,32 +232,9 @@ export default function EmpleadoModal({ empleado, onSave, onClose }) {
               <input value={detalle.Celular} onChange={setD("Celular")}
                 className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
             </div>
-            <div className="col-span-1">
-              <label className="block text-xs font-medium text-gray-500 mb-1">Teléfono</label>
-              <input value={detalle.Telefono} onChange={setD("Telefono")}
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
-            </div>
-            <div className="col-span-1">
-              <label className="block text-xs font-medium text-gray-500 mb-1">Permiso de Trabajo</label>
-              <input value={detalle.PermisoTrabajo} onChange={setD("PermisoTrabajo")}
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
-            </div>
 
             <div className="col-span-2 -mb-1 mt-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">Otros Datos</div>
 
-            <div className="col-span-1">
-              <label className="block text-xs font-medium text-gray-500 mb-1">Título Personal</label>
-              <select value={detalle.TituloPersonal} onChange={setD("TituloPersonal")}
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400">
-                <option value="">Seleccionar...</option>
-                <option value="Señor">Señor</option>
-                <option value="Señora">Señora</option>
-                <option value="Señorita">Señorita</option>
-                <option value="Licenciado/a">Licenciado/a</option>
-                <option value="Ingeniero/a">Ingeniero/a</option>
-                <option value="Doctor/a">Doctor/a</option>
-              </select>
-            </div>
             <div className="col-span-1">
               <label className="block text-xs font-medium text-gray-500 mb-1">Número de Hijos</label>
               <input type="number" min="0" value={detalle.NumeroHijos}
@@ -309,24 +254,8 @@ export default function EmpleadoModal({ empleado, onSave, onClose }) {
               </select>
             </div>
             <div className="col-span-1">
-              <label className="block text-xs font-medium text-gray-500 mb-1">Tipo de Sangre</label>
-              <select value={detalle.TipoSangre} onChange={setD("TipoSangre")}
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400">
-                <option value="">Sin Especificar</option>
-                <option value="A+">A+</option><option value="A-">A-</option>
-                <option value="B+">B+</option><option value="B-">B-</option>
-                <option value="AB+">AB+</option><option value="AB-">AB-</option>
-                <option value="O+">O+</option><option value="O-">O-</option>
-              </select>
-            </div>
-            <div className="col-span-1">
               <label className="block text-xs font-medium text-gray-500 mb-1">Profesión</label>
               <input value={detalle.Profesion} onChange={setD("Profesion")}
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
-            </div>
-            <div className="col-span-2">
-              <label className="block text-xs font-medium text-gray-500 mb-1">Beneficiario</label>
-              <input value={detalle.Beneficiario} onChange={setD("Beneficiario")}
                 className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
             </div>
 

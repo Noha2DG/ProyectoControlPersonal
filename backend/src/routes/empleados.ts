@@ -45,10 +45,9 @@ function safeDate(val: any): string | null {
 
 const DETALLE_CAMPOS = [
   "PrimerNombre", "SegundoNombre", "TercerNombre", "PrimerApellido", "SegundoApellido", "ApellidoCasada",
-  "PaisNacimiento", "FechaNacimiento", "DepartamentoNacimiento", "MunicipioNacimiento", "Etnia",
-  "Nacionalidad", "PaisDPI", "DepartamentoDPI", "MunicipioDPI", "VencimientoDPI",
-  "NIT", "SeguroSocial", "Celular", "Telefono", "PermisoTrabajo",
-  "TituloPersonal", "NumeroHijos", "NivelAcademico", "TipoSangre", "Beneficiario", "Profesion",
+  "PaisNacimiento", "FechaNacimiento", "DepartamentoNacimiento", "MunicipioNacimiento",
+  "NIT", "SeguroSocial", "Celular",
+  "NumeroHijos", "NivelAcademico", "Profesion",
 ] as const;
 
 const SELECT_CAMPOS = `
@@ -59,10 +58,9 @@ const SELECT_CAMPOS = `
   Sexo, EstadoCivil, Estado, CodigoEtalent, DPI,
   PrimerNombre, SegundoNombre, TercerNombre, PrimerApellido, SegundoApellido, ApellidoCasada,
   PaisNacimiento, CAST(FechaNacimiento AS CHAR) AS FechaNacimiento,
-  DepartamentoNacimiento, MunicipioNacimiento, Etnia,
-  Nacionalidad, PaisDPI, DepartamentoDPI, MunicipioDPI, CAST(VencimientoDPI AS CHAR) AS VencimientoDPI,
-  NIT, SeguroSocial, Celular, Telefono, PermisoTrabajo,
-  TituloPersonal, NumeroHijos, NivelAcademico, TipoSangre, Beneficiario, Profesion
+  DepartamentoNacimiento, MunicipioNacimiento,
+  NIT, SeguroSocial, Celular,
+  NumeroHijos, NivelAcademico, Profesion
 `;
 
 function mapRow(row: any) {
@@ -71,7 +69,6 @@ function mapRow(row: any) {
     FechaIngreso: safeDate(row.FechaIngreso),
     FechaBaja: safeDate(row.FechaBaja),
     FechaNacimiento: safeDate(row.FechaNacimiento),
-    VencimientoDPI: safeDate(row.VencimientoDPI),
     DPI: row.DPI !== null && row.DPI !== undefined ? Number(row.DPI) : 0,
     NumeroHijos: row.NumeroHijos !== null && row.NumeroHijos !== undefined ? Number(row.NumeroHijos) : 0,
   };
