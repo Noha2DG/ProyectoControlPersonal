@@ -47,13 +47,10 @@ export const CLASES_COLA = ["D30", "D33", "D34", "D35"];
 // ── Al cerrar una transacción, lo producido pasa al piso del siguiente proceso ──────────────────
 // Descabezado: la cola de sus termos va a Pelado o a Clasificado Cola. Pelado: depende del cliente,
 // así que el encargado escoge entre las bodegas con piso que siguen en el flujo (nunca hacia atrás);
-// no se propone ninguna. Lo que reciben queda en su inventario al piso y se depura bodega por bodega.
-//
-// Tratamiento queda fuera hasta que su pantalla esté en producción (usuario, 6 nov 2026): lo que le
-// llegara se quedaría en un piso que nadie toma. Para habilitarlo, quitarlo de DESTINOS_PENDIENTES.
+// no se propone ninguna. Lo que reciben queda en su inventario al piso y se depura bodega por bodega
+// (Tratamiento incluido, aunque su pantalla aún no esté en producción: usuario, 6 nov 2026).
 export const DESTINOS_COLA = ["PELADO", "CLASIFICADO_COLA"];
-const DESTINOS_PENDIENTES = ["TRATAMIENTO"];
-const NO_SON_DESTINO_DE_PELADO = ["RECEPCION", "DESCONGELADO", "PELADO", "DESCABEZADO", ...DESTINOS_PENDIENTES];
+const NO_SON_DESTINO_DE_PELADO = ["RECEPCION", "DESCONGELADO", "PELADO", "DESCABEZADO"];
 // La transacción de un descabezado produce una clase de cola (D, o M en gambón): lo pesado ahí es
 // CABEZA, que no se traslada. Lo que pasa al siguiente proceso es la cola de los termos.
 const FAMILIAS_DE_COLA = ["D", "M"];

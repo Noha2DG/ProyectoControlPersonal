@@ -306,10 +306,9 @@ const PISO = [
       }
       const iDS = await infoCierre(tx, tDS);
       check(iDS.Modo === "PELADO" && iDS.Procesado === 30.5 && iDS.DestinoSugerido === null && iDS.Destinos.length > 0
-        && !iDS.Destinos.some(d => ["PELADO", "DESCONGELADO", "DESCABEZADO", "TRATAMIENTO"].includes(d.Codigo)),
-        `el cierre de Pelado ofrece ${iDS.Destinos.length} destinos sin proponer ninguno, ni hacia atrás ni Tratamiento (30.5 kg pelados)`);
+        && !iDS.Destinos.some(d => ["PELADO", "DESCONGELADO", "DESCABEZADO"].includes(d.Codigo)) && iDS.Destinos.some(d => d.Codigo === "TRATAMIENTO"),
+        `el cierre de Pelado ofrece ${iDS.Destinos.length} destinos sin proponer ninguno, Tratamiento incluido, nunca hacia atrás (30.5 kg pelados)`);
       await falla(() => cerrarTransaccion(tx, tDS, { destino: "DESCONGELADO" }, HOY, OP), /no es un destino válido/, "no se manda lo pelado hacia atrás");
-      await falla(() => cerrarTransaccion(tx, tDS, { destino: "TRATAMIENTO" }, HOY, OP), /no es un destino válido/, "Tratamiento aún no recibe");
       await falla(() => cerrarTransaccion(tx, tDS, {}, HOY, OP), /Escoja a qué bodega/, "sin escoger bodega no se cierra");
       await cerrarTransaccion(tx, tDS, { destino: "CLASIFICADO_COLA" }, HOY, OP);
       const [pr]: any[] = await tx.$queryRawUnsafe(
