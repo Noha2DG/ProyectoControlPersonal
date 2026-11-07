@@ -13,7 +13,7 @@ const EMPTY = {
 const EMPTY_DETALLE = {
   PrimerNombre: "", SegundoNombre: "", TercerNombre: "",
   PrimerApellido: "", SegundoApellido: "", ApellidoCasada: "",
-  PaisNacimiento: "", FechaNacimiento: "", DepartamentoNacimiento: "", MunicipioNacimiento: "",
+  PaisNacimiento: "", FechaNacimiento: "", DepartamentoNacimiento: "", MunicipioNacimiento: "", DireccionActual: "",
   NIT: "", SeguroSocial: "", Celular: "",
   NumeroHijos: 0, NivelAcademico: "", Profesion: "",
 };
@@ -212,6 +212,11 @@ export default function EmpleadoModal({ empleado, onSave, onClose }) {
             <div className="col-span-1">
               <label className="block text-xs font-medium text-gray-500 mb-1">Municipio</label>
               <input value={detalle.MunicipioNacimiento} onChange={setD("MunicipioNacimiento")}
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
+            </div>
+            <div className="col-span-2">
+              <label className="block text-xs font-medium text-gray-500 mb-1">Dirección Actual</label>
+              <input value={detalle.DireccionActual} onChange={setD("DireccionActual")} maxLength={255}
                 className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
             </div>
 
