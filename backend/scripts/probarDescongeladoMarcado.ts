@@ -86,10 +86,23 @@ class Revertir extends Error {}
       await descongelarMarcado(tx, hoja, { BodegaDestino: "PELADO", PesoReal: 50, NumeroTermo: "12", lineas: [lin(A, 2), lin(C, 1)] } as any, OP);
       const mix = await traslados();
       check(mix.length === 2 && Number(mix[0].PesoKg) === 10.9 && Number(mix[1].PesoKg) === 9.07 && mix.every(t => t.NumeroTermo == null),
-        "sin unificar, un C20 y un D30 van juntos; el peso y el termo que mande la pantalla se ignoran: sale lo declarado");
+        "sin unificar, un C20 y un D30 van juntos; un peso suelto fuera del renglón y el termo se ignoran: sale lo declarado");
       await quitarTodo();
       await falla(() => descongelarMarcado(tx, hoja, { BodegaDestino: "PELADO", BaseLote: A.Lote, lineas: [lin(A, 2), lin(C, 1)] }, OP),
         /No se unifican productos distintos: C20 y D30/, "un C20 y un D30 no se unifican");
+
+      console.log("1b. Lo pesado se anota por renglón");
+      const pz = await descongelarMarcado(tx, hoja, { BodegaDestino: "PELADO", lineas: [{ ...lin(A, 2), PesoReal: 10.2 }, lin(C, 1)] }, OP);
+      const tPA = await de(A), tPC = await de(C);
+      const [cPA]: any[] = await tx.$queryRawUnsafe(`SELECT PesoKg FROM MovimientoPiso WHERE MovimientoId = ?`, Number(tPA.ConsumoId));
+      check(pz.Kg === 19.27 && pz.KgDeclarado === 19.97 && Number(tPA.PesoKg) === 10.2 && Number(cPA.PesoKg) === 10.9 && Number(tPC.PesoKg) === 9.07,
+        `A pesó 10.2 de 10.9 declarados (el consumo guarda lo declarado); C sin anotar sale con lo declarado: ${pz.Kg} de ${pz.KgDeclarado}`);
+      check((await piso("PELADO", A)).kg === 10.2 && (await piso("DESCONGELADO", A)).m === 8,
+        "al piso de Pelado llega lo pesado (10.2) y de Descongelado salen los 2 masters");
+      await quitarTodo();
+      check((await piso("PELADO", A)).kg === 0 && (await piso("DESCONGELADO", A)).m === 10, "quitar el renglón pesado lo devuelve completo");
+      await falla(() => descongelarMarcado(tx, hoja, { BodegaDestino: "PELADO", lineas: [{ ...lin(A, 2), PesoReal: 0 }] }, OP),
+        /peso pesado debe ser mayor que cero/, "lo pesado no puede ser cero");
 
       console.log("2. Dos lotes de dos remisiones, sin báscula");
       const r2l = await descongelarMarcado(tx, hoja, { BodegaDestino: "DESCABEZADO", lineas: [lin(A, 6), lin(B, 4)] }, OP);

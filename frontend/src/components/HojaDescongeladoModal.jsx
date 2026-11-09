@@ -91,6 +91,7 @@ export function ContenidoHoja({ hoja, filas }) {
       <table className="w-full text-[11px] print-table mb-4">
         <thead>
           <tr className="text-left uppercase border-b-2 border-gray-800 text-[10px] text-gray-600">
+            <th className="py-1 pr-2">Termo</th>
             <th className="py-1 pr-2">Lote</th>
             <th className="py-1 pr-2">Producto</th>
             <th className="py-1 pr-2">Talla</th>
@@ -108,6 +109,7 @@ export function ContenidoHoja({ hoja, filas }) {
             const o = origenDe(ref);
             return (
               <tr key={clave}>
+                <td className="py-1 pr-2 font-bold">{entrada?.NumeroTermo ?? ""}</td>
                 <td className="py-1 pr-2 font-mono whitespace-nowrap">
                   {o.Lote}{o.UnificadoEn && <span className="text-gray-500"> → {o.UnificadoEn}</span>}
                 </td>
@@ -123,12 +125,12 @@ export function ContenidoHoja({ hoja, filas }) {
             );
           })}
           {filas.length === 0 && (
-            <tr><td colSpan={9} className="py-3 text-center text-gray-400">Sin renglones</td></tr>
+            <tr><td colSpan={10} className="py-3 text-center text-gray-400">Sin renglones</td></tr>
           )}
         </tbody>
         <tfoot>
           <tr className="border-t-2 border-gray-800 font-bold">
-            <td colSpan={4} className="py-1 pr-2 text-right uppercase text-[10px]">Totales</td>
+            <td colSpan={5} className="py-1 pr-2 text-right uppercase text-[10px]">Totales</td>
             <td className="py-1 pr-2 text-right">{masters || "—"}</td>
             <td className="py-1 pr-2 text-right">{fmtNum(hoja.KgEntrada)}</td>
             <td className="py-1 pr-2 text-right">{fmtNum(hoja.KgDescongelado)}</td>

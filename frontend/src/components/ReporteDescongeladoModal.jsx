@@ -102,6 +102,9 @@ export function ContenidoReporte({ r }) {
         Descongelado en kilos declarados, que es lo que salió del piso. Pesado en báscula:{" "}
         <b>{kg(T.DescongeladoPesadoKg)} kg</b>. Rendimiento = pesado ÷ declarado, solo de lo descongelado
         (lo devuelto no entra). Merma anotada en las hojas: <b>{kg(T.MermaKg)} kg</b>.
+        {T.Termos > 0 && <> Termos pesados: <b>{T.Termos}</b>{T.TermosFueraDeRango > 0
+          ? <>, <b className="text-red-700">{T.TermosFueraDeRango} fuera del rango de −5 % a +2 %</b> (marcados con ⚠, registrados con confirmación).</>
+          : ", todos dentro del rango de −5 % a +2 %."}</>}
       </p>
 
       {/* 1 · RECIBIDO */}
@@ -130,7 +133,7 @@ export function ContenidoReporte({ r }) {
       <Titulo n={2} extra={`${T.DescongeladoMasters} masters · declarado ${kg(T.DescongeladoDeclaradoKg)} kg · pesado ${kg(T.DescongeladoPesadoKg)} kg`}>Descongelado</Titulo>
       <table className="w-full print-table">
         <thead><tr className="text-left border-b-2 border-gray-800">
-          <th className={TH}>Hoja</th><th className={TH}>Lote</th><th className={TH}>Producto</th><th className={TH}>Talla</th>
+          <th className={TH}>Hoja</th><th className={TH}>Termo</th><th className={TH}>Lote</th><th className={TH}>Producto</th><th className={TH}>Talla</th>
           <th className={TH}>Remisión</th><th className={`${TH} text-right`}>Masters</th>
           <th className={`${TH} text-right`}>Declarado</th><th className={`${TH} text-right`}>Pesado</th>
           <th className={`${TH} text-right`}>Dif.</th><th className={TH}>Enviado a</th>
@@ -140,8 +143,9 @@ export function ContenidoReporte({ r }) {
             const dif = x.Declarado != null ? Number((x.Declarado - x.Pesado).toFixed(2)) : null;
             const o = origenDe(x);
             return (
-              <tr key={x.MovimientoId}>
+              <tr key={x.MovimientoId} className={x.FueraDeRango ? "text-red-700" : ""}>
                 <td className={`${TD} font-mono`}>#{x.HojaId}</td>
+                <td className={`${TD} font-bold whitespace-nowrap`}>{x.Termo ?? ""}{x.FueraDeRango && " ⚠"}</td>
                 <td className={`${TD} font-mono whitespace-nowrap`}>
                   {o.Lote}{o.UnificadoEn && <span className="text-gray-500"> → {o.UnificadoEn}</span>}
                 </td>
@@ -156,7 +160,7 @@ export function ContenidoReporte({ r }) {
               </tr>
             );
           })}
-          {r.descongelado.length === 0 && <tr><td colSpan={10} className="py-2 text-center text-gray-400">Nada descongelado en la jornada</td></tr>}
+          {r.descongelado.length === 0 && <tr><td colSpan={11} className="py-2 text-center text-gray-400">Nada descongelado en la jornada</td></tr>}
         </tbody>
       </table>
       {r.porDestino.length > 1 && (

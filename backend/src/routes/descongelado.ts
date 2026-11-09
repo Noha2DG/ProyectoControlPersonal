@@ -731,7 +731,8 @@ export async function reporteJornada(bodega: string, fecha: string) {
            COALESCE(c.Masters, t.Masters) AS Masters, c.PesoKg AS Declarado, t.PesoKg AS Pesado,
            COALESCE(ar.Nombre, bd.Nombre, t.BodegaDestino) AS Destino, t.Motivo,
            c.Lote AS LoteOrigen, rc.Folio AS FolioOrigen, tc.Descripcion AS DescripcionTallaOrigen,
-           c.Clase AS ClaseOrigen, cc.Descripcion AS DescripcionClaseOrigen
+           c.Clase AS ClaseOrigen, cc.Descripcion AS DescripcionClaseOrigen,
+           t.PesadaId, c.NumeroTermo AS Termo
       FROM MovimientoPiso t
       JOIN HojaProceso h ON h.HojaId = t.HojaOrigenId AND h.BodegaCodigo = ? AND h.FechaProduccion = ?
       LEFT JOIN MovimientoPiso c ON c.MovimientoId = t.ConsumoId
@@ -745,7 +746,19 @@ export async function reporteJornada(bodega: string, fecha: string) {
       LEFT JOIN Areas ar ON ar.Codigo = t.AreaDeclarada
      WHERE t.Tipo IN ('TRASLADO', 'DEVOLUCION', 'MERMA')
      ORDER BY h.HoraInicio, h.HojaId, t.MovimientoId`, bodega, fecha) as any[],
-    ["HojaId", "MovimientoId", "Talla", "Masters", "Declarado", "Pesado"]);
+    ["HojaId", "MovimientoId", "Talla", "Masters", "Declarado", "Pesado", "PesadaId"]);
+
+  // Un termo fuera del rango se registró confirmado (ver registrarTermo) y aquí queda marcado. Se
+  // mide por TERMO completo: un termo mezclado son varios renglones con el peso repartido.
+  const porTermo = new Map<number, { d: number; p: number }>();
+  for (const x of salidas) {
+    if (x.Tipo !== "TRASLADO" || x.PesadaId == null) continue;
+    const t = porTermo.get(x.PesadaId) ?? { d: 0, p: 0 };
+    t.d += x.Declarado || 0; t.p += x.Pesado || 0;
+    porTermo.set(x.PesadaId, t);
+  }
+  const fueraTermo = new Set([...porTermo].filter(([, t]) => fueraDeRango(pctDif(t.p, t.d))).map(([id]) => id));
+  for (const x of salidas) (x as any).FueraDeRango = x.PesadaId != null && fueraTermo.has(x.PesadaId);
 
   const descongelado = salidas.filter(x => x.Tipo === "TRASLADO");
   const devuelto = salidas.filter(x => x.Tipo === "DEVOLUCION");
@@ -786,6 +799,7 @@ export async function reporteJornada(bodega: string, fecha: string) {
       MermaKg: Number(kgMerma.toFixed(2)),
       AlPisoKg: suma(alPiso, "Kg"), AlPisoMasters: suma(alPiso, "Masters"),
       Rendimiento: declaradoDesc > 0.001 ? Number((100 * suma(conPar, "Pesado") / declaradoDesc).toFixed(2)) : null,
+      Termos: porTermo.size, TermosFueraDeRango: fueraTermo.size,
     },
   };
 }
@@ -867,6 +881,9 @@ router.get("/hojas/:id", requireAuth, requirePerm("descongelado", "ver"), async 
              m.AreaDeclarada, ar.Nombre AS NombreAreaDeclarada, m.ConsumoId,
              m.RemisionId, r.Folio AS FolioRemision, m.Motivo, m.RegistradoPor,
              DATE_FORMAT(m.FechaHora, '%Y-%m-%d %H:%i') AS FechaHora,
+             -- El termo en que se pesó (ver registrarTermo). El número físico va solo en el CONSUMO:
+             -- es de Descongelado y no debe llegar al piso de quien recibe.
+             m.PesadaId, m.NumeroTermo, DATE_FORMAT(m.FechaLote, '%Y-%m-%d') AS FechaLote,
              -- De dónde salió lo que se despachó (su CONSUMO). Unificado, el TRASLADO dice el lote
              -- escogido y esto dice el de verdad; sin unificar es lo mismo.
              c.Lote AS LoteOrigen, rc.Folio AS FolioOrigen, tc.Descripcion AS DescripcionTallaOrigen,
@@ -884,7 +901,7 @@ router.get("/hojas/:id", requireAuth, requirePerm("descongelado", "ver"), async 
       WHERE m.HojaOrigenId = ? OR m.HojaDestinoId = ?
       ORDER BY m.MovimientoId ASC`, id, id);
 
-    const lineas = num(renglones, ["MovimientoId", "Talla", "Peso", "PesoKg", "Masters", "KgPorMaster", "ConsumoId"]);
+    const lineas = num(renglones, ["MovimientoId", "Talla", "Peso", "PesoKg", "Masters", "KgPorMaster", "ConsumoId", "PesadaId", "RemisionId"]);
     res.json({
       ...conRendimiento(hojas)[0],
       Auxiliares: await auxiliaresDeHoja(prisma, id),
@@ -1419,10 +1436,11 @@ router.post("/hojas/:id/descongelar", requireAuth, requirePerm("descongelado", "
 // ── Descongelar lo marcado ───────────────────────────────────────────────────────────────────
 //
 // Se marcan en el inventario al piso los lotes y masters que se descongelan (de una o varias
-// remisiones) y todo lo marcado va a UN destino. No se llevan termos ni canastas, y no hay báscula:
-// lo que sale pesa lo declarado, masters × kg por master (usuario, 27 oct 2026). Antes se llenaba
-// un termo con número y peso de báscula repartido entre sus lotes, y en todas las hojas de prueba lo
-// pesado fue exactamente lo declarado. Cada lote es su par CONSUMO + TRASLADO de siempre.
+// remisiones) y todo lo marcado va a UN destino. No se llevan termos ni canastas. Cada lote es su par
+// CONSUMO + TRASLADO de siempre: el CONSUMO lleva lo declarado (masters × kg por master) y el
+// TRASLADO lo pesado, que es lo que llega al piso del destino. Lo pesado se anota por renglón y es
+// opcional: sin anotarlo sale lo declarado (usuario, 9 nov 2026; del 27 oct al 9 nov no se pedía).
+// La diferencia es la merma del cierre y el rendimiento del reporte del día.
 //
 // UNIFICAR (opcional, igual que en Materia Prima): el encargado escoge uno de los lotes marcados y
 // todo llega al destino como ESE lote —  una sola línea al piso, con la clase, la remisión, la talla
@@ -1485,10 +1503,10 @@ export async function descongelarMarcado(tx: any, hojaId: number, p: {
   if (unificar) await validarUnificacion(tx, lotes);
   const fecha = fechaDeHoja(h);
 
-  // Lo declarado de cada lote sale de normalizarLineas (masters × kg por master). Un peso o un termo
-  // que mande la pantalla se descarta: lo que sale es lo declarado.
+  // Lo declarado de cada lote sale de normalizarLineas (masters × kg por master); lo pesado, de
+  // PesoReal o, si no viene, lo declarado. Un termo que mande la pantalla se descarta.
   const lineas = normalizarLineas(
-    crudas.map(l => ({ ...l, UM: "KG", PesoReal: null, NumeroTermo: null, BodegaDestino: destino })), true, null);
+    crudas.map(l => ({ ...l, UM: "KG", NumeroTermo: null, BodegaDestino: destino })), true, null);
   const consumos = await consumirDelPiso(tx, h, hojaId, lineas, operador, fecha);
   // Unificado, todos los TRASLADO llevan la llave del renglón de más kilos del lote escogido, para
   // que en el piso del destino sea UNA línea y no una por remisión o talla de origen.
@@ -1499,7 +1517,7 @@ export async function descongelarMarcado(tx: any, hojaId: number, p: {
   const filas = lineas.map((l, i) => {
     const llave = base ?? l;
     args.push(fecha, hojaId, destino, llave.Lote, llave.Clase, llave.talla, llave.fechaLote,
-              l.kgDecl, l.kgDecl, llave.remId, consumos[i], operador);
+              l.pesado!, l.kgReal!, llave.remId, consumos[i], operador);
     return "('TRASLADO',?,?,?,?,?,?,?,?,?,'KG',?,?,?)";
   }).join(",");
   await tx.$executeRawUnsafe(
@@ -1508,7 +1526,8 @@ export async function descongelarMarcado(tx: any, hojaId: number, p: {
      VALUES ${filas}`, ...args);
   return {
     ok: true, Lineas: lineas.length, Unificado: base ? base.Lote : null,
-    Kg: r2(lineas.reduce((s, l) => s + l.kgDecl, 0)),
+    Kg: r2(lineas.reduce((s, l) => s + l.kgReal!, 0)),
+    KgDeclarado: r2(lineas.reduce((s, l) => s + l.kgDecl, 0)),
   };
 }
 
@@ -1528,14 +1547,16 @@ async function trasladoDeHojaAbierta(tx: any, trasladoId: number) {
 // Lo que el renglón dejó en el piso del destino tiene que seguir ahí: si el siguiente proceso ya lo
 // tomó, moverlo o quitarlo dejaría ese piso en negativo. Se mide contra la línea completa del
 // destino, donde un lote unificado junta varios renglones.
-async function exigirQueSigaEnDestino(tx: any, t: any) {
+// `kg`: lo que tiene que seguir ahí. Por omisión, todo el renglón; al corregir un peso a la baja,
+// solo lo que se le quita.
+async function exigirQueSigaEnDestino(tx: any, t: any, kg: number = Number(t.PesoKg)) {
   const [s]: any[] = await tx.$queryRawUnsafe(`
     SELECT ROUND(COALESCE(SUM(CASE WHEN BodegaDestino = ? THEN PesoKg ELSE -PesoKg END), 0), 2) AS Kg
       FROM MovimientoPiso
      WHERE (BodegaDestino = ? OR BodegaOrigen = ?) AND RemisionId <=> ? AND Lote = ? AND Clase = ? AND Talla = ?
        AND FechaLote <=> ?`,
     t.BodegaDestino, t.BodegaDestino, t.BodegaDestino, t.RemisionId, t.Lote, t.Clase, Number(t.Talla), t.FechaLote);
-  if (Number(s.Kg) < Number(t.PesoKg) - 0.001) {
+  if (Number(s.Kg) < kg - 0.001) {
     throw new ErrorNegocio(400, `${t.BodegaDestino} ya tomó ${t.Lote} ${t.Clase} de su piso: este renglón ya no se puede cambiar ni quitar.`);
   }
 }
@@ -1563,12 +1584,284 @@ export async function quitarDescongelado(tx: any, trasladoId: number) {
   return { ok: true };
 }
 
+// ── Pesar por termo ──────────────────────────────────────────────────────────────────────────
+//
+// Un lote de cien masters o más se descongela de a poco: unos cuantos masters por termo, y cada
+// termo pasa por la báscula (usuario, 9 nov 2026). Cada termo se registra AL PESARLO, así que llega
+// al piso del destino en ese momento y quien recibe puede trabajarlo mientras Descongelado sigue.
+//
+// Un termo = una PESADA: el número físico del termo, los kilos de la báscula y los masters que
+// lleva, que pueden venir de varias líneas del piso (lo que queda de un lote más el principio de
+// otro). Cada línea es su par CONSUMO + TRASLADO de siempre; todos llevan PesadaId (el MovimientoId
+// del primer consumo) para quitar o corregir el termo completo. Los kilos se reparten entre las
+// líneas según lo declarado de cada una.
+//
+// Mezclar en un termo es UNIFICAR (usuario, 9 nov 2026): con las reglas de Materia Prima, y todo
+// llega al destino con UNA llave —  la "base", que manda la pantalla—  aunque los termos se pesen por
+// separado. Por eso la base puede ser una línea de otro termo de la misma hoja y no solo una de este.
+//
+// El número del termo va SOLO en el CONSUMO: es de Descongelado. El piso del destino junta los
+// números de termo de lo que le llega (saldoLineas en lib/destajoPiso.ts), y ahí no debe aparecer.
+//
+// Lo pesado contra lo declarado tiene un rango (usuario, 9 nov 2026): de −5 % a +2 %. Fuera de él
+// no se bloquea —  la báscula manda— , pero hay que confirmarlo y queda marcado en el reporte.
+export const RANGO_TERMO = { abajo: -5, arriba: 2 };
+function pctDif(pesado: number, declarado: number) {
+  return declarado > 0.001 ? (pesado - declarado) / declarado * 100 : 0;
+}
+function fueraDeRango(pct: number) {
+  return pct < RANGO_TERMO.abajo - 1e-9 || pct > RANGO_TERMO.arriba + 1e-9;
+}
+const textoPct = (pct: number) => `${pct > 0 ? "+" : ""}${pct.toFixed(1)} %`;
+/** Al cerrar la hoja: ¿salió más de lo que se acepta? Hasta +2 % de lo que entró es ganancia. */
+export function salidaExcedida(entro: number, salio: number) {
+  return salio - entro > Number((entro * RANGO_TERMO.arriba / 100).toFixed(2)) + 0.001;
+}
+function exigirRango(pesado: number, declarado: number, termo: string, confirmado: any) {
+  const pct = pctDif(pesado, declarado);
+  if (fueraDeRango(pct) && !confirmado) {
+    throw new ErrorNegocio(400, `El termo ${termo} pesa ${pesado.toFixed(2)} kg contra ${declarado.toFixed(2)} kg declarados ` +
+      `(${textoPct(pct)}): está fuera del rango de ${RANGO_TERMO.abajo} % a +${RANGO_TERMO.arriba} %. Confírmelo para registrarlo.`);
+  }
+  return pct;
+}
+
+/** Reparte `total` en proporción a `pesos`, a centavos; el último se lleva el redondeo. */
+export function repartir(total: number, pesos: number[]): number[] {
+  const suma = pesos.reduce((s, p) => s + p, 0);
+  const out = pesos.map(p => r2(total * p / suma));
+  out[out.length - 1] = r2(total - out.slice(0, -1).reduce((s, x) => s + x, 0));
+  if (out.some(x => x <= 0)) throw new ErrorNegocio(400, "Los kilos del termo son muy pocos para repartirlos entre sus lotes");
+  return out;
+}
+
+type Llave = { remId: number | null; Lote: string; Clase: string; talla: number; fechaLote: string | null };
+function leerLlave(b: any): Llave | null {
+  if (!b || !String(b.Lote ?? "").trim()) return null;
+  return {
+    remId: b.RemisionId ? Number(b.RemisionId) : null, Lote: String(b.Lote).trim(), Clase: String(b.Clase ?? "").trim(),
+    talla: b.Talla ? Number(b.Talla) : 900,
+    fechaLote: /^\d{4}-\d{2}-\d{2}/.test(String(b.FechaLote ?? "")) ? String(b.FechaLote).slice(0, 10) : null,
+  };
+}
+const mismaLlave = (a: Llave, b: Llave) =>
+  a.remId === b.remId && a.Lote === b.Lote && a.Clase === b.Clase && a.talla === b.talla && (a.fechaLote ?? null) === (b.fechaLote ?? null);
+
+// Lo que va junto en un termo, o se une a lo de un termo anterior, tiene que poder unificarse.
+async function validarMezcla(tx: any, partes: { Lote: string; Clase: string }[]) {
+  const clases = [...new Set(partes.map(p => p.Clase))];
+  if (new Set(clases.map(grupoDeProducto)).size > 1) {
+    throw new ErrorNegocio(400, `No se juntan productos distintos: ${clases.join(" y ")}`);
+  }
+  const lotes = [...new Set(partes.map(p => p.Lote))];
+  if (lotes.length > 1) await validarUnificacion(tx, lotes);
+}
+
+export async function registrarTermo(tx: any, hojaId: number, p: {
+  BodegaDestino?: any; NumeroTermo?: any; KgPesado?: any; Base?: any; lineas?: any[]; Confirmado?: any;
+}, operador: string) {
+  const crudas = Array.isArray(p.lineas) ? p.lineas : [];
+  if (!crudas.length) throw new ErrorNegocio(400, "El termo no lleva nada del piso");
+  const termo = String(p.NumeroTermo ?? "").trim();
+  if (!termo) throw new ErrorNegocio(400, "Falta el número del termo");
+  if (termo.length > 20) throw new ErrorNegocio(400, "El número del termo es muy largo");
+  const kg = Number(p.KgPesado);
+  if (!(kg > 0)) throw new ErrorNegocio(400, "Anote los kilos que marcó la báscula");
+  for (const l of crudas) {
+    const m = Number(l.Masters);
+    if (!Number.isInteger(m) || m <= 0) throw new ErrorNegocio(400, `${l.Lote ?? ""}: los masters del termo deben ser un número entero mayor que cero`);
+    if (!(Number(l.KgPorMaster) > 0)) throw new ErrorNegocio(400, `${l.Lote ?? ""}: la línea no tiene kilos por master`);
+  }
+  const destino = String(p.BodegaDestino ?? "").trim();
+
+  const h = await hojaParaEscribir(tx, hojaId);
+  await bloquearRemisiones(tx, crudas.map(l => (l.RemisionId ? Number(l.RemisionId) : null)));
+  await validarDestino(tx, destino, h.BodegaCodigo);
+  const fecha = fechaDeHoja(h);
+
+  const lineas = normalizarLineas(
+    crudas.map(l => ({ ...l, UM: "KG", NumeroTermo: null, PesoReal: null, BodegaDestino: destino })), true, null);
+  const declarado = r2(lineas.reduce((s, l) => s + l.kgDecl, 0));
+  const pct = exigirRango(kg, declarado, termo, p.Confirmado);
+  // Antes de consumirDelPiso: si parte una línea entre fechas, reparte también lo pesado.
+  repartir(kg, lineas.map(l => l.kgDecl)).forEach((x, i) => { lineas[i].pesado = x; lineas[i].kgReal = x; });
+
+  // La llave con que llega al destino. Sin base, la primera línea del termo.
+  const pedida = leerLlave(p.Base);
+  let base: Llave = pedida ?? { ...lineas[0] };
+  if (pedida && !lineas.some(l => mismaLlave(l, pedida))) {
+    const [ya]: any[] = await tx.$queryRawUnsafe(`
+      SELECT Clase FROM MovimientoPiso
+       WHERE HojaOrigenId = ? AND Tipo = 'TRASLADO' AND RemisionId <=> ? AND Lote = ? AND Clase = ? AND Talla = ?
+         AND FechaLote <=> ? LIMIT 1`,
+      hojaId, pedida.remId, pedida.Lote, pedida.Clase, pedida.talla, pedida.fechaLote);
+    if (!ya) throw new ErrorNegocio(400, `${pedida.Lote} no tiene termos en esta hoja: no se puede unir a él`);
+    base = pedida;
+  }
+  await validarMezcla(tx, [...lineas, base]);
+
+  const consumos = await consumirDelPiso(tx, h, hojaId, lineas, operador, fecha);
+  const pesadaId = consumos[0];
+  await tx.$executeRawUnsafe(
+    `UPDATE MovimientoPiso SET PesadaId = ?, NumeroTermo = ? WHERE MovimientoId IN (${enLista(consumos)})`,
+    pesadaId, termo, ...consumos);
+  const args: any[] = [];
+  const filas = lineas.map((l, i) => {
+    args.push(fecha, hojaId, destino, base.Lote, base.Clase, base.talla, base.fechaLote,
+              l.pesado!, l.kgReal!, base.remId, consumos[i], pesadaId, operador);
+    return "('TRASLADO',?,?,?,?,?,?,?,?,?,'KG',?,?,?,?)";
+  }).join(",");
+  await tx.$executeRawUnsafe(
+    `INSERT INTO MovimientoPiso (Tipo, FechaProduccion, HojaOrigenId, BodegaDestino, Lote, Clase, Talla,
+                                 FechaLote, Peso, PesoKg, UM, RemisionId, ConsumoId, PesadaId, RegistradoPor)
+     VALUES ${filas}`, ...args);
+  return { ok: true, PesadaId: pesadaId, Termo: termo, Kg: r2(kg), KgDeclarado: declarado, Dif: r2(pct),
+           FueraDeRango: fueraDeRango(pct) };
+}
+
+// Un termo con su hoja bloqueada: solo se toca con la hoja abierta. La hoja se bloquea primero,
+// igual que al registrar, para que dos capturas no se crucen.
+async function termoDeHojaAbierta(tx: any, pesadaId: number) {
+  const [c]: any[] = await tx.$queryRawUnsafe(
+    `SELECT HojaDestinoId FROM MovimientoPiso WHERE MovimientoId = ? AND PesadaId = ? AND Tipo = 'CONSUMO'`, pesadaId, pesadaId);
+  if (!c) throw new ErrorNegocio(404, "Termo no encontrado");
+  const [h]: any[] = await tx.$queryRawUnsafe(
+    `SELECT HojaId, BodegaCodigo, Estatus FROM HojaProceso WHERE HojaId = ? FOR UPDATE`, Number(c.HojaDestinoId));
+  if (!h || h.Estatus !== "Abierta") throw new ErrorNegocio(400, "La hoja ya está cerrada");
+  const filas: any[] = await tx.$queryRawUnsafe(`
+    SELECT MovimientoId, Tipo, ConsumoId, BodegaDestino, RemisionId, Lote, Clase, Talla,
+           DATE_FORMAT(FechaLote, '%Y-%m-%d') AS FechaLote, PesoKg, NumeroTermo
+      FROM MovimientoPiso WHERE PesadaId = ? ORDER BY MovimientoId FOR UPDATE`, pesadaId);
+  const consumos = filas.filter(f => f.Tipo === "CONSUMO");
+  const traslados = filas.filter(f => f.Tipo === "TRASLADO");
+  return { hoja: h, consumos, traslados };
+}
+
+// Lo que el termo dejó en el destino, por línea del destino (todos sus traslados comparten llave,
+// pero se agrupa por si acaso). `cuanto` dice cuánto de cada grupo tiene que seguir ahí.
+async function exigirTermoEnDestino(tx: any, traslados: any[], cuanto: (kg: number) => number) {
+  const grupos = new Map<string, { t: any; kg: number }>();
+  for (const t of traslados) {
+    const k = `${t.BodegaDestino}|${t.RemisionId}|${t.Lote}|${t.Clase}|${t.Talla}|${t.FechaLote}`;
+    const g = grupos.get(k) ?? { t, kg: 0 };
+    g.kg += Number(t.PesoKg);
+    grupos.set(k, g);
+  }
+  for (const g of grupos.values()) {
+    const kg = cuanto(g.kg);
+    if (kg > 0.001) await exigirQueSigaEnDestino(tx, g.t, kg);
+  }
+}
+
+/** Quita el termo completo: sus masters vuelven al piso de Descongelado. */
+export async function quitarTermo(tx: any, pesadaId: number) {
+  const { traslados } = await termoDeHojaAbierta(tx, pesadaId);
+  await exigirTermoEnDestino(tx, traslados, kg => kg);
+  // Los TRASLADO apuntan a su consumo: se borran primero.
+  await tx.$executeRawUnsafe(`DELETE FROM MovimientoPiso WHERE PesadaId = ? AND Tipo = 'TRASLADO'`, pesadaId);
+  await tx.$executeRawUnsafe(`DELETE FROM MovimientoPiso WHERE PesadaId = ? AND Tipo = 'CONSUMO'`, pesadaId);
+  return { ok: true };
+}
+
+/**
+ * Corrige un termo: su número, los kilos de la báscula o a dónde se envió. Los masters no se
+ * corrigen aquí —  son lo que bajó del piso— : si estaban mal, el termo se quita y se registra otra vez.
+ */
+export async function corregirTermo(tx: any, pesadaId: number, p: {
+  NumeroTermo?: any; KgPesado?: any; BodegaDestino?: any; Confirmado?: any;
+}) {
+  const { hoja, consumos, traslados } = await termoDeHojaAbierta(tx, pesadaId);
+  if (!traslados.length) throw new ErrorNegocio(400, "El termo no tiene a dónde se envió");
+  const termo = p.NumeroTermo != null ? String(p.NumeroTermo).trim() : String(consumos[0].NumeroTermo ?? "");
+  if (!termo) throw new ErrorNegocio(400, "Falta el número del termo");
+  if (termo.length > 20) throw new ErrorNegocio(400, "El número del termo es muy largo");
+  const antes = r2(traslados.reduce((s, t) => s + Number(t.PesoKg), 0));
+  const kg = p.KgPesado != null && p.KgPesado !== "" ? Number(p.KgPesado) : antes;
+  if (!(kg > 0)) throw new ErrorNegocio(400, "Anote los kilos que marcó la báscula");
+  const destino = p.BodegaDestino ? String(p.BodegaDestino).trim() : String(traslados[0].BodegaDestino);
+  const cambiaDestino = destino !== traslados[0].BodegaDestino;
+  if (cambiaDestino) await validarDestino(tx, destino, hoja.BodegaCodigo);
+
+  const declarado = r2(consumos.reduce((s, c) => s + Number(c.PesoKg), 0));
+  exigirRango(kg, declarado, termo, p.Confirmado);
+  // Si se va a otro destino, todo lo que dejó tiene que seguir donde estaba; si solo baja el peso,
+  // lo que se le quita.
+  await exigirTermoEnDestino(tx, traslados, viejo => (cambiaDestino ? viejo : viejo - viejo * kg / antes));
+
+  const partes = repartir(kg, consumos.map(c => Number(c.PesoKg)));
+  const deConsumo = new Map(consumos.map((c, i) => [Number(c.MovimientoId), partes[i]]));
+  for (const t of traslados) {
+    const x = deConsumo.get(Number(t.ConsumoId));
+    if (x == null) throw new ErrorNegocio(500, "El termo tiene un renglón sin su consumo; no se cambió nada.");
+    await tx.$executeRawUnsafe(
+      `UPDATE MovimientoPiso SET Peso = ?, PesoKg = ?, UM = 'KG', BodegaDestino = ? WHERE MovimientoId = ?`,
+      x, x, destino, Number(t.MovimientoId));
+  }
+  await tx.$executeRawUnsafe(
+    `UPDATE MovimientoPiso SET NumeroTermo = ? WHERE PesadaId = ? AND Tipo = 'CONSUMO'`, termo, pesadaId);
+  return { ok: true };
+}
+
+/**
+ * Para el panel de pesar: de los lotes candidatos, cuáles se pueden juntar con los que ya lleva.
+ * Devuelve el problema de cada uno (null = se puede), con la misma regla con que se rechaza.
+ */
+export async function problemasDeMezcla(client: any, lotes: string[], candidatos: string[]) {
+  const piscinas = await cargarPiscinas(client);
+  const leer = (Lote: string) => ({ Lote, d: descomponerCodigoLote(Lote, piscinas) });
+  const base = lotes.map(leer);
+  const out: Record<string, string | null> = {};
+  for (const c of candidatos) {
+    if (lotes.includes(c)) { out[c] = null; continue; }
+    const todos = [...base, leer(c)];
+    const ilegible = todos.find(x => !x.d);
+    out[c] = ilegible ? `No se reconoce la piscina del lote ${ilegible.Lote}`
+           : problemaAlUnificar(todos.map(x => ({ Lote: x.Lote, piscina: x.d!.piscina })));
+  }
+  return out;
+}
+
 // POST /api/descongelado/hojas/:id/descongelar-marcado — lo marcado del piso, a un destino.
 router.post("/hojas/:id/descongelar-marcado", requireAuth, requirePerm("descongelado", "crear"), async (req: Request, res: Response) => {
   try {
     const out = await prisma.$transaction(tx => descongelarMarcado(tx, Number(req.params.id), req.body ?? {}, getOperador(req)),
       { timeout: 30000, maxWait: 15000 });
     res.status(201).json(out);
+  } catch (err: any) { responderError(res, err); }
+});
+
+// POST /api/descongelado/hojas/:id/termo — un termo recién pesado.
+//   { BodegaDestino, NumeroTermo, KgPesado, Base?: {RemisionId, Lote, Clase, Talla, FechaLote},
+//     lineas: [{RemisionId, Lote, Clase, Talla, FechaLote, KgPorMaster, Masters}], Confirmado? }
+router.post("/hojas/:id/termo", requireAuth, requirePerm("descongelado", "crear"), async (req: Request, res: Response) => {
+  try {
+    const out = await prisma.$transaction(tx => registrarTermo(tx, Number(req.params.id), req.body ?? {}, getOperador(req)),
+      { timeout: 30000, maxWait: 15000 });
+    res.status(201).json(out);
+  } catch (err: any) { responderError(res, err); }
+});
+
+// PUT /api/descongelado/termo/:id  { NumeroTermo?, KgPesado?, BodegaDestino?, Confirmado? }
+router.put("/termo/:id", requireAuth, requirePerm("descongelado", "editar"), async (req: Request, res: Response) => {
+  try {
+    res.json(await prisma.$transaction(tx => corregirTermo(tx, Number(req.params.id), req.body ?? {}),
+      { timeout: 30000, maxWait: 15000 }));
+  } catch (err: any) { responderError(res, err); }
+});
+
+// DELETE /api/descongelado/termo/:id — quita el termo completo y lo devuelve al piso.
+router.delete("/termo/:id", requireAuth, requirePerm("descongelado", "eliminar"), async (req: Request, res: Response) => {
+  try {
+    res.json(await prisma.$transaction(tx => quitarTermo(tx, Number(req.params.id)),
+      { timeout: 30000, maxWait: 15000 }));
+  } catch (err: any) { responderError(res, err); }
+});
+
+// POST /api/descongelado/mezcla  { Lotes: [...], Candidatos: [...] } → { lote: problema | null }
+router.post("/mezcla", requireAuth, requirePerm("descongelado", "ver"), async (req: Request, res: Response) => {
+  try {
+    const lista = (v: any) => (Array.isArray(v) ? v : []).map((x: any) => String(x ?? "").trim()).filter(Boolean);
+    res.json(await problemasDeMezcla(prisma, lista(req.body?.Lotes), lista(req.body?.Candidatos).slice(0, 200)));
   } catch (err: any) { responderError(res, err); }
 });
 
@@ -2000,10 +2293,13 @@ router.post("/hojas/:id/cerrar", requireAuth, requirePerm("descongelado", "cerra
       if (entro <= 0) return { error: "La hoja no tiene entrada declarada; no se puede cerrar", status: 400 };
 
       const merma = Number((entro - salio).toFixed(2));
-      // Salir más de lo que entró no es merma negativa: es un error de captura, y cerrarlo dejaría
-      // el saldo del área con producto que nunca existió.
-      if (merma < 0) {
-        return { error: `Lo descongelado y devuelto (${salio.toFixed(2)} kg) supera la entrada declarada (${entro.toFixed(2)} kg). Revise los pesos antes de cerrar.`, status: 400 };
+      // Desde que se pesa por termo, lo pesado puede salir algo arriba de lo declarado: la báscula
+      // manda y un termo se acepta hasta +2 % (RANGO_TERMO). La hoja cierra con esa ganancia —  sin
+      // renglón de merma— ; pasarse de eso es un error de captura, y cerrarlo dejaría el saldo del área
+      // con producto que nunca existió.
+      if (salidaExcedida(entro, salio)) {
+        return { error: `Lo descongelado y devuelto (${salio.toFixed(2)} kg) supera la entrada declarada (${entro.toFixed(2)} kg) ` +
+                        `en ${(-merma).toFixed(2)} kg, más del +${RANGO_TERMO.arriba} % que se acepta. Revise los pesos antes de cerrar.`, status: 400 };
       }
 
       if (merma > 0) {
