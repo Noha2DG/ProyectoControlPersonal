@@ -19,6 +19,7 @@ import EmpleadoAutocomplete from "../components/EmpleadoAutocomplete.jsx";
 import HojaDescongeladoModal, { origenDe } from "../components/HojaDescongeladoModal.jsx";
 import ReporteDescongeladoModal from "../components/ReporteDescongeladoModal.jsx";
 import InventarioDescongeladoModal, { entregaDe } from "../components/InventarioDescongeladoModal.jsx";
+import PesarPorTermo, { termosDeHoja, fueraDeRango, pctDif, textoPct, RANGO } from "../components/PesarPorTermo.jsx";
 
 const API = "/api/descongelado";
 
@@ -305,6 +306,9 @@ function ModalCerrarHoja({ hoja, onConfirmar, onCerrar }) {
   }, [hoja.HojaId, horaFin, horaInicio]);
 
   const merma = Number((hoja.KgEntrada - hoja.KgDescongelado - hoja.KgDevuelto).toFixed(2));
+  // Igual que salidaExcedida en el backend: se cierra con ganancia hasta +2 % de lo que entró.
+  const tolerado = Number((hoja.KgEntrada * RANGO.arriba / 100).toFixed(2));
+  const excedida = -merma > tolerado + 0.001;
 
   const lista = aux?.lista ?? [];
   const marcado = a => marca[a.Codigo] ?? a.Elegido;
@@ -368,10 +372,14 @@ function ModalCerrarHoja({ hoja, onConfirmar, onCerrar }) {
 
           {/* La merma ya no se enseña al cerrar (usuario, 27 oct 2026): sin báscula, lo descongelado
               es lo declarado y la cuenta da cero. Solo se avisa si una hoja vieja no cuadra. */}
-          {merma < -0.004 && (
+          {excedida ? (
             <p className="text-xs text-red-700 bg-red-50 border border-red-200 rounded px-3 py-2">
-              Salió más de lo que entró ({fmtNum(-merma)} kg de más): la hoja no cierra con merma negativa.
-              Quite el renglón que sobra antes de cerrar.
+              Salió más de lo que entró ({fmtNum(-merma)} kg de más, más del +{RANGO.arriba} % que se acepta): la hoja no cierra así.
+              Revise los pesos de los termos antes de cerrar.
+            </p>
+          ) : merma < -0.004 && (
+            <p className="text-xs text-green-800 bg-green-50 border border-green-200 rounded px-3 py-2">
+              Lo pesado salió {fmtNum(-merma)} kg arriba de lo declarado ({textoPct(pctDif(hoja.KgEntrada - merma, hoja.KgEntrada))}): se cierra con esa ganancia.
             </p>
           )}
         </div>
@@ -384,7 +392,7 @@ function ModalCerrarHoja({ hoja, onConfirmar, onCerrar }) {
             className="ml-auto shrink-0 border border-gray-300 rounded px-4 py-1.5 text-sm text-gray-600 hover:bg-gray-50">
             Cancelar
           </button>
-          <button onClick={confirmar} disabled={guardando || merma < -0.004 || !aux || (lista.length > 0 && elegidos.length === 0)}
+          <button onClick={confirmar} disabled={guardando || excedida || !aux || (lista.length > 0 && elegidos.length === 0)}
             className="shrink-0 whitespace-nowrap bg-green-600 hover:bg-green-700 text-white rounded px-5 py-1.5 text-sm font-semibold disabled:opacity-40">
             {guardando ? "Cerrando…" : "Cerrar hoja"}
           </button>
@@ -409,9 +417,10 @@ function fechaCorta(f) {
   return `${d}-${m}-${a.slice(2)}`;
 }
 
-// Descongelar lo marcado del piso. No se llevan termos ni canastas y no hay báscula (usuario, 27 oct
-// 2026): lo que sale pesa lo declarado, masters × kg por master, y aquí solo se dice a dónde va. Todo
-// lo marcado va a un solo destino; las remisiones y los productos se pueden mezclar.
+// Descongelar lo marcado del piso. No se llevan termos ni canastas. Lo declarado es masters × kg por
+// master y no se teclea; lo pesado se anota por renglón y es opcional: vacío, sale lo declarado
+// (usuario, 9 nov 2026). La diferencia es la merma de la hoja. Todo lo marcado va a un solo destino;
+// las remisiones y los productos se pueden mezclar.
 // Con varios lotes del mismo producto se puede UNIFICAR, como en Materia Prima: el encargado escoge
 // uno de los lotes y todo llega al destino como ese lote. Por omisión cada lote conserva su código.
 // Las clases de entero (C20, C26, P28…) cuentan como un mismo producto. Las demás reglas (misma
@@ -422,6 +431,7 @@ function ModalDescongelar({ seleccion, hojasAbiertas, hojaInicial, destinos, des
   const [hojaId, setHojaId] = useState(hojaInicial);
   const hoja = hojasAbiertas.find(h => h.HojaId === hojaId) || null;
   const [base, setBase] = useState("");   // lote en que se unifica; "" = cada lote con su código
+  const [pesos, setPesos] = useState({}); // clave del renglón → kg pesados tecleados ("" = lo declarado)
   const [guardando, setGuardando] = useState(false);
 
   const lotes = [...new Set(seleccion.map(x => x.linea.Lote))];
@@ -441,6 +451,13 @@ function ModalDescongelar({ seleccion, hojasAbiertas, hojaInicial, destinos, des
     : null;
   const kg = Number(seleccion.reduce((s, x) => s + x.kg, 0).toFixed(2));
   const masters = seleccion.reduce((s, x) => s + (x.masters ?? 0), 0);
+  const pesadoDe = x => {
+    const v = String(pesos[x.clave] ?? "").trim();
+    return v === "" ? null : Number(v);
+  };
+  const malPesado = seleccion.some(x => { const p = pesadoDe(x); return p != null && !(p > 0); });
+  const kgPesado = Number(seleccion.reduce((s, x) => s + (pesadoDe(x) ?? x.kg), 0).toFixed(2));
+  const anotados = seleccion.filter(x => pesadoDe(x) != null).length;
 
   const confirmar = async () => {
     setGuardando(true);
@@ -451,6 +468,7 @@ function ModalDescongelar({ seleccion, hojasAbiertas, hojaInicial, destinos, des
           Lote: x.linea.Lote, Clase: x.linea.Clase, Talla: x.linea.Talla, RemisionId: x.linea.RemisionId,
           FechaLote: x.linea.FechaLote, KgPorMaster: x.linea.KgPorMaster, UM: "KG",
           ...(x.masters != null ? { Masters: x.masters } : { Peso: x.kg }),
+          ...(pesadoDe(x) != null ? { PesoReal: pesadoDe(x) } : {}),
         })),
       }, hojaId);
     } finally { setGuardando(false); }
@@ -479,7 +497,8 @@ function ModalDescongelar({ seleccion, hojasAbiertas, hojaInicial, destinos, des
                   <th className="px-3 py-2 text-left font-semibold">Talla</th>
                   <th className="px-3 py-2 text-left font-semibold">Remisión</th>
                   <th className="px-3 py-2 text-right font-semibold">Masters</th>
-                  <th className="px-3 py-2 text-right font-semibold">Kg</th>
+                  <th className="px-3 py-2 text-right font-semibold">Kg declarado</th>
+                  <th className="px-3 py-2 text-right font-semibold">Kg pesado</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
@@ -494,6 +513,13 @@ function ModalDescongelar({ seleccion, hojasAbiertas, hojaInicial, destinos, des
                     <td className="px-3 py-1.5 font-mono text-xs text-blue-700">{x.linea.FolioRemision || "—"}</td>
                     <td className="px-3 py-1.5 text-right tabular-nums">{x.masters ?? "—"}</td>
                     <td className="px-3 py-1.5 text-right tabular-nums">{fmtNum(x.kg)}</td>
+                    <td className="px-3 py-1 text-right">
+                      <input type="number" inputMode="decimal" step="0.01" min="0"
+                        value={pesos[x.clave] ?? ""} placeholder={fmtNum(x.kg)}
+                        onChange={e => setPesos(p => ({ ...p, [x.clave]: e.target.value }))}
+                        className={`w-24 border rounded px-2 py-1 text-right tabular-nums text-sm placeholder:text-gray-300
+                          ${pesadoDe(x) != null && pesadoDe(x) > x.kg ? "border-amber-400 bg-amber-50" : "border-gray-300"}`} />
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -504,10 +530,17 @@ function ModalDescongelar({ seleccion, hojasAbiertas, hojaInicial, destinos, des
                   </td>
                   <td className="px-3 py-2 text-right tabular-nums">{masters || "—"}</td>
                   <td className="px-3 py-2 text-right tabular-nums">{fmtNum(kg)}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{fmtNum(kgPesado)}</td>
                 </tr>
               </tfoot>
             </table>
           </div>
+          <p className="text-xs text-gray-400 -mt-2">
+            Anote lo que marcó la báscula en cada renglón. Si lo deja vacío se toma lo declarado.
+            {anotados > 0 && <> Diferencia: <b className={kg - kgPesado > 0.004 ? "text-amber-600" : "text-gray-600"}>{fmtNum(Number((kg - kgPesado).toFixed(2)))} kg</b>.</>}
+            {seleccion.some(x => pesadoDe(x) != null && pesadoDe(x) > x.kg) &&
+              <span className="text-amber-600"> Hay renglones que pesan más de lo declarado: revíselos, la hoja no cierra si sale más de lo que entró.</span>}
+          </p>
 
           {puedeUnificar && (
             <div className="space-y-1.5">
@@ -565,9 +598,9 @@ function ModalDescongelar({ seleccion, hojasAbiertas, hojaInicial, destinos, des
             className="ml-auto shrink-0 border border-gray-300 rounded px-4 py-1.5 text-sm text-gray-600 hover:bg-gray-50">
             Cancelar
           </button>
-          <button onClick={confirmar} disabled={!destino || !hoja || guardando}
+          <button onClick={confirmar} disabled={!destino || !hoja || guardando || malPesado}
             className="shrink-0 whitespace-nowrap bg-blue-600 hover:bg-blue-700 text-white rounded px-5 py-1.5 text-sm font-semibold disabled:opacity-40">
-            {guardando ? "Guardando…" : `Descongelar ${fmtNum(kg)} kg`}
+            {guardando ? "Guardando…" : `Descongelar ${fmtNum(kgPesado)} kg`}
           </button>
         </div>
       </div>
@@ -582,9 +615,8 @@ function ModalDescongelar({ seleccion, hojasAbiertas, hojaInicial, destinos, des
 //
 // "Días al piso" cuenta desde que el producto ENTRÓ AL ÁREA, no desde la fecha del lote: hay lotes
 // congelados del año pasado y su edad de producción no dice nada sobre si el área lo tiene parado.
-// Se marca lo que se descongela —  una línea, varias o una remisión completa—  y en cada marcada se
-// dice cuántos masters bajan (vienen todos; si se bajan menos, el resto sigue al piso). Después,
-// "Descongelar".
+// Cada línea con masters tiene "Pesar": abre el panel donde el lote se pesa termo por termo
+// (PesarPorTermo, desde el 9 nov 2026). Lo que no se pesa sigue al piso.
 //
 // Ya no se devuelve a bodega desde aquí (usuario, 28 oct 2026): el botón "Devolver" de cada remisión
 // se quitó por una inconsistencia en el proceso. Las devoluciones que ya estaban anotadas se siguen
@@ -594,7 +626,7 @@ const claveDeLinea = r => `${r.RemisionId ?? "-"}|${r.Lote}|${r.Clase}|${r.Talla
 // `onAbrirHoja` llega solo cuando no hay hoja abierta y el usuario puede abrirla: en ese caso no se
 // marca nada (puedeCrear viene en false) y la barra pide abrir la hoja primero.
 // `porLlegarM`: masters que bodega escaneó para el área y no han llegado (ver PorEntregar, abajo).
-function InventarioPiso({ saldo, porLlegarM = 0, resumen, puedeCrear, marcadas, setMarcadas, onDescongelar, onAbrirHoja, onImprimir }) {
+function InventarioPiso({ saldo, porLlegarM = 0, resumen, puedeCrear, onPesar, onDescongelarKg, onAbrirHoja, onImprimir }) {
   const [abierto, setAbierto] = useState(true);
   const totalKg = saldo.reduce((s, r) => s + r.Kg, 0);
   const totalM  = saldo.reduce((s, r) => s + (r.Masters || 0), 0);
@@ -610,32 +642,9 @@ function InventarioPiso({ saldo, porLlegarM = 0, resumen, puedeCrear, marcadas, 
     g.lineas.push(r); g.Kg += r.Kg; g.Masters += r.Masters || 0;
   }
 
-  // Lo marcado: masters si la línea viene contada en masters, kg si no (un ajuste sin masters).
+  // Lo que viene contado en masters se pesa por termo (PesarPorTermo). Un ajuste sin masters, que
+  // solo trae kilos, se descongela entero con el modal de antes.
   const conMasters = r => (r.Masters ?? 0) > 0;
-  const cantDe = r => {
-    const v = Number(marcadas[claveDeLinea(r)]);
-    return conMasters(r) ? Math.max(0, Math.min(Math.floor(v) || 0, r.Masters)) : Math.max(0, Math.min(v || 0, r.Kg));
-  };
-  const seleccion = saldo.filter(r => marcadas[claveDeLinea(r)] != null && cantDe(r) > 0).map(r => ({
-    clave: claveDeLinea(r), linea: r,
-    masters: conMasters(r) ? cantDe(r) : null,
-    kg: conMasters(r) ? Number((cantDe(r) * (r.KgPorMaster || 0)).toFixed(2)) : cantDe(r),
-  }));
-  const lotes = [...new Set(seleccion.map(x => x.linea.Lote))];
-  const kgSel = seleccion.reduce((s, x) => s + x.kg, 0);
-  const mSel = seleccion.reduce((s, x) => s + (x.masters ?? 0), 0);
-
-  const alternar = (r) => setMarcadas(m => {
-    const n = { ...m }; const k = claveDeLinea(r);
-    if (n[k] != null) delete n[k]; else n[k] = String(conMasters(r) ? r.Masters : r.Kg);
-    return n;
-  });
-  const alternarGrupo = (g) => setMarcadas(m => {
-    const n = { ...m };
-    const todas = g.lineas.every(r => n[claveDeLinea(r)] != null);
-    for (const r of g.lineas) { const k = claveDeLinea(r); if (todas) delete n[k]; else if (n[k] == null) n[k] = String(conMasters(r) ? r.Masters : r.Kg); }
-    return n;
-  });
 
   return (
     <section className="bg-white border border-gray-300 rounded-lg overflow-hidden">
@@ -675,27 +684,11 @@ function InventarioPiso({ saldo, porLlegarM = 0, resumen, puedeCrear, marcadas, 
         </div>
       )}
 
-      {/* La barra de lo marcado: siempre a la vista, arriba de la lista, porque en el teléfono la
-          lista es larga y el botón no puede quedar abajo de todo. */}
       {abierto && puedeCrear && saldo.length > 0 && (
-        <div className={`px-4 py-2 border-b flex flex-wrap items-center gap-2 ${seleccion.length ? "bg-blue-50 border-blue-200" : "bg-white"}`}>
-          {seleccion.length ? (
-            <>
-              <span className="text-sm text-blue-900">
-                <b>{seleccion.length}</b> línea{seleccion.length !== 1 ? "s" : ""} · {lotes.length} lote{lotes.length !== 1 ? "s" : ""}
-                {mSel > 0 && <> · <b>{mSel}</b> masters</>} · <b>{fmtNum(kgSel)}</b> kg declarados
-              </span>
-              <span className="ml-auto flex gap-2">
-                <button onClick={() => setMarcadas({})} className="border border-gray-300 rounded px-3 py-1.5 text-xs text-gray-600 hover:bg-white">Quitar marcas</button>
-                <button onClick={() => onDescongelar(seleccion)}
-                  className="bg-blue-600 text-white rounded px-4 py-1.5 text-xs font-semibold hover:bg-blue-700">
-                  Descongelar
-                </button>
-              </span>
-            </>
-          ) : (
-            <span className="text-xs text-gray-500">Marque lo que se descongela (uno o varios lotes, de una o varias remisiones) y use <b>Descongelar</b>.</span>
-          )}
+        <div className="px-4 py-2 border-b bg-white">
+          <span className="text-xs text-gray-500">
+            Use <b>Pesar</b> en el lote que va a descongelar: se anota termo por termo, con lo que marca la báscula, y cada termo llega al destino al registrarlo.
+          </span>
         </div>
       )}
 
@@ -704,7 +697,6 @@ function InventarioPiso({ saldo, porLlegarM = 0, resumen, puedeCrear, marcadas, 
           <table className="w-full text-sm">
             <thead className="bg-gray-50 text-xs text-gray-500 uppercase sticky top-0 z-10">
               <tr>
-                {puedeCrear && <th className="px-3 py-2 w-8"></th>}
                 <th className="px-3 py-2 text-left font-semibold">Lote</th>
                 <th className="px-3 py-2 text-left font-semibold">Producto</th>
                 <th className="px-3 py-2 text-left font-semibold">Talla</th>
@@ -714,26 +706,17 @@ function InventarioPiso({ saldo, porLlegarM = 0, resumen, puedeCrear, marcadas, 
                 <th className="px-3 py-2 text-right font-semibold">Kg</th>
                 {/* Las libras se derivan de los kilos (usuario, 29 oct 2026): no se capturan. */}
                 <th className="px-3 py-2 text-right font-semibold">Lb</th>
-                {puedeCrear && <th className="px-3 py-2 text-right font-semibold">Bajar</th>}
+                {puedeCrear && <th className="px-3 py-2 w-24"></th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
               {saldo.length === 0 ? (
-                <tr><td colSpan={10} className="px-4 py-8 text-center text-gray-400 text-xs">
+                <tr><td colSpan={9} className="px-4 py-8 text-center text-gray-400 text-xs">
                   Nada al piso. El producto aparece aquí cuando el área lo recibe o bodega confirma la remisión.</td></tr>
               ) : grupos.map(g => {
-                const todas = g.lineas.every(r => marcadas[claveDeLinea(r)] != null);
-                const algunas = g.lineas.some(r => marcadas[claveDeLinea(r)] != null);
                 return (
                   <Fragment key={g.clave}>
                     <tr className="bg-blue-50 border-t border-blue-200">
-                      {puedeCrear && (
-                        <td className="px-3 py-1.5">
-                          <input type="checkbox" checked={todas} title="Marcar la remisión completa"
-                            ref={el => { if (el) el.indeterminate = algunas && !todas; }}
-                            onChange={() => alternarGrupo(g)} className="w-4 h-4 cursor-pointer" />
-                        </td>
-                      )}
                       <td colSpan={5} className="px-3 py-1.5 font-semibold text-blue-900 text-xs">
                         {g.Folio || "Sin remisión (ajuste)"}
                         {g.ConfirmadaEn && <span className="font-normal text-blue-600 ml-2">confirmada {g.ConfirmadaEn}</span>}
@@ -748,15 +731,9 @@ function InventarioPiso({ saldo, porLlegarM = 0, resumen, puedeCrear, marcadas, 
                     </tr>
                     {g.lineas.map(r => {
                       const k = claveDeLinea(r);
-                      const marcada = marcadas[k] != null;
                       return (
-                        <tr key={k} className={marcada ? "bg-blue-50/60" : "hover:bg-gray-50"}>
-                          {puedeCrear && (
-                            <td className="px-3 py-1.5">
-                              <input type="checkbox" checked={marcada} onChange={() => alternar(r)} className="w-4 h-4 cursor-pointer" />
-                            </td>
-                          )}
-                          <td className="px-3 py-1.5 pl-6 font-mono text-xs cursor-pointer" onClick={() => puedeCrear && alternar(r)}>
+                        <tr key={k} className="hover:bg-gray-50">
+                          <td className="px-3 py-1.5 pl-6 font-mono text-xs">
                             {r.Lote}
                             {r.FechaLote && <span className="block font-sans text-[11px] text-gray-400">prod. {fechaCorta(r.FechaLote)}</span>}
                           </td>
@@ -778,13 +755,18 @@ function InventarioPiso({ saldo, porLlegarM = 0, resumen, puedeCrear, marcadas, 
                           <td className="px-3 py-1.5 text-right tabular-nums">{fmtNum(r.Kg)}</td>
                           <td className="px-3 py-1.5 text-right tabular-nums text-gray-600">{fmtNum(r.Kg * LB_POR_KG)}</td>
                           {puedeCrear && (
-                            <td className="px-3 py-1.5 text-right">
-                              {marcada && (
-                                <input type="number" inputMode="numeric" min="0" max={conMasters(r) ? r.Masters : r.Kg}
-                                  step={conMasters(r) ? 1 : 0.01} value={marcadas[k]}
-                                  onChange={e => setMarcadas(m => ({ ...m, [k]: e.target.value }))}
-                                  title={conMasters(r) ? "Masters que se descongelan" : "Kg que se descongelan"}
-                                  className="w-20 border border-blue-300 rounded px-2 py-1 text-sm text-right tabular-nums focus:outline-none focus:ring-2 focus:ring-blue-400" />
+                            <td className="px-3 py-1 text-right">
+                              {conMasters(r) ? (
+                                <button onClick={() => onPesar(r)} title="Pesar este lote termo por termo"
+                                  className="bg-blue-600 hover:bg-blue-700 text-white rounded px-4 py-1.5 text-xs font-semibold">
+                                  Pesar
+                                </button>
+                              ) : (
+                                <button onClick={() => onDescongelarKg([{ clave: k, linea: r, masters: null, kg: r.Kg }])}
+                                  title="Sin masters: se descongelan sus kilos"
+                                  className="border border-blue-300 text-blue-700 rounded px-3 py-1.5 text-xs font-semibold hover:bg-blue-50">
+                                  Descongelar
+                                </button>
                               )}
                             </td>
                           )}
@@ -1082,103 +1064,177 @@ function BotonIcono({ onClick, title, tipo }) {
   );
 }
 
-// Un renglón por lote descongelado, con sus masters, sus kilos (lo declarado: no hay báscula) y a
-// dónde se envió. Cada renglón se corrige o se quita solo. El lote es el de origen; si se unificó,
-// debajo dice en cuál llegó al destino.
-function TablaDescongelado({ hoja, destinos, puedeEditar, puedeBorrar, onCambiarDestino, onQuitar, onBorrar }) {
-  const [editando, setEditando] = useState(null);   // MovimientoId del renglón en edición
-  const [destino, setDestino] = useState("");
+// Un renglón por TERMO (pesar por termo, 9 nov 2026): su número, los masters, lo declarado, lo
+// pesado y la diferencia. Agrupados por la línea con que llegaron al destino —  el lote, o el lote en
+// que se unificaron— , con su subtotal: un lote de cien masters son diez termos y el encargado quiere
+// ver el lote. Lo descongelado antes del 9 nov no tiene termo: va un renglón por lote, como era.
+// Cada termo se corrige (número, kilos, destino) o se quita completo; sus masters vuelven al piso.
+const llaveDestino = (d) => `${d.BodegaDestino}|${d.RemisionId ?? ""}|${d.Lote}|${d.Clase}|${d.Talla}|${d.FechaLote ?? ""}`;
+
+function TablaDescongelado({ hoja, destinos, puedeEditar, puedeBorrar, onCorregirTermo, onQuitarTermo, onCambiarDestino, onQuitar, onBorrar }) {
+  const [editando, setEditando] = useState(null);   // { tipo, id, Termo, Kg, Destino, Declarado }
   const renglones = hoja.descongelado || [];
   const entradas = new Map((hoja.entrada || []).map(e => [e.MovimientoId, e]));
   // Lo que bajó del piso y nunca se despachó (flujo viejo de dos pasos) se muestra suelto. Lo
   // devuelto a bodega también baja con su consumo, pero va en su propia sección.
   const conSalida = new Set([...renglones, ...(hoja.devoluciones || [])].map(d => d.ConsumoId).filter(Boolean));
   const sueltos = (hoja.entrada || []).filter(e => !conSalida.has(e.MovimientoId));
-  const masters = renglones.reduce((s, d) => s + (entradas.get(d.ConsumoId)?.Masters ?? 0), 0);
 
-  const guardar = async () => { if (await onCambiarDestino(editando, destino)) setEditando(null); };
+  const filas = [
+    ...termosDeHoja(hoja).filter(t => t.traslados.length).map(t => ({
+      tipo: "termo", id: t.PesadaId, d: t.traslados[0], Termo: t.Termo, Hora: t.Hora, Lotes: t.Lotes,
+      Masters: t.Masters, Declarado: t.Declarado, Pesado: t.Pesado, Dif: t.Dif, orden: t.PesadaId,
+    })),
+    ...renglones.filter(d => d.PesadaId == null).map(d => {
+      const e = entradas.get(d.ConsumoId);
+      return {
+        tipo: "renglon", id: d.MovimientoId, d, Termo: null, Hora: d.FechaHora, Lotes: origenDe(d).Lote,
+        Masters: e?.Masters ?? null, Declarado: e?.PesoKg ?? null, Pesado: d.PesoKg,
+        Dif: e ? pctDif(d.PesoKg, e.PesoKg) : null, orden: d.MovimientoId,
+      };
+    }),
+  ].sort((a, b) => a.orden - b.orden);
+  const grupos = [];
+  for (const f of filas) {
+    const k = llaveDestino(f.d);
+    let g = grupos.find(x => x.k === k);
+    if (!g) { g = { k, d: f.d, filas: [] }; grupos.push(g); }
+    g.filas.push(f);
+  }
+  const suma = (xs, c) => Number(xs.reduce((s, x) => s + (x[c] || 0), 0).toFixed(2));
+  const masters = suma(filas, "Masters");
+  const declarado = suma(filas.filter(f => f.Declarado != null), "Declarado");
+  const pesadoConPar = suma(filas.filter(f => f.Declarado != null), "Pesado");
+
+  const guardar = async () => {
+    const e = editando;
+    const ok = e.tipo === "termo"
+      ? await onCorregirTermo(e.id, { NumeroTermo: e.Termo, KgPesado: e.Kg, BodegaDestino: e.Destino }, e.Declarado)
+      : await onCambiarDestino(e.id, e.Destino);
+    if (ok) setEditando(null);
+  };
 
   return (
     <section className="bg-white border border-gray-300 rounded-lg overflow-hidden">
       <header className="bg-gray-100 border-b border-gray-300 px-4 py-2 flex items-center gap-3">
         <h3 className="font-bold text-sm text-gray-700">DESCONGELADO</h3>
-        <span className="text-xs text-gray-500">{renglones.length} renglón{renglones.length !== 1 ? "es" : ""}</span>
+        <span className="text-xs text-gray-500">
+          {filas.filter(f => f.tipo === "termo").length} termo{filas.filter(f => f.tipo === "termo").length !== 1 ? "s" : ""}
+          {filas.some(f => f.tipo === "renglon") && ` · ${filas.filter(f => f.tipo === "renglon").length} renglón(es) sin termo`}
+        </span>
       </header>
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead className="bg-gray-50 text-xs text-gray-500 uppercase">
             <tr>
+              <th className="px-3 py-2 text-left font-semibold">Termo</th>
+              <th className="px-3 py-2 text-left font-semibold">Hora</th>
               <th className="px-3 py-2 text-left font-semibold">Lote</th>
-              <th className="px-3 py-2 text-left font-semibold">Producto</th>
-              <th className="px-3 py-2 text-left font-semibold">Talla</th>
-              <th className="px-3 py-2 text-left font-semibold">Remisión</th>
               <th className="px-3 py-2 text-right font-semibold">Masters</th>
-              <th className="px-3 py-2 text-right font-semibold">Kg</th>
+              <th className="px-3 py-2 text-right font-semibold">Declarado</th>
+              <th className="px-3 py-2 text-right font-semibold">Pesado</th>
+              <th className="px-3 py-2 text-right font-semibold">Dif.</th>
               <th className="px-3 py-2 text-left font-semibold">Enviado a</th>
               <th className="px-3 py-2 w-24"></th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
-            {renglones.length === 0 && sueltos.length === 0 && (
-              <tr><td colSpan={8} className="px-4 py-8 text-center text-gray-400 text-xs">
-                Todavía no se ha descongelado nada. Marque lo del piso y use <b>Descongelar</b>.</td></tr>
+            {filas.length === 0 && sueltos.length === 0 && (
+              <tr><td colSpan={9} className="px-4 py-8 text-center text-gray-400 text-xs">
+                Todavía no se ha descongelado nada. Use <b>Pesar</b> en un lote del piso.</td></tr>
             )}
-            {renglones.map(d => {
-              const o = origenDe(d);
-              const e = entradas.get(d.ConsumoId);
-              const enEdicion = editando === d.MovimientoId;
+            {grupos.map(g => {
+              const decl = suma(g.filas.filter(f => f.Declarado != null), "Declarado");
+              const pes = suma(g.filas.filter(f => f.Declarado != null), "Pesado");
+              const nT = g.filas.filter(f => f.tipo === "termo").length;
               return (
-                <tr key={d.MovimientoId} className={enEdicion ? "bg-blue-50" : "hover:bg-gray-50"}>
-                  <td className="px-3 py-1.5 font-mono text-xs">
-                    {o.Lote}
-                    {o.UnificadoEn && (
-                      <span className="block font-sans text-[11px] font-semibold text-emerald-700">
-                        unificado en <span className="font-mono">{o.UnificadoEn}</span>
-                      </span>
-                    )}
-                  </td>
-                  <td className="px-3 py-1.5 text-xs"><span className="font-mono text-gray-500">{o.Clase}</span> {o.DescripcionClase}</td>
-                  <td className="px-3 py-1.5 text-xs">{o.Talla}</td>
-                  <td className="px-3 py-1.5 font-mono text-xs text-blue-700">{o.Folio || "—"}</td>
-                  <td className="px-3 py-1.5 text-right tabular-nums">{e?.Masters ?? "—"}</td>
-                  <td className="px-3 py-1.5 text-right tabular-nums font-semibold">{fmtNum(d.PesoKg)}</td>
-                  <td className="px-3 py-1.5 text-xs">
-                    {enEdicion
-                      ? <SelectorDestino destinos={destinos} value={destino} onChange={setDestino} ancho="w-44" chico />
-                      : nombreDestinoDe(d)}
-                  </td>
-                  <td className="px-2 py-1 text-center whitespace-nowrap">
-                    {enEdicion ? (
-                      <>
-                        <BotonIcono tipo="guardar" title="Guardar" onClick={guardar} />
-                        <BotonIcono tipo="cancelar" title="Cancelar" onClick={() => setEditando(null)} />
-                      </>
-                    ) : (
-                      <>
-                        {puedeEditar && (
-                          <BotonIcono tipo="editar" title="Cambiar a dónde se envió"
-                            onClick={() => { setEditando(d.MovimientoId); setDestino(valorDestinoDe(d)); }} />
-                        )}
-                        {puedeBorrar && (
-                          <BotonIcono tipo="quitar" title="Quitar el renglón: el lote vuelve al piso" onClick={() => onQuitar(d)} />
-                        )}
-                      </>
-                    )}
-                  </td>
-                </tr>
+                <Fragment key={g.k}>
+                  <tr className="bg-blue-50 border-t border-blue-200 text-xs text-blue-900">
+                    <td colSpan={3} className="px-3 py-1.5">
+                      <span className="font-mono font-bold">{g.d.Lote}</span>
+                      <span className="ml-2"><span className="font-mono">{g.d.Clase}</span> {g.d.DescripcionClase} · {g.d.DescripcionTalla}</span>
+                      {g.d.FolioRemision && <span className="ml-2 font-mono text-blue-700">{g.d.FolioRemision}</span>}
+                      {nT > 0 && <span className="ml-2 text-blue-600">· {nT} termo{nT !== 1 ? "s" : ""}</span>}
+                    </td>
+                    <td className="px-3 py-1.5 text-right tabular-nums font-bold">{suma(g.filas, "Masters") || "—"}</td>
+                    <td className="px-3 py-1.5 text-right tabular-nums font-bold">{decl ? fmtNum(decl) : "—"}</td>
+                    <td className="px-3 py-1.5 text-right tabular-nums font-bold">{fmtNum(suma(g.filas, "Pesado"))}</td>
+                    <td className="px-3 py-1.5 text-right tabular-nums font-bold">{decl ? textoPct(pctDif(pes, decl)) : "—"}</td>
+                    <td colSpan={2}></td>
+                  </tr>
+                  {g.filas.map(f => {
+                    const ed = editando && editando.tipo === f.tipo && editando.id === f.id ? editando : null;
+                    const mal = f.tipo === "termo" && f.Dif != null && fueraDeRango(f.Dif);
+                    const o = origenDe(f.d);
+                    return (
+                      <tr key={`${f.tipo}${f.id}`} className={ed ? "bg-blue-50" : mal ? "bg-red-50/60" : "hover:bg-gray-50"}>
+                        <td className="px-3 py-1.5 pl-6">
+                          {ed && f.tipo === "termo" ? (
+                            <input value={ed.Termo} onChange={e => setEditando({ ...ed, Termo: e.target.value })} maxLength={20}
+                              className="w-16 border border-blue-400 rounded px-1.5 py-0.5 text-sm font-bold text-center" />
+                          ) : f.Termo != null ? (
+                            <span className="inline-flex items-center justify-center min-w-[2rem] px-1.5 py-0.5 rounded bg-gray-800 text-white text-xs font-bold tabular-nums">{f.Termo}</span>
+                          ) : <span className="text-gray-300">—</span>}
+                        </td>
+                        <td className="px-3 py-1.5 text-xs text-gray-500 tabular-nums">{f.Hora ? f.Hora.slice(11, 16) : ""}</td>
+                        <td className="px-3 py-1.5 font-mono text-xs">
+                          {f.Lotes}
+                          {f.tipo === "renglon" && o.UnificadoEn && (
+                            <span className="block font-sans text-[11px] font-semibold text-emerald-700">unificado en <span className="font-mono">{o.UnificadoEn}</span></span>
+                          )}
+                        </td>
+                        <td className="px-3 py-1.5 text-right tabular-nums">{f.Masters ?? "—"}</td>
+                        <td className="px-3 py-1.5 text-right tabular-nums text-gray-500">{f.Declarado != null ? fmtNum(f.Declarado) : "—"}</td>
+                        <td className="px-3 py-1.5 text-right tabular-nums font-semibold">
+                          {ed && f.tipo === "termo" ? (
+                            <input value={ed.Kg} onChange={e => setEditando({ ...ed, Kg: e.target.value.replace(/[^\d.]/g, "") })} inputMode="decimal"
+                              className="w-24 border border-blue-400 rounded px-1.5 py-0.5 text-sm text-right" />
+                          ) : fmtNum(f.Pesado)}
+                        </td>
+                        <td className={`px-3 py-1.5 text-right tabular-nums whitespace-nowrap ${mal ? "text-red-700 font-bold" : "text-gray-600"}`}>
+                          {f.Dif != null ? textoPct(f.Dif) : "—"}
+                          {mal && <span className="ml-1 text-[10px] font-semibold uppercase bg-red-600 text-white rounded px-1 py-0.5 align-middle">fuera</span>}
+                        </td>
+                        <td className="px-3 py-1.5 text-xs">
+                          {ed ? <SelectorDestino destinos={destinos} value={ed.Destino} onChange={v => setEditando({ ...ed, Destino: v })} ancho="w-40" chico />
+                              : nombreDestinoDe(f.d)}
+                        </td>
+                        <td className="px-2 py-1 text-center whitespace-nowrap">
+                          {ed ? (
+                            <>
+                              <BotonIcono tipo="guardar" title="Guardar" onClick={guardar} />
+                              <BotonIcono tipo="cancelar" title="Cancelar" onClick={() => setEditando(null)} />
+                            </>
+                          ) : (
+                            <>
+                              {puedeEditar && (
+                                <BotonIcono tipo="editar" title={f.tipo === "termo" ? "Corregir el número, los kilos o a dónde se envió" : "Cambiar a dónde se envió"}
+                                  onClick={() => setEditando({ tipo: f.tipo, id: f.id, Termo: String(f.Termo ?? ""), Kg: String(f.Pesado),
+                                                               Destino: valorDestinoDe(f.d), Declarado: f.Declarado })} />
+                              )}
+                              {puedeBorrar && (
+                                <BotonIcono tipo="quitar" title={f.tipo === "termo" ? "Quitar el termo: sus masters vuelven al piso" : "Quitar el renglón: el lote vuelve al piso"}
+                                  onClick={() => (f.tipo === "termo" ? onQuitarTermo(f) : onQuitar(f.d))} />
+                              )}
+                            </>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </Fragment>
               );
             })}
             {sueltos.map(e => (
               <tr key={`e${e.MovimientoId}`}>
+                <td className="px-3 py-1.5 text-gray-300">—</td>
+                <td></td>
                 <td className="px-3 py-1.5 font-mono text-xs">
-                  {e.Lote}<span className="block font-sans text-[11px] text-amber-600">sin despachar</span>
+                  {e.Lote}<span className="block font-sans text-[11px] text-amber-600">sin despachar · {e.FolioRemision || "—"}</span>
                 </td>
-                <td className="px-3 py-1.5 text-xs"><span className="font-mono text-gray-500">{e.Clase}</span> {e.DescripcionClase}</td>
-                <td className="px-3 py-1.5 text-xs">{e.DescripcionTalla}</td>
-                <td className="px-3 py-1.5 font-mono text-xs text-blue-700">{e.FolioRemision || "—"}</td>
                 <td className="px-3 py-1.5 text-right tabular-nums">{e.Masters ?? "—"}</td>
                 <td className="px-3 py-1.5 text-right tabular-nums">{fmtNum(e.PesoKg)}</td>
-                <td></td>
+                <td colSpan={3}></td>
                 <td className="px-2 py-1 text-center">
                   {puedeBorrar && (
                     <BotonIcono tipo="quitar" onClick={() => onBorrar(e.MovimientoId)} title="Quitar el renglón y devolverlo al piso" />
@@ -1189,9 +1245,11 @@ function TablaDescongelado({ hoja, destinos, puedeEditar, puedeBorrar, onCambiar
           </tbody>
           <tfoot className="bg-gray-100 border-t-2 border-gray-300">
             <tr className="font-bold">
-              <td colSpan={4} className="px-3 py-2 text-right text-xs text-gray-600 uppercase">Totales</td>
+              <td colSpan={3} className="px-3 py-2 text-right text-xs text-gray-600 uppercase">Totales</td>
               <td className="px-3 py-2 text-right tabular-nums">{masters || "—"}</td>
+              <td className="px-3 py-2 text-right tabular-nums">{declarado ? fmtNum(declarado) : "—"}</td>
               <td className="px-3 py-2 text-right tabular-nums text-base">{fmtNum(hoja.KgDescongelado)}</td>
+              <td className="px-3 py-2 text-right tabular-nums">{declarado ? textoPct(pctDif(pesadoConPar, declarado)) : "—"}</td>
               <td colSpan={2}></td>
             </tr>
           </tfoot>
@@ -1264,14 +1322,18 @@ function SeccionDevoluciones({ hoja, puedeBorrar, onBorrar }) {
 // Era una tabla al final de la pantalla. Es una resta de cuatro términos: cabe en una línea y así
 // se lee sin bajar, que es donde importa mientras la hoja está abierta.
 function Cuadre({ hoja }) {
-  const pendiente = Number((hoja.KgEntrada - hoja.KgDescongelado - hoja.KgDevuelto - hoja.KgMerma).toFixed(2));
+  // Entrada − salida: positivo es merma; negativo, ganancia (pesado arriba de lo declarado, que desde
+  // que se pesa por termo se acepta hasta +2 %). Cerrada con merma, es la del renglón MERMA.
+  const neto = Number((hoja.KgEntrada - hoja.KgDescongelado - hoja.KgDevuelto).toFixed(2));
+  const cerrada = hoja.Estatus === "Cerrada";
+  const ganancia = neto < -0.004;
   const tiles = [
     { t: "Entrada declarada", v: hoja.KgEntrada, c: "text-gray-800" },
     { t: "Descongelado", v: hoja.KgDescongelado, c: "text-blue-700" },
     { t: "Devuelto a bodega", v: hoja.KgDevuelto, c: "text-gray-800" },
-    { t: hoja.Estatus === "Cerrada" ? "Merma" : "Merma al cerrar",
-      v: hoja.Estatus === "Cerrada" ? hoja.KgMerma : pendiente,
-      c: (hoja.Estatus === "Cerrada" ? hoja.KgMerma : pendiente) > 0.004 ? "text-amber-600" : "text-gray-400" },
+    { t: ganancia ? (cerrada ? "Ganancia" : "Ganancia al cerrar") : (cerrada ? "Merma" : "Merma al cerrar"),
+      v: ganancia ? -neto : cerrada ? hoja.KgMerma : neto,
+      c: ganancia ? "text-green-700" : neto > 0.004 ? "text-amber-600" : "text-gray-400" },
   ];
   return (
     <div className="grid grid-cols-2 md:grid-cols-5 gap-px bg-gray-300 border border-gray-300 rounded-lg overflow-hidden">
@@ -1311,8 +1373,8 @@ export default function DescongeladoPage() {
   const [error, setError]         = useState("");
   const [auxiliares, setAuxiliares] = useState([]);
   const [resumen, setResumen] = useState(null);
-  const [modal, setModal]   = useState(null);   // { seleccion } — descongelar lo marcado
-  const [marcadas, setMarcadas] = useState({});   // clave de la línea del piso → masters (o kg) que bajan
+  const [modal, setModal]   = useState(null);   // { seleccion } — descongelar por kilos una línea sin masters
+  const [pesar, setPesar]   = useState(null);   // la línea del piso cuyo lote se pesa por termo
   const [ultimoDestino, setUltimoDestino] = useState("");   // el destino anterior se sugiere
   const [cierre, setCierre] = useState(false);   // modal de cerrar la hoja
   const [imprimir, setImprimir] = useState(false); // vista previa de la hoja para imprimir / PDF
@@ -1424,9 +1486,39 @@ export default function DescongeladoPage() {
     const out = await post(`${API}/hojas/${hojaId}/descongelar-marcado`, datos);
     if (!out) return;
     setUltimoDestino(datos.BodegaDestino);
-    setMarcadas({});
     setModal(null);
     await recargar(hojaId);
+  };
+
+  // Lo que el panel de pesar registró o corrigió: recarga el piso y la hoja, y recuerda el destino.
+  const alPesar = async (hojaId, destino) => {
+    if (destino) setUltimoDestino(destino);
+    await recargar(hojaId);
+  };
+
+  // Corregir un termo desde la tabla de la hoja. Fuera del rango se confirma, igual que al pesarlo.
+  const corregirTermo = async (id, { NumeroTermo, KgPesado, BodegaDestino }, declarado) => {
+    const kg = Number(KgPesado);
+    if (!String(NumeroTermo ?? "").trim() || !(kg > 0)) { await mostrarAlerta("Escriba el número del termo y los kilos."); return false; }
+    if (!BodegaDestino) { await mostrarAlerta("Escoja a dónde se envió."); return false; }
+    let Confirmado = false;
+    if (declarado != null && fueraDeRango(pctDif(kg, declarado))) {
+      if (!(await pedirConfirmacion(
+        `El termo ${NumeroTermo} quedaría en ${fmtNum(kg)} kg contra ${fmtNum(declarado)} kg declarados (${textoPct(pctDif(kg, declarado))}), ` +
+        `fuera del rango de ${RANGO.abajo} % a +${RANGO.arriba} %. ¿La báscula marcó eso?`, { textoConfirmar: "Sí, guardar así" }))) return false;
+      Confirmado = true;
+    }
+    if (!await post(`${API}/termo/${id}`, { NumeroTermo: String(NumeroTermo).trim(), KgPesado: kg, BodegaDestino, Confirmado }, "PUT")) return false;
+    await recargar(sel.HojaId);
+    return true;
+  };
+
+  const quitarTermo = async (f) => {
+    if (!(await pedirConfirmacion(`¿Quitar el termo ${f.Termo} (${f.Lotes}, ${f.Masters} masters)? Sus masters vuelven al inventario al piso.`))) return;
+    const res = await fetch(`${API}/termo/${f.id}`, { method: "DELETE", headers: authHeader() });
+    const data = await leerJSON(res);
+    if (!res.ok) { await mostrarAlerta(data.error || "No se pudo quitar"); return; }
+    await recargar(sel.HojaId);
   };
 
   // Recibir lo que bodega dejó y el área va a usar: entra al piso y se puede descongelar. De cada
@@ -1536,6 +1628,13 @@ export default function DescongeladoPage() {
           hojasAbiertas={hojasAbiertas} hojaInicial={hojaAbierta.HojaId} destinos={destinos} destinoSugerido={ultimoDestino}
           onConfirmar={confirmarDescongelar} onCerrar={() => setModal(null)} />
       )}
+      {/* El key ata el panel al lote: abrir otro no hereda lo tecleado del anterior. */}
+      {pesar && hojaAbierta && (
+        <PesarPorTermo key={`${pesar.Lote}|${pesar.Clase}|${pesar.Talla}`} linea={pesar} saldo={saldo}
+          hojasAbiertas={hojasAbiertas} hojaInicial={hojaAbierta.HojaId} destinos={destinos} destinoSugerido={ultimoDestino}
+          puedeEditar={puedeEditar} puedeBorrar={puedeBorrar}
+          onCambio={alPesar} onCerrar={() => setPesar(null)} />
+      )}
       {reporte && <ReporteDescongeladoModal fecha={fecha} onCerrar={() => setReporte(false)} />}
       {imprimirPiso && <InventarioDescongeladoModal fecha={fecha} saldo={saldo} porEntregar={porEntregar} onCerrar={() => setImprimirPiso(false)} />}
       {imprimir && sel && (
@@ -1587,8 +1686,8 @@ export default function DescongeladoPage() {
 
       <InventarioPiso saldo={saldo} resumen={resumen} puedeCrear={puedeCrear && !!hojaAbierta}
         porLlegarM={porEntregar.filter(r => !r.Recibido && !r.PorRegresar).reduce((s, r) => s + (r.Masters || 0), 0)}
-        marcadas={marcadas} setMarcadas={setMarcadas}
-        onDescongelar={(seleccion) => setModal({ seleccion })}
+        onPesar={(linea) => setPesar(linea)}
+        onDescongelarKg={(seleccion) => setModal({ seleccion })}
         onAbrirHoja={puedeCrear && !hojaAbierta ? () => setAbriendoHoja(true) : null}
         onImprimir={() => setImprimirPiso(true)} />
 
@@ -1662,6 +1761,7 @@ export default function DescongeladoPage() {
           <TablaDescongelado hoja={sel} destinos={destinos}
             puedeEditar={sel.Estatus === "Abierta" && puedeEditar}
             puedeBorrar={sel.Estatus === "Abierta" && puedeBorrar}
+            onCorregirTermo={corregirTermo} onQuitarTermo={quitarTermo}
             onCambiarDestino={cambiarDestino} onQuitar={quitarDescongelado} onBorrar={borrarRenglon} />
           {sel.devoluciones?.length > 0 && (
             <SeccionDevoluciones hoja={sel}
