@@ -143,7 +143,26 @@ const PISO = [
       check(r5.lotes[0].Lote === componerCodigoLote("EM03-E05", HOY, "7"), `con la piscina escogida va a ${r5.lotes[0].Lote}`);
 
       console.log("6. Bajar al piso y descarte");
-      await bajarAlPiso(tx, { lote: loteK, clase: "D30", peso: 100, talla: 217, fecha: HOY, operador: OP });
+      await falla(() => bajarAlPiso(tx, { lote: loteK, clase: "D30", peso: 100, talla: 217, fecha: HOY, operador: OP }),
+        /Falta el número de termo/, "bajar al piso sin número de termo se rechaza");
+      await falla(() => bajarAlPiso(tx, { lote: loteK, clase: "D30", peso: 100, talla: 217, termo: "   ", fecha: HOY, operador: OP }),
+        /Falta el número de termo/, "un termo en blanco tampoco pasa");
+      await bajarAlPiso(tx, { lote: loteK, clase: "D30", peso: 100, talla: 217, termo: " B7 ", fecha: HOY, operador: OP });
+      const [bt]: any[] = await tx.$queryRawUnsafe(
+        `SELECT NumeroTermo FROM MovimientoPiso WHERE LoteProceso = ? AND Tipo = 'BAJADO'`, loteK);
+      check(bt?.NumeroTermo === "B7", `lo bajado guarda el termo en que queda al piso, sin espacios (${bt?.NumeroTermo})`);
+      // La misma consulta del Reporte Termos (routes/reportes.ts, pTermoBajado).
+      const repo: any[] = await tx.$queryRawUnsafe(`
+        SELECT m.NumeroTermo, m.LoteProceso AS Lote, m.ClaseProceso AS ClaseOrigen, m.Motivo, m.Peso AS Procesado, bd.Nombre AS NombreDestino
+          FROM MovimientoPiso m
+          JOIN Lotes l ON l.Lote = m.LoteProceso AND l.Clase = m.ClaseProceso
+          JOIN Piscina p ON l.PiscinaId = p.PiscinaId
+          JOIN Finca f ON p.CodigoFinca = f.Codigo
+          JOIN Tallas ta ON ta.Codigo = m.Talla
+          LEFT JOIN BodegaVirtual bd ON bd.Codigo = m.BodegaDestino
+         WHERE m.Tipo = 'BAJADO' AND m.NumeroTermo IS NOT NULL AND l.Fecha BETWEEN ? AND ? AND m.LoteProceso = ?`, HOY, HOY, loteK);
+      check(repo.length === 1 && repo[0].NumeroTermo === "B7" && Number(repo[0].Procesado) === 100 && repo[0].Motivo === "Sobrante" && !!repo[0].NombreDestino,
+        `el Reporte Termos lo trae como MP bajada: termo ${repo[0]?.NumeroTermo}, ${repo[0]?.Procesado}, ${repo[0]?.Motivo} → ${repo[0]?.NombreDestino}`);
       await falla(() => registrarDescarte(tx, { lote: loteK, clase: "D30", peso: 1, motivo: "Rojo", fecha: HOY, operador: OP }),
         /no es descarte/, "el rojo no se registra como descarte");
       await registrarDescarte(tx, { lote: loteK, clase: "D30", peso: 28.4, motivo: "Descarte", nota: "prueba", fecha: HOY, operador: OP });
@@ -152,9 +171,10 @@ const PISO = [
         `cuadre: ingreso 976.1, bajado 100, descarte 28.4, pendiente ${c.Pendiente}`);
       const bajado = await linea(loteK, 217);
       check(!!bajado && bajado.Kg === 100 && bajado.EsBajado, "lo bajado aparece al piso de Pelado, marcado como bajado de la mesa");
+      check(bajado?.Termos === "B7", `y en "Tomar del piso" se ve en qué termo quedó (${bajado?.Termos})`);
       check(Math.abs(rendimientoLote(976.1, 100, 700) - 79.90) < 0.01,
         `rendimiento = procesado ÷ (ingreso − bajado): 700 ÷ 876.1 = ${rendimientoLote(976.1, 100, 700).toFixed(2)}%`);
-      await falla(() => bajarAlPiso(tx, { lote: loteK, clase: "D30", peso: 900, fecha: HOY, operador: OP }),
+      await falla(() => bajarAlPiso(tx, { lote: loteK, clase: "D30", peso: 900, termo: "B8", fecha: HOY, operador: OP }),
         /solo le quedan 847\.70/, "no se baja más de lo que queda sin pesar");
       const [desc]: any[] = await tx.$queryRawUnsafe(
         `SELECT BodegaOrigen, BodegaDestino, Motivo FROM MovimientoPiso WHERE LoteProceso = ? AND Tipo = 'DESCARTE'`, loteK);
@@ -180,7 +200,7 @@ const PISO = [
       await deshacerMovimiento(tx, movK.find(m => m.Tipo === "DESCARTE")!.MovimientoId);
       c = await cuadreLote(tx, loteK, "D30");
       check(c.Bajado === 0 && c.Descarte === 0 && c.Pendiente === 976.1, "deshacer bajado y descarte deja el lote como estaba");
-      await bajarAlPiso(tx, { lote: loteK, clase: "D30", peso: 900, fecha: HOY, operador: OP });
+      await bajarAlPiso(tx, { lote: loteK, clase: "D30", peso: 900, termo: "B9", fecha: HOY, operador: OP });
       const primeraToma = movK.find(m => m.Tipo === "DESTAJO")!.MovimientoId;   // la de 500 kg
       await falla(() => deshacerMovimiento(tx, primeraToma), /quedaría con 476\.10/,
         "no se devuelve una toma si el lote ya bajó o pesó más de lo que le quedaría");
@@ -192,7 +212,7 @@ const PISO = [
       const lin = { RemisionId: null, Lote: "G521EM05-E01-8", Clase: "C20", Talla: 237, FechaLote: "2026-07-01" };
       const rd = await tomarDelPiso(tx, { bodega: "PELADO", unificar: false, fecha: HOY, operador: OP, lineas: [{ ...lin, Kg: 50 }] });
       const ld = rd.lotes[0].Lote;
-      await bajarAlPiso(tx, { lote: ld, clase: "C20", peso: 10, motivo: "Rojo", nota: "oscuro", talla: 233, fecha: HOY, operador: OP });
+      await bajarAlPiso(tx, { lote: ld, clase: "C20", peso: 10, motivo: "Rojo", nota: "oscuro", talla: 233, termo: "R1", fecha: HOY, operador: OP });
       const rojo = await linea(ld, 233);
       check(!!rojo && rojo.Kg === 10 && rojo.EsBajado && rojo.EsRojo, "el rojo se baja al piso marcado para revisarlo otra vez");
       check((await cuadreLote(tx, ld, "C20")).Bajado === 10, "y cuenta como bajado (fuera del rendimiento), no como descarte");

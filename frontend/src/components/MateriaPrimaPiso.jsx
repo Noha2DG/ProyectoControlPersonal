@@ -344,6 +344,7 @@ const MOTIVOS_BAJADO = [{ valor: "Sobrante", texto: "Sobrante" }, { valor: "Rojo
 export function AjusteLoteModal({ tipo, lote, tallas, onHecho, onClose }) {
   const bajar = tipo === "bajar";
   const [peso, setPeso] = useState("");
+  const [termo, setTermo] = useState("");
   const [talla, setTalla] = useState("");
   const [bodega, setBodega] = useState("");
   const [bodegas, setBodegas] = useState([]);
@@ -363,8 +364,8 @@ export function AjusteLoteModal({ tipo, lote, tallas, onHecho, onClose }) {
     try {
       const res = await fetch(`${API}/lote/${enc(lote.Lote)}/${enc(lote.Clase)}/${bajar ? "bajar" : "descarte"}`, {
         method: "POST", headers: { "Content-Type": "application/json", ...authHeader() },
-        body: JSON.stringify({ Peso: Number(peso), Talla: talla || null, Nota: nota || null,
-                               Motivo: motivo, ...(bajar ? { Bodega: bodega || null } : {}) }),
+        body: JSON.stringify({ Peso: Number(peso), Talla: bajar ? talla || null : null, Nota: nota || null,
+                               Motivo: motivo, ...(bajar ? { Bodega: bodega || null, NumeroTermo: termo.trim() } : {}) }),
       });
       const d = await leerJSON(res);
       if (!res.ok) { setError(d.error || "No se pudo guardar"); return; }
@@ -383,20 +384,31 @@ export function AjusteLoteModal({ tipo, lote, tallas, onHecho, onClose }) {
             : "Merma del lote. No va al piso y sí cuenta en el rendimiento. El rojo no es descarte: se baja al piso."}
           {" "}Quedan <b>{fmtNum(Math.max(lote.Pendiente, 0))} {lote.UM}</b> sin pesar.
         </p>
-        <div className="grid grid-cols-2 gap-4">
+        <div className={`grid gap-4 ${bajar ? "grid-cols-3" : "grid-cols-1"}`}>
+          {bajar && (
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1"># Termo *</label>
+              <input required autoFocus type="text" maxLength={20} value={termo} onChange={e => setTermo(e.target.value)}
+                title="El termo en que queda al piso"
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-400" />
+            </div>
+          )}
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1">Peso ({lote.UM}) *</label>
-            <input required autoFocus type="number" step="0.01" min="0.01" value={peso} onChange={e => setPeso(e.target.value)}
+            <input required autoFocus={!bajar} type="number" step="0.01" min="0.01" value={peso} onChange={e => setPeso(e.target.value)}
               className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
           </div>
-          <div>
-            <label className="block text-xs font-medium text-gray-500 mb-1">Talla</label>
-            <select value={talla} onChange={e => setTalla(e.target.value)}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400">
-              <option value="">Sin talla</option>
-              {tallas.map(t => <option key={t.Codigo} value={t.Codigo}>{t.Descripcion}</option>)}
-            </select>
-          </div>
+          {/* El descarte no lleva talla (usuario, 9 nov 2026): va sin talla (900). */}
+          {bajar && (
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">Talla</label>
+              <select value={talla} onChange={e => setTalla(e.target.value)}
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400">
+                <option value="">Sin talla</option>
+                {tallas.map(t => <option key={t.Codigo} value={t.Codigo}>{t.Descripcion}</option>)}
+              </select>
+            </div>
+          )}
         </div>
         {bajar && (
           <div>
@@ -717,7 +729,7 @@ export function MovimientosPisoLote({ lote, recarga, puedeEditar, onCambio }) {
               <div key={m.MovimientoId} className="flex items-center gap-3 text-sm py-1">
                 <span className="flex-1 min-w-0 truncate text-gray-700">
                   {tipo === "DESTAJO" && <><span className="font-mono">{m.LoteOrigen}</span>{m.FolioRemision ? ` · ${m.FolioRemision}` : ""}</>}
-                  {tipo === "BAJADO" && <>{m.Motivo ? `${m.Motivo} · ` : ""}{m.NombreBodega} · {m.Fecha}</>}
+                  {tipo === "BAJADO" && <>{m.NumeroTermo && <>Termo <span className="font-mono font-semibold">{m.NumeroTermo}</span> · </>}{m.Motivo ? `${m.Motivo} · ` : ""}{m.NombreBodega} · {m.Fecha}</>}
                   {tipo === "DESCARTE" && <>{m.Motivo || "Descarte"}</>}
                   {tipo === "COLA" && <>Termo <span className="font-mono font-semibold">{m.NumeroTermo}</span> · {m.DescripcionClase || m.Clase} · {m.NombreBodega
                     ? <span className="text-emerald-700">→ {m.NombreBodega}</span>

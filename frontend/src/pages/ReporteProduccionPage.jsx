@@ -78,7 +78,7 @@ function AjustesLote({ l, compacto = false }) {
               <span className={a.Tipo === "DESCARTE" ? "text-red-700 font-semibold" : a.Tipo === "COLA" ? "text-emerald-700 font-semibold" : "font-semibold"}>
                 {a.Tipo === "DESCARTE" ? "Descarte" : a.Tipo === "COLA" ? "Cola" : "Bajado al piso"}
               </span>
-              {a.Tipo === "COLA" ? ` · termo ${a.NumeroTermo} · ${a.DescripcionClaseCola || a.ClaseCola} · ${a.NombreDestino ? `→ ${a.NombreDestino}` : "por trasladar"}` : a.Motivo ? ` · ${a.Motivo}` : ""}
+              {a.Tipo === "COLA" ? ` · termo ${a.NumeroTermo} · ${a.DescripcionClaseCola || a.ClaseCola} · ${a.NombreDestino ? `→ ${a.NombreDestino}` : "por trasladar"}` : `${a.NumeroTermo ? ` · termo ${a.NumeroTermo}` : ""}${a.Motivo ? ` · ${a.Motivo}` : ""}`}
               {a.Talla !== 900 ? ` · ${a.DescripcionTalla}` : ""}
             </span>
             <span className="tabular-nums whitespace-nowrap">{fmtNum(a.Peso)} {a.UM}</span>
@@ -405,6 +405,66 @@ function FilaTermoCola({ numeroTermo, cargas, abierta, onToggle }) {
   );
 }
 
+// Materia prima BAJADA de las mesas (sobrante o rojo): no es procesado; es lo que vuelve al piso en
+// ese termo para tomarse otro día. Va en su propio grupo, en ámbar, y no suma al total del pesaje.
+function MarcaBajada() {
+  return (
+    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 text-[10px] font-bold align-middle"
+      title="Materia prima bajada de las mesas al piso">
+      ↓ MP BAJADA
+    </span>
+  );
+}
+
+function FilaTermoBajado({ numeroTermo, cargas, abierta, onToggle }) {
+  const subtotal = cargas.reduce((s, c) => s + c.Procesado, 0);
+  const destinos = [...new Set(cargas.map(c => c.NombreDestino).filter(Boolean))].join(", ");
+  return (
+    <>
+      <tr onClick={onToggle} className="cursor-pointer bg-amber-50 hover:bg-amber-100 transition font-semibold border-l-4 border-amber-500">
+        <td className="px-2 py-1.5 text-amber-500 w-6">
+          <span className={`inline-block transition-transform ${abierta ? "rotate-90" : ""}`}>▶</span>
+        </td>
+        <td className="px-2 py-1.5 font-mono font-bold text-amber-900 whitespace-nowrap w-28">Termo {numeroTermo}</td>
+        <td className="px-2 py-1.5 text-amber-800 whitespace-nowrap truncate">
+          <MarcaBajada /> {cargas.length} bajado{cargas.length !== 1 ? "s" : ""}{destinos ? ` · → ${destinos}` : ""}
+        </td>
+        <td className="px-2 py-1.5 text-right font-bold text-amber-800 whitespace-nowrap w-28">{fmtNum(subtotal)}</td>
+      </tr>
+      {abierta && (
+        <tr>
+          <td colSpan={4} className="bg-amber-50/60 px-3 py-2 border-l-4 border-amber-500">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="text-amber-800 uppercase tracking-wider">
+                  <th className="px-2 py-1 text-left">Lote</th>
+                  <th className="px-2 py-1 text-left">Talla</th>
+                  <th className="px-2 py-1 text-left">Motivo</th>
+                  <th className="px-2 py-1 text-center">Fecha</th>
+                  <th className="px-2 py-1 text-left">Piso</th>
+                  <th className="px-2 py-1 text-right">Peso</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-amber-100">
+                {cargas.map(c => (
+                  <tr key={c.MovimientoId}>
+                    <td className="px-2 py-1 font-mono">{c.Lote} {c.ClaseOrigen}</td>
+                    <td className="px-2 py-1">{c.Talla === 900 ? "—" : c.DescripcionTalla}</td>
+                    <td className="px-2 py-1 truncate max-w-[14rem]" title={c.Motivo || ""}>{c.Motivo || "—"}</td>
+                    <td className="px-2 py-1 text-center">{c.FechaProduccion?.slice(0, 10)}</td>
+                    <td className="px-2 py-1">{c.NombreDestino || "—"}</td>
+                    <td className="px-2 py-1 text-right font-semibold whitespace-nowrap">{fmtNum(c.Procesado)} {c.UM}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </td>
+        </tr>
+      )}
+    </>
+  );
+}
+
 function FilaTermo({ numeroTermo, cargas, abierta, onToggle }) {
   const [widths, startResize] = useColWidths("reporte_termo_detalle", TERMO_DET_COL_DEFAULTS);
   const subtotal = cargas.reduce((s, c) => s + c.Procesado, 0);
@@ -601,6 +661,7 @@ export default function ReporteProduccionPage() {
     const porLoteTalla = reporte.porLoteTalla.filter(d => d.Lote === loteFiltroObj.Lote && d.ClaseOrigen === loteFiltroObj.Clase);
     const porTermo = reporte.porTermo.filter(t => t.Lote === loteFiltroObj.Lote && t.ClaseOrigen === loteFiltroObj.Clase);
     const porTermoCola = (reporte.porTermoCola ?? []).filter(t => t.Lote === loteFiltroObj.Lote && t.ClaseOrigen === loteFiltroObj.Clase);
+    const porTermoBajado = (reporte.porTermoBajado ?? []).filter(t => t.Lote === loteFiltroObj.Lote && t.ClaseOrigen === loteFiltroObj.Clase);
     const porPersona = reporte.porPersona.filter(p => p.Lote === loteFiltroObj.Lote && p.ClaseOrigen === loteFiltroObj.Clase);
     const porTalla = (() => {
       const mapa = new Map();
@@ -622,7 +683,7 @@ export default function ReporteProduccionPage() {
       TrabajadoRend: acc.TrabajadoRend + (l.TrabajadoRend ?? (l.PesoIngreso - (l.Bajado || 0))),
     }), { PesoIngreso: 0, Procesado: 0, Bajado: 0, Descarte: 0, Cola: 0, Salida: 0, TrabajadoRend: 0 });
     return {
-      ...reporte, porLote, porLoteTalla, porTermo, porTermoCola, porPersona, porTalla,
+      ...reporte, porLote, porLoteTalla, porTermo, porTermoCola, porTermoBajado, porPersona, porTalla,
       totales: { ...totales, Pendiente: totales.PesoIngreso - totales.Bajado - totales.Descarte - totales.Procesado,
                  Rendimiento: rendimientoDe(totales.Salida, totales.TrabajadoRend) },
     };
@@ -805,12 +866,22 @@ export default function ReporteProduccionPage() {
     return [...mapa.entries()];
   };
   const totalColaTermo = (datos?.porTermoCola ?? []).reduce((s, t) => s + t.Procesado, 0);
+  const gruposPorTermoBajado = () => {
+    const mapa = new Map();
+    for (const t of datos?.porTermoBajado ?? []) {
+      if (!mapa.has(t.NumeroTermo)) mapa.set(t.NumeroTermo, []);
+      mapa.get(t.NumeroTermo).push(t);
+    }
+    return [...mapa.entries()];
+  };
+  const totalBajadoTermo = (datos?.porTermoBajado ?? []).reduce((s, t) => s + t.Procesado, 0);
+  const hayTermos = (datos?.porTermo ?? []).length > 0 || (datos?.porTermoCola ?? []).length > 0 || (datos?.porTermoBajado ?? []).length > 0;
 
   const exportar = () => {
     if (!reporte) return;
     if (subTab === "general") exportarReporteGeneral(datos.porLote, datos.porTalla, desde, hasta);
     else if (subTab === "enterocola") exportarEnteroCola(datos.porLote.filter(l => l.EsEntero), desde, hasta);
-    else if (subTab === "termos") exportarReporteTermos(datos.porTermo, desde, hasta, datos.porTermoCola ?? []);
+    else if (subTab === "termos") exportarReporteTermos(datos.porTermo, desde, hasta, datos.porTermoCola ?? [], datos.porTermoBajado ?? []);
     else if (subTab === "hojalote") { if (loteHoja) exportarHojaLote(termosHoja, loteHoja); }
     else if (subTab === "lbhora") exportarLbHora(filasLbHora, desde, hasta, verMesas);
     else if (subTab === "portalla") exportarLbHoraPorTalla(filasPorTalla, desde, hasta);
@@ -1193,20 +1264,31 @@ export default function ReporteProduccionPage() {
                         abierta={termoAbierto === `cola-${numeroTermo}`}
                         onToggle={() => setTermoAbierto(termoAbierto === `cola-${numeroTermo}` ? null : `cola-${numeroTermo}`)} />
                     ))}
-                    {(datos.porTermo ?? []).length === 0 && (datos.porTermoCola ?? []).length === 0 && (
+                    {gruposPorTermoBajado().map(([numeroTermo, cargas]) => (
+                      <FilaTermoBajado key={`bajado-${numeroTermo}`} numeroTermo={numeroTermo} cargas={cargas}
+                        abierta={termoAbierto === `bajado-${numeroTermo}`}
+                        onToggle={() => setTermoAbierto(termoAbierto === `bajado-${numeroTermo}` ? null : `bajado-${numeroTermo}`)} />
+                    ))}
+                    {!hayTermos && (
                       <tr><td colSpan={4} className="px-3 py-6 text-center text-gray-400">Sin datos en este rango de fechas</td></tr>
                     )}
                   </tbody>
-                  {((datos.porTermo ?? []).length > 0 || (datos.porTermoCola ?? []).length > 0) && (
+                  {hayTermos && (
                     <tfoot>
                       <tr className="bg-gray-200 font-bold border-t-2 border-gray-300">
-                        <td className="px-2 py-1.5" colSpan={3}>{totalColaTermo > 0 ? "Total pesaje" : "Total General"}</td>
+                        <td className="px-2 py-1.5" colSpan={3}>{totalColaTermo > 0 || totalBajadoTermo > 0 ? "Total pesaje" : "Total General"}</td>
                         <td className="px-2 py-1.5 text-right text-blue-800">{fmtNum(totalProcesadoTermo)}</td>
                       </tr>
                       {totalColaTermo > 0 && (
                         <tr className="bg-emerald-100 font-bold text-emerald-800">
                           <td className="px-2 py-1.5" colSpan={3}><span className="inline-flex items-center gap-1"><IconoTermoCola />Total cola (termos)</span></td>
                           <td className="px-2 py-1.5 text-right">{fmtNum(totalColaTermo)}</td>
+                        </tr>
+                      )}
+                      {totalBajadoTermo > 0 && (
+                        <tr className="bg-amber-100 font-bold text-amber-900">
+                          <td className="px-2 py-1.5" colSpan={3}>↓ Total MP bajada de mesas (termos)</td>
+                          <td className="px-2 py-1.5 text-right">{fmtNum(totalBajadoTermo)}</td>
                         </tr>
                       )}
                     </tfoot>
@@ -1716,16 +1798,33 @@ export default function ReporteProduccionPage() {
                   </tr>
                 );
               })}
+              {gruposPorTermoBajado().map(([numeroTermo, cargas]) => {
+                const subtotal = cargas.reduce((s, c) => s + c.Procesado, 0);
+                const lotes = [...new Set(cargas.map(c => `${c.Lote} ${c.ClaseOrigen}`))].join(", ");
+                return (
+                  <tr key={`bajado-${numeroTermo}`} className="border-b border-gray-100 bg-amber-50">
+                    <td className="py-0.5 px-1 font-mono font-bold text-amber-900">Termo {numeroTermo} · MP BAJADA</td>
+                    <td className="py-0.5 px-1">{cargas.length} bajado{cargas.length !== 1 ? "s" : ""} · {lotes}</td>
+                    <td className="py-0.5 px-1 text-right font-semibold tabular-nums">{fmtNum(subtotal)}</td>
+                  </tr>
+                );
+              })}
             </tbody>
             <tfoot>
               <tr className="font-bold border-t-2 border-slate-900">
-                <td className="py-1 px-1" colSpan={2}>{totalColaTermo > 0 ? "Total pesaje" : "Total General"}</td>
+                <td className="py-1 px-1" colSpan={2}>{totalColaTermo > 0 || totalBajadoTermo > 0 ? "Total pesaje" : "Total General"}</td>
                 <td className="py-1 px-1 text-right tabular-nums">{fmtNum(totalProcesadoTermo)}</td>
               </tr>
               {totalColaTermo > 0 && (
                 <tr className="font-bold text-emerald-800">
                   <td className="py-1 px-1" colSpan={2}>Total cola (termos)</td>
                   <td className="py-1 px-1 text-right tabular-nums">{fmtNum(totalColaTermo)}</td>
+                </tr>
+              )}
+              {totalBajadoTermo > 0 && (
+                <tr className="font-bold text-amber-900">
+                  <td className="py-1 px-1" colSpan={2}>Total MP bajada de mesas (termos)</td>
+                  <td className="py-1 px-1 text-right tabular-nums">{fmtNum(totalBajadoTermo)}</td>
                 </tr>
               )}
             </tfoot>

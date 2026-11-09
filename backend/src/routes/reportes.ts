@@ -123,6 +123,23 @@ router.get("/produccion", requireAuth, requirePerm("destajo", "ver"), async (req
        ORDER BY m.FechaHora DESC, m.Lote DESC, m.NumeroTermo
     `, desde, hasta, ...argsFinca);
 
+    // Materia prima BAJADA de las mesas (sobrante o rojo) en el termo en que quedó al piso. También
+    // aparte de porTermo: no es procesado ni suma el total del pesaje. Los bajados de antes del
+    // 9 nov 2026 no tienen termo y no salen aquí.
+    const pTermoBajado = () => prisma.$queryRawUnsafe(`
+      SELECT m.MovimientoId, m.NumeroTermo, m.LoteProceso AS Lote, m.ClaseProceso AS ClaseOrigen, m.Motivo,
+             m.Talla, ta.Descripcion AS DescripcionTalla,
+             DATE_FORMAT(m.FechaHora, '%Y-%m-%d') AS FechaProduccion, m.Peso AS Procesado, m.UM, bd.Nombre AS NombreDestino
+        FROM MovimientoPiso m
+        JOIN Lotes l ON l.Lote = m.LoteProceso AND l.Clase = m.ClaseProceso
+        JOIN Piscina p ON l.PiscinaId = p.PiscinaId
+        JOIN Finca f ON p.CodigoFinca = f.Codigo
+        JOIN Tallas ta ON ta.Codigo = m.Talla
+        LEFT JOIN BodegaVirtual bd ON bd.Codigo = m.BodegaDestino
+       WHERE m.Tipo = 'BAJADO' AND m.NumeroTermo IS NOT NULL AND l.Fecha BETWEEN ? AND ? ${filtroFinca}
+       ORDER BY m.FechaHora DESC, m.LoteProceso DESC, m.NumeroTermo
+    `, desde, hasta, ...argsFinca);
+
     const pLoteTalla = () => prisma.$queryRawUnsafe(`
       SELECT tp.Lote, tp.ClaseOrigen, tp.Talla, ta.Descripcion AS DescripcionTalla, tp.ClasePT, cl.Descripcion AS DescripcionClasePT,
              tp.Estado, COALESCE(SUM(pd.Peso), 0) AS Procesado, COUNT(pd.PesajeId) AS NumPesajes
@@ -227,8 +244,8 @@ router.get("/produccion", requireAuth, requirePerm("destajo", "ver"), async (req
        ORDER BY m.MovimientoId
     `, desde, hasta);
 
-    const [porPersona, porLote, porTermo, porLoteTalla, porTalla, pausasNoPaga, fincasConLotes, ajustes, termosCola] =
-      await conLimite([pPersona, pLote, pTermo, pLoteTalla, pTalla, pPausas, pFincas, pAjustes, pTermoCola], MAX_CONSULTAS_REPORTE) as any[][];
+    const [porPersona, porLote, porTermo, porLoteTalla, porTalla, pausasNoPaga, fincasConLotes, ajustes, termosCola, termosBajado] =
+      await conLimite([pPersona, pLote, pTermo, pLoteTalla, pTalla, pPausas, pFincas, pAjustes, pTermoCola, pTermoBajado], MAX_CONSULTAS_REPORTE) as any[][];
     const ajustesDe = new Map<string, any[]>();
     for (const a of ajustes) {
       const k = `${a.Lote}|${a.Clase}`;
@@ -284,6 +301,7 @@ router.get("/produccion", requireAuth, requirePerm("destajo", "ver"), async (req
       porTalla: tallaFmt,
       porTermo: termoFmt,
       porTermoCola: numerizar(termosCola, ["MovimientoId", "Talla", "Procesado"]),
+      porTermoBajado: numerizar(termosBajado, ["MovimientoId", "Talla", "Procesado"]),
       porPersona: personaFmt,
       pausasNoPaga,
       fincasConLotes,

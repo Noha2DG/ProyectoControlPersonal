@@ -163,8 +163,9 @@ export function exportarEnteroCola(lotes, desde, hasta) {
   XLSX.writeFile(wb, `EnteroACola_${desde}_a_${hasta}.xlsx`);
 }
 
-// Los termos de cola (Descabezado) van en las mismas filas, con su destino.
-export function exportarReporteTermos(porTermo, desde, hasta, porTermoCola = []) {
+// Los termos de cola (Descabezado) y los de materia prima bajada de las mesas van en las mismas
+// filas, con su destino.
+export function exportarReporteTermos(porTermo, desde, hasta, porTermoCola = [], porTermoBajado = []) {
   const termos = porTermo.map(t => ({
     "Termo":          t.NumeroTermo,
     "Lote":           t.Lote,
@@ -182,6 +183,15 @@ export function exportarReporteTermos(porTermo, desde, hasta, porTermoCola = [])
     "Proceso":        t.DescripcionClaseCola,
     "Fecha Proceso":  t.FechaProduccion?.slice(0, 10),
     "Destino":        t.NombreDestino || "por trasladar",
+    "Kg Procesados":  +t.Procesado.toFixed(2),
+  }))).concat(porTermoBajado.map(t => ({
+    "Termo":          t.NumeroTermo,
+    "Lote":           t.Lote,
+    "Talla":          t.Talla === 900 ? "" : t.Talla,
+    "Descripción Talla": t.Talla === 900 ? "" : t.DescripcionTalla,
+    "Proceso":        `MP bajada de mesa${t.Motivo ? ` (${t.Motivo})` : ""}`,
+    "Fecha Proceso":  t.FechaProduccion?.slice(0, 10),
+    "Destino":        t.NombreDestino || "",
     "Kg Procesados":  +t.Procesado.toFixed(2),
   })));
 
@@ -218,7 +228,8 @@ export function exportarHojaLote(termos, lote) {
   XLSX.utils.sheet_add_json(ws, filas, { origin: -1 });
   const ajustes = (lote.Ajustes ?? []).map(a => [
     a.Tipo === "DESCARTE" ? "Descarte" : a.Tipo === "COLA" ? "Cola" : "Bajado al piso",
-    a.Tipo === "COLA" ? `termo ${a.NumeroTermo} · ${a.DescripcionClaseCola || a.ClaseCola}` : (a.Motivo ?? ""),
+    a.Tipo === "COLA" ? `termo ${a.NumeroTermo} · ${a.DescripcionClaseCola || a.ClaseCola}`
+      : [a.NumeroTermo ? `termo ${a.NumeroTermo}` : "", a.Motivo ?? ""].filter(Boolean).join(" · "),
     a.Talla !== 900 ? a.DescripcionTalla : "", a.Peso, a.UM]);
   if (ajustes.length) XLSX.utils.sheet_add_aoa(ws, [[], ["Cola, bajado al piso y descarte"], ...ajustes], { origin: -1 });
   if (lote.EsEntero) {

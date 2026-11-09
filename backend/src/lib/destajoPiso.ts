@@ -397,7 +397,15 @@ export async function tomarDelPiso(
 
 // ── Bajar al piso y descarte ────────────────────────────────────────────────────────────────────
 type Ajuste = { lote: string; clase: string; peso: number; talla?: number | null; nota?: string | null;
-                bodega?: string | null; motivo?: string | null; fecha: string; operador: string };
+                bodega?: string | null; motivo?: string | null; termo?: string | null; fecha: string; operador: string };
+
+// El número de termo se teclea (texto libre, como en la cola).
+function leerTermo(t: unknown) {
+  const termo = String(t ?? "").trim();
+  if (!termo) throw new ErrorNegocio(400, "Falta el número de termo");
+  if (termo.length > 20) throw new ErrorNegocio(400, "El número de termo es demasiado largo");
+  return termo;
+}
 
 // "Rojo: se ve oscuro" — el motivo va primero para que el saldo reconozca el rojo (Motivo LIKE 'Rojo%').
 const textoMotivo = (a: Ajuste) =>
@@ -415,8 +423,12 @@ function validarAjuste(c: Awaited<ReturnType<typeof cuadreLote>>, peso: number, 
 /**
  * Lo que no se terminó en la mesa (Sobrante) o lo que se separa para revisarlo otra vez (Rojo) vuelve
  * al piso de la bodega; se retoma otro día desde "Tomar del piso".
+ *
+ * Lleva el número del termo en que se queda al piso (usuario, 9 nov 2026): sale en "Tomar del piso"
+ * y en el Reporte Termos como materia prima bajada de las mesas.
  */
 export async function bajarAlPiso(tx: any, a: Ajuste) {
+  const termo = leerTermo(a.termo);
   const c = await cuadreLote(tx, a.lote, a.clase);
   const peso = r2(Number(a.peso));
   validarAjuste(c, peso, "bajar");
@@ -435,10 +447,10 @@ export async function bajarAlPiso(tx: any, a: Ajuste) {
 
   await tx.$executeRawUnsafe(`
     INSERT INTO MovimientoPiso (Tipo, FechaProduccion, BodegaDestino, Lote, Clase, Talla, FechaLote,
-                                Peso, UM, PesoKg, Motivo, LoteProceso, ClaseProceso, RegistradoPor)
-    VALUES ('BAJADO', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                                Peso, UM, PesoKg, Motivo, NumeroTermo, LoteProceso, ClaseProceso, RegistradoPor)
+    VALUES ('BAJADO', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     a.fecha, bodega, c.Lote, c.Clase, Number(a.talla) || 900, c.FechaProduccion,
-    peso, c.UM, aKg(peso, c.UM), textoMotivo({ ...a, motivo }), c.Lote, c.Clase, a.operador);
+    peso, c.UM, aKg(peso, c.UM), textoMotivo({ ...a, motivo }), termo, c.Lote, c.Clase, a.operador);
   return { ok: true, Bodega: bodega };
 }
 
@@ -483,9 +495,7 @@ export async function registrarCola(
   if (!CLASES_COLA.includes(a.claseCola)) {
     throw new ErrorNegocio(400, `La cola tiene que ser ${CLASES_COLA.join(", ")} (llegó ${a.claseCola || "vacía"})`);
   }
-  const termo = String(a.termo ?? "").trim();
-  if (!termo) throw new ErrorNegocio(400, "Falta el número de termo");
-  if (termo.length > 20) throw new ErrorNegocio(400, "El número de termo es demasiado largo");
+  const termo = leerTermo(a.termo);
   const peso = r2(Number(a.peso));
   if (!(peso > 0)) throw new ErrorNegocio(400, "El peso debe ser mayor que cero");
   // Techo de cordura, no de cuadre: la cola no puede pasar de lo que se trabajó del lote.

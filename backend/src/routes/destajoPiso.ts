@@ -81,11 +81,12 @@ router.get("/lote/:lote/:clase", requireAuth, requirePerm("destajo", "ver"), asy
   }
 });
 
-// POST /api/destajo-piso/lote/:lote/:clase/bajar  { Peso, Motivo: "Sobrante" | "Rojo", Talla?, Bodega?, Nota? }
+// POST /api/destajo-piso/lote/:lote/:clase/bajar  { Peso, NumeroTermo, Motivo: "Sobrante" | "Rojo", Talla?, Bodega?, Nota? }
 router.post("/lote/:lote/:clase/bajar", requireAuth, requirePerm("destajo", "editar"), async (req: Request, res: Response) => {
   try {
     const out = await prisma.$transaction(tx => bajarAlPiso(tx, {
       lote: String(req.params.lote), clase: String(req.params.clase), peso: Number(req.body.Peso),
+      termo: req.body.NumeroTermo == null ? null : String(req.body.NumeroTermo),
       talla: req.body.Talla ? Number(req.body.Talla) : null, bodega: req.body.Bodega || null,
       motivo: req.body.Motivo || null, nota: req.body.Nota || null, fecha: hoyGT(), operador: getOperador(req),
     }), TX);
