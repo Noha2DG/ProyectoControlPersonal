@@ -7,12 +7,31 @@ import { CerrarTransaccionModal } from "../components/MateriaPrimaPiso.jsx";
 const COL_DEFAULTS = { empleado: 110, nombre: 190, termo: 90, peso: 100, hora: 90, acciones: 110 };
 const COLS = Object.keys(COL_DEFAULTS);
 
+// Las transacciones van agrupadas por lote (Lote + Clase): una tarjeta por lote con "+", y al
+// abrirla se despliegan a su derecha las transacciones de ese lote. Con una búsqueda escrita se
+// abren todas las que coinciden, para no esconder lo que se buscó.
 function SelectorTransacciones({ transacciones, seleccionada, onSelect, onCerrar, puedeEditar }) {
   const [busqueda, setBusqueda] = useState("");
+  const [abiertos, setAbiertos] = useState(() => new Set());
   const q = busqueda.toLowerCase();
   const filtradas = transacciones.filter(t =>
     t.Lote.toLowerCase().includes(q) || t.DescripcionProceso.toLowerCase().includes(q) || t.ClasePT.toLowerCase().includes(q)
   );
+  const grupos = [];
+  const porLlave = new Map();
+  for (const t of filtradas) {
+    const llave = `${t.Lote}|${t.ClaseOrigen}`;
+    if (!porLlave.has(llave)) {
+      const g = { llave, Lote: t.Lote, Clase: t.ClaseOrigen, trans: [] };
+      porLlave.set(llave, g); grupos.push(g);
+    }
+    porLlave.get(llave).trans.push(t);
+  }
+  const alternar = (llave) => setAbiertos(prev => {
+    const s = new Set(prev);
+    if (s.has(llave)) s.delete(llave); else s.add(llave);
+    return s;
+  });
   return (
     <div className="bg-white border border-gray-300 rounded-xl shadow-sm p-3 mb-4">
       <div className="flex items-center gap-3 mb-2">
@@ -20,25 +39,50 @@ function SelectorTransacciones({ transacciones, seleccionada, onSelect, onCerrar
         <input value={busqueda} onChange={e => setBusqueda(e.target.value)} placeholder="Buscar por lote, proceso o producto..."
           className="flex-1 border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
       </div>
-      <div className="flex gap-2 overflow-x-auto pb-1">
-        {filtradas.map(t => {
-          const activa = seleccionada?.TransaccionId === t.TransaccionId;
+      <div className="flex gap-2 overflow-x-auto pb-1 items-stretch">
+        {grupos.map(g => {
+          const abierto = abiertos.has(g.llave) || q !== "";
+          const contieneSel = g.trans.some(t => t.TransaccionId === seleccionada?.TransaccionId);
+          const kg = g.trans.reduce((s, t) => s + Number(t.Procesado || 0), 0);
           return (
-            <div key={t.TransaccionId}
-              className={`shrink-0 text-left border rounded-lg px-3 py-2 transition min-w-[200px] ${
-                activa ? "bg-blue-600 border-blue-600 text-white" : "border-gray-200 hover:bg-blue-50 hover:border-blue-300"
-              }`}>
-              <button onClick={() => onSelect(t)} className="w-full text-left">
-                <p className={`font-mono font-bold ${activa ? "text-white" : "text-gray-800"}`}>{t.Lote}</p>
-                <p className={`text-xs ${activa ? "text-blue-100" : "text-gray-500"}`}>{t.DescripcionProceso} → {t.ClasePT} ({t.DescripcionTalla})</p>
-                <p className={`text-xs font-semibold ${activa ? "text-white" : "text-blue-700"}`}>{fmtNum(t.Procesado, 1)} kg</p>
+            <div key={g.llave} className={`shrink-0 flex gap-2 ${abierto ? "bg-slate-100 border border-slate-300 rounded-xl p-1.5" : ""}`}>
+              {/* El lote va en oscuro para que no se confunda con sus transacciones (blancas, y azul la escogida). */}
+              <button onClick={() => alternar(g.llave)} title={abierto ? "Ocultar las transacciones de este lote" : "Ver las transacciones de este lote"}
+                className={`shrink-0 text-left border rounded-lg px-3 py-2 transition min-w-[170px] flex items-start gap-3 bg-slate-800 hover:bg-slate-700 ${
+                  contieneSel ? "border-amber-400 ring-2 ring-amber-300" : "border-slate-800"
+                }`}>
+                <span className="flex-1">
+                  <span className="block font-mono font-bold text-white">{g.Lote}</span>
+                  <span className="block text-xs text-slate-300">{g.Clase} · {g.trans.length} transacci{g.trans.length === 1 ? "ón" : "ones"}</span>
+                  <span className="block text-xs font-semibold text-amber-300">{fmtNum(kg, 1)} kg</span>
+                </span>
+                <span className={`w-7 h-7 shrink-0 rounded-full flex items-center justify-center text-lg font-bold leading-none ${
+                  abierto ? "bg-white text-slate-800" : "bg-slate-600 text-white"}`}>
+                  {abierto ? "−" : "+"}
+                </span>
               </button>
-              {puedeEditar && (
-                <button onClick={() => onCerrar(t)}
-                  className={`mt-1 text-xs font-medium underline ${activa ? "text-blue-100 hover:text-white" : "text-amber-600 hover:text-amber-700"}`}>
-                  Cerrar
-                </button>
-              )}
+              {abierto && g.trans.map(t => {
+                const activa = seleccionada?.TransaccionId === t.TransaccionId;
+                return (
+                  <div key={t.TransaccionId}
+                    className={`shrink-0 text-left border rounded-lg px-3 py-2 transition min-w-[180px] ${
+                      activa ? "bg-blue-600 border-blue-600 text-white" : "bg-white border-gray-200 hover:bg-blue-50 hover:border-blue-300"
+                    }`}>
+                    <button onClick={() => onSelect(t)} className="w-full text-left">
+                      <p className={`text-sm font-semibold ${activa ? "text-white" : "text-gray-800"}`}>{t.DescripcionProceso}</p>
+                      <p className={`text-xs whitespace-nowrap ${activa ? "text-blue-100" : "text-gray-500"}`}>
+                        → {t.ClasePT} ({t.DescripcionTalla}) · <span className={`font-semibold ${activa ? "text-white" : "text-blue-700"}`}>{fmtNum(t.Procesado, 1)} kg</span>
+                      </p>
+                    </button>
+                    {puedeEditar && (
+                      <button onClick={() => onCerrar(t)}
+                        className={`mt-1 text-xs font-medium underline ${activa ? "text-blue-100 hover:text-white" : "text-amber-600 hover:text-amber-700"}`}>
+                        Cerrar
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           );
         })}
