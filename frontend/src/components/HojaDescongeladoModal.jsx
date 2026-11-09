@@ -95,7 +95,6 @@ export function ContenidoHoja({ hoja, filas }) {
             <th className="py-1 pr-2">Lote</th>
             <th className="py-1 pr-2">Producto</th>
             <th className="py-1 pr-2">Talla</th>
-            <th className="py-1 pr-2">Remisión</th>
             <th className="py-1 pr-2 text-right">Masters</th>
             <th className="py-1 pr-2 text-right">Declarado</th>
             <th className="py-1 pr-2 text-right">Pesado</th>
@@ -115,7 +114,6 @@ export function ContenidoHoja({ hoja, filas }) {
                 </td>
                 <td className="py-1 pr-2">{o.Clase} {o.DescripcionClase}</td>
                 <td className="py-1 pr-2 whitespace-nowrap">{o.Talla}</td>
-                <td className="py-1 pr-2 font-mono">{o.Folio || "—"}</td>
                 <td className="py-1 pr-2 text-right">{entrada?.Masters ?? "—"}</td>
                 <td className="py-1 pr-2 text-right">{entrada ? fmtNum(entrada.PesoKg) : "—"}</td>
                 <td className="py-1 pr-2 text-right font-semibold">{salida ? fmtNum(salida.PesoKg) : "sin despachar"}</td>
@@ -125,12 +123,12 @@ export function ContenidoHoja({ hoja, filas }) {
             );
           })}
           {filas.length === 0 && (
-            <tr><td colSpan={10} className="py-3 text-center text-gray-400">Sin renglones</td></tr>
+            <tr><td colSpan={9} className="py-3 text-center text-gray-400">Sin renglones</td></tr>
           )}
         </tbody>
         <tfoot>
           <tr className="border-t-2 border-gray-800 font-bold">
-            <td colSpan={5} className="py-1 pr-2 text-right uppercase text-[10px]">Totales</td>
+            <td colSpan={4} className="py-1 pr-2 text-right uppercase text-[10px]">Totales</td>
             <td className="py-1 pr-2 text-right">{masters || "—"}</td>
             <td className="py-1 pr-2 text-right">{fmtNum(hoja.KgEntrada)}</td>
             <td className="py-1 pr-2 text-right">{fmtNum(hoja.KgDescongelado)}</td>
