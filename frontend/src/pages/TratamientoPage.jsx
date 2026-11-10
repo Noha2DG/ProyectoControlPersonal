@@ -2,8 +2,9 @@
 //
 // Cada renglón del papel es un TERMO y se captura en dos momentos, como se llena la hoja:
 //   - Entrada: se escoge del inventario al piso (lote, clase, talla y fecha del lote vienen de ahí,
-//     no se teclean), con número de termo, hora de inicio, conteo inicial, químico y kg sin tratar.
-//     Esos kilos salen del piso en ese momento.
+//     no se teclean), con número de termo, hora de inicio, químico y kg sin tratar, que se pesan:
+//     una línea del piso se reparte en varios termos. Esos kilos salen del piso en ese momento.
+//     El conteo inicial ya no se pide (usuario, 10 nov 2026).
 //   - Salida: hora, conteo final, kg tratadas y a dónde va. Lo tratado entra al piso del destino ahí
 //     mismo, sin esperar a que se cierre la hoja.
 // Lo que el papel calcula a mano lo calcula el sistema: TIEMPO (salida − inicio), el % PICK-UP y los
@@ -94,171 +95,290 @@ function Botones({ onCancelar, onAceptar, texto, ocupado, deshabilitado }) {
 }
 
 /* ── Tratar lo marcado del piso ───────────────────────────────────── */
-// La hoja NO se abre a mano: se marca lo del piso, "Tratar" y se escoge el cliente. Si ese cliente
-// ya tiene hoja abierta en la jornada, los termos se suman a esa; si no, se abre una —  una hoja por
-// cliente, como dice el papel— , así nunca queda una hoja vacía.
+// La hoja NO se abre a mano: se marca lo del piso, "Tratar" y se escoge el cliente de un pedido
+// activo. Si ese cliente ya tiene hoja abierta en la jornada, los termos se suman a esa; si no, se
+// abre una —  una hoja por cliente, como dice el papel— , así nunca queda una hoja vacía.
 //
-// Un termo por línea marcada. Hora y químico se ponen una vez para todos ("〃" en el papel) y se
-// corrigen por renglón. Los kg sin tratar son FIJOS: los que la línea tiene al piso, que es el peso
-// con que Pelado la entregó (decisión del usuario, 22 oct 2026: se revisa en las pruebas reales).
-// Por eso no se parte un lote en varios termos: con el peso fijo, cada línea entra completa.
+// Un termo no carga 1000 kg (usuario, 10 nov 2026): cada línea del piso se REPARTE en los termos que
+// haga falta y los kg de cada termo se teclean (antes cada línea entraba completa en un solo termo,
+// decisión del 22 oct). Lo que no se asigna sigue al piso para otro turno. La hora se pone
+// una vez para todos ("〃" en el papel) y se corrige por termo; el químico ya no se pide aquí.
 let llaveRenglon = 0;
-const renglonDe = (linea, hora, quimico) => ({
-  key: ++llaveRenglon, linea, NumeroTermo: "", HoraInicio: hora, ConteoInicial: "", Quimico: quimico, KgSinTratar: linea.Kg, Aceptar: false,
-});
+// El químico no se pide al meter a tratamiento (usuario, 10 nov 2026): se corrige en "Editar" si hace falta.
+const termoNuevo = (hora) => ({ key: ++llaveRenglon, NumeroTermo: "", Kg: "", HoraInicio: hora, Aceptar: false });
 const claveLinea = (l) => `${l.RemisionId ?? ""}|${l.Lote}|${l.Clase}|${l.Talla}|${l.FechaLote ?? ""}`;
+// Lo mismo que acepta el servidor como diferencia de báscula (lib/tratamiento.ts, MARGEN_DIFERENCIA).
+const tolerancia = (alPiso) => Math.max(1, alPiso * 0.10);
 
-function ModalTratar({ lineas, fecha, hojas, clientes, empleados, quimicos, quimicoSugerido, pedirConfirmacion, onConfirmar, onCerrar }) {
+// La línea del piso como una barra de avance que se llena con sus termos: cada segmento es un termo
+// con su número y sus kg; lo rayado en ámbar es lo que todavía queda al piso. Lo que PASA de lo
+// declarado al piso se pinta en rojo, dentro del mismo termo que se pasó, y una raya marca hasta
+// dónde llegaba el piso.
+const CIAN = ["#0891b2", "#0e7490"];   // cyan-600 / cyan-700, alternados para separar termos
+const ROJO = "#dc2626";                 // red-600
+function BarraTermos({ alPiso, termos }) {
+  const conKg = termos.filter(t => Number(t.Kg) > 0);
+  const asignado = conKg.reduce((s, t) => s + Number(t.Kg), 0);
+  const escala = Math.max(alPiso, asignado) || 1;
+  const queda = alPiso - asignado;
+  const pasa = asignado - alPiso > 0.001;
+  // Dónde empieza cada termo dentro de la barra (kg acumulados de los anteriores).
+  const inicios = conKg.map((_, i) => conKg.slice(0, i).reduce((s, t) => s + Number(t.Kg), 0));
+  return (
+    <div className="relative flex h-7 w-full overflow-hidden rounded-md border border-gray-300 bg-white">
+      {conKg.map((t, i) => {
+        const kg = Number(t.Kg);
+        const desde = inicios[i];
+        // Qué parte de este termo cae después de lo declarado al piso (0 a 100 % del segmento).
+        const dentro = Math.max(0, Math.min(kg, alPiso - desde));
+        const pctDentro = (dentro / kg) * 100;
+        const color = CIAN[i % 2];
+        const fondo = pctDentro >= 100 ? color : `linear-gradient(to right, ${color} 0 ${pctDentro}%, ${ROJO} ${pctDentro}% 100%)`;
+        const pct = (kg / escala) * 100;
+        return (
+          <div key={t.key} title={`Termo ${t.NumeroTermo || "sin número"} · ${fmtNum(kg)} kg${pctDentro < 100 ? ` · ${fmtNum(kg - dentro)} kg de más` : ""}`}
+            style={{ width: `${pct}%`, background: fondo }}
+            className="flex items-center justify-center overflow-hidden whitespace-nowrap border-r border-white/70 px-1 text-[11px] font-semibold text-white transition-[width] duration-200 motion-reduce:transition-none">
+            {pct > 8 && <span className="truncate"><span className="font-mono">{t.NumeroTermo ? `T${t.NumeroTermo}` : "T?"}</span> · {fmtNum(kg, 0)}</span>}
+          </div>
+        );
+      })}
+      {queda > 0.001 && (
+        <div className="flex flex-1 items-center justify-center overflow-hidden whitespace-nowrap px-2 text-[11px] font-semibold text-amber-800"
+          style={{ backgroundImage: "repeating-linear-gradient(135deg, #fde68a 0 6px, #fef3c7 6px 12px)" }}>
+          queda {fmtNum(queda)} kg
+        </div>
+      )}
+      {pasa && (
+        <div aria-hidden className="pointer-events-none absolute inset-y-0 w-0.5 bg-gray-900"
+          style={{ left: `calc(${(alPiso / escala) * 100}% - 1px)` }} title="Hasta aquí llega lo declarado al piso" />
+      )}
+    </div>
+  );
+}
+
+const Paso = ({ n, children }) => (
+  <p className="text-xs font-semibold uppercase tracking-wider text-gray-500"><span className="text-blue-600">{n}</span> · {children}</p>
+);
+
+function ModalTratar({ lineas, fecha, hojas, clientes, empleados, pedirConfirmacion, onConfirmar, onCerrar }) {
   const [filtro, setFiltro] = useState("");
   const [cliente, setCliente] = useState("");
   const [encargado, setEncargado] = useState("");
   const [inicioHoja, setInicioHoja] = useState(horaGT());
   const [horaComun, setHoraComun] = useState(horaGT());
-  const [quimicoComun, setQuimicoComun] = useState(quimicoSugerido ?? "");
-  const [renglones, setRenglones] = useState(() => lineas.map(l => renglonDe(l, horaGT(), quimicoSugerido ?? "")));
-  const [errorEn, setErrorEn] = useState(null);   // { Indice, error }
+  // Una tarjeta por línea marcada, cada una con sus termos. Empieza con un termo vacío.
+  const [grupos, setGrupos] = useState(() => lineas.map(l => ({ linea: l, termos: [termoNuevo(horaGT())] })));
+  const [errorEn, setErrorEn] = useState(null);   // { key, error }
   const [ocupado, setOcupado] = useState(false);
 
   const lista = useMemo(() => {
     const f = filtro.trim().toUpperCase();
-    return f ? clientes.filter(c => c.RazonSocial.toUpperCase().includes(f) || String(c.Codigo) === f) : clientes;
+    if (!f) return clientes;
+    return clientes.filter(c => c.RazonSocial.toUpperCase().includes(f) ||
+      c.Pedidos.some(p => String(p.CodigoPedido).toUpperCase().includes(f) || String(p.Descripcion ?? "").toUpperCase().includes(f)));
   }, [clientes, filtro]);
   const hojaDelCliente = cliente ? hojas.find(h => h.Estatus === "Abierta" && h.ClienteCodigo === Number(cliente)) : null;
 
-  const set = (key, campo, valor) => setRenglones(rs => rs.map(r => (r.key === key ? { ...r, [campo]: valor, Aceptar: false } : r)));
-  const quitar = (key) => setRenglones(rs => rs.filter(r => r.key !== key));
-  const completo = cliente && renglones.length > 0 && renglones.every(r => r.NumeroTermo.trim() && r.HoraInicio && Number(r.KgSinTratar) > 0);
-  const totalKg = renglones.reduce((s, r) => s + (Number(r.KgSinTratar) || 0), 0);
+  const editarTermo = (lkey, tkey, campo, valor) => setGrupos(gs => gs.map(g => (claveLinea(g.linea) !== lkey ? g
+    : { ...g, termos: g.termos.map(t => (t.key === tkey ? { ...t, [campo]: valor, Aceptar: false } : t)) })));
+  const agregarTermo = (lkey) => setGrupos(gs => gs.map(g => (claveLinea(g.linea) !== lkey ? g
+    : { ...g, termos: [...g.termos, termoNuevo(horaComun)] })));
+  const quitarTermo = (lkey, tkey) => setGrupos(gs => gs.map(g => (claveLinea(g.linea) !== lkey ? g
+    : { ...g, termos: g.termos.filter(t => t.key !== tkey) })));
+  const quitarLinea = (lkey) => setGrupos(gs => gs.filter(g => claveLinea(g.linea) !== lkey));
+  const aTodos = (campo, valor) => setGrupos(gs => gs.map(g => ({ ...g, termos: g.termos.map(t => ({ ...t, [campo]: valor })) })));
 
-  const guardar = async (lista = renglones) => {
+  const todos = grupos.flatMap(g => g.termos.map(t => ({ g, t })));
+  const totalKg = todos.reduce((s, x) => s + (Number(x.t.Kg) || 0), 0);
+  // Lo que sigue al piso se cuenta línea por línea: lo que sobra en una no tapa lo que falta en otra.
+  const siguenAlPiso = grupos.reduce((s, g) =>
+    s + Math.max(0, g.linea.Kg - g.termos.reduce((x, t) => x + (Number(t.Kg) || 0), 0)), 0);
+  // Lo que impide guardar, dicho en concreto; null si se puede.
+  const problema = (() => {
+    if (!cliente) return "Escoja el pedido del cliente.";
+    if (!todos.length) return "No quedó ningún termo.";
+    if (todos.some(x => !x.t.NumeroTermo.trim())) return "Falta el número de algún termo.";
+    if (todos.some(x => !(Number(x.t.Kg) > 0))) return "Falta pesar algún termo.";
+    if (todos.some(x => !x.t.HoraInicio)) return "Falta la hora de inicio de algún termo.";
+    const vistos = new Set();
+    for (const x of todos) {
+      const n = x.t.NumeroTermo.trim().toUpperCase();
+      if (vistos.has(n)) return `El termo ${x.t.NumeroTermo.trim()} está dos veces.`;
+      vistos.add(n);
+    }
+    for (const g of grupos) {
+      const kg = g.termos.reduce((s, t) => s + (Number(t.Kg) || 0), 0);
+      if (kg - g.linea.Kg > tolerancia(g.linea.Kg)) return `${g.linea.Lote}: los termos suman ${fmtNum(kg)} kg y al piso hay ${fmtNum(g.linea.Kg)} kg.`;
+    }
+    return null;
+  })();
+
+  const guardar = async (estado = grupos) => {
     setOcupado(true); setErrorEn(null);
+    const planos = estado.flatMap(g => g.termos.map(t => ({ g, t })));
     const r = await onConfirmar({
       ClienteCodigo: Number(cliente), Encargado: encargado || null, HoraInicio: inicioHoja, FechaProduccion: fecha,
-      Termos: lista.map(x => ({
-        RemisionId: x.linea.RemisionId, Lote: x.linea.Lote, Clase: x.linea.Clase, Talla: x.linea.Talla, FechaLote: x.linea.FechaLote,
-        NumeroTermo: x.NumeroTermo.trim(), HoraInicio: x.HoraInicio, Quimico: x.Quimico || null,
-        ConteoInicial: x.ConteoInicial === "" ? null : Number(x.ConteoInicial), KgSinTratar: Number(x.KgSinTratar),
-        AceptarDiferencia: x.Aceptar,
+      Termos: planos.map(({ g, t }) => ({
+        RemisionId: g.linea.RemisionId, Lote: g.linea.Lote, Clase: g.linea.Clase, Talla: g.linea.Talla, FechaLote: g.linea.FechaLote,
+        NumeroTermo: t.NumeroTermo.trim(), HoraInicio: t.HoraInicio, Quimico: null,
+        KgSinTratar: Number(t.Kg), AceptarDiferencia: t.Aceptar,
       })),
     });
     setOcupado(false);
     if (!r) return;   // guardado: el padre cierra
-    // Un termo que pesa un poco más de lo que hay al piso: se pregunta, y si es báscula se reintenta
-    // con ese renglón aceptado. Nada quedó escrito en el intento anterior.
-    if (r.Codigo === "DIFERENCIA" && r.Indice != null &&
+    const fallo = r.Indice != null ? planos[r.Indice] : null;
+    // Un termo que pesa un poco más de lo que queda al piso: se pregunta, y si es báscula se reintenta
+    // con ese termo aceptado. Nada quedó escrito en el intento anterior.
+    if (r.Codigo === "DIFERENCIA" && fallo &&
         await pedirConfirmacion(`${r.error} Si acepta, los ${fmtNum(r.Exceso)} kg de más quedan registrados como diferencia de báscula.`)) {
-      const nueva = lista.map((x, i) => (i === r.Indice ? { ...x, Aceptar: true } : x));
-      setRenglones(nueva);
-      return guardar(nueva);
+      const nuevo = estado.map(g => ({ ...g, termos: g.termos.map(t => (t.key === fallo.t.key ? { ...t, Aceptar: true } : t)) }));
+      setGrupos(nuevo);
+      return guardar(nuevo);
     }
-    setErrorEn({ Indice: r.Indice ?? null, error: r.error });
+    setErrorEn({ key: fallo?.t.key ?? null, error: r.error });
   };
 
   return (
-    <Marco titulo={`Tratar ${lineas.length} línea${lineas.length !== 1 ? "s" : ""} del piso`} ancho="max-w-5xl" onClose={onCerrar}>
-      <div className="grid sm:grid-cols-2 gap-4">
-        <div>
-          <Etiqueta>Cliente previsto</Etiqueta>
-          <input value={filtro} onChange={e => setFiltro(e.target.value)} placeholder="Buscar cliente…" className={`${campo} mb-2`} />
-          <select value={cliente} onChange={e => setCliente(e.target.value)} size={5}
-            className={`${campo} ${cliente ? "" : "border-amber-400"}`}>
-            {lista.map(c => <option key={c.Codigo} value={c.Codigo}>{c.RazonSocial}</option>)}
-          </select>
-          <p className="text-xs text-gray-400 mt-1">Es una referencia: Empaque puede cambiar el destino al escanear el master.</p>
+    <Marco titulo={`Tratar ${grupos.length} línea${grupos.length !== 1 ? "s" : ""} del piso`} ancho="max-w-5xl" onClose={onCerrar}>
+      {/* 1 · Pedido: solo clientes con pedido activo */}
+      <section className="space-y-2">
+        <div className="flex flex-wrap items-center gap-3">
+          <Paso n="1">Pedido del cliente</Paso>
+          <input value={filtro} onChange={e => setFiltro(e.target.value)} placeholder="Buscar cliente o pedido…"
+            className="ml-auto w-full sm:w-64 border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
         </div>
-        <div className="space-y-3">
-          {!cliente ? (
-            <p className="text-sm text-gray-500 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">Escoja el cliente.</p>
-          ) : hojaDelCliente ? (
-            <p className="text-sm text-blue-800 bg-blue-50 border border-blue-200 rounded-lg px-3 py-2">
-              Los termos se suman a la hoja abierta <b>#{hojaDelCliente.HojaId}</b> de este cliente.
-            </p>
-          ) : (
-            <>
-              <p className="text-sm text-green-800 bg-green-50 border border-green-200 rounded-lg px-3 py-2">Se abre una hoja nueva para este cliente.</p>
-              <div className="flex flex-wrap gap-4 items-end">
-                <div className="min-w-0">
-                  <Etiqueta>Encargado</Etiqueta>
-                  <EmpleadoAutocomplete empleados={empleados} value={encargado} onSelect={setEncargado} />
-                </div>
-                <div>
-                  <Etiqueta>Inicio de la hoja</Etiqueta>
-                  <input type="time" value={inicioHoja} onChange={e => setInicioHoja(e.target.value)} className="border border-gray-300 rounded px-2 py-1.5 text-sm" />
-                </div>
-              </div>
-            </>
-          )}
-          <div className="flex flex-wrap gap-4 items-end border-t pt-3">
-            <div>
-              <Etiqueta>Inicio trat. (todos)</Etiqueta>
-              <input type="time" value={horaComun}
-                onChange={e => { setHoraComun(e.target.value); setRenglones(rs => rs.map(r => ({ ...r, HoraInicio: e.target.value }))); }}
-                className="border border-gray-300 rounded px-2 py-1.5 text-sm" />
-            </div>
-            <div>
-              <Etiqueta>Químico (todos)</Etiqueta>
-              <select value={quimicoComun}
-                onChange={e => { setQuimicoComun(e.target.value); setRenglones(rs => rs.map(r => ({ ...r, Quimico: e.target.value }))); }}
-                className="border border-gray-300 rounded px-2 py-1.5 text-sm">
-                <option value="">—</option>
-                {quimicos.map(q => <option key={q.Codigo} value={q.Codigo}>{q.Nombre}</option>)}
-              </select>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div className="border border-gray-200 rounded-lg overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead className="bg-gray-50 text-xs text-gray-500 uppercase">
-            <tr>
-              <th className="text-left px-2 py-2">Lote</th><th className="text-left px-2 py-2"># Termo</th>
-              <th className="text-left px-2 py-2">Inicio</th><th className="text-left px-2 py-2">Conteo ini.</th>
-              <th className="text-left px-2 py-2">Químico</th><th className="text-left px-2 py-2">Kg sin tratar</th><th className="px-2 py-2" />
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-100">
-            {renglones.map((r, i) => {
+        {clientes.length === 0 ? (
+          <p className="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+            No hay pedidos activos. Ponga un pedido en Proceso (Pedidos) para poder tratar.
+          </p>
+        ) : (
+          // Un cliente por renglón: el nombre y, al lado, sus pedidos activos (el texto completo en el
+          // title cuando no cabe).
+          <div className="grid gap-1.5 sm:grid-cols-2 lg:grid-cols-3 max-h-40 overflow-y-auto pr-1">
+            {lista.map(c => {
+              const activo = cliente === String(c.Codigo);
+              const pedidos = c.Pedidos.map(p => `${p.CodigoPedido}${p.Descripcion ? ` ${p.Descripcion}` : ""}`).join(" · ");
               return (
-                <tr key={r.key} className={errorEn?.Indice === i ? "bg-red-50" : ""}>
-                  <td className="px-2 py-1.5 align-top">
-                    <p className="font-mono font-semibold whitespace-nowrap">{r.linea.Lote}</p>
-                    <p className="text-xs text-gray-500">{r.linea.Clase} · {r.linea.DescripcionTalla}</p>
-                  </td>
-                  <td className="px-2 py-1.5 align-top">
-                    <input value={r.NumeroTermo} onChange={e => set(r.key, "NumeroTermo", e.target.value)}
-                      className={`w-20 border rounded px-2 py-1 text-sm ${r.NumeroTermo.trim() ? "border-gray-300" : "border-amber-400 bg-amber-50"}`} />
-                  </td>
-                  <td className="px-2 py-1.5 align-top">
-                    <input type="time" value={r.HoraInicio} onChange={e => set(r.key, "HoraInicio", e.target.value)} className="border border-gray-300 rounded px-2 py-1 text-sm" />
-                  </td>
-                  <td className="px-2 py-1.5 align-top">
-                    <input type="number" inputMode="numeric" value={r.ConteoInicial} onChange={e => set(r.key, "ConteoInicial", e.target.value)}
-                      className="w-20 border border-gray-300 rounded px-2 py-1 text-sm" />
-                  </td>
-                  <td className="px-2 py-1.5 align-top">
-                    <select value={r.Quimico} onChange={e => set(r.key, "Quimico", e.target.value)} className="border border-gray-300 rounded px-2 py-1 text-sm">
-                      <option value="">—</option>
-                      {quimicos.map(q => <option key={q.Codigo} value={q.Codigo}>{q.Nombre}</option>)}
-                    </select>
-                  </td>
-                  <td className="px-2 py-1.5 align-top whitespace-nowrap">
-                    <p className="font-semibold pt-1">{fmtNum(r.KgSinTratar)} kg</p>
-                    <p className="text-xs text-gray-400">del piso</p>
-                  </td>
-                  <td className="px-2 py-1.5 align-top whitespace-nowrap text-right">
-                    {renglones.length > 1 && <button onClick={() => quitar(r.key)} className="text-xs text-red-600 border border-red-200 rounded px-2 py-1 hover:bg-red-50">Quitar</button>}
-                  </td>
-                </tr>
+                <button key={c.Codigo} type="button" onClick={() => setCliente(String(c.Codigo))} title={`${c.RazonSocial} — ${pedidos}`}
+                  className={`flex min-w-0 items-baseline gap-2 rounded-md border px-2.5 py-1.5 text-left transition focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 ${
+                    activo ? "border-blue-600 bg-blue-50 ring-1 ring-blue-600" : "border-gray-200 hover:border-blue-300 hover:bg-gray-50"}`}>
+                  <span className={`shrink-0 text-sm font-semibold ${activo ? "text-blue-800" : "text-gray-800"}`}>{c.RazonSocial}</span>
+                  <span className="min-w-0 truncate text-xs text-gray-500">{pedidos}</span>
+                </button>
               );
             })}
-          </tbody>
-        </table>
-      </div>
+            {lista.length === 0 && <p className="text-sm text-gray-400 px-1 py-2">Ningún pedido activo coincide con "{filtro}".</p>}
+          </div>
+        )}
+        {cliente && (hojaDelCliente ? (
+          <p className="text-sm text-blue-800 bg-blue-50 border border-blue-200 rounded-lg px-3 py-2">
+            Los termos se suman a la hoja abierta <b>#{hojaDelCliente.HojaId}</b> de este cliente.
+          </p>
+        ) : (
+          <div className="flex flex-wrap items-end gap-4 bg-green-50 border border-green-200 rounded-lg px-3 py-2">
+            <p className="text-sm text-green-800 self-center">Se abre una hoja nueva para este cliente.</p>
+            <div className="min-w-0">
+              <Etiqueta>Encargado</Etiqueta>
+              <EmpleadoAutocomplete empleados={empleados} value={encargado} onSelect={setEncargado} />
+            </div>
+            <div>
+              <Etiqueta>Inicio de la hoja</Etiqueta>
+              <input type="time" value={inicioHoja} onChange={e => setInicioHoja(e.target.value)} className="border border-gray-300 rounded px-2 py-1.5 text-sm bg-white" />
+            </div>
+          </div>
+        ))}
+      </section>
+
+      {/* 2 · Termos: cada línea se reparte en los termos que haga falta */}
+      <section className="space-y-3 border-t border-gray-200 pt-4">
+        <div className="flex flex-wrap items-end gap-4">
+          <div className="self-end pb-2"><Paso n="2">Termos</Paso></div>
+          <div className="ml-auto">
+            <Etiqueta>Inicio trat. (todos)</Etiqueta>
+            <input type="time" value={horaComun} onChange={e => { setHoraComun(e.target.value); aTodos("HoraInicio", e.target.value); }}
+              className="border border-gray-300 rounded px-2 py-1.5 text-sm" />
+          </div>
+        </div>
+
+        {grupos.map(g => {
+          const lkey = claveLinea(g.linea);
+          const asignado = g.termos.reduce((s, t) => s + (Number(t.Kg) || 0), 0);
+          const pasa = asignado - g.linea.Kg;
+          return (
+            <div key={lkey} className={`rounded-lg border p-3 space-y-2 ${pasa > 0.001 ? "border-red-300 bg-red-50/40" : "border-gray-200 bg-gray-50/60"}`}>
+              {/* Lote, avance y kilos en un renglón: la barra es el avance de lo asignado contra lo declarado al piso. */}
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+                <div className="min-w-0 shrink-0">
+                  <span className="font-mono font-bold text-gray-800">{g.linea.Lote}</span>
+                  <span className="block text-xs text-gray-500">{g.linea.Clase} · {g.linea.DescripcionTalla}{g.linea.FechaLote ? ` · prod. ${fmtDia(g.linea.FechaLote)}` : ""}</span>
+                </div>
+                <div className="min-w-[14rem] flex-1"><BarraTermos alPiso={g.linea.Kg} termos={g.termos} /></div>
+                <div className="shrink-0 text-right text-sm leading-tight whitespace-nowrap">
+                  <span className={`font-semibold ${pasa > 0.001 ? "text-red-600" : "text-gray-800"}`}>{fmtNum(asignado)}</span>
+                  <span className="text-gray-500"> de {fmtNum(g.linea.Kg)} kg</span>
+                  <span className={`block text-xs ${pasa > 0.001 ? "font-semibold text-red-600" : "text-gray-400"}`}>
+                    {pasa > 0.001 ? `+${fmtNum(pasa)} kg sobre lo del piso` : "declarado al piso"}
+                  </span>
+                </div>
+                {grupos.length > 1 && (
+                  <button type="button" onClick={() => quitarLinea(lkey)} title="No tratar esta línea" aria-label="No tratar esta línea"
+                    className="shrink-0 text-xs text-gray-400 underline hover:text-red-600">quitar</button>
+                )}
+              </div>
+              {pasa > 0.001 && (
+                <p className="text-xs text-red-600">
+                  {pasa > tolerancia(g.linea.Kg)
+                    ? "Pasa de lo declarado al piso: revise los pesos de los termos."
+                    : "Pasa de lo declarado al piso: al guardar se pregunta si es diferencia de báscula."}
+                </p>
+              )}
+
+              <div className="grid grid-cols-[5.5rem_7.5rem_6.5rem_2rem] items-center gap-x-2 gap-y-1.5 text-sm">
+                <span className="text-[11px] uppercase text-gray-400"># Termo</span>
+                <span className="text-[11px] uppercase text-gray-400">Kg sin tratar</span>
+                <span className="text-[11px] uppercase text-gray-400">Inicio</span>
+                <span />
+                {g.termos.map(t => {
+                  const malo = errorEn?.key === t.key;
+                  return (
+                    <div key={t.key} className={`contents ${malo ? "[&>*]:ring-2 [&>*]:ring-red-400" : ""}`}>
+                      <input value={t.NumeroTermo} onChange={e => editarTermo(lkey, t.key, "NumeroTermo", e.target.value)} placeholder="#"
+                        aria-label="Número de termo"
+                        className={`w-full rounded border px-2 py-1 font-mono font-semibold ${t.NumeroTermo.trim() ? "border-gray-300 bg-white" : "border-amber-400 bg-amber-50"}`} />
+                      <div className="relative">
+                        <input type="number" inputMode="decimal" step="0.01" min="0" value={t.Kg} placeholder="pesar"
+                          onChange={e => editarTermo(lkey, t.key, "Kg", e.target.value)} aria-label="Kg sin tratar"
+                          className={`w-full rounded border py-1 pl-2 pr-7 text-right ${Number(t.Kg) > 0 ? "border-gray-300 bg-white" : "border-amber-400 bg-amber-50"}`} />
+                        <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-xs text-gray-400">kg</span>
+                      </div>
+                      <input type="time" value={t.HoraInicio} onChange={e => editarTermo(lkey, t.key, "HoraInicio", e.target.value)} aria-label="Inicio"
+                        className="w-full rounded border border-gray-300 bg-white px-1.5 py-1" />
+                      {g.termos.length > 1 ? (
+                        <button type="button" onClick={() => quitarTermo(lkey, t.key)} title="Quitar este termo" aria-label="Quitar este termo"
+                          className="h-7 w-7 rounded text-lg leading-none text-gray-400 hover:bg-red-50 hover:text-red-600">&times;</button>
+                      ) : <span />}
+                    </div>
+                  );
+                })}
+              </div>
+              <button type="button" onClick={() => agregarTermo(lkey)}
+                className="rounded border border-dashed border-cyan-600 px-3 py-1 text-xs font-semibold text-cyan-700 hover:bg-cyan-50">
+                + Otro termo
+              </button>
+            </div>
+          );
+        })}
+      </section>
+
       {errorEn && <p className="text-sm text-red-600">{errorEn.error} No se guardó nada: corrija y vuelva a intentar.</p>}
-      <div className="flex items-center justify-between gap-3 flex-wrap">
-        <p className="text-sm text-gray-600">{renglones.length} termo{renglones.length !== 1 ? "s" : ""} · <b>{fmtNum(totalKg)} kg</b> sin tratar</p>
-        <Botones texto="Meter a tratamiento" ocupado={ocupado} deshabilitado={!completo} onCancelar={onCerrar} onAceptar={() => guardar()} />
+      <div className="flex items-center justify-between gap-3 flex-wrap border-t border-gray-200 pt-3">
+        <p className="text-sm text-gray-600">
+          {todos.length} termo{todos.length !== 1 ? "s" : ""} · <b>{fmtNum(totalKg)} kg</b> a tratar
+          {siguenAlPiso > 0.001 && <span className="text-amber-700"> · {fmtNum(siguenAlPiso)} kg siguen al piso</span>}
+          {problema && <span className="block text-xs text-gray-400">{problema}</span>}
+        </p>
+        <Botones texto="Meter a tratamiento" ocupado={ocupado} deshabilitado={!!problema} onCancelar={onCerrar} onAceptar={() => guardar()} />
       </div>
     </Marco>
   );
@@ -276,6 +396,13 @@ function ModalSalidas({ termos, destinos, destinoSugerido, pickupMaximo, onConfi
   const [ocupado, setOcupado] = useState(false);
   const set = (id, campo, v) => setFilas(fs => fs.map(f => (f.t.TermoId === id ? { ...f, [campo]: v } : f)));
   const completo = horaSalida && destino && filas.every(f => Number(f.KgTratadas) > 0);
+  // Totales de lo que sale junto. El pick-up del total es solo de los termos ya pesados: contar los
+  // kg sin tratar de uno que falta pesar se leería como pérdida.
+  const totalSin = filas.reduce((s, f) => s + Number(f.t.KgSinTratar || 0), 0);
+  const pesados = filas.filter(f => Number(f.KgTratadas) > 0);
+  const totalTrat = pesados.reduce((s, f) => s + Number(f.KgTratadas), 0);
+  const pTotal = pickupDe(pesados.reduce((s, f) => s + Number(f.t.KgSinTratar || 0), 0), totalTrat);
+  const faltan = filas.length - pesados.length;
 
   return (
     <Marco titulo={`Salida de ${termos.length} termo${termos.length !== 1 ? "s" : ""}`} ancho="max-w-3xl" onClose={onCerrar}>
@@ -308,7 +435,7 @@ function ModalSalidas({ termos, destinos, destinoSugerido, pickupMaximo, onConfi
                 <tr key={f.t.TermoId} className={errorEn?.Indice === i ? "bg-red-50" : ""}>
                   <td className="px-2 py-1.5 font-mono font-semibold">{f.t.NumeroTermo}</td>
                   <td className="px-2 py-1.5"><span className="font-mono">{f.t.Lote}</span> <span className="text-xs text-gray-500">{f.t.DescripcionTalla}</span></td>
-                  <td className="px-2 py-1.5">{hora(f.t.HoraInicio)}{f.t.ConteoInicial ? <span className="text-xs text-gray-500"> · conteo {f.t.ConteoInicial}</span> : null}</td>
+                  <td className="px-2 py-1.5">{hora(f.t.HoraInicio)}</td>
                   <td className="px-2 py-1.5 text-right">{fmtNum(f.t.KgSinTratar)}</td>
                   <td className="px-2 py-1.5">
                     <input type="number" inputMode="numeric" value={f.ConteoFinal} onChange={e => set(f.t.TermoId, "ConteoFinal", e.target.value)}
@@ -323,6 +450,21 @@ function ModalSalidas({ termos, destinos, destinoSugerido, pickupMaximo, onConfi
               );
             })}
           </tbody>
+          {filas.length > 1 && (
+            <tfoot className="border-t-2 border-gray-300 bg-gray-50 font-semibold text-gray-800">
+              <tr>
+                <td className="px-2 py-2 text-xs uppercase text-gray-500" colSpan={3}>Total · {filas.length} termos</td>
+                <td className="px-2 py-2 text-right whitespace-nowrap">{fmtNum(totalSin)}</td>
+                <td />
+                <td className="px-2 py-2 whitespace-nowrap">
+                  {/* Alineado con el texto de las casillas de arriba (w-24 + px-2). */}
+                  <span className="inline-block w-24 px-2">{fmtNum(totalTrat)}</span>
+                  {faltan > 0 && <span className="block px-2 text-[11px] font-normal text-amber-700">falta{faltan > 1 ? "n" : ""} {faltan} por pesar</span>}
+                </td>
+                <td className="px-2 py-2 text-right whitespace-nowrap"><Pickup valor={pTotal} alerta={alertaDe(pTotal, pickupMaximo)} /></td>
+              </tr>
+            </tfoot>
+          )}
         </table>
       </div>
       {errorEn && <p className="text-sm text-red-600">{errorEn.error} No se guardó nada: corrija y vuelva a intentar.</p>}
@@ -344,14 +486,15 @@ function ModalSalidas({ termos, destinos, destinoSugerido, pickupMaximo, onConfi
 function ModalEntrada({ linea, termo, quimicos, quimicoSugerido, onConfirmar, onCerrar }) {
   const editando = !!termo;
   const [f, setF] = useState(() => editando ? {
-    NumeroTermo: termo.NumeroTermo ?? "", HoraInicio: hora(termo.HoraInicio), ConteoInicial: termo.ConteoInicial ?? "",
+    NumeroTermo: termo.NumeroTermo ?? "", HoraInicio: hora(termo.HoraInicio),
     Quimico: termo.QuimicoCodigo ?? "", KgSinTratar: String(termo.KgSinTratar),
-  } : { NumeroTermo: "", HoraInicio: horaGT(), ConteoInicial: "", Quimico: quimicoSugerido ?? "", KgSinTratar: "" });
+  } : { NumeroTermo: "", HoraInicio: horaGT(), Quimico: quimicoSugerido ?? "", KgSinTratar: "" });
   const [ocupado, setOcupado] = useState(false);
   const set = (k) => (e) => setF(x => ({ ...x, [k]: e.target.value }));
   const base = editando ? termo : linea;
-  // Los kg sin tratar son los del piso y no se corrigen aquí (decisión del usuario, 22 oct 2026).
-  const kgFijo = true;
+  // Los kg sin tratar se pesan por termo (10 nov 2026), así que se corrigen aquí mientras el termo
+  // no haya salido; el servidor revisa que alcance lo del piso.
+  const yaSalio = editando && termo.KgTratadas != null;
 
   return (
     <Marco titulo={editando ? `Corregir termo ${termo.NumeroTermo}` : "Termo nuevo"} onClose={onCerrar}>
@@ -363,8 +506,7 @@ function ModalEntrada({ linea, termo, quimicos, quimicoSugerido, onConfirmar, on
       <div className="grid grid-cols-2 gap-3">
         <div><Etiqueta># Termo</Etiqueta><input value={f.NumeroTermo} onChange={set("NumeroTermo")} className={campo} autoFocus /></div>
         <div><Etiqueta>Inicio trat.</Etiqueta><input type="time" value={f.HoraInicio} onChange={set("HoraInicio")} className={campo} /></div>
-        <div><Etiqueta>Conteo inicial</Etiqueta><input type="number" inputMode="numeric" value={f.ConteoInicial} onChange={set("ConteoInicial")} className={campo} /></div>
-        <div>
+        <div className="col-span-2">
           <Etiqueta>Tipo de químico</Etiqueta>
           <select value={f.Quimico} onChange={set("Quimico")} className={campo}>
             <option value="">—</option>
@@ -373,17 +515,17 @@ function ModalEntrada({ linea, termo, quimicos, quimicoSugerido, onConfirmar, on
         </div>
         <div className="col-span-2">
           <Etiqueta>Kg sin tratar</Etiqueta>
-          <input type="number" inputMode="decimal" step="0.01" value={f.KgSinTratar} onChange={set("KgSinTratar")} disabled={kgFijo}
-            className={`${campo} ${kgFijo ? "bg-gray-100" : ""}`} />
-          {kgFijo && <p className="text-xs text-gray-400 mt-1">Vienen del inventario al piso: no se cambian aquí.</p>}
+          <input type="number" inputMode="decimal" step="0.01" value={f.KgSinTratar} onChange={set("KgSinTratar")} disabled={yaSalio}
+            className={`${campo} ${yaSalio ? "bg-gray-100" : ""}`} />
+          {yaSalio && <p className="text-xs text-gray-400 mt-1">El termo ya salió: para cambiar los kg, quite primero la salida.</p>}
         </div>
       </div>
       <Botones texto={editando ? "Guardar" : "Registrar entrada"} ocupado={ocupado}
         deshabilitado={!f.NumeroTermo.trim() || !f.HoraInicio || !(Number(f.KgSinTratar) > 0)} onCancelar={onCerrar}
         onAceptar={async () => {
           setOcupado(true);
-          const datos = { ...f, ConteoInicial: f.ConteoInicial === "" ? null : Number(f.ConteoInicial), KgSinTratar: Number(f.KgSinTratar) };
-          if (kgFijo) delete datos.KgSinTratar;
+          const datos = { ...f, KgSinTratar: Number(f.KgSinTratar) };
+          if (yaSalio) delete datos.KgSinTratar;
           await onConfirmar(datos);
           setOcupado(false);
         }} />
@@ -407,8 +549,7 @@ function ModalSalida({ termo, destinos, destinoSugerido, pickupMaximo, onConfirm
     <Marco titulo={`Salida del termo ${termo.NumeroTermo}`} onClose={onCerrar}>
       <div className="text-sm bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
         <p><span className="font-mono font-bold">{termo.Lote}</span> · {termo.DescripcionTalla}</p>
-        <p className="text-xs text-gray-500">Entró a las {hora(termo.HoraInicio)} con <b>{fmtNum(termo.KgSinTratar)} kg</b> sin tratar
-          {termo.ConteoInicial ? ` · conteo ${termo.ConteoInicial}` : ""}</p>
+        <p className="text-xs text-gray-500">Entró a las {hora(termo.HoraInicio)} con <b>{fmtNum(termo.KgSinTratar)} kg</b> sin tratar</p>
       </div>
       <div className="grid grid-cols-2 gap-3">
         <div><Etiqueta>Salida trat.</Etiqueta><input type="time" value={f.HoraSalida} onChange={set("HoraSalida")} className={campo} /></div>
@@ -601,7 +742,7 @@ function TablaTermos({ hoja, abierta, puedeCrear, puedeEditar, puedeBorrar, onSa
             )}
             <th className="text-left px-2 py-2"># Termo</th><th className="text-left px-2 py-2">Lote</th><th className="text-left px-2 py-2">Talla</th>
             <th className="text-left px-2 py-2">Inicio</th><th className="text-left px-2 py-2">Salida</th>
-            <th className="text-right px-2 py-2">Conteo ini.</th><th className="text-right px-2 py-2">Conteo fin.</th>
+            <th className="text-right px-2 py-2">Conteo fin.</th>
             <th className="text-left px-2 py-2">Tiempo</th><th className="text-left px-2 py-2">Químico</th><th className="text-left px-2 py-2">Corte</th>
             <th className="text-right px-2 py-2">Kg sin tratar</th><th className="text-right px-2 py-2">Kg tratadas</th>
             <th className="text-right px-2 py-2">% Pick-up</th><th className="text-left px-2 py-2">Va a</th><th className="px-2 py-2" />
@@ -620,7 +761,6 @@ function TablaTermos({ hoja, abierta, puedeCrear, puedeEditar, puedeBorrar, onSa
               <td className="px-2 py-1.5 whitespace-nowrap">{t.DescripcionTalla}</td>
               <td className="px-2 py-1.5">{hora(t.HoraInicio)}</td>
               <td className="px-2 py-1.5">{hora(t.HoraSalida) || <span className="text-blue-600 text-xs">en termo</span>}</td>
-              <td className="px-2 py-1.5 text-right">{t.ConteoInicial ?? "—"}</td>
               <td className="px-2 py-1.5 text-right">{t.ConteoFinal ?? "—"}</td>
               <td className="px-2 py-1.5 whitespace-nowrap">{fmtTiempo(t.Minutos)}</td>
               <td className="px-2 py-1.5">{t.NombreQuimico || "—"}</td>
@@ -778,10 +918,8 @@ export default function TratamientoPage() {
   };
 
   const abierta = sel?.Estatus === "Abierta";
-  // El químico y el destino de un termo nuevo se sugieren del termo anterior de la hoja: casi
-  // siempre son los mismos en todo el turno ("〃" en el papel).
-  const ultimo = sel?.Termos?.length ? sel.Termos[sel.Termos.length - 1] : null;
-  const quimicoSugerido = ultimo?.QuimicoCodigo ?? quimicos[0]?.Codigo ?? "";
+  // El destino de la salida se sugiere del termo anterior de la hoja: casi siempre es el mismo en
+  // todo el turno ("〃" en el papel).
   const destinoSugerido = [...(sel?.Termos ?? [])].reverse().find(t => t.BodegaDestino)?.BodegaDestino
     ?? cat.Destinos.find(d => d.Codigo === "TUNEL")?.Codigo ?? "";
 
@@ -859,7 +997,7 @@ export default function TratamientoPage() {
       {aviso && <AvisoModal {...aviso} onCerrar={() => cerrar(true)} onCancelar={() => cerrar(false)} />}
       {modal?.tipo === "tratar" && (
         <ModalTratar lineas={modal.lineas} fecha={fecha} hojas={hojas} clientes={cat.Clientes} empleados={empleados}
-          quimicos={quimicos} quimicoSugerido={quimicoSugerido} pedirConfirmacion={pedirConfirmacion}
+          pedirConfirmacion={pedirConfirmacion}
           onConfirmar={tratar} onCerrar={() => setModal(null)} />
       )}
       {modal?.tipo === "salidas" && (
@@ -935,6 +1073,9 @@ export default function TratamientoPage() {
               {abierta && puedeEditar && (
                 <select value={sel.ClienteCodigo ?? ""} onChange={e => cambiarCliente(e.target.value)} title="Cliente previsto"
                   className="bg-gray-700 border border-gray-500 rounded px-2 py-1 text-xs max-w-[14rem]">
+                  {!cat.Clientes.some(c => c.Codigo === sel.ClienteCodigo) && sel.ClienteCodigo != null && (
+                    <option value={sel.ClienteCodigo}>{sel.NombreCliente} (sin pedido activo)</option>
+                  )}
                   {cat.Clientes.map(c => <option key={c.Codigo} value={c.Codigo}>{c.RazonSocial}</option>)}
                 </select>
               )}
