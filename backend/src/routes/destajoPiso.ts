@@ -54,7 +54,8 @@ router.get("/saldo", requireAuth, requirePerm("destajo", "ver"), async (req: Req
   }
 });
 
-// POST /api/destajo-piso/tomar  { Bodega, Unificar, BaseLote?, Lineas: [{ RemisionId, Lote, Clase, Talla, FechaLote, Kg, PiscinaId?, Ciclo? }] }
+// POST /api/destajo-piso/tomar  { Bodega, Unificar, BaseLote?, Lineas: [{ RemisionId, Lote, Clase, Talla, FechaLote, Kg, PiscinaId?, Ciclo?, Termo? }] }
+// Termo: de cuál termo de la línea se toma (una línea por termo); queda en la fila DESTAJO.
 // BaseLote: al unificar, el lote de origen (entre los marcados) que da el código. Obligatorio al unificar.
 router.post("/tomar", requireAuth, requirePerm("destajo", "crear"), async (req: Request, res: Response) => {
   try {
