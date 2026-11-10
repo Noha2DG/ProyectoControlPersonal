@@ -1393,7 +1393,7 @@ export default function DescongeladoPage() {
   const fetchHojas = useCallback(async () => {
     setCargando(true);
     try {
-      const res = await fetch(`${API}/hojas?fecha=${fecha}`, { headers: authHeader() });
+      const res = await fetch(`${API}/hojas?bodega=DESCONGELADO&fecha=${fecha}`, { headers: authHeader() });
       const data = await leerJSON(res);
       if (!res.ok) throw new Error(data.error || `Error ${res.status}`);
       setHojas(Array.isArray(data) ? data : []);

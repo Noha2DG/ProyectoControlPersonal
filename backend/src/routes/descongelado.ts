@@ -851,15 +851,18 @@ function conRendimiento(rows: any[]) {
   }));
 }
 
-// GET /api/descongelado/hojas?fecha=YYYY-MM-DD&estatus=Abierta
+// GET /api/descongelado/hojas?fecha=YYYY-MM-DD&estatus=Abierta&bodega=DESCONGELADO
+// Solo las hojas del área: HojaProceso también guarda las de Tratamiento (y las de cualquier otra
+// área con hoja), y sin este filtro se colaban en "Hojas de la jornada" de Descongelado.
 router.get("/hojas", requireAuth, requirePerm("descongelado", "ver"), async (req: Request, res: Response) => {
   try {
     const fecha = (req.query.fecha as string) || hoyGT();
+    const bodega = (req.query.bodega as string) || "DESCONGELADO";
     const estatus = req.query.estatus as string | undefined;
     const filtro = estatus ? "AND h.Estatus = ?" : "";
-    const args = estatus ? [fecha, estatus] : [fecha];
+    const args = estatus ? [bodega, fecha, estatus] : [bodega, fecha];
     const rows: any[] = await prisma.$queryRawUnsafe(
-      `${SQL_HOJA} WHERE h.FechaProduccion = ? ${filtro} ORDER BY h.HoraInicio ASC, h.HojaId ASC`, ...args);
+      `${SQL_HOJA} WHERE h.BodegaCodigo = ? AND h.FechaProduccion = ? ${filtro} ORDER BY h.HoraInicio ASC, h.HojaId ASC`, ...args);
     res.json(conRendimiento(rows));
   } catch (err: any) {
     res.status(500).json({ error: err.message });
