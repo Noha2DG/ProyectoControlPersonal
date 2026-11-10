@@ -1,6 +1,6 @@
 // Materia Prima tomada del inventario al piso: tomar (y unificar), bajar al piso, descarte y deshacer.
 // La regla de negocio vive en backend/src/lib/destajoPiso.ts; acá solo se escoge y se confirma.
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, Fragment } from "react";
 import { fmtNum } from "../utils/numero.js";
 import { authHeader } from "../context/AuthContext.jsx";
 import InventarioPisoModal from "./InventarioPisoModal.jsx";
@@ -37,7 +37,10 @@ export function TomarDelPisoModal({ onHecho, onClose }) {
   const [lineas, setLineas] = useState([]);
   const [cargando, setCargando] = useState(false);
   const [error, setError] = useState("");
-  const [sel, setSel] = useState({});        // Clave → { kg, piscinaId, ciclo }
+  const [sel, setSel] = useState({});        // Clave → { kg, piscinaId, ciclo, termos? }
+  // Las líneas con termos se abren hacia abajo y se toma termo por termo: termos = { termo → kg }
+  // ("" es lo que queda sin termo identificado).
+  const [abiertas, setAbiertas] = useState(() => new Set());
   const [piscinas, setPiscinas] = useState([]);
   const [guardando, setGuardando] = useState(false);
   const [hecho, setHecho] = useState(null);
@@ -57,7 +60,7 @@ export function TomarDelPisoModal({ onHecho, onClose }) {
     if (!bodega) return;
     guardarPref(bodega);
     let vigente = true;
-    setCargando(true); setError(""); setSel({});
+    setCargando(true); setError(""); setSel({}); setAbiertas(new Set());
     fetch(`${API}/saldo?bodega=${enc(bodega)}`, { headers: authHeader() }).then(leerJSON).then(d => {
       if (!vigente) return;
       if (Array.isArray(d)) setLineas(d);
@@ -75,7 +78,11 @@ export function TomarDelPisoModal({ onHecho, onClose }) {
   }, [hayIlegibles, piscinas.length]);
 
   const elegidas = lineas.filter(l => sel[l.Clave]);
-  const kgDe = l => Number(sel[l.Clave]?.kg ?? 0);
+  const conTermos = l => (l.TermosDetalle?.length ?? 0) > 0;
+  const llaveTermo = t => t.Termo ?? "";
+  const kgDe = l => conTermos(l)
+    ? Object.values(sel[l.Clave]?.termos ?? {}).reduce((x, v) => x + Number(v || 0), 0)
+    : Number(sel[l.Clave]?.kg ?? 0);
   const fincaDe = l => l.Legible ? l.CodigoFinca : piscinas.find(p => p.PiscinaId === Number(sel[l.Clave]?.piscinaId))?.CodigoFinca;
   const fincas = new Set(elegidas.map(fincaDe).filter(Boolean));
   const totalKg = elegidas.reduce((s, l) => s + kgDe(l), 0);
@@ -109,6 +116,15 @@ export function TomarDelPisoModal({ onHecho, onClose }) {
 
   const problema = (() => {
     for (const l of elegidas) {
+      if (conTermos(l)) {
+        for (const t of l.TermosDetalle) {
+          const v = sel[l.Clave].termos[llaveTermo(t)];
+          if (v === undefined) continue;
+          const nombre = t.Termo ? `termo ${t.Termo}` : "sin termo";
+          if (!(Number(v) > 0)) return `${l.Lote} ${nombre}: los kilos deben ser mayores que cero`;
+          if (Number(v) > t.Kg + 0.001) return `${l.Lote} ${nombre}: al piso solo hay ${fmtNum(t.Kg)} kg`;
+        }
+      }
       const kg = kgDe(l);
       if (!(kg > 0)) return `${l.Lote}: los kilos deben ser mayores que cero`;
       if (kg > l.Kg + 0.001) return `${l.Lote}: al piso solo hay ${fmtNum(l.Kg)} kg`;
@@ -117,14 +133,33 @@ export function TomarDelPisoModal({ onHecho, onClose }) {
     return "";
   })();
 
+  // Marcar la línea completa = todos sus termos.
+  const nuevaSel = l => ({ kg: l.Kg, piscinaId: "", ciclo: "",
+    ...(conTermos(l) ? { termos: Object.fromEntries(l.TermosDetalle.map(t => [llaveTermo(t), t.Kg])) } : {}) });
   const alternar = (l) => setSel(s => {
     const n = { ...s };
-    if (n[l.Clave]) delete n[l.Clave]; else n[l.Clave] = { kg: l.Kg, piscinaId: "", ciclo: "" };
+    if (n[l.Clave]) delete n[l.Clave]; else n[l.Clave] = nuevaSel(l);
+    return n;
+  });
+  const alternarTermo = (l, t) => setSel(s => {
+    const n = { ...s };
+    const actual = n[l.Clave] ?? { ...nuevaSel(l), termos: {} };
+    const termos = { ...actual.termos };
+    const k = llaveTermo(t);
+    if (k in termos) delete termos[k]; else termos[k] = t.Kg;
+    if (Object.keys(termos).length === 0) delete n[l.Clave]; else n[l.Clave] = { ...actual, termos };
+    return n;
+  });
+  const cambiarTermo = (l, t, v) => setSel(s => ({
+    ...s, [l.Clave]: { ...s[l.Clave], termos: { ...s[l.Clave].termos, [llaveTermo(t)]: v } } }));
+  const abrir = (l) => setAbiertas(prev => {
+    const n = new Set(prev);
+    if (n.has(l.Clave)) n.delete(l.Clave); else n.add(l.Clave);
     return n;
   });
   const cambiar = (l, campo, v) => setSel(s => ({ ...s, [l.Clave]: { ...s[l.Clave], [campo]: v } }));
   const todas = lineas.length > 0 && elegidas.length === lineas.length;
-  const alternarTodas = () => setSel(todas ? {} : Object.fromEntries(lineas.map(l => [l.Clave, { kg: l.Kg, piscinaId: "", ciclo: "" }])));
+  const alternarTodas = () => setSel(todas ? {} : Object.fromEntries(lineas.map(l => [l.Clave, nuevaSel(l)])));
 
   const tomar = async (unificar) => {
     if (problema) { setError(problema); return; }
@@ -134,11 +169,15 @@ export function TomarDelPisoModal({ onHecho, onClose }) {
         method: "POST", headers: { "Content-Type": "application/json", ...authHeader() },
         body: JSON.stringify({
           Bodega: bodega, Unificar: unificar, ...(unificar ? { BaseLote: base } : {}),
-          Lineas: elegidas.map(l => ({
-            RemisionId: l.RemisionId, Lote: l.Lote, Clase: l.Clase, Talla: l.Talla, FechaLote: l.FechaLote,
-            Kg: kgDe(l),
-            ...(!l.Legible ? { PiscinaId: Number(sel[l.Clave].piscinaId), Ciclo: sel[l.Clave].ciclo ? Number(sel[l.Clave].ciclo) : null } : {}),
-          })),
+          // Una línea por termo escogido: el servidor guarda de qué termo salió cada toma.
+          Lineas: elegidas.flatMap(l => {
+            const base = {
+              RemisionId: l.RemisionId, Lote: l.Lote, Clase: l.Clase, Talla: l.Talla, FechaLote: l.FechaLote,
+              ...(!l.Legible ? { PiscinaId: Number(sel[l.Clave].piscinaId), Ciclo: sel[l.Clave].ciclo ? Number(sel[l.Clave].ciclo) : null } : {}),
+            };
+            if (!conTermos(l)) return [{ ...base, Kg: kgDe(l) }];
+            return Object.entries(sel[l.Clave].termos).map(([k, v]) => ({ ...base, Termo: k || null, Kg: Number(v) }));
+          }),
         }),
       });
       const d = await leerJSON(res);
@@ -248,10 +287,17 @@ export function TomarDelPisoModal({ onHecho, onClose }) {
             <tbody className="divide-y divide-gray-100">
               {lineas.map(l => {
                 const s = sel[l.Clave];
+                const termos = conTermos(l);
+                const abierta = termos && abiertas.has(l.Clave);
+                const nTermos = termos ? Object.keys(s?.termos ?? {}).length : 0;
                 return (
-                  <tr key={l.Clave} className={s ? "bg-blue-50" : "hover:bg-gray-50"}>
+                  <Fragment key={l.Clave}>
+                  <tr className={s ? "bg-blue-50" : "hover:bg-gray-50"}>
                     <td className="px-3 py-2"><input type="checkbox" checked={!!s} onChange={() => alternar(l)} className="w-4 h-4" /></td>
-                    <td className="px-3 py-2 font-mono text-gray-800 whitespace-nowrap">
+                    <td className={`px-3 py-2 font-mono text-gray-800 whitespace-nowrap ${termos ? "cursor-pointer select-none" : ""}`}
+                      onClick={termos ? () => abrir(l) : undefined}
+                      title={termos ? (abierta ? "Ocultar los termos" : "Ver los termos y tomar de ahí") : undefined}>
+                      {termos && <span className="inline-block w-4 text-blue-600 font-sans">{abierta ? "▾" : "▸"}</span>}
                       {l.Lote}
                       {l.NombreFinca && <span className="block text-[11px] font-sans text-gray-400">{l.NombreFinca}</span>}
                       {/* Lo que no viene de Descongelado se marca: el rojo se tiene que revisar antes. */}
@@ -262,15 +308,20 @@ export function TomarDelPisoModal({ onHecho, onClose }) {
                     <td className="px-3 py-2 text-gray-700 whitespace-nowrap">{l.Talla === 900 ? <span className="text-gray-300">—</span> : l.DescripcionTalla}</td>
                     <td className="px-3 py-2 text-right font-semibold text-gray-800 whitespace-nowrap">{fmtNum(l.Kg)}</td>
                     <td className="px-3 py-2 text-right">
-                      {s && (
+                      {/* Con termos, lo tomado es la suma de los termos marcados (se ajusta abajo). */}
+                      {s && termos && <span className="font-semibold text-blue-700 whitespace-nowrap">{fmtNum(kgDe(l))}</span>}
+                      {s && !termos && (
                         <input type="number" step="0.01" min="0" max={l.Kg} value={s.kg} onChange={e => cambiar(l, "kg", e.target.value)}
                           className="w-24 border border-gray-300 rounded px-2 py-1 text-sm text-right focus:outline-none focus:ring-2 focus:ring-blue-400" />
                       )}
                     </td>
-                    {/* Solo información: el termo (o canasta) en que llegó la línea. Aquí no se asigna
-                        termo, solo se crea la materia prima. */}
-                    <td className="px-3 py-2 font-mono text-gray-700 max-w-[9rem] truncate" title={l.Termos || ""}>
-                      {l.Termos || <span className="text-gray-300">—</span>}
+                    <td className="px-3 py-2 whitespace-nowrap">
+                      {termos ? (
+                        <button type="button" onClick={() => abrir(l)}
+                          className="text-xs font-medium text-blue-700 hover:underline">
+                          {s ? `${nTermos} de ${l.TermosDetalle.length}` : l.TermosDetalle.length} termo{l.TermosDetalle.length !== 1 ? "s" : ""}
+                        </button>
+                      ) : <span className="text-gray-300">—</span>}
                     </td>
                     <td className="px-3 py-2 whitespace-nowrap">
                       {l.Legible ? (
@@ -294,6 +345,33 @@ export function TomarDelPisoModal({ onHecho, onClose }) {
                       )}
                     </td>
                   </tr>
+                  {abierta && l.TermosDetalle.map(t => {
+                    const k = llaveTermo(t);
+                    const v = s?.termos?.[k];
+                    const marcado = v !== undefined;
+                    return (
+                      <tr key={`${l.Clave}#${k}`} className={marcado ? "bg-blue-50/60" : "bg-slate-50"}>
+                        <td className="px-3 py-1.5" />
+                        <td className="pl-8 pr-3 py-1.5" colSpan={3}>
+                          <label className="flex items-center gap-2 cursor-pointer">
+                            <input type="checkbox" checked={marcado} onChange={() => alternarTermo(l, t)} className="w-4 h-4" />
+                            {t.Termo
+                              ? <span className="text-gray-700">Termo <b className="font-mono">{t.Termo}</b></span>
+                              : <span className="text-gray-500 italic">Sin termo identificado</span>}
+                          </label>
+                        </td>
+                        <td className="px-3 py-1.5 text-right text-gray-700 whitespace-nowrap">{fmtNum(t.Kg)}</td>
+                        <td className="px-3 py-1.5 text-right">
+                          {marcado && (
+                            <input type="number" step="0.01" min="0" max={t.Kg} value={v} onChange={e => cambiarTermo(l, t, e.target.value)}
+                              className="w-24 border border-gray-300 rounded px-2 py-1 text-sm text-right focus:outline-none focus:ring-2 focus:ring-blue-400" />
+                          )}
+                        </td>
+                        <td colSpan={2} />
+                      </tr>
+                    );
+                  })}
+                  </Fragment>
                 );
               })}
             </tbody>
@@ -730,7 +808,7 @@ export function MovimientosPisoLote({ lote, recarga, puedeEditar, onCambio }) {
             {lista.map(m => (
               <div key={m.MovimientoId} className="flex items-center gap-3 text-sm py-1">
                 <span className="flex-1 min-w-0 truncate text-gray-700">
-                  {tipo === "DESTAJO" && <><span className="font-mono">{m.LoteOrigen}</span>{m.FolioRemision ? ` · ${m.FolioRemision}` : ""}</>}
+                  {tipo === "DESTAJO" && <><span className="font-mono">{m.LoteOrigen}</span>{m.FolioRemision ? ` · ${m.FolioRemision}` : ""}{m.NumeroTermo && <> · Termo <span className="font-mono font-semibold">{m.NumeroTermo}</span></>}</>}
                   {tipo === "BAJADO" && <>{m.NumeroTermo && <>Termo <span className="font-mono font-semibold">{m.NumeroTermo}</span> · </>}{m.Motivo ? `${m.Motivo} · ` : ""}{m.NombreBodega} · {m.Fecha}</>}
                   {tipo === "DESCARTE" && <>{m.Motivo || "Descarte"}</>}
                   {tipo === "COLA" && <>Termo <span className="font-mono font-semibold">{m.NumeroTermo}</span> · {m.DescripcionClase || m.Clase} · {m.NombreBodega

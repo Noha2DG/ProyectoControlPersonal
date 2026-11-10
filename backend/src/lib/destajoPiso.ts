@@ -153,17 +153,14 @@ async function saldoLineas(client: any, bodega: string, lotes?: string[]) {
            t.Talla, ta.Descripcion AS DescripcionTalla, DATE_FORMAT(t.FechaLote, '%Y-%m-%d') AS FechaLote,
            DATE_FORMAT(MIN(CASE WHEN t.Delta > 0 THEN t.FechaProduccion END), '%Y-%m-%d') AS FechaIngreso,
            ROUND(SUM(t.Delta), 2) AS Kg, SUM(t.Masters) AS Masters, MAX(t.KgPorMaster) AS KgPorMaster,
-           MAX(t.EsBajado) AS EsBajado, MAX(t.EsRojo) AS EsRojo, MAX(t.EsCola) AS EsCola,
-           -- Los termos (o canastas) en que llegó la línea. Solo es información para quien toma del
-           -- piso: aquí no se asigna termo, solo se crea la materia prima.
-           GROUP_CONCAT(DISTINCT t.NumeroTermo ORDER BY t.NumeroTermo SEPARATOR ', ') AS Termos
+           MAX(t.EsBajado) AS EsBajado, MAX(t.EsRojo) AS EsRojo, MAX(t.EsCola) AS EsCola
+           -- Los termos de la línea y lo que queda en cada uno: termosDeLineas, abajo.
       FROM (
         SELECT RemisionId, Lote, Clase, Talla, FechaLote, FechaProduccion,  PesoKg AS Delta,  Masters, KgPorMaster,
-               Tipo = 'BAJADO' AS EsBajado, Tipo = 'BAJADO' AND Motivo LIKE 'Rojo%' AS EsRojo, Tipo = 'COLA' AS EsCola,
-               NumeroTermo
+               Tipo = 'BAJADO' AS EsBajado, Tipo = 'BAJADO' AND Motivo LIKE 'Rojo%' AS EsRojo, Tipo = 'COLA' AS EsCola
           FROM MovimientoPiso WHERE BodegaDestino = ? ${filtro}
         UNION ALL
-        SELECT RemisionId, Lote, Clase, Talla, FechaLote, FechaProduccion, -PesoKg, -Masters, KgPorMaster, 0, 0, 0, NULL
+        SELECT RemisionId, Lote, Clase, Talla, FechaLote, FechaProduccion, -PesoKg, -Masters, KgPorMaster, 0, 0, 0
           FROM MovimientoPiso WHERE BodegaOrigen = ? ${filtro}
       ) t
       JOIN Clase cl ON cl.Clase = t.Clase
@@ -172,16 +169,84 @@ async function saldoLineas(client: any, bodega: string, lotes?: string[]) {
      GROUP BY t.RemisionId, rm.Folio, rm.ConfirmadaEn, t.Lote, t.Clase, cl.Descripcion, t.Talla, ta.Descripcion, t.FechaLote
     HAVING Kg > 0.001
      ORDER BY t.FechaLote IS NULL, t.FechaLote, rm.ConfirmadaEn, t.Lote, t.Clase, t.Talla`, ...args);
-  return rows.map(r => ({
-    ...r,
-    RemisionId: r.RemisionId == null ? null : Number(r.RemisionId),
-    Talla: Number(r.Talla), Kg: Number(r.Kg),
-    Masters: r.Masters == null ? null : Number(r.Masters),
-    KgPorMaster: r.KgPorMaster == null ? null : Number(r.KgPorMaster),
-    EsBajado: Number(r.EsBajado) === 1,
-    EsRojo: Number(r.EsRojo) === 1,
-    EsCola: Number(r.EsCola) === 1,
-  }));
+  const porTermo = await termosDeLineas(client, bodega, lotes);
+  return rows.map(r => {
+    const l = {
+      ...r,
+      RemisionId: r.RemisionId == null ? null : Number(r.RemisionId),
+      Talla: Number(r.Talla), Kg: Number(r.Kg),
+      Masters: r.Masters == null ? null : Number(r.Masters),
+      KgPorMaster: r.KgPorMaster == null ? null : Number(r.KgPorMaster),
+      EsBajado: Number(r.EsBajado) === 1,
+      EsRojo: Number(r.EsRojo) === 1,
+      EsCola: Number(r.EsCola) === 1,
+    };
+    const det = porTermo.get(claveLinea(l)) ?? [];
+    // Sin ningún termo identificado (remisión directa, o lo que llegó antes de pesar por termo) la
+    // línea se toma entera, como siempre.
+    const TermosDetalle = det.some(t => t.Termo != null) ? det : [];
+    return { ...l, TermosDetalle, Termos: TermosDetalle.filter(t => t.Termo != null).map(t => t.Termo).join(", ") || null };
+  });
+}
+
+// ── Termos de cada línea del piso ───────────────────────────────────────────────────────────────
+// Desde que Descongelado pesa termo por termo (5eb34ac), cada traslado al piso apunta a su pesada
+// (PesadaId → la fila CONSUMO que guarda el número de termo). Lo bajado de la mesa y la cola traen
+// el termo en la propia fila. Al tomar del piso, la fila DESTAJO guarda de qué termo salió.
+//
+// Lo que sale SIN termo (tomas de antes, ajustes) se descuenta de los termos más viejos primero, así
+// que la suma de los termos siempre es el saldo de la línea.
+type TermoLinea = { Termo: string | null; Kg: number };
+
+async function termosDeLineas(client: any, bodega: string, lotes?: string[]) {
+  const filtro = lotes?.length ? `AND m.Lote IN (${enLista(lotes)})` : "";
+  const args = lotes?.length ? [bodega, ...lotes, bodega, ...lotes] : [bodega, bodega];
+  const rows: any[] = await client.$queryRawUnsafe(`
+    SELECT t.RemisionId, t.Lote, t.Clase, t.Talla, DATE_FORMAT(t.FechaLote, '%Y-%m-%d') AS FechaLote, t.Termo,
+           SUM(CASE WHEN t.Delta > 0 THEN t.Delta ELSE 0 END) AS Entro,
+           SUM(CASE WHEN t.Delta < 0 THEN -t.Delta ELSE 0 END) AS Salio,
+           MIN(CASE WHEN t.Delta > 0 THEN t.MovimientoId END) AS PrimeraEntrada
+      FROM (
+        SELECT m.MovimientoId, m.RemisionId, m.Lote, m.Clase, m.Talla, m.FechaLote, m.PesoKg AS Delta,
+               NULLIF(TRIM(COALESCE(m.NumeroTermo, p.NumeroTermo)), '') AS Termo
+          FROM MovimientoPiso m
+          LEFT JOIN MovimientoPiso p ON p.MovimientoId = m.PesadaId
+         WHERE m.BodegaDestino = ? ${filtro}
+        UNION ALL
+        SELECT m.MovimientoId, m.RemisionId, m.Lote, m.Clase, m.Talla, m.FechaLote, -m.PesoKg,
+               NULLIF(TRIM(m.NumeroTermo), '')
+          FROM MovimientoPiso m WHERE m.BodegaOrigen = ? ${filtro}
+      ) t
+     GROUP BY t.RemisionId, t.Lote, t.Clase, t.Talla, t.FechaLote, t.Termo`, ...args);
+
+  const grupos = new Map<string, any[]>();
+  for (const r of rows) {
+    const k = claveLinea({ ...r, RemisionId: r.RemisionId == null ? null : Number(r.RemisionId) });
+    if (!grupos.has(k)) grupos.set(k, []);
+    grupos.get(k)!.push(r);
+  }
+  const out = new Map<string, TermoLinea[]>();
+  for (const [k, lista] of grupos) {
+    // Lo que salió sin termo, y lo que salió de un termo por encima de lo que entró en él.
+    let sinDueno = 0;
+    const cubetas = lista.map(r => {
+      const termo = r.Termo == null ? null : String(r.Termo);
+      let queda = Number(r.Entro);
+      if (termo == null) sinDueno += Number(r.Salio);
+      else queda -= Number(r.Salio);
+      if (queda < 0) { sinDueno -= queda; queda = 0; }
+      return { Termo: termo, Kg: queda, orden: r.PrimeraEntrada == null ? Infinity : Number(r.PrimeraEntrada) };
+    }).sort((a, b) => a.orden - b.orden);
+    for (const c of cubetas) {
+      const quita = Math.min(c.Kg, sinDueno);
+      c.Kg -= quita; sinDueno -= quita;
+    }
+    out.set(k, cubetas.filter(c => c.Kg > 0.001)
+      .sort((a, b) => (a.Termo == null ? 1 : 0) - (b.Termo == null ? 1 : 0) ||
+                      String(a.Termo).localeCompare(String(b.Termo), "es", { numeric: true }))
+      .map(c => ({ Termo: c.Termo, Kg: r2(c.Kg) })));
+  }
+  return out;
 }
 
 // Año del ciclo: el del lote de ORIGEN (su letra), no el de hoy. El ciclo es la siembra de la que
@@ -230,6 +295,8 @@ export async function saldoParaDestajo(client: any, bodega: string, fecha: strin
 type LineaToma = {
   RemisionId: number | null; Lote: string; Clase: string; Talla: number; FechaLote: string | null;
   Kg: number; PiscinaId?: number | null; Ciclo?: number | null;
+  // El termo del que se toma (de TermosDetalle). Sin termo se toma de la línea, como antes.
+  Termo?: string | null;
 };
 
 /**
@@ -256,9 +323,10 @@ export async function tomarDelPiso(
   const lineas = p.lineas.map(l => {
     const kg = r2(Number(l.Kg));
     if (!(kg > 0)) throw new ErrorNegocio(400, `${l.Lote} ${l.Clase}: los kilos deben ser mayores que cero`);
+    const termo = l.Termo == null ? "" : String(l.Termo).trim();
     return { ...l, Kg: kg, Talla: Number(l.Talla) || 900,
              RemisionId: l.RemisionId == null || (l.RemisionId as any) === "" ? null : Number(l.RemisionId),
-             FechaLote: l.FechaLote || null };
+             FechaLote: l.FechaLote || null, Termo: termo || null };
   });
 
   // Disponibilidad contra un saldo que va bajando: la misma línea dos veces en la petición mide la
@@ -274,6 +342,16 @@ export async function tomarDelPiso(
       throw new ErrorNegocio(400, `De ${l.Lote} ${l.Clase} solo quedan ${Math.max(queda, 0).toFixed(2)} kg al piso; está tomando ${l.Kg.toFixed(2)} kg.`);
     }
     usado.set(k, (usado.get(k) ?? 0) + l.Kg);
+    if (l.Termo) {
+      const kt = `${k}#${l.Termo}`;
+      const t = s?.TermosDetalle.find(x => x.Termo === l.Termo);
+      if (!t) throw new ErrorNegocio(400, `${l.Lote} ${l.Clase}: el termo ${l.Termo} ya no está al piso`);
+      const quedaTermo = t.Kg - (usado.get(kt) ?? 0);
+      if (l.Kg > quedaTermo + 0.001) {
+        throw new ErrorNegocio(400, `Del termo ${l.Termo} (${l.Lote} ${l.Clase}) solo quedan ${Math.max(quedaTermo, 0).toFixed(2)} kg; está tomando ${l.Kg.toFixed(2)} kg.`);
+      }
+      usado.set(kt, (usado.get(kt) ?? 0) + l.Kg);
+    }
   }
 
   // Lo bajado de una mesa lleva el código del lote de Destajo, cuya letra es la fecha en que se
@@ -386,14 +464,14 @@ export async function tomarDelPiso(
       if (s?.Masters && s.KgPorMaster) {
         masters = l.Kg >= s.Kg - 0.001 ? s.Masters : Math.min(s.Masters, Math.round(l.Kg / s.KgPorMaster));
       }
-      filas.push("('DESTAJO',?,?,?,?,?,?,?,'KG',?,?,?,?,?,?,?)");
+      filas.push("('DESTAJO',?,?,?,?,?,?,?,'KG',?,?,?,?,?,?,?,?)");
       args.push(fecha, bodega, l.Lote, l.Clase, l.Talla, l.FechaLote, l.Kg, l.Kg, masters,
-                s?.KgPorMaster ?? null, l.RemisionId, g.lote, g.clase, operador);
+                s?.KgPorMaster ?? null, l.RemisionId, l.Termo, g.lote, g.clase, operador);
     }
   }
   await tx.$executeRawUnsafe(`
     INSERT INTO MovimientoPiso (Tipo, FechaProduccion, BodegaOrigen, Lote, Clase, Talla, FechaLote,
-                                Peso, UM, PesoKg, Masters, KgPorMaster, RemisionId, LoteProceso, ClaseProceso, RegistradoPor)
+                                Peso, UM, PesoKg, Masters, KgPorMaster, RemisionId, NumeroTermo, LoteProceso, ClaseProceso, RegistradoPor)
     VALUES ${filas.join(",")}`, ...args);
 
   return { ok: true, lotes: creados };
