@@ -26,12 +26,24 @@ router.get("/saldo", requireAuth, requirePerm("tratamiento", "ver"), async (_req
 
 router.get("/catalogos", requireAuth, requirePerm("tratamiento", "ver"), async (_req, res) => {
   try {
-    const clientes: any[] = await prisma.$queryRawUnsafe(
-      `SELECT Codigo, RazonSocial FROM Clientes WHERE Estatus = 'Activo' ORDER BY RazonSocial`);
+    // El cliente de la hoja se escoge de los PEDIDOS ACTIVOS (Estatus 'Proceso'), no de todo el
+    // catálogo: se trata para un pedido que está corriendo. Cada cliente trae sus pedidos para
+    // reconocerlo (PESCANOVA → 2026-100 RED LOBSTER).
+    const pedidos: any[] = await prisma.$queryRawUnsafe(`
+      SELECT p.CodigoPedido, p.Descripcion, c.Codigo, c.RazonSocial
+        FROM Pedidos p JOIN Clientes c ON c.Codigo = p.CodigoCliente
+       WHERE p.Estatus = 'Proceso' AND c.Estatus = 'Activo'
+       ORDER BY c.RazonSocial, p.FechaInicio DESC, p.CodigoPedido`);
+    const clientes = new Map<number, { Codigo: number; RazonSocial: string; Pedidos: any[] }>();
+    for (const p of pedidos) {
+      const k = Number(p.Codigo);
+      if (!clientes.has(k)) clientes.set(k, { Codigo: k, RazonSocial: p.RazonSocial, Pedidos: [] });
+      clientes.get(k)!.Pedidos.push({ CodigoPedido: p.CodigoPedido, Descripcion: p.Descripcion });
+    }
     res.json({
       Destinos: await T.destinos(prisma),
       Insumos: await T.insumos(prisma),
-      Clientes: clientes.map(c => ({ Codigo: Number(c.Codigo), RazonSocial: c.RazonSocial })),
+      Clientes: [...clientes.values()],
       PickupMaximo: T.PICKUP_MAXIMO,
     });
   } catch (e) { fallo(res, e); }

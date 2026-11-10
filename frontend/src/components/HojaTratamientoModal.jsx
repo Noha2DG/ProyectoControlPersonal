@@ -28,7 +28,7 @@ const corteDe = (t) => `${t.Clase} · ${String(t.DescripcionClase ?? "").replace
 // apretaban hasta pegarse unas con otras ("4" y "1 min" se leían "41 min"). Lo que no cabe se recorta
 // con "…" en su celda, nunca se pinta encima de la vecina.
 const COLUMNAS = [
-  ["Termo", "6%"], ["Lote", "12%"], ["Talla", "7%"], ["Horario", "10%"], ["Tiempo h:mm", "6%"], ["Conteo ini. → fin.", "8%"],
+  ["Termo", "6%"], ["Lote", "12%"], ["Talla", "7%"], ["Horario", "10%"], ["Tiempo h:mm", "6%"], ["Conteo fin.", "8%"],
   ["Químico", "7%"], ["Corte", "12%"], ["Kg sin tratar", "7%", true], ["Kg tratadas", "7%", true], ["% Pick-up", "9%", true], ["Va a", "9%"],
 ];
 const CELDA = "py-0.5 px-1.5 truncate";
@@ -81,7 +81,7 @@ export function ContenidoHojaTratamiento({ hoja, pickupMaximo = 20 }) {
               <td className={CELDA}>{x.DescripcionTalla}</td>
               <td className={CELDA}>{hora(x.HoraInicio)}–{x.HoraSalida ? hora(x.HoraSalida) : "en termo"}</td>
               <td className={CELDA}>{fmtTiempo(x.Minutos)}</td>
-              <td className={CELDA}>{x.ConteoInicial ?? "—"} → {x.ConteoFinal ?? "—"}</td>
+              <td className={CELDA}>{x.ConteoFinal ?? "—"}</td>
               <td className={CELDA}>{x.NombreQuimico || "—"}</td>
               <td className={CELDA} title={`${x.Clase} ${x.DescripcionClase ?? ""}`}>{corteDe(x)}</td>
               <td className={`${CELDA} text-right`}>{fmtNum(x.KgSinTratar)}</td>
