@@ -76,7 +76,7 @@ export function ContenidoHojaTratamiento({ hoja, pickupMaximo = 20 }) {
         <tbody className="divide-y divide-gray-200">
           {hoja.Termos.map(x => (
             <tr key={x.TermoId}>
-              <td className={`${CELDA} font-mono font-semibold`}>{x.NumeroTermo}</td>
+              <td className={`${CELDA} font-mono font-semibold`}>{x.NumeroTermo ?? "—"}</td>
               <td className={`${CELDA} font-mono`} title={x.Lote}>{x.Lote}</td>
               <td className={CELDA}>{x.DescripcionTalla}</td>
               <td className={CELDA}>{hora(x.HoraInicio)}–{x.HoraSalida ? hora(x.HoraSalida) : "en termo"}</td>

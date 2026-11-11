@@ -15,7 +15,7 @@
 //
 // El cliente de la hoja es el PREVISTO: Empaque lo puede cambiar al escanear el master según tallas y
 // prioridades, así que es una referencia y no separa el inventario. Ver backend/src/lib/tratamiento.ts.
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { fmtNum } from "../utils/numero.js";
 import { authHeader, usePuede } from "../context/AuthContext.jsx";
 import { useAviso } from "../hooks/useAviso.js";
@@ -43,6 +43,12 @@ const fmtTiempo = (min) => {
   const h = Math.floor(min / 60), m = min % 60;
   return h ? (m ? `${h} h ${m} min` : `${h} h`) : `${m} min`;
 };
+
+// Un termo de una línea del piso: (transacción de Pelado, número). Sin los dos es lo que quedó sin termo.
+const llaveTermoPiso = (l, t) => `${claveLinea(l)}#${t.TransaccionId ?? ""}|${t.NumeroTermo ?? ""}`;
+
+// Lo que entró del piso tal cual no lleva número de termo: se nombra por su lote y talla.
+const nombreTermo = (t) => (t.NumeroTermo ? `termo ${t.NumeroTermo}` : `${t.Lote} ${t.DescripcionTalla ?? ""}`.trim());
 
 async function leerJSON(res) { try { return await res.json(); } catch { return {}; } }
 
@@ -94,81 +100,35 @@ function Botones({ onCancelar, onAceptar, texto, ocupado, deshabilitado }) {
   );
 }
 
-/* ── Tratar lo marcado del piso ───────────────────────────────────── */
-// La hoja NO se abre a mano: se marca lo del piso, "Tratar" y se escoge el cliente de un pedido
-// activo. Si ese cliente ya tiene hoja abierta en la jornada, los termos se suman a esa; si no, se
-// abre una —  una hoja por cliente, como dice el papel— , así nunca queda una hoja vacía.
+/* ── Tratar lo marcado ────────────────────────────────────────────── */
+// La hoja NO se abre a mano: se marca lo que se va a trabajar —  termos de Pelado, líneas del piso o
+// las dos cosas— , "Tratar" y se escoge el cliente de un pedido activo. Si ese cliente ya tiene hoja
+// abierta en la jornada, se suma a esa; si no, se abre una (una hoja por cliente, como el papel).
 //
-// Un termo no carga 1000 kg (usuario, 10 nov 2026): cada línea del piso se REPARTE en los termos que
-// haga falta y los kg de cada termo se teclean (antes cada línea entraba completa en un solo termo,
-// decisión del 22 oct). Lo que no se asigna sigue al piso para otro turno. La hora se pone
-// una vez para todos ("〃" en el papel) y se corrige por termo; el químico ya no se pide aquí.
-let llaveRenglon = 0;
-// El químico no se pide al meter a tratamiento (usuario, 10 nov 2026): se corrige en "Editar" si hace falta.
-const termoNuevo = (hora) => ({ key: ++llaveRenglon, NumeroTermo: "", Kg: "", HoraInicio: hora, Aceptar: false });
+// Todo entra TAL COMO LLEGA de Pelado (usuario, 10 nov 2026): no se anota número de termo ni se
+// pesa al entrar.
+//   - Termo de Pelado: su número y los kg de sus pesadas (lib/tratamiento.ts, tomarTermoDePelado).
+//   - Línea del piso: completa, con los kg que tenga al piso en ese momento (TodaLaLinea).
+// Lo único que se pone es la hora de inicio, una vez para todos ("〃" en el papel) y corregible por
+// renglón. El pick-up se mide a la salida, cuando se pesa lo tratado.
 const claveLinea = (l) => `${l.RemisionId ?? ""}|${l.Lote}|${l.Clase}|${l.Talla}|${l.FechaLote ?? ""}`;
-// Lo mismo que acepta el servidor como diferencia de báscula (lib/tratamiento.ts, MARGEN_DIFERENCIA).
-const tolerancia = (alPiso) => Math.max(1, alPiso * 0.10);
-
-// La línea del piso como una barra de avance que se llena con sus termos: cada segmento es un termo
-// con su número y sus kg; lo rayado en ámbar es lo que todavía queda al piso. Lo que PASA de lo
-// declarado al piso se pinta en rojo, dentro del mismo termo que se pasó, y una raya marca hasta
-// dónde llegaba el piso.
-const CIAN = ["#0891b2", "#0e7490"];   // cyan-600 / cyan-700, alternados para separar termos
-const ROJO = "#dc2626";                 // red-600
-function BarraTermos({ alPiso, termos }) {
-  const conKg = termos.filter(t => Number(t.Kg) > 0);
-  const asignado = conKg.reduce((s, t) => s + Number(t.Kg), 0);
-  const escala = Math.max(alPiso, asignado) || 1;
-  const queda = alPiso - asignado;
-  const pasa = asignado - alPiso > 0.001;
-  // Dónde empieza cada termo dentro de la barra (kg acumulados de los anteriores).
-  const inicios = conKg.map((_, i) => conKg.slice(0, i).reduce((s, t) => s + Number(t.Kg), 0));
-  return (
-    <div className="relative flex h-7 w-full overflow-hidden rounded-md border border-gray-300 bg-white">
-      {conKg.map((t, i) => {
-        const kg = Number(t.Kg);
-        const desde = inicios[i];
-        // Qué parte de este termo cae después de lo declarado al piso (0 a 100 % del segmento).
-        const dentro = Math.max(0, Math.min(kg, alPiso - desde));
-        const pctDentro = (dentro / kg) * 100;
-        const color = CIAN[i % 2];
-        const fondo = pctDentro >= 100 ? color : `linear-gradient(to right, ${color} 0 ${pctDentro}%, ${ROJO} ${pctDentro}% 100%)`;
-        const pct = (kg / escala) * 100;
-        return (
-          <div key={t.key} title={`Termo ${t.NumeroTermo || "sin número"} · ${fmtNum(kg)} kg${pctDentro < 100 ? ` · ${fmtNum(kg - dentro)} kg de más` : ""}`}
-            style={{ width: `${pct}%`, background: fondo }}
-            className="flex items-center justify-center overflow-hidden whitespace-nowrap border-r border-white/70 px-1 text-[11px] font-semibold text-white transition-[width] duration-200 motion-reduce:transition-none">
-            {pct > 8 && <span className="truncate"><span className="font-mono">{t.NumeroTermo ? `T${t.NumeroTermo}` : "T?"}</span> · {fmtNum(kg, 0)}</span>}
-          </div>
-        );
-      })}
-      {queda > 0.001 && (
-        <div className="flex flex-1 items-center justify-center overflow-hidden whitespace-nowrap px-2 text-[11px] font-semibold text-amber-800"
-          style={{ backgroundImage: "repeating-linear-gradient(135deg, #fde68a 0 6px, #fef3c7 6px 12px)" }}>
-          queda {fmtNum(queda)} kg
-        </div>
-      )}
-      {pasa && (
-        <div aria-hidden className="pointer-events-none absolute inset-y-0 w-0.5 bg-gray-900"
-          style={{ left: `calc(${(alPiso / escala) * 100}% - 1px)` }} title="Hasta aquí llega lo declarado al piso" />
-      )}
-    </div>
-  );
-}
+const llavePelado = (t) => `${t.TransaccionId}|${t.NumeroTermo}`;
 
 const Paso = ({ n, children }) => (
   <p className="text-xs font-semibold uppercase tracking-wider text-gray-500"><span className="text-blue-600">{n}</span> · {children}</p>
 );
 
-function ModalTratar({ lineas, fecha, hojas, clientes, empleados, pedirConfirmacion, onConfirmar, onCerrar }) {
+function ModalTratar({ termosPiso = [], termosPelado = [], fecha, hojas, clientes, empleados, onConfirmar, onCerrar }) {
   const [filtro, setFiltro] = useState("");
   const [cliente, setCliente] = useState("");
   const [encargado, setEncargado] = useState("");
   const [inicioHoja, setInicioHoja] = useState(horaGT());
   const [horaComun, setHoraComun] = useState(horaGT());
-  // Una tarjeta por línea marcada, cada una con sus termos. Empieza con un termo vacío.
-  const [grupos, setGrupos] = useState(() => lineas.map(l => ({ linea: l, termos: [termoNuevo(horaGT())] })));
+  // Un renglón por cosa que entra: primero los termos de Pelado, luego las líneas del piso.
+  const [items, setItems] = useState(() => [
+    ...termosPelado.map(t => ({ tipo: "PELADO", key: `P|${llavePelado(t)}`, t, Kg: t.Kg, HoraInicio: horaGT() })),
+    ...termosPiso.map(({ l, t }) => ({ tipo: "PISO", key: `L|${llaveTermoPiso(l, t)}`, l, b: t, Kg: t.Kg, HoraInicio: horaGT() })),
+  ]);
   const [errorEn, setErrorEn] = useState(null);   // { key, error }
   const [ocupado, setOcupado] = useState(false);
 
@@ -180,67 +140,43 @@ function ModalTratar({ lineas, fecha, hojas, clientes, empleados, pedirConfirmac
   }, [clientes, filtro]);
   const hojaDelCliente = cliente ? hojas.find(h => h.Estatus === "Abierta" && h.ClienteCodigo === Number(cliente)) : null;
 
-  const editarTermo = (lkey, tkey, campo, valor) => setGrupos(gs => gs.map(g => (claveLinea(g.linea) !== lkey ? g
-    : { ...g, termos: g.termos.map(t => (t.key === tkey ? { ...t, [campo]: valor, Aceptar: false } : t)) })));
-  const agregarTermo = (lkey) => setGrupos(gs => gs.map(g => (claveLinea(g.linea) !== lkey ? g
-    : { ...g, termos: [...g.termos, termoNuevo(horaComun)] })));
-  const quitarTermo = (lkey, tkey) => setGrupos(gs => gs.map(g => (claveLinea(g.linea) !== lkey ? g
-    : { ...g, termos: g.termos.filter(t => t.key !== tkey) })));
-  const quitarLinea = (lkey) => setGrupos(gs => gs.filter(g => claveLinea(g.linea) !== lkey));
-  const aTodos = (campo, valor) => setGrupos(gs => gs.map(g => ({ ...g, termos: g.termos.map(t => ({ ...t, [campo]: valor })) })));
+  const hora = (key, valor) => setItems(xs => xs.map(x => (x.key === key ? { ...x, HoraInicio: valor } : x)));
+  const quitar = (key) => setItems(xs => xs.filter(x => x.key !== key));
+  const pelado = items.filter(x => x.tipo === "PELADO");
+  const piso = items.filter(x => x.tipo === "PISO");
+  const totalKg = items.reduce((s, x) => s + x.Kg, 0);
 
-  const todos = grupos.flatMap(g => g.termos.map(t => ({ g, t })));
-  const totalKg = todos.reduce((s, x) => s + (Number(x.t.Kg) || 0), 0);
-  // Lo que sigue al piso se cuenta línea por línea: lo que sobra en una no tapa lo que falta en otra.
-  const siguenAlPiso = grupos.reduce((s, g) =>
-    s + Math.max(0, g.linea.Kg - g.termos.reduce((x, t) => x + (Number(t.Kg) || 0), 0)), 0);
-  // Lo que impide guardar, dicho en concreto; null si se puede.
-  const problema = (() => {
-    if (!cliente) return "Escoja el pedido del cliente.";
-    if (!todos.length) return "No quedó ningún termo.";
-    if (todos.some(x => !x.t.NumeroTermo.trim())) return "Falta el número de algún termo.";
-    if (todos.some(x => !(Number(x.t.Kg) > 0))) return "Falta pesar algún termo.";
-    if (todos.some(x => !x.t.HoraInicio)) return "Falta la hora de inicio de algún termo.";
-    const vistos = new Set();
-    for (const x of todos) {
-      const n = x.t.NumeroTermo.trim().toUpperCase();
-      if (vistos.has(n)) return `El termo ${x.t.NumeroTermo.trim()} está dos veces.`;
-      vistos.add(n);
-    }
-    for (const g of grupos) {
-      const kg = g.termos.reduce((s, t) => s + (Number(t.Kg) || 0), 0);
-      if (kg - g.linea.Kg > tolerancia(g.linea.Kg)) return `${g.linea.Lote}: los termos suman ${fmtNum(kg)} kg y al piso hay ${fmtNum(g.linea.Kg)} kg.`;
-    }
-    return null;
-  })();
+  const problema = !cliente ? "Escoja el pedido del cliente."
+    : !items.length ? "No quedó nada por tratar."
+    : items.some(x => !x.HoraInicio) ? "Falta la hora de inicio de algún renglón."
+    : null;
 
-  const guardar = async (estado = grupos) => {
+  const guardar = async () => {
     setOcupado(true); setErrorEn(null);
-    const planos = estado.flatMap(g => g.termos.map(t => ({ g, t })));
     const r = await onConfirmar({
       ClienteCodigo: Number(cliente), Encargado: encargado || null, HoraInicio: inicioHoja, FechaProduccion: fecha,
-      Termos: planos.map(({ g, t }) => ({
-        RemisionId: g.linea.RemisionId, Lote: g.linea.Lote, Clase: g.linea.Clase, Talla: g.linea.Talla, FechaLote: g.linea.FechaLote,
-        NumeroTermo: t.NumeroTermo.trim(), HoraInicio: t.HoraInicio, Quimico: null,
-        KgSinTratar: Number(t.Kg), AceptarDiferencia: t.Aceptar,
+      // Cada termo del piso entra completo, con lo que le queda (el servidor lo calcula).
+      Termos: piso.map(({ l, b, HoraInicio }) => ({
+        RemisionId: l.RemisionId, Lote: l.Lote, Clase: l.Clase, Talla: l.Talla, FechaLote: l.FechaLote,
+        HoraInicio, TermoPiso: true, NumeroTermo: b.NumeroTermo, TransaccionTermo: b.TransaccionId,
       })),
+      // Con los kg que se vieron: si entró otra pesada mientras tanto, el servidor avisa en vez de
+      // llevarse un termo distinto del que se escogió.
+      TermosPelado: pelado.map(({ t, HoraInicio }) => ({ TransaccionId: t.TransaccionId, NumeroTermo: t.NumeroTermo, HoraInicio, Kg: t.Kg })),
     });
     setOcupado(false);
     if (!r) return;   // guardado: el padre cierra
-    const fallo = r.Indice != null ? planos[r.Indice] : null;
-    // Un termo que pesa un poco más de lo que queda al piso: se pregunta, y si es báscula se reintenta
-    // con ese termo aceptado. Nada quedó escrito en el intento anterior.
-    if (r.Codigo === "DIFERENCIA" && fallo &&
-        await pedirConfirmacion(`${r.error} Si acepta, los ${fmtNum(r.Exceso)} kg de más quedan registrados como diferencia de báscula.`)) {
-      const nuevo = estado.map(g => ({ ...g, termos: g.termos.map(t => (t.key === fallo.t.key ? { ...t, Aceptar: true } : t)) }));
-      setGrupos(nuevo);
-      return guardar(nuevo);
-    }
-    setErrorEn({ key: fallo?.t.key ?? null, error: r.error });
+    const fallo = r.IndicePelado != null ? pelado[r.IndicePelado] : r.Indice != null ? piso[r.Indice] : null;
+    setErrorEn({ key: fallo?.key ?? null, error: r.error });
   };
 
+  const titulo = [
+    pelado.length ? `${pelado.length} termo${pelado.length !== 1 ? "s" : ""} de Pelado` : null,
+    piso.length ? `${piso.length} termo${piso.length !== 1 ? "s" : ""} del piso` : null,
+  ].filter(Boolean).join(" y ") || "nada";
+
   return (
-    <Marco titulo={`Tratar ${grupos.length} línea${grupos.length !== 1 ? "s" : ""} del piso`} ancho="max-w-5xl" onClose={onCerrar}>
+    <Marco titulo={`Tratar ${titulo}`} ancho="max-w-4xl" onClose={onCerrar}>
       {/* 1 · Pedido: solo clientes con pedido activo */}
       <section className="space-y-2">
         <div className="flex flex-wrap items-center gap-3">
@@ -273,7 +209,7 @@ function ModalTratar({ lineas, fecha, hojas, clientes, empleados, pedirConfirmac
         )}
         {cliente && (hojaDelCliente ? (
           <p className="text-sm text-blue-800 bg-blue-50 border border-blue-200 rounded-lg px-3 py-2">
-            Los termos se suman a la hoja abierta <b>#{hojaDelCliente.HojaId}</b> de este cliente.
+            Se suma a la hoja abierta <b>#{hojaDelCliente.HojaId}</b> de este cliente.
           </p>
         ) : (
           <div className="flex flex-wrap items-end gap-4 bg-green-50 border border-green-200 rounded-lg px-3 py-2">
@@ -290,97 +226,139 @@ function ModalTratar({ lineas, fecha, hojas, clientes, empleados, pedirConfirmac
         ))}
       </section>
 
-      {/* 2 · Termos: cada línea se reparte en los termos que haga falta */}
-      <section className="space-y-3 border-t border-gray-200 pt-4">
+      {/* 2 · Lo que entra: tal como llega de Pelado */}
+      <section className="space-y-2 border-t border-gray-200 pt-4">
         <div className="flex flex-wrap items-end gap-4">
-          <div className="self-end pb-2"><Paso n="2">Termos</Paso></div>
+          <div className="self-end pb-2"><Paso n="2">Lo que entra a tratamiento</Paso></div>
           <div className="ml-auto">
             <Etiqueta>Inicio trat. (todos)</Etiqueta>
-            <input type="time" value={horaComun} onChange={e => { setHoraComun(e.target.value); aTodos("HoraInicio", e.target.value); }}
+            <input type="time" value={horaComun}
+              onChange={e => { setHoraComun(e.target.value); setItems(xs => xs.map(x => ({ ...x, HoraInicio: e.target.value }))); }}
               className="border border-gray-300 rounded px-2 py-1.5 text-sm" />
           </div>
         </div>
+        <p className="text-xs text-gray-500">Entra tal como llega de Pelado: cada termo completo, con lo que pesaron en él.</p>
 
-        {grupos.map(g => {
-          const lkey = claveLinea(g.linea);
-          const asignado = g.termos.reduce((s, t) => s + (Number(t.Kg) || 0), 0);
-          const pasa = asignado - g.linea.Kg;
-          return (
-            <div key={lkey} className={`rounded-lg border p-3 space-y-2 ${pasa > 0.001 ? "border-red-300 bg-red-50/40" : "border-gray-200 bg-gray-50/60"}`}>
-              {/* Lote, avance y kilos en un renglón: la barra es el avance de lo asignado contra lo declarado al piso. */}
-              <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
-                <div className="min-w-0 shrink-0">
-                  <span className="font-mono font-bold text-gray-800">{g.linea.Lote}</span>
-                  <span className="block text-xs text-gray-500">{g.linea.Clase} · {g.linea.DescripcionTalla}{g.linea.FechaLote ? ` · prod. ${fmtDia(g.linea.FechaLote)}` : ""}</span>
+        <div className="rounded-lg border border-gray-200 divide-y divide-gray-100">
+          {items.map(x => {
+            const malo = errorEn?.key === x.key;
+            const base = x.tipo === "PELADO" ? x.t : x.l;
+            return (
+              <div key={x.key} className={`flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 text-sm ${malo ? "bg-red-50" : ""}`}>
+                <span className="w-20 shrink-0">
+                  {x.tipo === "PELADO"
+                    ? <span className="rounded bg-cyan-100 px-1.5 py-0.5 font-mono font-bold text-cyan-800" title={`Termo de Pelado · transacción #${x.t.TransaccionId}`}>{x.t.NumeroTermo}</span>
+                    : x.b.NumeroTermo
+                      ? <span className="rounded bg-blue-100 px-1.5 py-0.5 font-mono font-bold text-blue-800" title="Termo del inventario al piso">{x.b.NumeroTermo}</span>
+                      : <span className="rounded bg-gray-100 px-1.5 py-0.5 text-[11px] font-semibold uppercase text-gray-500">sin termo</span>}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate">
+                    <span className="font-mono font-semibold text-gray-800">{base.Lote}</span>{" "}
+                    <span className="text-xs text-gray-500">
+                      <span className="font-semibold text-gray-700">{base.Clase}</span> {base.DescripcionClase} · {base.DescripcionTalla}
+                      {x.tipo === "PISO" && base.FechaLote ? ` · prod. ${fmtDia(base.FechaLote)}` : ""}
+                      {x.tipo === "PELADO" ? ` · ${base.Pesadas} pesadas` : ""}
+                    </span>
+                  </p>
                 </div>
-                <div className="min-w-[14rem] flex-1"><BarraTermos alPiso={g.linea.Kg} termos={g.termos} /></div>
-                <div className="shrink-0 text-right text-sm leading-tight whitespace-nowrap">
-                  <span className={`font-semibold ${pasa > 0.001 ? "text-red-600" : "text-gray-800"}`}>{fmtNum(asignado)}</span>
-                  <span className="text-gray-500"> de {fmtNum(g.linea.Kg)} kg</span>
-                  <span className={`block text-xs ${pasa > 0.001 ? "font-semibold text-red-600" : "text-gray-400"}`}>
-                    {pasa > 0.001 ? `+${fmtNum(pasa)} kg sobre lo del piso` : "declarado al piso"}
-                  </span>
-                </div>
-                {grupos.length > 1 && (
-                  <button type="button" onClick={() => quitarLinea(lkey)} title="No tratar esta línea" aria-label="No tratar esta línea"
-                    className="shrink-0 text-xs text-gray-400 underline hover:text-red-600">quitar</button>
-                )}
+                <span className="w-28 shrink-0 text-right font-semibold text-gray-800">{fmtNum(x.Kg)} <span className="text-xs font-normal text-gray-400">kg</span></span>
+                <input type="time" value={x.HoraInicio} onChange={e => hora(x.key, e.target.value)} aria-label="Inicio"
+                  className="w-28 shrink-0 rounded border border-gray-300 bg-white px-1.5 py-1" />
+                {items.length > 1 ? (
+                  <button type="button" onClick={() => quitar(x.key)} title="No tratar esto" aria-label="No tratar esto"
+                    className="h-7 w-7 shrink-0 rounded text-lg leading-none text-gray-400 hover:bg-red-50 hover:text-red-600">&times;</button>
+                ) : <span className="w-7 shrink-0" />}
               </div>
-              {pasa > 0.001 && (
-                <p className="text-xs text-red-600">
-                  {pasa > tolerancia(g.linea.Kg)
-                    ? "Pasa de lo declarado al piso: revise los pesos de los termos."
-                    : "Pasa de lo declarado al piso: al guardar se pregunta si es diferencia de báscula."}
-                </p>
-              )}
-
-              <div className="grid grid-cols-[5.5rem_7.5rem_6.5rem_2rem] items-center gap-x-2 gap-y-1.5 text-sm">
-                <span className="text-[11px] uppercase text-gray-400"># Termo</span>
-                <span className="text-[11px] uppercase text-gray-400">Kg sin tratar</span>
-                <span className="text-[11px] uppercase text-gray-400">Inicio</span>
-                <span />
-                {g.termos.map(t => {
-                  const malo = errorEn?.key === t.key;
-                  return (
-                    <div key={t.key} className={`contents ${malo ? "[&>*]:ring-2 [&>*]:ring-red-400" : ""}`}>
-                      <input value={t.NumeroTermo} onChange={e => editarTermo(lkey, t.key, "NumeroTermo", e.target.value)} placeholder="#"
-                        aria-label="Número de termo"
-                        className={`w-full rounded border px-2 py-1 font-mono font-semibold ${t.NumeroTermo.trim() ? "border-gray-300 bg-white" : "border-amber-400 bg-amber-50"}`} />
-                      <div className="relative">
-                        <input type="number" inputMode="decimal" step="0.01" min="0" value={t.Kg} placeholder="pesar"
-                          onChange={e => editarTermo(lkey, t.key, "Kg", e.target.value)} aria-label="Kg sin tratar"
-                          className={`w-full rounded border py-1 pl-2 pr-7 text-right ${Number(t.Kg) > 0 ? "border-gray-300 bg-white" : "border-amber-400 bg-amber-50"}`} />
-                        <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-xs text-gray-400">kg</span>
-                      </div>
-                      <input type="time" value={t.HoraInicio} onChange={e => editarTermo(lkey, t.key, "HoraInicio", e.target.value)} aria-label="Inicio"
-                        className="w-full rounded border border-gray-300 bg-white px-1.5 py-1" />
-                      {g.termos.length > 1 ? (
-                        <button type="button" onClick={() => quitarTermo(lkey, t.key)} title="Quitar este termo" aria-label="Quitar este termo"
-                          className="h-7 w-7 rounded text-lg leading-none text-gray-400 hover:bg-red-50 hover:text-red-600">&times;</button>
-                      ) : <span />}
-                    </div>
-                  );
-                })}
-              </div>
-              <button type="button" onClick={() => agregarTermo(lkey)}
-                className="rounded border border-dashed border-cyan-600 px-3 py-1 text-xs font-semibold text-cyan-700 hover:bg-cyan-50">
-                + Otro termo
-              </button>
-            </div>
-          );
-        })}
+            );
+          })}
+        </div>
       </section>
 
-      {errorEn && <p className="text-sm text-red-600">{errorEn.error} No se guardó nada: corrija y vuelva a intentar.</p>}
+      {errorEn && <p className="text-sm text-red-600">{errorEn.error} No se guardó nada: actualice y vuelva a intentar.</p>}
       <div className="flex items-center justify-between gap-3 flex-wrap border-t border-gray-200 pt-3">
         <p className="text-sm text-gray-600">
-          {todos.length} termo{todos.length !== 1 ? "s" : ""} · <b>{fmtNum(totalKg)} kg</b> a tratar
-          {siguenAlPiso > 0.001 && <span className="text-amber-700"> · {fmtNum(siguenAlPiso)} kg siguen al piso</span>}
+          {items.length} {items.length === 1 ? "renglón" : "renglones"} · <b>{fmtNum(totalKg)} kg</b> a tratar
           {problema && <span className="block text-xs text-gray-400">{problema}</span>}
         </p>
-        <Botones texto="Meter a tratamiento" ocupado={ocupado} deshabilitado={!!problema} onCancelar={onCerrar} onAceptar={() => guardar()} />
+        <Botones texto="Meter a tratamiento" ocupado={ocupado} deshabilitado={!!problema} onCancelar={onCerrar} onAceptar={guardar} />
       </div>
     </Marco>
+  );
+}
+
+/* ── Agrupar por lote ─────────────────────────────────────────────── */
+// Los termos van saliendo de a poco, no todos a la vez (usuario, 10 nov 2026): las listas de termos
+// se agrupan por lote (lote, clase y talla) y debajo de cada uno sus termos, en el orden en que entraron.
+const llaveLote = (t) => `${t.Lote}|${t.Clase}|${t.Talla}`;
+function agruparPorLote(lista, deFila = (x) => x) {
+  const grupos = [];
+  const por = new Map();
+  for (const x of lista) {
+    const t = deFila(x);
+    const k = llaveLote(t);
+    if (!por.has(k)) {
+      const g = { k, Lote: t.Lote, Clase: t.Clase, DescripcionClase: t.DescripcionClase, DescripcionTalla: t.DescripcionTalla, filas: [] };
+      por.set(k, g); grupos.push(g);
+    }
+    por.get(k).filas.push(x);
+  }
+  return grupos;
+}
+
+function EncabezadoLote({ g }) {
+  return (
+    <span className="whitespace-nowrap">
+      <span className="font-mono font-bold text-gray-800">{g.Lote}</span>{" "}
+      <span className="text-xs text-gray-600"><span className="font-semibold text-gray-700">{g.Clase}</span> {g.DescripcionClase} · {g.DescripcionTalla}</span>
+    </span>
+  );
+}
+
+/* ── Canastas de la salida ────────────────────────────────────────── */
+// Lo tratado sale del termo por CANASTAS (usuario, 10 nov 2026): se pesa una por una y se va sumando
+// hasta tener el total del termo. Cada canasta es un renglón; al escribir en el último se genera
+// otro vacío abajo, y Enter pasa a él. Se guarda el total (KgTratadas), no el desglose.
+const red2 = (n) => Number(Number(n).toFixed(2));
+const sumaCanastas = (lineas) => red2(lineas.reduce((s, x) => s + (Number(x) > 0 ? Number(x) : 0), 0));
+const cuentaCanastas = (lineas) => lineas.filter(x => Number(x) > 0).length;
+// Siempre queda un renglón vacío al final para la siguiente canasta.
+const conVacio = (lineas) => (lineas.length && lineas[lineas.length - 1] === "" ? lineas : [...lineas, ""]);
+
+function Canastas({ lineas, onLineas, autoFocus = false }) {
+  const caja = useRef(null);
+  const cambiar = (i, v) => onLineas(conVacio(lineas.map((x, j) => (j === i ? v : x))));
+  const quitar = (i) => onLineas(conVacio(lineas.filter((_, j) => j !== i)));
+  const siguiente = (i) => caja.current?.querySelectorAll("input")[i + 1]?.focus();
+  const total = sumaCanastas(lineas);
+  const n = cuentaCanastas(lineas);
+  return (
+    <div ref={caja} className="min-w-[10rem] space-y-1">
+      {lineas.map((x, i) => {
+        const ultima = i === lineas.length - 1;
+        return (
+          <div key={i} className="flex items-center gap-1.5">
+            <span className="w-5 text-right text-[11px] text-gray-400">{i + 1}</span>
+            <input type="number" inputMode="decimal" step="0.01" min="0" value={x}
+              placeholder={ultima ? (n ? "otra" : "kg") : ""} autoFocus={autoFocus && i === 0}
+              onChange={e => cambiar(i, e.target.value)}
+              onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); siguiente(i); } }}
+              aria-label={`Peso de la canasta ${i + 1}`}
+              className={`w-24 rounded border px-2 py-0.5 text-sm ${
+                ultima ? (n ? "border-dashed border-gray-300 bg-white" : "border-amber-400 bg-amber-50") : "border-gray-300 bg-white"}`} />
+            {!ultima && (
+              <button type="button" onClick={() => quitar(i)} aria-label={`Quitar la canasta ${i + 1}`} title="Quitar esta canasta"
+                className="px-1 text-base leading-none text-gray-400 hover:text-red-600">&times;</button>
+            )}
+          </div>
+        );
+      })}
+      {n > 0 && (
+        <p className="border-t border-gray-200 pt-1 pl-6 text-xs text-gray-600">
+          <b className="text-gray-900">{fmtNum(total)} kg</b> · {n} canasta{n !== 1 ? "s" : ""}
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -391,21 +369,23 @@ function ModalTratar({ lineas, fecha, hojas, clientes, empleados, pedirConfirmac
 function ModalSalidas({ termos, destinos, destinoSugerido, pickupMaximo, onConfirmar, onCerrar }) {
   const [horaSalida, setHoraSalida] = useState(horaGT());
   const [destino, setDestino] = useState(destinoSugerido || "");
-  const [filas, setFilas] = useState(() => termos.map(t => ({ t, ConteoFinal: "", KgTratadas: "" })));
+  const [filas, setFilas] = useState(() => termos.map(t => ({ t, ConteoFinal: "", lineas: [""] })));
   const [errorEn, setErrorEn] = useState(null);
   const [ocupado, setOcupado] = useState(false);
   const set = (id, campo, v) => setFilas(fs => fs.map(f => (f.t.TermoId === id ? { ...f, [campo]: v } : f)));
-  const completo = horaSalida && destino && filas.every(f => Number(f.KgTratadas) > 0);
+  const kgDe = (f) => sumaCanastas(f.lineas);
+  const completo = horaSalida && destino && filas.every(f => kgDe(f) > 0);
   // Totales de lo que sale junto. El pick-up del total es solo de los termos ya pesados: contar los
   // kg sin tratar de uno que falta pesar se leería como pérdida.
   const totalSin = filas.reduce((s, f) => s + Number(f.t.KgSinTratar || 0), 0);
-  const pesados = filas.filter(f => Number(f.KgTratadas) > 0);
-  const totalTrat = pesados.reduce((s, f) => s + Number(f.KgTratadas), 0);
+  const pesados = filas.filter(f => kgDe(f) > 0);
+  const totalTrat = pesados.reduce((s, f) => s + kgDe(f), 0);
+  const totalCanastas = filas.reduce((s, f) => s + cuentaCanastas(f.lineas), 0);
   const pTotal = pickupDe(pesados.reduce((s, f) => s + Number(f.t.KgSinTratar || 0), 0), totalTrat);
   const faltan = filas.length - pesados.length;
 
   return (
-    <Marco titulo={`Salida de ${termos.length} termo${termos.length !== 1 ? "s" : ""}`} ancho="max-w-3xl" onClose={onCerrar}>
+    <Marco titulo={`Salida de ${termos.length} termo${termos.length !== 1 ? "s" : ""}`} ancho="max-w-4xl" onClose={onCerrar}>
       <div className="flex flex-wrap gap-4 items-end">
         <div>
           <Etiqueta>Salida trat.</Etiqueta>
@@ -423,18 +403,30 @@ function ModalSalidas({ termos, destinos, destinoSugerido, pickupMaximo, onConfi
         <table className="w-full text-sm">
           <thead className="bg-gray-50 text-xs text-gray-500 uppercase">
             <tr>
-              <th className="text-left px-2 py-2"># Termo</th><th className="text-left px-2 py-2">Lote</th><th className="text-left px-2 py-2">Entró</th>
+              <th className="text-left px-2 py-2"># Termo</th><th className="text-left px-2 py-2">Entró</th>
               <th className="text-right px-2 py-2">Kg sin tratar</th><th className="text-left px-2 py-2">Conteo fin.</th>
-              <th className="text-left px-2 py-2">Kg tratadas</th><th className="text-right px-2 py-2">% Pick-up</th>
+              <th className="text-left px-2 py-2">Kg tratadas (por canasta)</th><th className="text-right px-2 py-2">% Pick-up</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-gray-100">
-            {filas.map((f, i) => {
-              const p = pickupDe(f.t.KgSinTratar, f.KgTratadas);
+          {agruparPorLote(filas.map((f, i) => ({ f, i })), x => x.f.t).map(g => {
+            const sinLote = g.filas.reduce((s, x) => s + Number(x.f.t.KgSinTratar || 0), 0);
+            const pesadosLote = g.filas.filter(x => kgDe(x.f) > 0);
+            const tratLote = pesadosLote.reduce((s, x) => s + kgDe(x.f), 0);
+            const pLote = pickupDe(pesadosLote.reduce((s, x) => s + Number(x.f.t.KgSinTratar || 0), 0), tratLote);
+            return (
+          <tbody key={g.k} className="divide-y divide-gray-100 border-t-2 border-gray-200">
+            <tr className="bg-slate-100">
+              <td className="px-2 py-1.5" colSpan={2}><EncabezadoLote g={g} /></td>
+              <td className="px-2 py-1.5 text-right font-semibold whitespace-nowrap">{fmtNum(sinLote)}</td>
+              <td />
+              <td className="px-2 py-1.5 font-semibold whitespace-nowrap">{pesadosLote.length ? `${fmtNum(tratLote)} kg` : ""}</td>
+              <td className="px-2 py-1.5 text-right whitespace-nowrap"><Pickup valor={pLote} alerta={alertaDe(pLote, pickupMaximo)} /></td>
+            </tr>
+            {g.filas.map(({ f, i }) => {
+              const p = pickupDe(f.t.KgSinTratar, kgDe(f));
               return (
-                <tr key={f.t.TermoId} className={errorEn?.Indice === i ? "bg-red-50" : ""}>
-                  <td className="px-2 py-1.5 font-mono font-semibold">{f.t.NumeroTermo}</td>
-                  <td className="px-2 py-1.5"><span className="font-mono">{f.t.Lote}</span> <span className="text-xs text-gray-500">{f.t.DescripcionTalla}</span></td>
+                <tr key={f.t.TermoId} className={`[&>td]:align-top ${errorEn?.Indice === i ? "bg-red-50" : ""}`}>
+                  <td className="pl-5 pr-2 py-1.5 font-mono font-semibold">{f.t.NumeroTermo ?? <span className="font-sans text-[11px] uppercase text-gray-400">del piso</span>}</td>
                   <td className="px-2 py-1.5">{hora(f.t.HoraInicio)}</td>
                   <td className="px-2 py-1.5 text-right">{fmtNum(f.t.KgSinTratar)}</td>
                   <td className="px-2 py-1.5">
@@ -442,24 +434,24 @@ function ModalSalidas({ termos, destinos, destinoSugerido, pickupMaximo, onConfi
                       className="w-20 border border-gray-300 rounded px-2 py-1 text-sm" />
                   </td>
                   <td className="px-2 py-1.5">
-                    <input type="number" inputMode="decimal" step="0.01" value={f.KgTratadas} placeholder="pesar" onChange={e => set(f.t.TermoId, "KgTratadas", e.target.value)}
-                      className={`w-24 border rounded px-2 py-1 text-sm ${Number(f.KgTratadas) > 0 ? "border-gray-300" : "border-amber-400 bg-amber-50"}`} />
+                    <Canastas lineas={f.lineas} autoFocus={i === 0} onLineas={v => set(f.t.TermoId, "lineas", v)} />
                   </td>
                   <td className="px-2 py-1.5 text-right whitespace-nowrap"><Pickup valor={p} alerta={alertaDe(p, pickupMaximo)} /></td>
                 </tr>
               );
             })}
           </tbody>
+            );
+          })}
           {filas.length > 1 && (
             <tfoot className="border-t-2 border-gray-300 bg-gray-50 font-semibold text-gray-800">
               <tr>
-                <td className="px-2 py-2 text-xs uppercase text-gray-500" colSpan={3}>Total · {filas.length} termos</td>
+                <td className="px-2 py-2 text-xs uppercase text-gray-500" colSpan={2}>Total · {filas.length} termos</td>
                 <td className="px-2 py-2 text-right whitespace-nowrap">{fmtNum(totalSin)}</td>
                 <td />
                 <td className="px-2 py-2 whitespace-nowrap">
-                  {/* Alineado con el texto de las casillas de arriba (w-24 + px-2). */}
-                  <span className="inline-block w-24 px-2">{fmtNum(totalTrat)}</span>
-                  {faltan > 0 && <span className="block px-2 text-[11px] font-normal text-amber-700">falta{faltan > 1 ? "n" : ""} {faltan} por pesar</span>}
+                  {fmtNum(totalTrat)} <span className="text-xs font-normal text-gray-500">kg · {totalCanastas} canasta{totalCanastas !== 1 ? "s" : ""}</span>
+                  {faltan > 0 && <span className="block text-[11px] font-normal text-amber-700">falta{faltan > 1 ? "n" : ""} {faltan} por pesar</span>}
                 </td>
                 <td className="px-2 py-2 text-right whitespace-nowrap"><Pickup valor={pTotal} alerta={alertaDe(pTotal, pickupMaximo)} /></td>
               </tr>
@@ -473,7 +465,7 @@ function ModalSalidas({ termos, destinos, destinoSugerido, pickupMaximo, onConfi
           setOcupado(true); setErrorEn(null);
           const r = await onConfirmar({
             HoraSalida: horaSalida, BodegaDestino: destino,
-            Salidas: filas.map(f => ({ TermoId: f.t.TermoId, KgTratadas: Number(f.KgTratadas), ConteoFinal: f.ConteoFinal === "" ? null : Number(f.ConteoFinal) })),
+            Salidas: filas.map(f => ({ TermoId: f.t.TermoId, KgTratadas: kgDe(f), ConteoFinal: f.ConteoFinal === "" ? null : Number(f.ConteoFinal) })),
           });
           setOcupado(false);
           if (r) setErrorEn({ Indice: r.Indice ?? null, error: r.error });
@@ -495,16 +487,18 @@ function ModalEntrada({ linea, termo, quimicos, quimicoSugerido, onConfirmar, on
   // Los kg sin tratar se pesan por termo (10 nov 2026), así que se corrigen aquí mientras el termo
   // no haya salido; el servidor revisa que alcance lo del piso.
   const yaSalio = editando && termo.KgTratadas != null;
+  const dePelado = editando && termo.TransaccionPelado != null;
 
   return (
-    <Marco titulo={editando ? `Corregir termo ${termo.NumeroTermo}` : "Termo nuevo"} onClose={onCerrar}>
+    <Marco titulo={editando ? `Corregir ${nombreTermo(termo)}` : "Termo nuevo"} onClose={onCerrar}>
       <div className="text-sm bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
         <p><span className="font-mono font-bold">{base.Lote}</span> · {base.DescripcionTalla}</p>
         <p className="text-gray-500 text-xs">{base.Clase} {base.DescripcionClase}{base.FechaLote ? ` · prod. ${fmtDia(base.FechaLote)}` : ""}</p>
         {!editando && <p className="text-xs mt-1">Al piso: <b>{fmtNum(linea.Kg)} kg</b></p>}
       </div>
       <div className="grid grid-cols-2 gap-3">
-        <div><Etiqueta># Termo</Etiqueta><input value={f.NumeroTermo} onChange={set("NumeroTermo")} className={campo} autoFocus /></div>
+        <div><Etiqueta># Termo (opcional)</Etiqueta><input value={f.NumeroTermo} onChange={set("NumeroTermo")} disabled={dePelado}
+          className={`${campo} ${dePelado ? "bg-gray-100" : ""}`} autoFocus={!dePelado} /></div>
         <div><Etiqueta>Inicio trat.</Etiqueta><input type="time" value={f.HoraInicio} onChange={set("HoraInicio")} className={campo} /></div>
         <div className="col-span-2">
           <Etiqueta>Tipo de químico</Etiqueta>
@@ -515,17 +509,19 @@ function ModalEntrada({ linea, termo, quimicos, quimicoSugerido, onConfirmar, on
         </div>
         <div className="col-span-2">
           <Etiqueta>Kg sin tratar</Etiqueta>
-          <input type="number" inputMode="decimal" step="0.01" value={f.KgSinTratar} onChange={set("KgSinTratar")} disabled={yaSalio}
-            className={`${campo} ${yaSalio ? "bg-gray-100" : ""}`} />
-          {yaSalio && <p className="text-xs text-gray-400 mt-1">El termo ya salió: para cambiar los kg, quite primero la salida.</p>}
+          <input type="number" inputMode="decimal" step="0.01" value={f.KgSinTratar} onChange={set("KgSinTratar")} disabled={yaSalio || dePelado}
+            className={`${campo} ${yaSalio || dePelado ? "bg-gray-100" : ""}`} />
+          {dePelado ? <p className="text-xs text-gray-400 mt-1">El número y los kg son los del termo y sus pesadas en Pelado. Para corregirlos, quite el termo ({termo.TomadoDePelado ? "vuelve a Pelado" : "vuelve al piso"}) y vuelva a meterlo.</p>
+            : yaSalio && <p className="text-xs text-gray-400 mt-1">El termo ya salió: para cambiar los kg, quite primero la salida.</p>}
         </div>
       </div>
       <Botones texto={editando ? "Guardar" : "Registrar entrada"} ocupado={ocupado}
-        deshabilitado={!f.NumeroTermo.trim() || !f.HoraInicio || !(Number(f.KgSinTratar) > 0)} onCancelar={onCerrar}
+        deshabilitado={!f.HoraInicio || !(Number(f.KgSinTratar) > 0)} onCancelar={onCerrar}
         onAceptar={async () => {
           setOcupado(true);
           const datos = { ...f, KgSinTratar: Number(f.KgSinTratar) };
-          if (yaSalio) delete datos.KgSinTratar;
+          if (yaSalio || dePelado) delete datos.KgSinTratar;
+          if (dePelado) delete datos.NumeroTermo;
           await onConfirmar(datos);
           setOcupado(false);
         }} />
@@ -537,16 +533,18 @@ function ModalEntrada({ linea, termo, quimicos, quimicoSugerido, onConfirmar, on
 function ModalSalida({ termo, destinos, destinoSugerido, pickupMaximo, onConfirmar, onCerrar }) {
   const [f, setF] = useState({
     HoraSalida: hora(termo.HoraSalida) || horaGT(), ConteoFinal: termo.ConteoFinal ?? "",
-    KgTratadas: termo.KgTratadas != null ? String(termo.KgTratadas) : "",
     BodegaDestino: termo.BodegaDestino || destinoSugerido || "",
   });
+  // Al corregir se parte del total guardado como una sola canasta: el desglose no se guarda.
+  const [lineas, setLineas] = useState(() => (termo.KgTratadas != null ? [String(termo.KgTratadas), ""] : [""]));
+  const kgTratadas = sumaCanastas(lineas);
   const [ocupado, setOcupado] = useState(false);
   const set = (k) => (e) => setF(x => ({ ...x, [k]: e.target.value }));
-  const p = pickupDe(termo.KgSinTratar, f.KgTratadas);
+  const p = pickupDe(termo.KgSinTratar, kgTratadas);
   const alerta = alertaDe(p, pickupMaximo);
 
   return (
-    <Marco titulo={`Salida del termo ${termo.NumeroTermo}`} onClose={onCerrar}>
+    <Marco titulo={`Salida de ${nombreTermo(termo)}`} onClose={onCerrar}>
       <div className="text-sm bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
         <p><span className="font-mono font-bold">{termo.Lote}</span> · {termo.DescripcionTalla}</p>
         <p className="text-xs text-gray-500">Entró a las {hora(termo.HoraInicio)} con <b>{fmtNum(termo.KgSinTratar)} kg</b> sin tratar</p>
@@ -554,7 +552,10 @@ function ModalSalida({ termo, destinos, destinoSugerido, pickupMaximo, onConfirm
       <div className="grid grid-cols-2 gap-3">
         <div><Etiqueta>Salida trat.</Etiqueta><input type="time" value={f.HoraSalida} onChange={set("HoraSalida")} className={campo} /></div>
         <div><Etiqueta>Conteo final</Etiqueta><input type="number" inputMode="numeric" value={f.ConteoFinal} onChange={set("ConteoFinal")} className={campo} /></div>
-        <div><Etiqueta>Kg tratadas</Etiqueta><input type="number" inputMode="decimal" step="0.01" value={f.KgTratadas} onChange={set("KgTratadas")} className={campo} autoFocus /></div>
+        <div>
+          <Etiqueta>Kg tratadas (por canasta)</Etiqueta>
+          <Canastas lineas={lineas} onLineas={setLineas} autoFocus />
+        </div>
         <div>
           <Etiqueta>Va a</Etiqueta>
           <select value={f.BodegaDestino} onChange={set("BodegaDestino")} className={`${campo} ${f.BodegaDestino ? "" : "border-amber-400 bg-amber-50"}`}>
@@ -570,10 +571,10 @@ function ModalSalida({ termo, destinos, destinoSugerido, pickupMaximo, onConfirm
       {alerta === "PERDIDA" && <p className="text-xs text-red-600">Sale pesando menos de lo que entró. Se registra tal cual, como alerta: revise tiempo y dosis.</p>}
       {alerta === "EXCEDE" && <p className="text-xs text-amber-700">Pasa del máximo de {pickupMaximo} %. Se registra, pero conviene revisar el peso o la dosis.</p>}
       <Botones texto="Registrar salida" ocupado={ocupado}
-        deshabilitado={!f.HoraSalida || !(Number(f.KgTratadas) > 0) || !f.BodegaDestino} onCancelar={onCerrar}
+        deshabilitado={!f.HoraSalida || !(kgTratadas > 0) || !f.BodegaDestino} onCancelar={onCerrar}
         onAceptar={async () => {
           setOcupado(true);
-          await onConfirmar({ ...f, ConteoFinal: f.ConteoFinal === "" ? null : Number(f.ConteoFinal), KgTratadas: Number(f.KgTratadas) });
+          await onConfirmar({ ...f, ConteoFinal: f.ConteoFinal === "" ? null : Number(f.ConteoFinal), KgTratadas: kgTratadas });
           setOcupado(false);
         }} />
     </Marco>
@@ -597,7 +598,7 @@ function ModalCerrar({ hoja, onConfirmar, onCerrar }) {
   return (
     <Marco titulo={`Cerrar hoja #${hoja.HojaId}`} ancho="max-w-xl" onClose={onCerrar}>
       {enTermo.length > 0 ? (
-        <p className="text-sm text-red-600">Falta la salida de {enTermo.length} termo{enTermo.length > 1 ? "s" : ""}: {enTermo.map(x => x.NumeroTermo).join(", ")}.</p>
+        <p className="text-sm text-red-600">Falta la salida de {enTermo.length} termo{enTermo.length > 1 ? "s" : ""}: {enTermo.map(nombreTermo).join(", ")}.</p>
       ) : (
         <>
           <div className="grid grid-cols-4 gap-2 text-center text-sm">
@@ -640,65 +641,151 @@ function ModalCerrar({ hoja, onConfirmar, onCerrar }) {
   );
 }
 
+/* ── Termos que Pelado va llenando ────────────────────────────────── */
+// Tratamiento no espera a que Pelado cierre: ve los termos de las transacciones abiertas con lo pesado
+// hasta ahora y toma el que va a trabajar. "Se sigue llenando" si la última pesada fue hace poco: se
+// puede tomar igual, pero lo que pesen después ya no cabe en ese termo.
+const MINUTOS_LLENANDO = 10;
+const llaveGrupoPelado = (t) => `${t.Lote}|${t.Clase}|${t.Talla}`;
+
+function TermosPelado({ termos, puedeTratar, marcados, setMarcados, onTratar }) {
+  const sel = termos.filter(t => marcados.has(llavePelado(t)));
+  const kgSel = sel.reduce((s, t) => s + t.Kg, 0);
+  const total = termos.reduce((s, t) => s + t.Kg, 0);
+  const alternar = (t) => setMarcados(m => { const n = new Set(m); const k = llavePelado(t); n.has(k) ? n.delete(k) : n.add(k); return n; });
+  const grupos = [];
+  const por = new Map();
+  for (const t of termos) {
+    const k = llaveGrupoPelado(t);
+    if (!por.has(k)) { const g = { k, Lote: t.Lote, Clase: t.Clase, DescripcionClase: t.DescripcionClase, DescripcionTalla: t.DescripcionTalla, termos: [] }; por.set(k, g); grupos.push(g); }
+    por.get(k).termos.push(t);
+  }
+  return (
+    <div className="bg-white border border-cyan-300 rounded-lg">
+      <div className="px-4 py-2.5 border-b border-cyan-100 bg-cyan-50/60 rounded-t-lg flex flex-wrap items-center gap-2">
+        <h2 className="font-semibold text-cyan-900">Termos en Pelado</h2>
+        <span className="text-xs text-cyan-800">{termos.length} termo{termos.length !== 1 ? "s" : ""} · {fmtNum(total)} kg pesados en transacciones abiertas</span>
+        {puedeTratar && termos.length > 0 && (
+          <button onClick={onTratar} disabled={!sel.length}
+            className="ml-auto bg-cyan-700 text-white rounded px-3 py-1.5 text-xs font-semibold hover:bg-cyan-800 disabled:opacity-40">
+            {sel.length ? `Tomar y tratar (${sel.length} termo${sel.length !== 1 ? "s" : ""} · ${fmtNum(kgSel)} kg)` : "Marque los termos que va a trabajar"}
+          </button>
+        )}
+      </div>
+      {termos.length === 0 ? (
+        <p className="px-4 py-4 text-center text-sm text-gray-400">Pelado no tiene termos pesados en transacciones abiertas.</p>
+      ) : (
+        <div className="divide-y divide-gray-100">
+          {grupos.map(g => (
+            <div key={g.k} className="px-4 py-2 flex flex-wrap items-start gap-x-4 gap-y-2">
+              <div className="w-44 shrink-0">
+                <p className="font-mono font-semibold text-gray-800">{g.Lote}</p>
+                <p className="text-xs text-gray-500"><span className="font-semibold text-gray-700">{g.Clase}</span> {g.DescripcionClase} · {g.DescripcionTalla}</p>
+              </div>
+              <div className="flex flex-1 flex-wrap gap-2">
+                {g.termos.map(t => {
+                  const k = llavePelado(t);
+                  const on = marcados.has(k);
+                  const llenando = t.MinutosSinPesar != null && t.MinutosSinPesar < MINUTOS_LLENANDO;
+                  return (
+                    <button key={k} type="button" disabled={!puedeTratar} onClick={() => alternar(t)}
+                      title={`Transacción #${t.TransaccionId} · ${t.Pesadas} pesadas · ${hora(t.Primera)}–${hora(t.Ultima)}`}
+                      className={`min-w-[8.5rem] rounded-lg border px-3 py-1.5 text-left transition focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500 ${
+                        on ? "border-cyan-700 bg-cyan-700 text-white" : "border-gray-200 bg-white hover:border-cyan-400 hover:bg-cyan-50"}`}>
+                      <span className="flex items-baseline justify-between gap-2">
+                        {/* El número del termo como etiqueta con fondo, para que no se confunda con los kg. */}
+                        <span className={`rounded px-1.5 py-0.5 font-mono font-bold ${on ? "bg-white text-cyan-800" : "bg-cyan-100 text-cyan-800"}`}>{t.NumeroTermo}</span>
+                        <span className="font-semibold">{fmtNum(t.Kg)} <span className={`text-xs font-normal ${on ? "text-cyan-100" : "text-gray-400"}`}>kg</span></span>
+                      </span>
+                      <span className={`block text-[11px] ${on ? "text-cyan-100" : llenando ? "text-amber-700 font-semibold" : "text-gray-500"}`}>
+                        {llenando ? `se sigue llenando · ${t.MinutosSinPesar} min` : `última pesada ${hora(t.Ultima)}`}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ── Inventario al piso de Tratamiento ────────────────────────────── */
-// Se marca lo que se va a tratar (una línea, varias o todas) y "Tratar" abre la captura con el
-// cliente. Ya no hace falta abrir la hoja antes.
+// Lo del piso se trata POR TERMO (usuario, 10 nov 2026): cada línea muestra sus termos (los de las
+// pesadas de Pelado, ver lib/tratamiento.ts termosDelPiso) y se marcan los que se van a trabajar.
+// La casilla de la línea marca todos sus termos. "Tratar" abre la captura con el cliente.
 function InventarioPiso({ saldo, puedeTratar, marcadas, setMarcadas, onTratar }) {
   const total = saldo.reduce((s, l) => s + l.Kg, 0);
-  const sel = saldo.filter(l => marcadas.has(claveLinea(l)));
-  const kgSel = sel.reduce((s, l) => s + l.Kg, 0);
-  const todas = saldo.length > 0 && sel.length === saldo.length;
-  const alternar = (l) => setMarcadas(m => { const n = new Set(m); const k = claveLinea(l); n.has(k) ? n.delete(k) : n.add(k); return n; });
+  const todos = saldo.flatMap(l => l.TermosDetalle.map(t => ({ l, t, k: llaveTermoPiso(l, t) })));
+  const sel = todos.filter(x => marcadas.has(x.k));
+  const kgSel = sel.reduce((s, x) => s + x.t.Kg, 0);
+  const alternar = (k) => setMarcadas(m => { const n = new Set(m); n.has(k) ? n.delete(k) : n.add(k); return n; });
+  const alternarLinea = (ks, todasMarcadas) => setMarcadas(m => {
+    const n = new Set(m);
+    for (const k of ks) { if (todasMarcadas) n.delete(k); else n.add(k); }
+    return n;
+  });
   return (
     <div className="bg-white border border-gray-300 rounded-lg">
       <div className="px-4 py-2.5 border-b flex flex-wrap items-center gap-2">
         <h2 className="font-semibold text-gray-800">Inventario al piso de Tratamiento</h2>
-        <span className="text-xs text-gray-500">{saldo.length} línea{saldo.length !== 1 ? "s" : ""} · {fmtNum(total)} kg</span>
+        <span className="text-xs text-gray-500">{saldo.length} línea{saldo.length !== 1 ? "s" : ""} · {todos.length} termo{todos.length !== 1 ? "s" : ""} · {fmtNum(total)} kg</span>
         {puedeTratar && saldo.length > 0 && (
-          <button onClick={() => onTratar(sel)} disabled={!sel.length}
+          <button onClick={onTratar} disabled={!sel.length}
             className="ml-auto bg-blue-600 text-white rounded px-3 py-1.5 text-xs font-semibold hover:bg-blue-700 disabled:opacity-40">
-            {sel.length ? `Tratar (${sel.length} línea${sel.length !== 1 ? "s" : ""} · ${fmtNum(kgSel)} kg)` : "Marque lo que va a tratar"}
+            {sel.length ? `Tratar (${sel.length} termo${sel.length !== 1 ? "s" : ""} · ${fmtNum(kgSel)} kg)` : "Marque los termos que va a tratar"}
           </button>
         )}
       </div>
       {saldo.length === 0 ? (
         <p className="px-4 py-6 text-center text-sm text-gray-400">No hay producto al piso. Llega al cerrar las transacciones de Pelado con destino Tratamiento.</p>
       ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead className="bg-gray-50 text-xs text-gray-500 uppercase">
-              <tr>
-                {puedeTratar && (
-                  <th className="px-3 py-2 w-8">
-                    <input type="checkbox" checked={todas} title="Marcar todo"
-                      onChange={e => setMarcadas(e.target.checked ? new Set(saldo.map(claveLinea)) : new Set())} />
-                  </th>
-                )}
-                <th className="text-left px-3 py-2">Lote</th><th className="text-left px-3 py-2">Clase</th>
-                <th className="text-left px-3 py-2">Talla</th><th className="text-left px-3 py-2">Prod.</th>
-                <th className="text-right px-3 py-2">Días al piso</th><th className="text-right px-3 py-2">Kg</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
-              {saldo.map(l => {
-                const k = claveLinea(l);
-                return (
-                  <tr key={k} onClick={puedeTratar ? () => alternar(l) : undefined}
-                    className={`${puedeTratar ? "cursor-pointer hover:bg-gray-50" : ""} ${marcadas.has(k) ? "bg-blue-50" : ""}`}>
-                    {puedeTratar && (
-                      <td className="px-3 py-1.5"><input type="checkbox" checked={marcadas.has(k)} onChange={() => alternar(l)} onClick={e => e.stopPropagation()} /></td>
-                    )}
-                    <td className="px-3 py-1.5 font-mono whitespace-nowrap">{l.Lote}</td>
-                    <td className="px-3 py-1.5"><span className="font-semibold">{l.Clase}</span> <span className="text-xs text-gray-500">{l.DescripcionClase}</span></td>
-                    <td className="px-3 py-1.5 whitespace-nowrap">{l.DescripcionTalla}</td>
-                    <td className="px-3 py-1.5 whitespace-nowrap text-gray-500">{fmtDia(l.FechaLote)}</td>
-                    <td className={`px-3 py-1.5 text-right ${l.DiasAlPiso > 2 ? "text-amber-700 font-semibold" : ""}`}>{l.DiasAlPiso ?? "—"}</td>
-                    <td className="px-3 py-1.5 text-right font-semibold whitespace-nowrap">{fmtNum(l.Kg)}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+        <div className="divide-y divide-gray-100">
+          {saldo.map(l => {
+            const ks = l.TermosDetalle.map(t => llaveTermoPiso(l, t));
+            const todasMarcadas = ks.length > 0 && ks.every(k => marcadas.has(k));
+            return (
+              <div key={claveLinea(l)} className="px-4 py-2 flex flex-wrap items-start gap-x-4 gap-y-2">
+                <div className="flex w-64 shrink-0 items-start gap-2">
+                  {puedeTratar && (
+                    <input type="checkbox" className="mt-1" checked={todasMarcadas} title="Marcar todos los termos de esta línea"
+                      onChange={() => alternarLinea(ks, todasMarcadas)} />
+                  )}
+                  <div className="min-w-0">
+                    <p className="flex items-baseline gap-2">
+                      <span className="font-mono font-semibold text-gray-800">{l.Lote}</span>
+                      <span className="text-sm font-semibold text-gray-800">{fmtNum(l.Kg)} <span className="text-xs font-normal text-gray-400">kg</span></span>
+                    </p>
+                    <p className="text-xs text-gray-500"><span className="font-semibold text-gray-700">{l.Clase}</span> {l.DescripcionClase} · {l.DescripcionTalla}</p>
+                    <p className="text-[11px] text-gray-400">
+                      prod. {fmtDia(l.FechaLote)} · <span className={l.DiasAlPiso > 2 ? "font-semibold text-amber-700" : ""}>{l.DiasAlPiso ?? 0} día{l.DiasAlPiso === 1 ? "" : "s"} al piso</span>
+                    </p>
+                  </div>
+                </div>
+                <div className="flex flex-1 flex-wrap gap-2">
+                  {l.TermosDetalle.map(t => {
+                    const k = llaveTermoPiso(l, t);
+                    const on = marcadas.has(k);
+                    return (
+                      <button key={k} type="button" disabled={!puedeTratar} onClick={() => alternar(k)}
+                        title={t.TransaccionId ? `Termo ${t.NumeroTermo} · transacción #${t.TransaccionId} de Pelado` : "Lo que está al piso sin termo identificado"}
+                        className={`min-w-[8.5rem] rounded-lg border px-3 py-1.5 text-left transition focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 ${
+                          on ? "border-blue-600 bg-blue-600 text-white" : "border-gray-200 bg-white hover:border-blue-300 hover:bg-blue-50"}`}>
+                        <span className="flex items-baseline justify-between gap-2">
+                          {t.NumeroTermo
+                            ? <span className={`rounded px-1.5 py-0.5 font-mono font-bold ${on ? "bg-white text-blue-800" : "bg-blue-100 text-blue-800"}`}>{t.NumeroTermo}</span>
+                            : <span className={`rounded px-1.5 py-0.5 text-[11px] font-semibold uppercase ${on ? "bg-white text-gray-600" : "bg-gray-100 text-gray-500"}`}>sin termo</span>}
+                          <span className="font-semibold">{fmtNum(t.Kg)} <span className={`text-xs font-normal ${on ? "text-blue-100" : "text-gray-400"}`}>kg</span></span>
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
@@ -706,20 +793,27 @@ function InventarioPiso({ saldo, puedeTratar, marcadas, setMarcadas, onTratar })
 }
 
 /* ── Los termos de la hoja ────────────────────────────────────────── */
-// Los termos sin salida se marcan para sacarlos juntos ("Registrar salida"); "Corregir salida" sigue
-// siendo de uno en uno.
-function TablaTermos({ hoja, abierta, puedeCrear, puedeEditar, puedeBorrar, onSalidas, onCorregirSalida, onEditar, onQuitarSalida, onBorrar }) {
+// Agrupados por lote; debajo de cada lote, sus termos. Los que siguen en tratamiento se marcan para
+// sacarlos juntos ("Registrar salida"), de uno en uno o el lote completo con su casilla. "Corregir
+// salida" sigue siendo de uno en uno.
+function TablaTermos({ hoja, abierta, pickupMaximo, puedeCrear, puedeEditar, puedeBorrar, onSalidas, onCorregirSalida, onEditar, onQuitarSalida, onBorrar }) {
   const [marcados, setMarcados] = useState(new Set());
   const pendientes = hoja.Termos.filter(t => t.KgTratadas == null);
   const marcables = abierta && puedeCrear && pendientes.length > 0;
   const sel = pendientes.filter(t => marcados.has(t.TermoId));
   useEffect(() => { setMarcados(new Set()); }, [hoja]);
   const alternar = (id) => setMarcados(m => { const n = new Set(m); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const alternarLote = (ids, todos) => setMarcados(m => {
+    const n = new Set(m);
+    for (const id of ids) { if (todos) n.delete(id); else n.add(id); }
+    return n;
+  });
   if (!hoja.Termos.length) {
     return <div className="bg-white border border-gray-300 rounded-lg px-4 py-6 text-center text-sm text-gray-400">
-      Sin termos todavía. Marque lo del inventario al piso y use "Tratar".
+      Sin termos todavía. Marque lo que va a trabajar y use "Tratar".
     </div>;
   }
+  const grupos = agruparPorLote(hoja.Termos);
   return (
     <div className="bg-white border border-gray-300 rounded-lg overflow-x-auto">
       {marcables && (
@@ -740,54 +834,87 @@ function TablaTermos({ hoja, abierta, puedeCrear, puedeEditar, puedeBorrar, onSa
                   onChange={e => setMarcados(e.target.checked ? new Set(pendientes.map(t => t.TermoId)) : new Set())} />
               </th>
             )}
-            <th className="text-left px-2 py-2"># Termo</th><th className="text-left px-2 py-2">Lote</th><th className="text-left px-2 py-2">Talla</th>
+            <th className="text-left px-2 py-2"># Termo</th>
             <th className="text-left px-2 py-2">Inicio</th><th className="text-left px-2 py-2">Salida</th>
             <th className="text-right px-2 py-2">Conteo fin.</th>
-            <th className="text-left px-2 py-2">Tiempo</th><th className="text-left px-2 py-2">Químico</th><th className="text-left px-2 py-2">Corte</th>
+            <th className="text-left px-2 py-2">Tiempo</th><th className="text-left px-2 py-2">Químico</th>
             <th className="text-right px-2 py-2">Kg sin tratar</th><th className="text-right px-2 py-2">Kg tratadas</th>
             <th className="text-right px-2 py-2">% Pick-up</th><th className="text-left px-2 py-2">Va a</th><th className="px-2 py-2" />
           </tr>
         </thead>
-        <tbody className="divide-y divide-gray-100">
-          {hoja.Termos.map(t => (
-            <tr key={t.TermoId} className={t.Alerta === "PERDIDA" ? "bg-red-50" : t.Alerta === "EXCEDE" ? "bg-amber-50" : t.KgTratadas == null ? "bg-blue-50/40" : ""}>
-              {marcables && (
-                <td className="px-2 py-1.5">
-                  {t.KgTratadas == null && <input type="checkbox" checked={marcados.has(t.TermoId)} onChange={() => alternar(t.TermoId)} />}
+        {grupos.map(g => {
+          const enTrat = g.filas.filter(t => t.KgTratadas == null);
+          const idsPend = enTrat.map(t => t.TermoId);
+          const todosLote = idsPend.length > 0 && idsPend.every(id => marcados.has(id));
+          const salidos = g.filas.filter(t => t.KgTratadas != null);
+          const sinTot = g.filas.reduce((s, t) => s + t.KgSinTratar, 0);
+          const tratTot = salidos.reduce((s, t) => s + t.KgTratadas, 0);
+          const pLote = pickupDe(salidos.reduce((s, t) => s + t.KgSinTratar, 0), tratTot);
+          return (
+            <tbody key={g.k} className="divide-y divide-gray-100 border-t-2 border-gray-200">
+              {/* Encabezado del lote, con lo que suma hasta ahora (el pick-up, de lo que ya salió). */}
+              <tr className="bg-slate-100">
+                {marcables && (
+                  <td className="px-2 py-1.5">
+                    {idsPend.length > 0 && (
+                      <input type="checkbox" checked={todosLote} title="Marcar los termos de este lote que no han salido"
+                        onChange={() => alternarLote(idsPend, todosLote)} />
+                    )}
+                  </td>
+                )}
+                <td className="px-2 py-1.5" colSpan={6}>
+                  <EncabezadoLote g={g} />
+                  <span className="ml-2 text-xs text-gray-500">
+                    {g.filas.length} termo{g.filas.length !== 1 ? "s" : ""}
+                    {enTrat.length > 0 && <span className="text-blue-700"> · {enTrat.length} en termo</span>}
+                  </span>
                 </td>
-              )}
-              <td className="px-2 py-1.5 font-mono font-semibold">{t.NumeroTermo}</td>
-              <td className="px-2 py-1.5 font-mono whitespace-nowrap">{t.Lote}</td>
-              <td className="px-2 py-1.5 whitespace-nowrap">{t.DescripcionTalla}</td>
-              <td className="px-2 py-1.5">{hora(t.HoraInicio)}</td>
-              <td className="px-2 py-1.5">{hora(t.HoraSalida) || <span className="text-blue-600 text-xs">en termo</span>}</td>
-              <td className="px-2 py-1.5 text-right">{t.ConteoFinal ?? "—"}</td>
-              <td className="px-2 py-1.5 whitespace-nowrap">{fmtTiempo(t.Minutos)}</td>
-              <td className="px-2 py-1.5">{t.NombreQuimico || "—"}</td>
-              <td className="px-2 py-1.5 text-xs text-gray-600 max-w-[10rem] truncate" title={t.DescripcionClase}>{t.Clase} {t.DescripcionClase}</td>
-              <td className="px-2 py-1.5 text-right whitespace-nowrap">
-                {fmtNum(t.KgSinTratar)}
-                {t.KgDiferencia ? <span className="block text-[10px] text-gray-400" title="Diferencia de báscula aceptada al registrar">+{fmtNum(t.KgDiferencia)} dif.</span> : null}
-              </td>
-              <td className="px-2 py-1.5 text-right whitespace-nowrap">{t.KgTratadas != null ? fmtNum(t.KgTratadas) : "—"}</td>
-              <td className="px-2 py-1.5 text-right whitespace-nowrap"><Pickup valor={t.Pickup} alerta={t.Alerta} /></td>
-              <td className="px-2 py-1.5 whitespace-nowrap">{t.NombreDestino || "—"}</td>
-              <td className="px-2 py-1.5 whitespace-nowrap text-right space-x-1">
-                {abierta && puedeCrear && (
-                  <button onClick={() => (t.KgTratadas == null ? onSalidas([t]) : onCorregirSalida(t))}
-                    className={`text-xs font-semibold rounded px-2 py-1 border ${t.KgTratadas == null ? "bg-blue-600 text-white border-blue-600 hover:bg-blue-700" : "text-blue-700 border-blue-300 hover:bg-blue-50"}`}>
-                    {t.KgTratadas == null ? "Salida" : "Corregir salida"}
-                  </button>
-                )}
-                {abierta && puedeEditar && <button onClick={() => onEditar(t)} className="text-xs text-gray-600 border border-gray-300 rounded px-2 py-1 hover:bg-gray-50">Editar</button>}
-                {abierta && puedeEditar && t.KgTratadas != null && (
-                  <button onClick={() => onQuitarSalida(t)} className="text-xs text-amber-700 border border-amber-300 rounded px-2 py-1 hover:bg-amber-50">Quitar salida</button>
-                )}
-                {abierta && puedeBorrar && <button onClick={() => onBorrar(t)} className="text-xs text-red-600 border border-red-200 rounded px-2 py-1 hover:bg-red-50">Quitar</button>}
-              </td>
-            </tr>
-          ))}
-        </tbody>
+                <td className="px-2 py-1.5 text-right font-semibold whitespace-nowrap">{fmtNum(sinTot)}</td>
+                <td className="px-2 py-1.5 text-right font-semibold whitespace-nowrap">{salidos.length ? fmtNum(tratTot) : "—"}</td>
+                <td className="px-2 py-1.5 text-right whitespace-nowrap"><Pickup valor={pLote} alerta={alertaDe(pLote, pickupMaximo)} /></td>
+                <td colSpan={2} />
+              </tr>
+              {g.filas.map(t => (
+                <tr key={t.TermoId} className={t.Alerta === "PERDIDA" ? "bg-red-50" : t.Alerta === "EXCEDE" ? "bg-amber-50" : t.KgTratadas == null ? "bg-blue-50/40" : ""}>
+                  {marcables && (
+                    <td className="px-2 py-1.5">
+                      {t.KgTratadas == null && <input type="checkbox" checked={marcados.has(t.TermoId)} onChange={() => alternar(t.TermoId)} />}
+                    </td>
+                  )}
+                  <td className="pl-5 pr-2 py-1.5 font-mono font-semibold">
+                    {t.NumeroTermo ?? <span className="font-sans text-[11px] font-semibold uppercase text-gray-400">del piso</span>}
+                    {t.TomadoDePelado && <span className="block font-sans text-[10px] font-semibold text-cyan-700" title={`Transacción #${t.TransaccionPelado} de Pelado`}>de Pelado</span>}
+                  </td>
+                  <td className="px-2 py-1.5">{hora(t.HoraInicio)}</td>
+                  <td className="px-2 py-1.5">{hora(t.HoraSalida) || <span className="text-blue-600 text-xs">en termo</span>}</td>
+                  <td className="px-2 py-1.5 text-right">{t.ConteoFinal ?? "—"}</td>
+                  <td className="px-2 py-1.5 whitespace-nowrap">{fmtTiempo(t.Minutos)}</td>
+                  <td className="px-2 py-1.5">{t.NombreQuimico || "—"}</td>
+                  <td className="px-2 py-1.5 text-right whitespace-nowrap">
+                    {fmtNum(t.KgSinTratar)}
+                    {t.KgDiferencia ? <span className="block text-[10px] text-gray-400" title="Diferencia de báscula aceptada al registrar">+{fmtNum(t.KgDiferencia)} dif.</span> : null}
+                  </td>
+                  <td className="px-2 py-1.5 text-right whitespace-nowrap">{t.KgTratadas != null ? fmtNum(t.KgTratadas) : "—"}</td>
+                  <td className="px-2 py-1.5 text-right whitespace-nowrap"><Pickup valor={t.Pickup} alerta={t.Alerta} /></td>
+                  <td className="px-2 py-1.5 whitespace-nowrap">{t.NombreDestino || "—"}</td>
+                  <td className="px-2 py-1.5 whitespace-nowrap text-right space-x-1">
+                    {abierta && puedeCrear && (
+                      <button onClick={() => (t.KgTratadas == null ? onSalidas([t]) : onCorregirSalida(t))}
+                        className={`text-xs font-semibold rounded px-2 py-1 border ${t.KgTratadas == null ? "bg-blue-600 text-white border-blue-600 hover:bg-blue-700" : "text-blue-700 border-blue-300 hover:bg-blue-50"}`}>
+                        {t.KgTratadas == null ? "Salida" : "Corregir salida"}
+                      </button>
+                    )}
+                    {abierta && puedeEditar && <button onClick={() => onEditar(t)} className="text-xs text-gray-600 border border-gray-300 rounded px-2 py-1 hover:bg-gray-50">Editar</button>}
+                    {abierta && puedeEditar && t.KgTratadas != null && (
+                      <button onClick={() => onQuitarSalida(t)} className="text-xs text-amber-700 border border-amber-300 rounded px-2 py-1 hover:bg-amber-50">Quitar salida</button>
+                    )}
+                    {abierta && puedeBorrar && <button onClick={() => onBorrar(t)} className="text-xs text-red-600 border border-red-200 rounded px-2 py-1 hover:bg-red-50">Quitar</button>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          );
+        })}
       </table>
     </div>
   );
@@ -863,7 +990,9 @@ export default function TratamientoPage() {
   const [modal, setModal] = useState(null);   // { tipo: "nueva" | "entrada" | "editar" | "salida" | "cerrar", ... }
   const [imprimir, setImprimir] = useState(false);   // la hoja seleccionada, para imprimir / PDF
   const [reporte, setReporte] = useState(false);     // el reporte de la jornada completa
-  const [marcadas, setMarcadas] = useState(new Set());   // líneas del piso marcadas para tratar
+  const [marcadas, setMarcadas] = useState(new Set());   // termos del piso marcados para tratar
+  const [pelado, setPelado] = useState([]);               // termos que Pelado va llenando
+  const [marcadosPelado, setMarcadosPelado] = useState(new Set());
 
   const quimicos = cat.Insumos.filter(i => i.EsQuimico);
 
@@ -883,6 +1012,16 @@ export default function TratamientoPage() {
     setSaldo(Array.isArray(data) ? data : []);
   }, []);
 
+  // Los termos de Pelado cambian solos (cada pesada): se refrescan cada 30 s. Lo marcado que ya no
+  // está (lo tomó otra pantalla o se cerró la transacción) se suelta.
+  const fetchPelado = useCallback(async () => {
+    const res = await fetch(`${API}/termos-pelado`, { headers: authHeader() });
+    const data = await leerJSON(res);
+    const lista = Array.isArray(data) ? data : [];
+    setPelado(lista);
+    setMarcadosPelado(m => new Set([...m].filter(k => lista.some(t => llavePelado(t) === k))));
+  }, []);
+
   const abrirDetalle = useCallback(async (id) => {
     setSelId(id);
     const res = await fetch(`${API}/hojas/${id}`, { headers: authHeader() });
@@ -891,7 +1030,11 @@ export default function TratamientoPage() {
     setSel(data);
   }, []);
 
-  useEffect(() => { fetchHojas(); fetchSaldo(); }, [fetchHojas, fetchSaldo]);
+  useEffect(() => { fetchHojas(); fetchSaldo(); fetchPelado(); }, [fetchHojas, fetchSaldo, fetchPelado]);
+  useEffect(() => {
+    const id = setInterval(fetchPelado, 30000);
+    return () => clearInterval(id);
+  }, [fetchPelado]);
   useEffect(() => {
     fetch(`${API}/catalogos`, { headers: authHeader() }).then(leerJSON).then(d => d?.Destinos && setCat(d));
     fetch("/api/empleados", { headers: authHeader() }).then(leerJSON).then(d => Array.isArray(d) && setEmpleados(d.filter(e => e.Estado === "Activo")));
@@ -909,7 +1052,7 @@ export default function TratamientoPage() {
     return { ok: res.ok, status: res.status, data };
   };
   const recargar = async (id = sel?.HojaId) => {
-    await Promise.all([fetchHojas(), fetchSaldo()]);
+    await Promise.all([fetchHojas(), fetchSaldo(), fetchPelado()]);
     if (id) await abrirDetalle(id);
   };
   const conAviso = async (r) => {
@@ -929,6 +1072,7 @@ export default function TratamientoPage() {
     if (!r.ok) return { error: r.data.error || `Error ${r.status}`, ...r.data };
     setModal(null);
     setMarcadas(new Set());
+    setMarcadosPelado(new Set());
     await recargar(r.data.HojaId);
     return null;
   };
@@ -955,12 +1099,21 @@ export default function TratamientoPage() {
   };
 
   const quitarSalida = async (termo) => {
-    if (!(await pedirConfirmacion(`¿Quitar la salida del termo ${termo.NumeroTermo}? Lo tratado sale del piso de ${termo.NombreDestino} y el termo vuelve a quedar en termo.`))) return;
+    if (!(await pedirConfirmacion(`¿Quitar la salida de ${nombreTermo(termo)}? Lo tratado sale del piso de ${termo.NombreDestino} y vuelve a quedar en tratamiento.`))) return;
     if (await conAviso(await enviar(`${API}/termos/${termo.TermoId}/salida`, undefined, "DELETE"))) await recargar();
   };
 
+  const abrirTratar = () => setModal({
+    tipo: "tratar",
+    termosPiso: saldo.flatMap(l => l.TermosDetalle.filter(t => marcadas.has(llaveTermoPiso(l, t))).map(t => ({ l, t }))),
+    termosPelado: pelado.filter(t => marcadosPelado.has(llavePelado(t))),
+  });
+
   const borrarTermo = async (termo) => {
-    if (!(await pedirConfirmacion(`¿Quitar el termo ${termo.NumeroTermo}? Sus ${fmtNum(termo.KgSinTratar)} kg vuelven al inventario al piso de Tratamiento.`))) return;
+    const texto = termo.TomadoDePelado
+      ? `¿Quitar el termo ${termo.NumeroTermo}? Vuelve a Pelado (transacción #${termo.TransaccionPelado}) y allá se puede seguir pesando en él.`
+      : `¿Quitar ${nombreTermo(termo)}? Sus ${fmtNum(termo.KgSinTratar)} kg vuelven al inventario al piso de Tratamiento.`;
+    if (!(await pedirConfirmacion(texto))) return;
     if (await conAviso(await enviar(`${API}/termos/${termo.TermoId}`, undefined, "DELETE"))) await recargar();
   };
 
@@ -996,8 +1149,7 @@ export default function TratamientoPage() {
     <div className="space-y-4">
       {aviso && <AvisoModal {...aviso} onCerrar={() => cerrar(true)} onCancelar={() => cerrar(false)} />}
       {modal?.tipo === "tratar" && (
-        <ModalTratar lineas={modal.lineas} fecha={fecha} hojas={hojas} clientes={cat.Clientes} empleados={empleados}
-          pedirConfirmacion={pedirConfirmacion}
+        <ModalTratar termosPiso={modal.termosPiso} termosPelado={modal.termosPelado} fecha={fecha} hojas={hojas} clientes={cat.Clientes} empleados={empleados}
           onConfirmar={tratar} onCerrar={() => setModal(null)} />
       )}
       {modal?.tipo === "salidas" && (
@@ -1032,8 +1184,11 @@ export default function TratamientoPage() {
 
       {error && <div className="bg-red-50 border border-red-300 text-red-700 text-sm px-4 py-2 rounded">⚠ {error}</div>}
 
+      {/* Lo marcado en los dos lados entra junto en el mismo "Tratar". */}
+      <TermosPelado termos={pelado} puedeTratar={puedeCrear} marcados={marcadosPelado} setMarcados={setMarcadosPelado}
+        onTratar={abrirTratar} />
       <InventarioPiso saldo={saldo} puedeTratar={puedeCrear} marcadas={marcadas} setMarcadas={setMarcadas}
-        onTratar={lineas => setModal({ tipo: "tratar", lineas })} />
+        onTratar={abrirTratar} />
 
       {hojas.length > 0 ? (
         <div className="bg-white border border-gray-300 rounded-lg px-4 py-2 flex flex-wrap items-center gap-2">
@@ -1092,7 +1247,7 @@ export default function TratamientoPage() {
           </div>
 
           <Totales t={sel.Totales} pickupMaximo={cat.PickupMaximo} />
-          <TablaTermos hoja={sel} abierta={abierta} puedeCrear={puedeCrear} puedeEditar={puedeEditar} puedeBorrar={puedeBorrar}
+          <TablaTermos hoja={sel} abierta={abierta} pickupMaximo={cat.PickupMaximo} puedeCrear={puedeCrear} puedeEditar={puedeEditar} puedeBorrar={puedeBorrar}
             onSalidas={ts => setModal({ tipo: "salidas", termos: ts })} onCorregirSalida={t => setModal({ tipo: "salida", termo: t })}
             onEditar={t => setModal({ tipo: "editar", termo: t })}
             onQuitarSalida={quitarSalida} onBorrar={borrarTermo} />

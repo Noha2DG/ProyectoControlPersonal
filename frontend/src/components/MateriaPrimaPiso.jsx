@@ -704,17 +704,33 @@ export function CerrarTransaccionModal({ transaccionId, onHecho, onClose }) {
               <p className="text-gray-500">{info.DescripcionClasePT}{info.Talla !== 900 ? ` · ${info.DescripcionTalla}` : ""}</p>
             </div>
 
+            {/* Los termos que Tratamiento ya se llevó con la transacción abierta: ya están allá. */}
+            {info.Modo === "PELADO" && info.TermosTratamiento?.length > 0 && (
+              <div className="text-sm bg-cyan-50 border border-cyan-200 rounded-lg px-3 py-2">
+                <p className="text-cyan-900">
+                  Tratamiento ya se llevó <b>{fmtNum(info.TomadoTratamiento)} {info.UM}</b> de los {fmtNum(info.Procesado)} pesados:
+                </p>
+                <p className="text-xs text-cyan-800 mt-0.5">
+                  {info.TermosTratamiento.map(t => `termo ${t.NumeroTermo} (${fmtNum(t.Peso)})`).join(" · ")}
+                </p>
+              </div>
+            )}
             {info.Modo === "PELADO" ? (
-              info.Procesado > 0 ? (
+              info.PorTrasladar > 0 ? (
                 <div className="space-y-2">
-                  <p className="text-sm">Lo pelado, <b>{fmtNum(info.Procesado)} {info.UM}</b>, pasa al inventario al piso de:</p>
+                  <p className="text-sm">
+                    {info.TomadoTratamiento > 0 ? "Lo que queda" : "Lo pelado"}, <b>{fmtNum(info.PorTrasladar)} {info.UM}</b>, pasa al inventario al piso de:
+                  </p>
                   <select value={destino} onChange={e => setDestino(e.target.value)}
                     className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400">
                     {info.Destinos.map(d => <option key={d.Codigo} value={d.Codigo}>{d.Nombre}</option>)}
                   </select>
                 </div>
               ) : (
-                <p className="text-sm text-gray-500">No hay nada pesado en esta transacción: se cierra sin trasladar nada.</p>
+                <p className="text-sm text-gray-500">
+                  {info.TomadoTratamiento > 0 ? "Todo lo pesado ya está en Tratamiento: se cierra sin trasladar nada más."
+                                              : "No hay nada pesado en esta transacción: se cierra sin trasladar nada."}
+                </p>
               )
             ) : (
               <div className="space-y-2">
@@ -757,7 +773,7 @@ export function CerrarTransaccionModal({ transaccionId, onHecho, onClose }) {
               <button onClick={cerrar} disabled={guardando}
                 className="px-5 py-2 text-sm bg-amber-600 hover:bg-amber-700 text-white font-semibold rounded-lg transition disabled:opacity-50">
                 {guardando ? "Cerrando…"
-                  : info.Modo === "PELADO" && info.Procesado > 0 ? `Cerrar y trasladar a ${nombre(destino)}`
+                  : info.Modo === "PELADO" && info.PorTrasladar > 0 ? `Cerrar y trasladar a ${nombre(destino)}`
                   : info.Modo === "DESCABEZADO" && info.ColaPendiente.length ? "Cerrar y trasladar la cola"
                   : "Cerrar"}
               </button>
@@ -770,7 +786,7 @@ export function CerrarTransaccionModal({ transaccionId, onHecho, onClose }) {
 }
 
 // ── Movimientos del piso de un lote ─────────────────────────────────────────────────────────────
-const TITULO = { DESTAJO: "Tomado del piso", COLA: "Cola (termos)", PROCESADO: "Trasladado al cerrar transacciones",
+const TITULO = { DESTAJO: "Tomado del piso", COLA: "Cola (termos)", PROCESADO: "Trasladado al siguiente proceso",
                  BAJADO: "Bajado al piso", DESCARTE: "Descarte" };
 // Lo trasladado al cerrar no se deshace aquí: se deshace reabriendo la transacción.
 const DESHACER = { DESTAJO: "Devolver al piso", COLA: "Deshacer", PROCESADO: null, BAJADO: "Deshacer", DESCARTE: "Deshacer" };
@@ -822,7 +838,7 @@ export function MovimientosPisoLote({ lote, recarga, puedeEditar, onCambio }) {
                   {tipo === "COLA" && <>Termo <span className="font-mono font-semibold">{m.NumeroTermo}</span> · {m.DescripcionClase || m.Clase} · {m.NombreBodega
                     ? <span className="text-emerald-700">→ {m.NombreBodega}</span>
                     : <span className="text-amber-700">por trasladar</span>}</>}
-                  {tipo === "PROCESADO" && <>{m.DescripcionClase || m.Clase} · <span className="text-emerald-700">→ {m.NombreBodega}</span> · {m.Fecha}</>}
+                  {tipo === "PROCESADO" && <>{m.NumeroTermo && <>Termo <span className="font-mono font-semibold">{m.NumeroTermo}</span> tomado por Tratamiento · </>}{m.DescripcionClase || m.Clase} · <span className="text-emerald-700">→ {m.NombreBodega}</span> · {m.Fecha}</>}
                   {m.Talla !== 900 && <span className="text-gray-400"> · {m.DescripcionTalla}</span>}
                 </span>
                 <span className="font-semibold text-gray-800 whitespace-nowrap">

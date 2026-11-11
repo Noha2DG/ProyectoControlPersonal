@@ -11,10 +11,14 @@ function formatear(rows: any[]) {
     TransaccionId: Number(r.TransaccionId),
     Capacidad: r.Capacidad != null ? Number(r.Capacidad) : null,
     PesoAcumulado: Number(r.PesoAcumulado),
+    KgTermo: Number(r.KgTermo),
+    EnTratamiento: r.TratamientoHora ? { Hora: r.TratamientoHora, HojaId: r.TratamientoHoja == null ? null : Number(r.TratamientoHoja) } : null,
   }));
 }
 
 // GET /api/termos?transaccion=ID
+// EnTratamiento: si Tratamiento ya se llevó el termo (lib/tratamiento.ts, tomarTermoDePelado), la hora y
+// la hoja. Queda cerrado para Pelado y la pantalla de pesaje lo avisa.
 // Los termos se crean automáticamente al registrar el primer pesaje con un NumeroTermo nuevo (ver /api/pesaje).
 router.get("/", requireAuth, requirePerm("destajo", "ver"), async (req: Request, res: Response) => {
   try {
@@ -28,7 +32,12 @@ router.get("/", requireAuth, requirePerm("destajo", "ver"), async (req: Request,
                JOIN Termos t2 ON pd2.TermoId = t2.TermoId
                WHERE t2.NumeroTermo = t.NumeroTermo
                  AND DATE(pd2.FechaHora) = CURDATE()
-             ), 0) AS PesoAcumulado
+             ), 0) AS PesoAcumulado,
+             COALESCE((SELECT SUM(pd3.Peso) FROM PesajeDetalle pd3 WHERE pd3.TermoId = t.TermoId), 0) AS KgTermo,
+             (SELECT DATE_FORMAT(p.FechaHora, '%H:%i') FROM MovimientoPiso p
+               WHERE p.Tipo = 'PROCESADO' AND p.TransaccionId = t.TransaccionId AND p.NumeroTermo = t.NumeroTermo LIMIT 1) AS TratamientoHora,
+             (SELECT c.HojaDestinoId FROM MovimientoPiso c
+               WHERE c.Tipo = 'CONSUMO' AND c.TransaccionId = t.TransaccionId AND c.NumeroTermo = t.NumeroTermo LIMIT 1) AS TratamientoHoja
       FROM Termos t
       WHERE t.TransaccionId = ${transaccionId}
       ORDER BY t.NumeroTermo ASC

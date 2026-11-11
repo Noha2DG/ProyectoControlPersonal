@@ -70,6 +70,25 @@ async function resolverTermo(tx: any, transaccionId: number, numeroTermo: string
   return termos[0].TermoId;
 }
 
+// Un termo que Tratamiento ya se llevó (lib/tratamiento.ts, tomarTermoDePelado) queda cerrado para
+// Pelado: sus kilos ya están en una hoja de Tratamiento, así que no se pesa más en él ni se corrigen
+// o borran sus pesadas. Se llama con la transacción ya bloqueada (FOR UPDATE), que es la misma fila
+// que bloquea Tratamiento al tomarlo: o gana la pesada o gana la toma, nunca las dos a medias.
+export async function termoEnTratamiento(tx: any, transaccionId: number, numeroTermo: string) {
+  const rows: any[] = await tx.$queryRawUnsafe(`
+    SELECT DATE_FORMAT(p.FechaHora, '%H:%i') AS Hora, c.HojaDestinoId AS HojaId
+      FROM MovimientoPiso p
+      LEFT JOIN MovimientoPiso c ON c.Tipo = 'CONSUMO' AND c.TransaccionId = p.TransaccionId AND c.NumeroTermo = p.NumeroTermo
+     WHERE p.Tipo = 'PROCESADO' AND p.TransaccionId = ? AND p.NumeroTermo = ? LIMIT 1`, transaccionId, numeroTermo);
+  if (!rows.length) return null;
+  const r = rows[0];
+  return {
+    status: 400,
+    error: `Tratamiento tomó el termo ${numeroTermo} a las ${r.Hora}${r.HojaId ? ` (hoja #${r.HojaId})` : ""}: ` +
+           `ya no se puede pesar ni corregir en él. Use otro termo.`,
+  };
+}
+
 // Bloquea la fila de la transacción (FOR UPDATE) y revalida su Estado dentro de la transacción de BD —
 // esto serializa contra un DELETE concurrente de la misma transacción (ver transaccionesProduccion.ts)
 // y evita leer un Estado que cambió justo después de leerlo afuera.
@@ -302,6 +321,9 @@ router.post("/", requireAuth, requirePerm("destajo", "crear"), async (req: Reque
         }
       }
 
+      const enTrat = await termoEnTratamiento(tx, Number(TransaccionId), String(NumeroTermo).trim());
+      if (enTrat) return enTrat;
+
       const disponibilidad = await verificarDisponibilidad(tx, bloqueo.trans.Lote, bloqueo.trans.ClaseOrigen, Number(Peso));
       if (!disponibilidad.ok) return disponibilidad;
 
@@ -331,13 +353,21 @@ router.put("/:id", requireAuth, requirePerm("destajo", "editar"), async (req: Re
     const { Peso, NumeroTermo } = req.body;
     if (!NumeroTermo || Peso == null) { res.status(400).json({ error: "Número de Termo y Peso son requeridos" }); return; }
 
-    const actual: any[] = await prisma.$queryRaw`SELECT TransaccionId FROM PesajeDetalle WHERE PesajeId = ${id} LIMIT 1`;
+    const actual: any[] = await prisma.$queryRaw`
+      SELECT pd.TransaccionId, t.NumeroTermo FROM PesajeDetalle pd JOIN Termos t ON t.TermoId = pd.TermoId
+       WHERE pd.PesajeId = ${id} LIMIT 1`;
     if (!actual.length) { res.status(404).json({ error: "Pesaje no encontrado" }); return; }
     const transaccionId = Number(actual[0].TransaccionId);
 
     const resultado = await prisma.$transaction(async (tx) => {
       const bloqueo = await bloquearTransaccionAbierta(tx, transaccionId);
       if ("error" in bloqueo) return bloqueo;
+
+      // Ni el termo en que estaba la pesada ni al que se quiere mover pueden estar en Tratamiento.
+      for (const n of new Set([String(actual[0].NumeroTermo), String(NumeroTermo).trim()])) {
+        const enTrat = await termoEnTratamiento(tx, transaccionId, n);
+        if (enTrat) return enTrat;
+      }
 
       const disponibilidad = await verificarDisponibilidad(tx, bloqueo.trans.Lote, bloqueo.trans.ClaseOrigen, Number(Peso), id);
       if (!disponibilidad.ok) return disponibilidad;
@@ -361,7 +391,20 @@ router.put("/:id", requireAuth, requirePerm("destajo", "editar"), async (req: Re
 // DELETE /api/pesaje/:id  (corrección de captura)
 router.delete("/:id", requireAuth, requirePerm("destajo", "eliminar"), async (req: Request, res: Response) => {
   try {
-    await prisma.$executeRaw`DELETE FROM PesajeDetalle WHERE PesajeId = ${Number(req.params.id)}`;
+    const id = Number(req.params.id);
+    const resultado: any = await prisma.$transaction(async (tx) => {
+      const filas: any[] = await tx.$queryRaw`
+        SELECT pd.TransaccionId, t.NumeroTermo FROM PesajeDetalle pd JOIN Termos t ON t.TermoId = pd.TermoId
+         WHERE pd.PesajeId = ${id} LIMIT 1`;
+      if (!filas.length) return { ok: true };
+      const p = filas[0];
+      await tx.$queryRaw`SELECT TransaccionId FROM TransaccionesProduccion WHERE TransaccionId = ${Number(p.TransaccionId)} FOR UPDATE`;
+      const enTrat = await termoEnTratamiento(tx, Number(p.TransaccionId), String(p.NumeroTermo));
+      if (enTrat) return enTrat;
+      await tx.$executeRaw`DELETE FROM PesajeDetalle WHERE PesajeId = ${id}`;
+      return { ok: true };
+    });
+    if (!resultado.ok) { res.status(resultado.status).json({ error: resultado.error }); return; }
     res.json({ ok: true });
   } catch (err: any) {
     res.status(500).json({ error: err.message });

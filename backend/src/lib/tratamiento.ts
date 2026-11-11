@@ -35,6 +35,8 @@ export class ErrorNegocio extends Error {
 
 const r2 = (n: number) => Number(Number(n).toFixed(2));
 const enLista = (xs: any[]) => xs.map(() => "?").join(",");
+const LB_POR_KG = 2.20462;
+const aKg = (peso: number, um: string) => r2(um === "LB" ? peso / LB_POR_KG : peso);
 
 export function pickup(sinTratar: number, tratadas: number | null): number | null {
   if (tratadas == null || !(sinTratar > 0)) return null;
@@ -114,13 +116,127 @@ export async function saldoPiso(client: any, bodega = BODEGA, lotes?: string[], 
      GROUP BY t.RemisionId, t.Lote, t.Clase, cl.Descripcion, t.Talla, ta.Descripcion, t.FechaLote
     HAVING Kg > 0.001
      ORDER BY MIN(CASE WHEN t.Delta > 0 THEN t.FechaProduccion END), t.Lote, t.Clase, t.Talla`, ...args);
-  return rows.map(r => ({
+  // Los termos de cada línea: solo para el saldo de ahora (el del reporte de una jornada no los usa).
+  const lineas = rows.map(r => ({
     ...r,
     RemisionId: r.RemisionId == null ? null : Number(r.RemisionId),
     Talla: Number(r.Talla), Kg: Number(r.Kg),
     DiasAlPiso: r.DiasAlPiso == null ? null : Number(r.DiasAlPiso),
   }));
+  if (hasta || !lineas.length) return lineas.map(l => ({ ...l, TermosDetalle: [] as TermoPiso[], Termos: null as string | null }));
+  const porLinea = await termosDelPiso(client, bodega, [...new Set(lineas.map(l => String(l.Lote)))]);
+  return lineas.map(l => {
+    const det = porLinea.get(claveDe(l)) ?? [];
+    return { ...l, TermosDetalle: det, Termos: det.filter(t => t.NumeroTermo).map(t => t.NumeroTermo).join(", ") || null };
+  });
 }
+
+// ── Termos de cada línea del piso ───────────────────────────────────────────────────────────────
+// Lo del piso se trata POR TERMO (usuario, 10 nov 2026), igual que lo que se toma de Pelado. Una
+// línea llega al cerrar una transacción de Pelado (un PROCESADO con el total); sus termos son los de
+// esa transacción con sus pesadas, sin los que Tratamiento ya se llevó aparte. Cada termo se
+// identifica por (transacción de Pelado, número): el mismo número puede repetirse entre transacciones.
+//   - Lo que entra con termo propio (un termo tomado de Pelado) es su propio termo.
+//   - Lo que entra sin termo, o lo que el cierre trasladó y no cuadra con sus termos (más de 0.05 kg),
+//     queda "sin termo": a la vista, no escondido.
+//   - Lo que sale por termo (CONSUMO con TransaccionId y NumeroTermo) se descuenta de ese termo; lo
+//     que sale sin termo (la línea completa, hojas de antes) se descuenta de los más viejos primero.
+// Así la suma de los termos es siempre el saldo de la línea.
+export type TermoPiso = { TransaccionId: number | null; NumeroTermo: string | null; Kg: number };
+
+async function termosDelPiso(client: any, bodega: string, lotes: string[]) {
+  const out = new Map<string, TermoPiso[]>();
+  if (!lotes.length) return out;
+  const movs: any[] = await client.$queryRawUnsafe(`
+    SELECT m.MovimientoId, m.RemisionId, m.Lote, m.Clase, m.Talla, DATE_FORMAT(m.FechaLote, '%Y-%m-%d') AS FechaLote,
+           m.Tipo, m.TransaccionId, NULLIF(TRIM(m.NumeroTermo), '') AS NumeroTermo, m.PesoKg, m.BodegaDestino = ? AS Entra
+      FROM MovimientoPiso m
+     WHERE (m.BodegaDestino = ? OR m.BodegaOrigen = ?) AND m.Lote IN (${enLista(lotes)})
+     ORDER BY m.MovimientoId`, bodega, bodega, bodega, ...lotes);
+
+  // Los termos (con pesadas) de las transacciones que cerraron hacia este piso, y los ya tomados.
+  const cierres = [...new Set(movs.filter(m => Number(m.Entra) === 1 && m.Tipo === "PROCESADO" && m.NumeroTermo == null && m.TransaccionId != null)
+    .map(m => Number(m.TransaccionId)))];
+  const termosDe = new Map<number, { NumeroTermo: string; Kg: number }[]>();
+  if (cierres.length) {
+    const ts: any[] = await client.$queryRawUnsafe(`
+      SELECT t.TransaccionId, t.NumeroTermo, MIN(t.TermoId) AS Orden, SUM(pd.Peso) AS Peso, l.UM
+        FROM Termos t
+        JOIN PesajeDetalle pd ON pd.TermoId = t.TermoId
+        JOIN TransaccionesProduccion tp ON tp.TransaccionId = t.TransaccionId
+        JOIN Lotes l ON l.Lote = tp.Lote AND l.Clase = tp.ClaseOrigen
+       WHERE t.TransaccionId IN (${enLista(cierres)})
+         AND NOT EXISTS (SELECT 1 FROM MovimientoPiso x
+                          WHERE x.Tipo = 'PROCESADO' AND x.TransaccionId = t.TransaccionId AND x.NumeroTermo = t.NumeroTermo)
+       GROUP BY t.TransaccionId, t.NumeroTermo, l.UM
+       ORDER BY t.TransaccionId, MIN(t.TermoId)`, ...cierres);
+    for (const t of ts) {
+      const id = Number(t.TransaccionId);
+      if (!termosDe.has(id)) termosDe.set(id, []);
+      termosDe.get(id)!.push({ NumeroTermo: String(t.NumeroTermo), Kg: aKg(Number(t.Peso), String(t.UM)) });
+    }
+  }
+
+  type Cubeta = TermoPiso & { orden: number };
+  const lineas = new Map<string, { cubetas: Map<string, Cubeta>; sinDueno: number }>();
+  const cubeta = (L: { cubetas: Map<string, Cubeta> }, t: number | null, n: string | null, orden: number) => {
+    const k = `${t ?? ""}|${n ?? ""}`;
+    if (!L.cubetas.has(k)) L.cubetas.set(k, { TransaccionId: t, NumeroTermo: n, Kg: 0, orden });
+    return L.cubetas.get(k)!;
+  };
+  for (const m of movs) {
+    const k = claveDe({ ...m, RemisionId: m.RemisionId == null ? null : Number(m.RemisionId) });
+    if (!lineas.has(k)) lineas.set(k, { cubetas: new Map(), sinDueno: 0 });
+    const L = lineas.get(k)!;
+    const kg = Number(m.PesoKg);
+    const trans = m.TransaccionId == null ? null : Number(m.TransaccionId);
+    const orden = Number(m.MovimientoId) * 1000;
+    if (Number(m.Entra) === 1) {
+      if (m.Tipo === "PROCESADO" && m.NumeroTermo == null && trans != null && termosDe.get(trans)?.length) {
+        // El cierre: se reparte en los termos de su transacción; lo que no cuadra queda sin termo.
+        const ts = termosDe.get(trans)!;
+        let resto = kg;
+        ts.forEach((t, i) => { cubeta(L, trans, t.NumeroTermo, orden + i).Kg += t.Kg; resto -= t.Kg; });
+        if (Math.abs(resto) > 0.05) {
+          if (resto > 0) cubeta(L, null, null, orden + ts.length).Kg += resto;
+          else L.sinDueno += -resto;
+        } else {
+          cubeta(L, trans, ts[ts.length - 1].NumeroTermo, orden).Kg += resto;   // centavos de redondeo
+        }
+      } else if (trans != null && m.NumeroTermo != null) {
+        cubeta(L, trans, String(m.NumeroTermo), orden).Kg += kg;
+      } else {
+        cubeta(L, null, null, orden).Kg += kg;
+      }
+    } else {
+      const c = trans != null && m.NumeroTermo != null ? L.cubetas.get(`${trans}|${m.NumeroTermo}`) : undefined;
+      if (c) {
+        c.Kg -= kg;
+        if (c.Kg < 0) { L.sinDueno += -c.Kg; c.Kg = 0; }
+      } else {
+        L.sinDueno += kg;
+      }
+    }
+  }
+  for (const [k, L] of lineas) {
+    const cs = [...L.cubetas.values()].sort((a, b) => a.orden - b.orden);
+    let sinDueno = L.sinDueno;
+    for (const c of cs) {
+      const quita = Math.min(c.Kg, sinDueno);
+      c.Kg -= quita; sinDueno -= quita;
+    }
+    out.set(k, cs.filter(c => c.Kg > 0.005).map(c => ({ TransaccionId: c.TransaccionId, NumeroTermo: c.NumeroTermo, Kg: r2(c.Kg) })));
+  }
+  return out;
+}
+
+// Los números de los termos de una línea, para anotarlos de guía cuando entra completa: caben en
+// NumeroTermo (VARCHAR 20) sin espacios y, si no alcanza, cortados con "…".
+const guiaCorta = (det: TermoPiso[] | undefined) => {
+  const s = (det ?? []).filter(t => t.NumeroTermo).map(t => t.NumeroTermo).join(",");
+  if (!s) return null;
+  return s.length <= 20 ? s : `${s.slice(0, 19)}…`;
+};
 
 async function saldoDeClave(client: any, bodega: string, c: Clave) {
   const s = (await saldoPiso(client, bodega, [c.Lote])).find(x => claveDe(x) === claveDe(c));
@@ -171,6 +287,9 @@ export async function termosDeHojas(client: any, hojaIds: number[]) {
   if (!hojaIds.length) return [];
   const rows: any[] = await client.$queryRawUnsafe(`
     SELECT c.HojaDestinoId AS HojaId, c.MovimientoId AS TermoId, c.NumeroTermo, c.RemisionId, c.Lote, c.Clase, cl.Descripcion AS DescripcionClase,
+           c.TransaccionId AS TransaccionPelado,
+           EXISTS (SELECT 1 FROM MovimientoPiso p
+                    WHERE p.Tipo = 'PROCESADO' AND p.TransaccionId = c.TransaccionId AND p.NumeroTermo = c.NumeroTermo) AS TomadoDePelado,
            c.Talla, ta.Descripcion AS DescripcionTalla, DATE_FORMAT(c.FechaLote, '%Y-%m-%d') AS FechaLote,
            c.PesoKg AS KgSinTratar,
            DATE_FORMAT(t.HoraInicio, '%Y-%m-%d %H:%i') AS HoraInicio,
@@ -196,6 +315,8 @@ export async function termosDeHojas(client: any, hojaIds: number[]) {
     return {
       ...r,
       HojaId: Number(r.HojaId), TermoId: Number(r.TermoId), Talla: Number(r.Talla),
+      TransaccionPelado: r.TransaccionPelado == null ? null : Number(r.TransaccionPelado),
+      TomadoDePelado: Number(r.TomadoDePelado) === 1,
       RemisionId: r.RemisionId == null ? null : Number(r.RemisionId),
       KgSinTratar: sin, KgTratadas: trat,
       KgGanados: trat == null ? null : r2(trat - sin),
@@ -304,7 +425,7 @@ async function hojaParaEditar(tx: any, hojaId: number) {
 async function termoParaEditar(tx: any, termoId: number) {
   const [c]: any[] = await tx.$queryRawUnsafe(`
     SELECT c.MovimientoId, c.HojaDestinoId, c.RemisionId, c.Lote, c.Clase, c.Talla,
-           DATE_FORMAT(c.FechaLote, '%Y-%m-%d') AS FechaLote, c.PesoKg, c.NumeroTermo,
+           DATE_FORMAT(c.FechaLote, '%Y-%m-%d') AS FechaLote, c.PesoKg, c.NumeroTermo, c.TransaccionId,
            DATE_FORMAT(t.HoraInicio, '%Y-%m-%d %H:%i:%s') AS HoraInicio
       FROM MovimientoPiso c JOIN TratamientoTermo t ON t.ConsumoId = c.MovimientoId
      WHERE c.MovimientoId = ? FOR UPDATE`, termoId);
@@ -392,16 +513,27 @@ export async function eliminarHoja(tx: any, hojaId: number) {
 }
 
 export type Entrada = Clave & {
-  NumeroTermo: string; HoraInicio: string; ConteoInicial?: any; Quimico?: any; KgSinTratar: any;
+  NumeroTermo?: string | null; HoraInicio: string; ConteoInicial?: any; Quimico?: any; KgSinTratar?: any;
   AceptarDiferencia?: boolean;
+  // La línea del piso entra COMPLETA, con los kg que tenga al piso en ese momento (usuario, 10 nov
+  // 2026: se trata tal como llega de Pelado, sin anotar termo ni pesar). KgSinTratar se ignora.
+  TodaLaLinea?: boolean;
+  // Un TERMO de la línea del piso (TransaccionTermo + NumeroTermo; los dos null = lo que está sin
+  // termo): entra completo con lo que le queda al piso (termosDelPiso). KgSinTratar se ignora.
+  TermoPiso?: boolean;
+  TransaccionTermo?: any;
 };
 
-/** El termo entra a tratamiento: sus kg sin tratar salen del piso en ese momento. */
+/**
+ * Entra a tratamiento: sus kg sin tratar salen del piso en ese momento. El número de termo es
+ * opcional: lo traen los termos tomados de Pelado; lo que entra del piso tal cual no lo lleva.
+ */
 export async function registrarEntrada(tx: any, hojaId: number, e: Entrada, operador: string) {
   const hoja = await hojaParaEditar(tx, hojaId);
-  const numero = String(e.NumeroTermo ?? "").trim();
-  if (!numero) throw new ErrorNegocio(400, "Falta el número de termo");
-  const kg = kilos(e.KgSinTratar, "sin tratar");
+  let numero = String(e.NumeroTermo ?? "").trim() || null;
+  const todaLaLinea = !!e.TodaLaLinea;
+  // Lo que entra completo (la línea o un termo del piso) toma sus kg del piso, no de lo tecleado.
+  let kg = todaLaLinea || e.TermoPiso ? 0 : kilos(e.KgSinTratar, "sin tratar");
   const quimico = await validarQuimico(tx, e.Quimico);
   const conteoIni = conteo(e.ConteoInicial, "inicial");
   const clave: Clave = {
@@ -416,6 +548,20 @@ export async function registrarEntrada(tx: any, hojaId: number, e: Entrada, oper
   await tx.$queryRawUnsafe(`SELECT Codigo FROM BodegaVirtual WHERE Codigo = ? FOR UPDATE`, BODEGA);
   const hay = await saldoDeClave(tx, BODEGA, clave);
   if (hay <= 0.001) throw new ErrorNegocio(400, `${clave.Lote} ${clave.Clase} ya no tiene kilos al piso de Tratamiento`);
+  // La línea completa lleva de guía los termos de Pelado de los que salió (si no traía número).
+  if (todaLaLinea) {
+    kg = r2(hay);
+    if (!numero) numero = guiaCorta((await termosDelPiso(tx, BODEGA, [clave.Lote])).get(claveDe(clave)));
+  }
+  // Un termo del piso entra completo, con lo que le queda.
+  let transTermo: number | null = null;
+  if (e.TermoPiso) {
+    transTermo = e.TransaccionTermo == null || e.TransaccionTermo === "" ? null : Number(e.TransaccionTermo);
+    const det = (await termosDelPiso(tx, BODEGA, [clave.Lote])).get(claveDe(clave)) ?? [];
+    const t = det.find(x => x.TransaccionId === transTermo && x.NumeroTermo === numero);
+    if (!t) throw new ErrorNegocio(400, `${numero ? `El termo ${numero}` : "Lo que estaba sin termo"} de ${clave.Lote} ${clave.Clase} ya no está al piso`);
+    kg = t.Kg;
+  }
   const exceso = r2(kg - hay);
   if (exceso > 0.001) {
     if (exceso > Math.max(1, hay * MARGEN_DIFERENCIA)) {
@@ -439,6 +585,8 @@ export async function registrarEntrada(tx: any, hojaId: number, e: Entrada, oper
     kg, kg, numero, operador);
   const [r]: any[] = await tx.$queryRawUnsafe(`SELECT LAST_INSERT_ID() AS id`);
   const termoId = Number(r.id);
+  // De qué transacción de Pelado es el termo: con el número, lo identifica en termosDelPiso.
+  if (transTermo != null) await tx.$executeRawUnsafe(`UPDATE MovimientoPiso SET TransaccionId = ? WHERE MovimientoId = ?`, transTermo, termoId);
   if (exceso > 0.001) {
     // El sobrante entra al piso antes de que el termo lo tome: el piso queda en cero, no en negativo.
     await tx.$executeRawUnsafe(`
@@ -461,9 +609,19 @@ export async function registrarEntrada(tx: any, hojaId: number, e: Entrada, oper
 /** Corrige los datos de entrada. Los kilos solo mientras el termo no haya salido. */
 export async function editarEntrada(tx: any, termoId: number, e: Partial<Entrada>) {
   const { c, hoja } = await termoParaEditar(tx, termoId);
+  // Un termo tomado de Pelado es el termo físico de Pelado con lo que pesaron en él: su número y sus
+  // kilos no se corrigen aquí (se quita el termo, vuelve a Pelado, y allá se corrigen las pesadas).
+  if (c.TransaccionId != null) {
+    if (e.NumeroTermo !== undefined && String(e.NumeroTermo ?? "").trim() !== String(c.NumeroTermo)) {
+      throw new ErrorNegocio(400, "El número es el del termo de Pelado: no se cambia aquí");
+    }
+    if (e.KgSinTratar !== undefined && Math.abs(Number(e.KgSinTratar) - Number(c.PesoKg)) > 0.001) {
+      throw new ErrorNegocio(400, "Los kg son los de las pesadas de Pelado: quite el termo para que vuelva a Pelado y corrija allá");
+    }
+  }
   if (e.NumeroTermo !== undefined) {
-    const numero = String(e.NumeroTermo ?? "").trim();
-    if (!numero) throw new ErrorNegocio(400, "Falta el número de termo");
+    // Opcional: lo que entró del piso tal cual no lleva número de termo.
+    const numero = String(e.NumeroTermo ?? "").trim() || null;
     await tx.$executeRawUnsafe(`UPDATE MovimientoPiso SET NumeroTermo = ? WHERE MovimientoId = ? OR ConsumoId = ?`,
       numero, termoId, termoId);
   }
@@ -564,15 +722,40 @@ export async function deshacerSalida(tx: any, termoId: number) {
   return { ok: true };
 }
 
-/** Quita el termo: sus kg sin tratar vuelven al piso de Tratamiento. */
+/**
+ * Quita el termo: sus kg sin tratar vuelven al piso de Tratamiento. Si se tomó de Pelado, VUELVE A
+ * PELADO (usuario, 10 nov 2026): se borra también su PROCESADO y el termo queda abierto otra vez para
+ * pesar. Solo mientras la transacción de Pelado siga abierta; cerrada, sus kilos ya no tendrían a
+ * dónde volver.
+ */
 export async function eliminarTermo(tx: any, termoId: number) {
+  // La transacción de Pelado se bloquea ANTES que la hoja, en el mismo orden que al tomar el termo.
+  const [pre]: any[] = await tx.$queryRawUnsafe(`
+    SELECT c.TransaccionId, c.NumeroTermo,
+           EXISTS (SELECT 1 FROM MovimientoPiso p
+                    WHERE p.Tipo = 'PROCESADO' AND p.TransaccionId = c.TransaccionId AND p.NumeroTermo = c.NumeroTermo) AS DePelado
+      FROM MovimientoPiso c WHERE c.MovimientoId = ? AND c.Tipo = 'CONSUMO'`, termoId);
+  // Un termo que salió del piso también lleva su transacción, pero ese vuelve al piso, no a Pelado.
+  const transPelado = pre?.TransaccionId == null || Number(pre.DePelado) !== 1 ? null : Number(pre.TransaccionId);
+  if (transPelado != null) {
+    const [tp]: any[] = await tx.$queryRawUnsafe(
+      `SELECT Estado FROM TransaccionesProduccion WHERE TransaccionId = ? FOR UPDATE`, transPelado);
+    if (tp && String(tp.Estado) !== "Abierta") {
+      throw new ErrorNegocio(400,
+        `El termo ${pre.NumeroTermo} vino de la transacción #${transPelado} de Pelado, que ya se cerró: reábrala para devolverle el termo.`);
+    }
+  }
   await termoParaEditar(tx, termoId);
   await quitarSalida(tx, termoId);
   // El sobrante de báscula que entró por este termo también se va: sin el termo no hay de qué.
   await tx.$executeRawUnsafe(`DELETE FROM MovimientoPiso WHERE ConsumoId = ? AND Tipo = 'DIFERENCIA'`, termoId);
   await tx.$executeRawUnsafe(`DELETE FROM TratamientoTermo WHERE ConsumoId = ?`, termoId);
   await tx.$executeRawUnsafe(`DELETE FROM MovimientoPiso WHERE MovimientoId = ?`, termoId);
-  return { ok: true };
+  if (transPelado != null) {
+    await tx.$executeRawUnsafe(
+      `DELETE FROM MovimientoPiso WHERE Tipo = 'PROCESADO' AND TransaccionId = ? AND NumeroTermo = ?`, transPelado, String(pre.NumeroTermo));
+  }
+  return { ok: true, VolvioAPelado: transPelado != null };
 }
 
 /** El consumo de insumos de la hoja. Reemplaza lo anterior; una cantidad vacía o en cero lo quita. */
@@ -611,7 +794,7 @@ export async function cerrarHoja(tx: any, hojaId: number, p: { horaFin?: string 
   const enTermo = termos.filter(t => t.KgTratadas == null);
   if (enTermo.length) {
     throw new ErrorNegocio(400, `Falta la salida de ${enTermo.length} termo${enTermo.length > 1 ? "s" : ""}: ` +
-      enTermo.map(t => t.NumeroTermo).join(", "));
+      enTermo.map(t => t.NumeroTermo ?? `${t.Lote} ${t.DescripcionTalla}`).join(", "));
   }
 
   const terminar = new Set(p.terminar ?? []);
@@ -755,7 +938,7 @@ export async function reporteDia(client: any, fecha: string) {
       AlPisoKg: r2(alPiso.reduce((s, l) => s + l.Kg, 0)),
     },
     Recibido: recibido.map(x => ({
-      ...x, Origen: ORIGEN[x.Tipo] ?? x.Tipo, MovimientoId: Number(x.MovimientoId), Talla: Number(x.Talla), PesoKg: Number(x.PesoKg),
+      ...x, Origen: x.Tipo === "PROCESADO" && x.NumeroTermo ? `Pelado (termo ${x.NumeroTermo} tomado en proceso)` : ORIGEN[x.Tipo] ?? x.Tipo, MovimientoId: Number(x.MovimientoId), Talla: Number(x.Talla), PesoKg: Number(x.PesoKg),
     })),
     PorLote: porLote,
     PorCliente: porCliente,
@@ -798,11 +981,122 @@ async function todoONada<R>(fn: (deshacer: (f: () => Promise<any>) => void) => P
   }
 }
 
+// ── Termos de Pelado ────────────────────────────────────────────────────────────────────────────
+// Tratamiento no espera a que Pelado cierre la transacción (usuario, 10 nov 2026): los termos se van
+// llenando durante el día y cada uno necesita sus 3-4 horas de tratamiento. Tratamiento ve los termos
+// de las transacciones abiertas de Pelado —  el pesaje por persona ya dice en qué termo cae cada
+// pesada—  y TOMA el que va a trabajar:
+//   - PROCESADO de ese termo (con NumeroTermo y TransaccionId) al piso de Tratamiento, y en el mismo
+//     paso su CONSUMO en la hoja, con el mismo número de termo y la transacción de Pelado.
+//   - El termo queda cerrado para Pelado: no se pesa más en él ni se corrigen sus pesadas
+//     (routes/pesajeDetalle.ts), y la pantalla de pesaje lo avisa.
+//   - Al cerrar la transacción, Pelado solo traslada lo que no se llevó Tratamiento
+//     (lib/destajoPiso.ts, infoCierre.PorTrasladar).
+//   - Quitar el termo de la hoja lo devuelve a Pelado (eliminarTermo).
+// Los kg sin tratar son los de las pesadas del termo: es el mismo termo físico.
+const FAMILIAS_DE_COLA = ["D", "M"];   // las de lib/destajoPiso.ts: ahí lo pesado es cabeza, no se trata
+
+/** Los termos con pesadas de las transacciones abiertas de Pelado que Tratamiento todavía no tomó. */
+export async function termosEnPelado(client: any) {
+  const rows: any[] = await client.$queryRawUnsafe(`
+    SELECT tp.TransaccionId, tp.Lote, tp.ClaseOrigen, tp.ClasePT AS Clase, cp.Descripcion AS DescripcionClase,
+           tp.Talla, ta.Descripcion AS DescripcionTalla, pr.Descripcion AS DescripcionProceso, l.UM,
+           DATE_FORMAT(COALESCE(l.FechaProduccion, l.Fecha), '%Y-%m-%d') AS FechaLote,
+           t.NumeroTermo, COUNT(pd.PesajeId) AS Pesadas, SUM(pd.Peso) AS Peso,
+           DATE_FORMAT(MIN(pd.FechaHora), '%Y-%m-%d %H:%i') AS Primera,
+           DATE_FORMAT(MAX(pd.FechaHora), '%Y-%m-%d %H:%i') AS Ultima,
+           TIMESTAMPDIFF(MINUTE, MAX(pd.FechaHora), NOW()) AS MinutosSinPesar
+      FROM TransaccionesProduccion tp
+      JOIN Clase cp ON cp.Clase = tp.ClasePT
+      JOIN Tallas ta ON ta.Codigo = tp.Talla
+      JOIN Procesos pr ON pr.Proceso = tp.Proceso
+      JOIN Lotes l ON l.Lote = tp.Lote AND l.Clase = tp.ClaseOrigen
+      JOIN Termos t ON t.TransaccionId = tp.TransaccionId
+      JOIN PesajeDetalle pd ON pd.TermoId = t.TermoId
+     WHERE tp.Estado = 'Abierta' AND COALESCE(cp.Familia, '') NOT IN (${enLista(FAMILIAS_DE_COLA)})
+       AND NOT EXISTS (SELECT 1 FROM MovimientoPiso m
+                        WHERE m.Tipo = 'PROCESADO' AND m.TransaccionId = tp.TransaccionId AND m.NumeroTermo = t.NumeroTermo)
+     GROUP BY tp.TransaccionId, tp.Lote, tp.ClaseOrigen, tp.ClasePT, cp.Descripcion, tp.Talla, ta.Descripcion,
+              pr.Descripcion, l.UM, l.FechaProduccion, l.Fecha, t.TermoId, t.NumeroTermo
+    HAVING SUM(pd.Peso) > 0
+     ORDER BY tp.Lote, tp.ClasePT, tp.Talla, MIN(pd.FechaHora)`, ...FAMILIAS_DE_COLA);
+  return rows.map(r => ({
+    ...r,
+    TransaccionId: Number(r.TransaccionId), Talla: Number(r.Talla), Pesadas: Number(r.Pesadas),
+    Peso: r2(Number(r.Peso)), Kg: aKg(Number(r.Peso), String(r.UM)),
+    MinutosSinPesar: r.MinutosSinPesar == null ? null : Number(r.MinutosSinPesar),
+  }));
+}
+
+export type TermoPelado = { TransaccionId: any; NumeroTermo: any; HoraInicio: string; Kg?: any };
+
+/** Tratamiento toma un termo de Pelado y lo mete a la hoja (ver arriba). */
+export async function tomarTermoDePelado(tx: any, hojaId: number, fecha: string, x: TermoPelado, operador: string) {
+  const id = Number(x.TransaccionId);
+  const numero = String(x.NumeroTermo ?? "").trim();
+  if (!id || !numero) throw new ErrorNegocio(400, "Falta la transacción o el número del termo de Pelado");
+  // La misma fila que bloquea cada pesada (routes/pesajeDetalle.ts): una pesada y la toma del mismo
+  // termo no pueden cruzarse.
+  const [bloq]: any[] = await tx.$queryRawUnsafe(
+    `SELECT Estado FROM TransaccionesProduccion WHERE TransaccionId = ? FOR UPDATE`, id);
+  if (!bloq) throw new ErrorNegocio(404, `La transacción #${id} de Pelado no existe`);
+  if (String(bloq.Estado) !== "Abierta") {
+    throw new ErrorNegocio(400, `La transacción #${id} de Pelado ya se cerró: lo pesado se trasladó al cerrarla`);
+  }
+  const [t]: any[] = await tx.$queryRawUnsafe(`
+    SELECT tp.Lote, tp.ClaseOrigen, tp.ClasePT, tp.Talla, cp.Familia, l.UM,
+           DATE_FORMAT(COALESCE(l.FechaProduccion, l.Fecha), '%Y-%m-%d') AS FechaLote
+      FROM TransaccionesProduccion tp
+      JOIN Clase cp ON cp.Clase = tp.ClasePT
+      JOIN Lotes l ON l.Lote = tp.Lote AND l.Clase = tp.ClaseOrigen
+     WHERE tp.TransaccionId = ?`, id);
+  if (FAMILIAS_DE_COLA.includes(String(t.Familia ?? ""))) {
+    throw new ErrorNegocio(400, `La transacción #${id} es de Descabezado: lo pesado ahí es cabeza`);
+  }
+  const [ya]: any[] = await tx.$queryRawUnsafe(
+    `SELECT 1 AS x FROM MovimientoPiso WHERE Tipo = 'PROCESADO' AND TransaccionId = ? AND NumeroTermo = ? LIMIT 1`, id, numero);
+  if (ya) throw new ErrorNegocio(400, `Tratamiento ya tomó el termo ${numero} de la transacción #${id}`);
+  const [p]: any[] = await tx.$queryRawUnsafe(`
+    SELECT COALESCE(SUM(pd.Peso), 0) AS Peso FROM PesajeDetalle pd JOIN Termos te ON te.TermoId = pd.TermoId
+     WHERE te.TransaccionId = ? AND te.NumeroTermo = ?`, id, numero);
+  const peso = r2(Number(p.Peso));
+  if (!(peso > 0)) throw new ErrorNegocio(400, `El termo ${numero} no tiene pesadas en la transacción #${id}`);
+  const um = String(t.UM);
+  const kg = aKg(peso, um);
+  // Lo que se vio en pantalla tiene que ser lo que se lleva: si entró una pesada mientras tanto, se avisa.
+  if (x.Kg != null && x.Kg !== "" && Math.abs(Number(x.Kg) - kg) > 0.005) {
+    throw new ErrorNegocio(409,
+      `El termo ${numero} cambió mientras lo escogía: ahora tiene ${kg.toFixed(2)} kg (antes ${Number(x.Kg).toFixed(2)}). ` +
+      `Actualice y vuelva a tomarlo.`, { Codigo: "CAMBIO", Kg: kg });
+  }
+
+  await tx.$executeRawUnsafe(`
+    INSERT INTO MovimientoPiso (Tipo, FechaProduccion, BodegaDestino, Lote, Clase, Talla, FechaLote,
+                                Peso, UM, PesoKg, NumeroTermo, LoteProceso, ClaseProceso, TransaccionId, RegistradoPor)
+    VALUES ('PROCESADO', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    fecha, BODEGA, t.Lote, t.ClasePT, Number(t.Talla), t.FechaLote, peso, um, kg, numero, t.Lote, t.ClaseOrigen, id, operador);
+  const e = await registrarEntrada(tx, hojaId, {
+    RemisionId: null, Lote: String(t.Lote), Clase: String(t.ClasePT), Talla: Number(t.Talla), FechaLote: t.FechaLote,
+    NumeroTermo: numero, HoraInicio: x.HoraInicio, KgSinTratar: kg,
+  }, operador);
+  await tx.$executeRawUnsafe(`UPDATE MovimientoPiso SET TransaccionId = ? WHERE MovimientoId = ?`, id, e.TermoId);
+  return { ...e, TransaccionId: id, NumeroTermo: numero, Kg: kg };
+}
+
+const conIndicePelado = (i: number, numero: any, e: any) => {
+  if (e instanceof ErrorNegocio) {
+    throw new ErrorNegocio(e.status, `Termo ${numero ?? ""} de Pelado: ${e.message}`, { ...(e.datos ?? {}), IndicePelado: i });
+  }
+  throw e;
+};
+
 export async function tratarDelPiso(tx: any, p: {
   fecha: string; cliente: any; encargado?: string | null; horaInicio?: string | null;
-  termos: Entrada[]; operador: string;
+  termos: Entrada[]; termosPelado?: TermoPelado[]; operador: string;
 }) {
-  if (!Array.isArray(p.termos) || !p.termos.length) throw new ErrorNegocio(400, "No escogió nada del piso");
+  const dePiso = Array.isArray(p.termos) ? p.termos : [];
+  const dePelado = Array.isArray(p.termosPelado) ? p.termosPelado : [];
+  if (!dePiso.length && !dePelado.length) throw new ErrorNegocio(400, "No escogió nada del piso ni de Pelado");
   return todoONada(async deshacer => {
     const cliente = await validarCliente(tx, p.cliente);
     const [abierta]: any[] = await tx.$queryRawUnsafe(`
@@ -816,12 +1110,19 @@ export async function tratarDelPiso(tx: any, p: {
       deshacer(() => tx.$executeRawUnsafe(`DELETE FROM HojaProceso WHERE HojaId = ?`, hojaId));
     }
     const termos = [];
-    for (const [i, e] of p.termos.entries()) {
+    for (const [i, e] of dePiso.entries()) {
       try {
         const t = await registrarEntrada(tx, hojaId, e, p.operador);
         deshacer(() => eliminarTermo(tx, t.TermoId));
         termos.push(t);
       } catch (err) { conIndice(i, err); }
+    }
+    for (const [i, x] of dePelado.entries()) {
+      try {
+        const t = await tomarTermoDePelado(tx, hojaId, p.fecha, x, p.operador);
+        deshacer(() => eliminarTermo(tx, t.TermoId));
+        termos.push(t);
+      } catch (err) { conIndicePelado(i, x?.NumeroTermo, err); }
     }
     return { HojaId: hojaId, HojaNueva: !abierta, Termos: termos };
   });
