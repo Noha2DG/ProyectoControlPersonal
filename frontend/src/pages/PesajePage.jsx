@@ -73,6 +73,11 @@ function SelectorTransacciones({ transacciones, seleccionada, onSelect, onCerrar
                       <p className={`text-xs whitespace-nowrap ${activa ? "text-blue-100" : "text-gray-500"}`}>
                         → {t.ClasePT} ({t.DescripcionTalla}) · <span className={`font-semibold ${activa ? "text-white" : "text-blue-700"}`}>{fmtNum(t.Procesado, 1)} kg</span>
                       </p>
+                      {t.TermosEnTratamiento && (
+                        <p className={`text-[11px] font-semibold whitespace-nowrap ${activa ? "text-cyan-100" : "text-cyan-700"}`}>
+                          En Tratamiento: termo {t.TermosEnTratamiento}
+                        </p>
+                      )}
                     </button>
                     {puedeEditar && (
                       <button onClick={() => onCerrar(t)}
@@ -149,6 +154,11 @@ export default function PesajePage() {
   const [modalEditar, setModalEditar] = useState(null);
   const [widths, startResize] = useColWidths("pesajes", COL_DEFAULTS);
 
+  // Termos que Tratamiento tomó mientras esta pantalla los tenía abiertos (lib/tratamiento.ts,
+  // tomarTermoDePelado): se avisa en grande porque desde ese momento ya no se pesa en ellos.
+  const tomadosRef = useRef({ id: null, set: new Set() });
+  const [avisoTrat, setAvisoTrat] = useState([]);
+
   const termoRef = useRef(null);
   const codigoRef = useRef(null);
   const pesoRef = useRef(null);
@@ -186,8 +196,26 @@ export default function PesajePage() {
   const fetchTermos = useCallback(async (transaccionId) => {
     const res = await fetch(`/api/termos?transaccion=${transaccionId}`, { headers: authHeader() });
     const data = await res.json();
-    if (Array.isArray(data)) setTermos(data);
+    if (!Array.isArray(data)) return;
+    setTermos(data);
+    const ahora = new Set(data.filter(t => t.EnTratamiento).map(t => t.NumeroTermo));
+    const antes = tomadosRef.current;
+    if (antes.id === transaccionId) {
+      const nuevos = [...ahora].filter(n => !antes.set.has(n));
+      if (nuevos.length) setAvisoTrat(a => [...new Set([...a, ...nuevos])]);
+    } else {
+      setAvisoTrat([]);
+    }
+    tomadosRef.current = { id: transaccionId, set: ahora };
   }, []);
+
+  // Los termos de la transacción escogida también se refrescan solos: Tratamiento puede llevarse uno
+  // en cualquier momento, y desde ahí ya no se pesa en él.
+  useEffect(() => {
+    if (!transSel) return;
+    const id = setInterval(() => fetchTermos(transSel.TransaccionId), 20000);
+    return () => clearInterval(id);
+  }, [transSel, fetchTermos]);
 
   const fetchPesajes = useCallback(async (transaccionId) => {
     setLoadingPesajes(true);
@@ -266,7 +294,8 @@ export default function PesajePage() {
 
   const handleEliminarPesaje = async (p) => {
     if (!confirm("¿Eliminar esta pesada?")) return;
-    await fetch(`/api/pesaje/${p.PesajeId}`, { method: "DELETE", headers: authHeader() });
+    const res = await fetch(`/api/pesaje/${p.PesajeId}`, { method: "DELETE", headers: authHeader() });
+    if (!res.ok) { const d = await res.json().catch(() => ({})); alert(d.error || "No se pudo eliminar la pesada"); }
     refrescarTodo();
   };
 
@@ -303,6 +332,8 @@ export default function PesajePage() {
   const empleadoEscaneado = codigoEscaneado ? empleados.find(e => e.Codigo === codigoEscaneado) : null;
 
   const termoActual = termos.find(t => t.NumeroTermo === numeroTermo);
+  const termoEnTrat = termoActual?.EnTratamiento ?? null;
+  const termosEnTrat = termos.filter(t => t.EnTratamiento);
   // Sobre lo trabajado: lo bajado al piso no se trabajó en este lote (ver backend/src/lib/destajoPiso.ts).
   // En un lote entero lo pesado es cabeza: el rendimiento es el de la cola, que se registra por termo.
   const trabajado = lote ? lote.PesoIngreso - (lote.Bajado || 0) : 0;
@@ -314,6 +345,17 @@ export default function PesajePage() {
       <div className="flex flex-col lg:flex-row gap-4">
       {/* Columna captura */}
       <div className="lg:w-[420px] lg:shrink-0 space-y-4">
+
+        {avisoTrat.length > 0 && (
+          <div role="alert" className="bg-cyan-700 text-white rounded-xl shadow px-4 py-3 flex items-start gap-3">
+            <p className="flex-1 text-sm">
+              <b>Tratamiento tomó {avisoTrat.length === 1 ? "el termo" : "los termos"} {avisoTrat.join(", ")}.</b>{" "}
+              Ya no se puede pesar en {avisoTrat.length === 1 ? "él" : "ellos"}: use otro termo.
+            </p>
+            <button onClick={() => setAvisoTrat([])} aria-label="Entendido" title="Entendido"
+              className="shrink-0 rounded px-2 text-lg leading-none text-cyan-100 hover:bg-cyan-600 hover:text-white">&times;</button>
+          </div>
+        )}
 
         {lote && (
           <div className="bg-white border border-gray-300 rounded-xl shadow-sm p-3 space-y-3">
@@ -356,7 +398,13 @@ export default function PesajePage() {
           {numeroTermo && !termoActual && (
             <p className="text-xs text-gray-500 mt-2">Termo nuevo — se crea con la primera pesada</p>
           )}
-          {termoActual && (
+          {termoEnTrat && (
+            <div className="mt-2 bg-red-50 border border-red-300 text-red-800 text-sm rounded-lg px-3 py-2">
+              <p className="font-semibold">Tratamiento tomó este termo a las {termoEnTrat.Hora}{termoEnTrat.HojaId ? ` (hoja #${termoEnTrat.HojaId})` : ""}.</p>
+              <p className="text-xs mt-0.5">Ya no se puede pesar en él: use otro termo.</p>
+            </div>
+          )}
+          {termoActual && !termoEnTrat && (
             <div className="mt-2">
               {(() => {
                 const cap = termoActual.Capacidad ?? 150;
@@ -380,6 +428,12 @@ export default function PesajePage() {
               })()}
             </div>
           )}
+          {termosEnTrat.length > 0 && (
+            <p className="mt-2 text-xs text-cyan-800 bg-cyan-50 border border-cyan-200 rounded-lg px-2.5 py-1.5">
+              En Tratamiento (ya no se pesa en ellos):{" "}
+              {termosEnTrat.map(t => `termo ${t.NumeroTermo} (${fmtNum(t.KgTermo)} kg, ${t.EnTratamiento.Hora})`).join(" · ")}
+            </p>
+          )}
         </div>
 
         <div className="bg-white border border-gray-300 rounded-xl shadow-sm p-4 space-y-3">
@@ -390,7 +444,7 @@ export default function PesajePage() {
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1">Código Empleado *</label>
             <input ref={codigoRef} value={codigoInput} onChange={e => setCodigoInput(e.target.value.toUpperCase())}
-              onKeyDown={handleCodigoKey} disabled={guardando || !numeroTermo || !puedeCrear} placeholder="Escanear o escribir..." autoComplete="off"
+              onKeyDown={handleCodigoKey} disabled={guardando || !numeroTermo || !puedeCrear || !!termoEnTrat} placeholder="Escanear o escribir..." autoComplete="off"
               className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono uppercase text-center focus:outline-none focus:ring-2 focus:ring-blue-400 disabled:opacity-50" />
             {codigoEscaneado && (
               <p className={`text-[15px] mt-1 text-center rounded-lg px-2 py-1 ${empleadoEscaneado ? "bg-green-200 text-green-900 font-semibold" : "bg-red-200 text-red-900"}`}>
@@ -401,7 +455,7 @@ export default function PesajePage() {
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1">Peso *</label>
             <input ref={pesoRef} type="number" step="0.01" value={peso} onChange={e => setPeso(e.target.value)}
-              onKeyDown={handlePesoKey} disabled={guardando || !numeroTermo || !puedeCrear}
+              onKeyDown={handlePesoKey} disabled={guardando || !numeroTermo || !puedeCrear || !!termoEnTrat}
               placeholder="kg" className="w-full border border-gray-300 rounded-lg px-3 py-2 text-3xl font-bold text-center text-red-600 focus:outline-none focus:ring-2 focus:ring-blue-400 disabled:opacity-50" />
           </div>
           {ultimoEmpleado && !errorMsg && (
@@ -458,6 +512,10 @@ export default function PesajePage() {
                     <td className="px-3 py-2 text-right font-semibold whitespace-nowrap">{fmtNum(p.Peso)}</td>
                     <td className="px-3 py-2 text-center text-gray-500 whitespace-nowrap">{p.FechaHora?.slice(11, 16)}</td>
                     <td className="px-3 py-2 text-center whitespace-nowrap">
+                      {/* Las pesadas de un termo que ya se llevó Tratamiento no se corrigen: sus kilos ya están allá. */}
+                      {termosEnTrat.some(t => t.NumeroTermo === p.NumeroTermo) ? (
+                        <span className="text-[11px] font-semibold text-cyan-700">En Tratamiento</span>
+                      ) : (
                       <div className="flex justify-center gap-2">
                         {puedeEditar && (
                           <button onClick={() => setModalEditar(p)}
@@ -468,6 +526,7 @@ export default function PesajePage() {
                             className="text-red-500 hover:text-red-700 text-xs font-medium px-2 py-1 rounded hover:bg-red-50 transition">Eliminar</button>
                         )}
                       </div>
+                      )}
                     </td>
                   </tr>
                 ))}

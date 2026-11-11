@@ -24,6 +24,11 @@ router.get("/saldo", requireAuth, requirePerm("tratamiento", "ver"), async (_req
   try { res.json(await T.saldoPiso(prisma)); } catch (e) { fallo(res, e); }
 });
 
+// Los termos que Pelado va llenando en sus transacciones abiertas, para tomarlos sin esperar el cierre.
+router.get("/termos-pelado", requireAuth, requirePerm("tratamiento", "ver"), async (_req, res) => {
+  try { res.json(await T.termosEnPelado(prisma)); } catch (e) { fallo(res, e); }
+});
+
 router.get("/catalogos", requireAuth, requirePerm("tratamiento", "ver"), async (_req, res) => {
   try {
     // El cliente de la hoja se escoge de los PEDIDOS ACTIVOS (Estatus 'Proceso'), no de todo el
@@ -124,7 +129,7 @@ router.post("/tratar", requireAuth, requirePerm("tratamiento", "crear"), async (
     const b = req.body ?? {};
     res.status(201).json(await enTx(tx => T.tratarDelPiso(tx, {
       fecha: String(b.FechaProduccion || hoyGT()), cliente: b.ClienteCodigo, encargado: b.Encargado || null,
-      horaInicio: b.HoraInicio || null, termos: b.Termos ?? [], operador: operador(req),
+      horaInicio: b.HoraInicio || null, termos: b.Termos ?? [], termosPelado: b.TermosPelado ?? [], operador: operador(req),
     })));
   } catch (e) { fallo(res, e); }
 });

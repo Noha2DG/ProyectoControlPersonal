@@ -36,7 +36,11 @@ const SELECT_TRANS = `
          -- A dónde se trasladó lo producido al cerrarla (lib/destajoPiso.ts, cerrarTransaccion).
          (SELECT GROUP_CONCAT(DISTINCT b.Nombre ORDER BY b.Nombre SEPARATOR ', ')
             FROM MovimientoPiso m JOIN BodegaVirtual b ON b.Codigo = m.BodegaDestino
-           WHERE m.TransaccionId = tp.TransaccionId) AS Destino
+           WHERE m.TransaccionId = tp.TransaccionId AND NOT (m.Tipo = 'PROCESADO' AND m.NumeroTermo IS NOT NULL)) AS Destino,
+         -- Termos que Tratamiento ya se llevó con la transacción abierta (lib/tratamiento.ts).
+         (SELECT GROUP_CONCAT(m.NumeroTermo ORDER BY m.MovimientoId SEPARATOR ', ')
+            FROM MovimientoPiso m
+           WHERE m.TransaccionId = tp.TransaccionId AND m.Tipo = 'PROCESADO' AND m.NumeroTermo IS NOT NULL) AS TermosEnTratamiento
   FROM TransaccionesProduccion tp
   JOIN Procesos pr ON tp.Proceso = pr.Proceso
   JOIN Clase cl ON tp.ClasePT = cl.Clase

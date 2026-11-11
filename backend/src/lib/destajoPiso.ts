@@ -768,11 +768,25 @@ export async function infoCierre(client: any, transaccionId: number) {
         .map(c => ({ ...c, MovimientoId: Number(c.MovimientoId), Talla: Number(c.Talla), Peso: Number(c.Peso) }))
     : [];
 
+  // Los termos que Tratamiento ya se llevó mientras la transacción seguía abierta (lib/tratamiento.ts,
+  // tomarTermoDePelado): ya están en su piso, así que al cerrar solo se traslada el resto.
+  const tomados: any[] = modo === "PELADO"
+    ? await client.$queryRawUnsafe(`
+        SELECT m.NumeroTermo, m.Peso, DATE_FORMAT(m.FechaHora, '%Y-%m-%d %H:%i') AS FechaHora
+          FROM MovimientoPiso m
+         WHERE m.Tipo = 'PROCESADO' AND m.TransaccionId = ? AND m.NumeroTermo IS NOT NULL
+         ORDER BY m.MovimientoId`, transaccionId)
+    : [];
+  const termosTratamiento = tomados.map(x => ({ NumeroTermo: String(x.NumeroTermo), Peso: r2(Number(x.Peso)), FechaHora: x.FechaHora }));
+  const kgTomado = r2(termosTratamiento.reduce((s, x) => s + x.Peso, 0));
+
   return {
     TransaccionId: Number(t.TransaccionId), Lote: String(t.Lote), ClaseOrigen: String(t.ClaseOrigen),
     ClasePT: String(t.ClasePT), DescripcionClasePT: t.DescripcionClasePT, Talla: Number(t.Talla),
     DescripcionTalla: t.DescripcionTalla, DescripcionProceso: t.DescripcionProceso, Estado: String(t.Estado),
     UM: String(t.UM), FechaLote: String(t.FechaLote), Procesado: r2(Number(t.Procesado)), Modo: modo,
+    TermosTratamiento: termosTratamiento, TomadoTratamiento: kgTomado,
+    PorTrasladar: r2(Math.max(0, Number(t.Procesado) - kgTomado)),
     Destinos: destinos.map(d => ({ Codigo: String(d.Codigo), Nombre: String(d.Nombre) })),
     DestinoSugerido: modo === "DESCABEZADO" ? DESTINOS_COLA[0] : null,
     ColaPendiente: colaPendiente,
@@ -802,7 +816,8 @@ export async function cerrarTransaccion(
   const trasladado: { Destino: string; NombreDestino: string; Kg: number; Termo?: string }[] = [];
 
   if (info.Modo === "PELADO") {
-    if (info.Procesado > 0.001) {
+    // Solo lo que Tratamiento no se llevó termo por termo mientras la transacción estaba abierta.
+    if (info.PorTrasladar > 0.001) {
       if (!o.destino) throw new ErrorNegocio(400, "Escoja a qué bodega va lo pelado");
       const destino = String(o.destino);
       if (!validos.has(destino)) throw new ErrorNegocio(400, `${destino} no es un destino válido para lo pelado`);
@@ -811,8 +826,8 @@ export async function cerrarTransaccion(
                                     Peso, UM, PesoKg, LoteProceso, ClaseProceso, TransaccionId, RegistradoPor)
         VALUES ('PROCESADO', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         fecha, destino, info.Lote, info.ClasePT, info.Talla, info.FechaLote,
-        info.Procesado, info.UM, aKg(info.Procesado, info.UM), info.Lote, info.ClaseOrigen, transaccionId, operador);
-      trasladado.push({ Destino: destino, NombreDestino: validos.get(destino)!, Kg: aKg(info.Procesado, info.UM) });
+        info.PorTrasladar, info.UM, aKg(info.PorTrasladar, info.UM), info.Lote, info.ClaseOrigen, transaccionId, operador);
+      trasladado.push({ Destino: destino, NombreDestino: validos.get(destino)!, Kg: aKg(info.PorTrasladar, info.UM) });
     }
   } else {
     for (const c of info.ColaPendiente) {
@@ -839,14 +854,18 @@ export async function reabrirTransaccion(tx: any, transaccionId: number) {
   const [bloq]: any[] = await tx.$queryRawUnsafe(
     `SELECT Estado FROM TransaccionesProduccion WHERE TransaccionId = ? FOR UPDATE`, transaccionId);
   if (!bloq) throw new ErrorNegocio(404, "Transacción no encontrada");
+  // Solo lo que trasladó el CIERRE. Los termos que Tratamiento tomó con la transacción abierta
+  // (PROCESADO con NumeroTermo) y sus consumos en la hoja no se tocan: no los movió el cierre.
   const movs: any[] = await tx.$queryRawUnsafe(
-    `SELECT MovimientoId, Tipo FROM MovimientoPiso WHERE TransaccionId = ? FOR UPDATE`, transaccionId);
+    `SELECT MovimientoId, Tipo FROM MovimientoPiso
+      WHERE TransaccionId = ? AND ((Tipo = 'PROCESADO' AND NumeroTermo IS NULL) OR Tipo = 'COLA') FOR UPDATE`, transaccionId);
   for (const m of movs) {
     if (!(await sigueAlPiso(tx, Number(m.MovimientoId)))) {
       throw new ErrorNegocio(400, "Lo que se trasladó al cerrar esta transacción ya lo tomó el siguiente proceso: no se puede reabrir.");
     }
   }
-  await tx.$executeRawUnsafe(`DELETE FROM MovimientoPiso WHERE TransaccionId = ? AND Tipo = 'PROCESADO'`, transaccionId);
+  await tx.$executeRawUnsafe(
+    `DELETE FROM MovimientoPiso WHERE TransaccionId = ? AND Tipo = 'PROCESADO' AND NumeroTermo IS NULL`, transaccionId);
   await tx.$executeRawUnsafe(
     `UPDATE MovimientoPiso SET BodegaDestino = NULL, TransaccionId = NULL WHERE TransaccionId = ? AND Tipo = 'COLA'`, transaccionId);
   await tx.$executeRawUnsafe(`UPDATE TransaccionesProduccion SET Estado = 'Abierta' WHERE TransaccionId = ?`, transaccionId);
