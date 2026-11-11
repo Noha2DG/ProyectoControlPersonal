@@ -21,6 +21,10 @@ import ReporteDescongeladoModal from "../components/ReporteDescongeladoModal.jsx
 import InventarioDescongeladoModal, { entregaDe } from "../components/InventarioDescongeladoModal.jsx";
 import PesarPorTermo, { termosDeHoja, fueraDeRango, pctDif, textoPct, RANGO } from "../components/PesarPorTermo.jsx";
 
+// Columna Dif. de la tabla de la hoja: en KILOS, pesado − declarado (usuario, 11 nov 2026; antes %).
+// El % sigue en el title y es el que decide si el termo está fuera de rango.
+const textoKg = (kg) => `${kg > 0.004 ? "+" : kg < -0.004 ? "−" : ""}${fmtNum(Math.abs(kg))}`;
+
 const API = "/api/descongelado";
 
 const hoyGT = () => new Date().toLocaleDateString("sv-SE", { timeZone: "America/Guatemala" });
@@ -1159,7 +1163,7 @@ function TablaDescongelado({ hoja, destinos, puedeEditar, puedeBorrar, onCorregi
                     <td className="px-3 py-1.5 text-right tabular-nums font-bold">{suma(g.filas, "Masters") || "—"}</td>
                     <td className="px-3 py-1.5 text-right tabular-nums font-bold">{decl ? fmtNum(decl) : "—"}</td>
                     <td className="px-3 py-1.5 text-right tabular-nums font-bold">{fmtNum(suma(g.filas, "Pesado"))}</td>
-                    <td className="px-3 py-1.5 text-right tabular-nums font-bold">{decl ? textoPct(pctDif(pes, decl)) : "—"}</td>
+                    <td className="px-3 py-1.5 text-right tabular-nums font-bold" title={decl ? textoPct(pctDif(pes, decl)) : undefined}>{decl ? textoKg(pes - decl) : "—"}</td>
                     <td colSpan={2}></td>
                   </tr>
                   {g.filas.map(f => {
@@ -1191,8 +1195,9 @@ function TablaDescongelado({ hoja, destinos, puedeEditar, puedeBorrar, onCorregi
                               className="w-24 border border-blue-400 rounded px-1.5 py-0.5 text-sm text-right" />
                           ) : fmtNum(f.Pesado)}
                         </td>
-                        <td className={`px-3 py-1.5 text-right tabular-nums whitespace-nowrap ${mal ? "text-red-700 font-bold" : "text-gray-600"}`}>
-                          {f.Dif != null ? textoPct(f.Dif) : "—"}
+                        <td className={`px-3 py-1.5 text-right tabular-nums whitespace-nowrap ${mal ? "text-red-700 font-bold" : "text-gray-600"}`}
+                          title={f.Dif != null ? textoPct(f.Dif) : undefined}>
+                          {f.Dif != null && f.Declarado != null ? textoKg(f.Pesado - f.Declarado) : "—"}
                           {mal && <span className="ml-1 text-[10px] font-semibold uppercase bg-red-600 text-white rounded px-1 py-0.5 align-middle">fuera</span>}
                         </td>
                         <td className="px-3 py-1.5 text-xs">
@@ -1249,7 +1254,7 @@ function TablaDescongelado({ hoja, destinos, puedeEditar, puedeBorrar, onCorregi
               <td className="px-3 py-2 text-right tabular-nums">{masters || "—"}</td>
               <td className="px-3 py-2 text-right tabular-nums">{declarado ? fmtNum(declarado) : "—"}</td>
               <td className="px-3 py-2 text-right tabular-nums text-base">{fmtNum(hoja.KgDescongelado)}</td>
-              <td className="px-3 py-2 text-right tabular-nums">{declarado ? textoPct(pctDif(pesadoConPar, declarado)) : "—"}</td>
+              <td className="px-3 py-2 text-right tabular-nums" title={declarado ? textoPct(pctDif(pesadoConPar, declarado)) : undefined}>{declarado ? textoKg(pesadoConPar - declarado) : "—"}</td>
               <td colSpan={2}></td>
             </tr>
           </tfoot>
