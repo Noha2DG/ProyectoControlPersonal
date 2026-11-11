@@ -19,6 +19,8 @@ function ContenidoHoja({ remision }) {
   // Igual que el formulario: lo que decide la forma del documento es el Destino de la serie, no el
   // nombre del tipo — un destino interno nuevo sale bien impreso sin tocar este componente.
   const interno = remision.Destino === "Area";
+  // Muestra para análisis: ni cliente ni bodega, el documento dice para qué salió.
+  const muestra = remision.Destino === "Muestra";
   const exportacion = remision.PideEmbarque === true;
 
   // El detalle impreso se agrupa por producto, no una fila por master: al cliente y a la aduana les
@@ -43,7 +45,7 @@ function ContenidoHoja({ remision }) {
     return acc;
   }, {})).sort((a, b) => (a.Linea ?? 0) - (b.Linea ?? 0));
 
-  const destino = interno
+  const destino = muestra ? "Muestra para análisis" : interno
     ? (remision.NombreBodegaDestino || remision.NombreAreaDestino || remision.BodegaDestino || remision.AreaDestino)
     : (remision.NombreCliente || "-") + (remision.NombreSubcliente ? ` — ${remision.NombreSubcliente}` : "");
 
@@ -52,7 +54,7 @@ function ContenidoHoja({ remision }) {
       <div className="flex items-start justify-between mb-6">
         <div>
           <h1 className="text-3xl font-bold text-gray-900">
-            {interno ? "Vale de traslado interno" : "Remisión de despacho"}
+            {muestra ? "Salida de muestra para análisis" : interno ? "Vale de traslado interno" : "Remisión de despacho"}
           </h1>
           <p className="text-base text-gray-500 mt-1">{remision.NombreTipo}</p>
         </div>
@@ -67,7 +69,7 @@ function ContenidoHoja({ remision }) {
 
       <div className="border-y-2 border-gray-800 py-3 mb-5 grid grid-cols-2 gap-x-8 gap-y-2 text-base">
         <div>
-          <span className="text-gray-400">{interno ? "Bodega de destino:" : "Cliente:"}</span>{" "}
+          <span className="text-gray-400">{muestra ? "Destino:" : interno ? "Bodega de destino:" : "Cliente:"}</span>{" "}
           <span className="font-semibold">{destino}</span>
         </div>
         {remision.CodigoPedido && (

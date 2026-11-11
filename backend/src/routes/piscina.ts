@@ -1,6 +1,7 @@
 import { Router, Request, Response } from "express";
 import prisma from "../lib/prisma.ts";
-import { requireAuth, requirePerm } from "../middleware/auth.ts";
+import { requireAuth, requirePerm, AuthRequest } from "../middleware/auth.ts";
+import { FINCA_IMPORTACION } from "../lib/liberacionMP.ts";
 
 const router = Router();
 
@@ -22,11 +23,21 @@ router.get("/", async (req: Request, res: Response) => {
 });
 
 // POST /api/piscina  { CodigoFinca, Nombre }
-router.post("/", requireAuth, requirePerm("catalogos", "crear"), async (req: Request, res: Response) => {
+// Una piscina de la finca de importación es un CONTENEDOR nuevo (Q013, Q014…): nace pendiente de
+// liberar, en la misma transacción, para que nada de él pueda salir de bodega antes de que alguien
+// con el permiso "Liberar materia prima" lo libere (ver lib/liberacionMP.ts).
+router.post("/", requireAuth, requirePerm("catalogos", "crear"), async (req: AuthRequest, res: Response) => {
   try {
     const { CodigoFinca, Nombre } = req.body;
     if (!CodigoFinca || !Nombre) { res.status(400).json({ error: "CodigoFinca y Nombre son requeridos" }); return; }
-    await prisma.$executeRaw`INSERT INTO Piscina (CodigoFinca, Nombre) VALUES (${CodigoFinca}, ${Nombre})`;
+    await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`INSERT INTO Piscina (CodigoFinca, Nombre) VALUES (${CodigoFinca}, ${Nombre})`;
+      if (CodigoFinca === FINCA_IMPORTACION) {
+        await tx.$executeRaw`
+          INSERT INTO LiberacionMateriaPrima (PiscinaId, Estado, CreadoPor)
+          VALUES (LAST_INSERT_ID(), 'PENDIENTE', ${req.user?.nombre ?? req.user?.username ?? "Sistema"})`;
+      }
+    });
     res.status(201).json({ ok: true });
   } catch (err: any) {
     if (err.message?.includes("Duplicate")) res.status(400).json({ error: "Esa piscina ya existe en esta finca" });

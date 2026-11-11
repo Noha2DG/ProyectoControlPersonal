@@ -43,6 +43,10 @@ export interface Permisos {
   // planilla). `editar` prepara versiones en borrador; `aprobar` las pone en vigor o las anula y
   // registra el salario mínimo — así quien carga los precios no es por fuerza quien los autoriza.
   tarifas?:        { ver?: boolean; editar?: boolean; aprobar?: boolean };
+  // Liberar materia prima: un contenedor importado no sale de bodega hasta que alguien con `liberar`
+  // lo libera completo (ver lib/liberacionMP.ts). También es el único que puede hacer una remisión de
+  // muestra para análisis, la única salida permitida mientras está pendiente.
+  liberar_mp?:     { ver?: boolean; liberar?: boolean };
 }
 
 export interface AuthPayload {

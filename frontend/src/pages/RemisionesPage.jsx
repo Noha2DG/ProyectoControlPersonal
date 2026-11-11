@@ -57,6 +57,7 @@ async function leerJSON(res) {
 }
 
 function destinoDe(r) {
+  if (r.Destino === "Muestra") return "Muestra para análisis";
   if (r.BodegaDestino || r.AreaDestino) {
     // La bodega a la que se cargó; las remisiones de antes de oct 2026 sin bodega muestran su área.
     const lugar = r.NombreBodegaDestino || r.NombreAreaDestino || r.BodegaDestino || r.AreaDestino;
@@ -87,6 +88,9 @@ function ModalRemision({ remision, series, clientes, bodegas, empleados, onGuard
 
   const serie = series.find(s => s.Tipo === tipo);
   const aCliente = serie?.Destino === "Cliente";
+  // Muestra para análisis: sin cliente ni bodega destino. Es la única salida de un contenedor
+  // importado pendiente de liberar (solo la ve quien tiene el permiso "Liberar materia prima").
+  const esMuestra = serie?.Destino === "Muestra";
   const pideEmbarque = serie?.PideEmbarque === true;
   const pidePedido = serie?.PidePedido === true;
   // Una venta local solo ofrece clientes locales y una exportación solo los de exportación. Maquila
@@ -133,8 +137,8 @@ function ModalRemision({ remision, series, clientes, bodegas, empleados, onGuard
         // claridad del payload, pero la fuente de verdad es CodigoPedido.
         CodigoCliente: aCliente ? Number(codigoCliente) : null,
         CodigoSubcliente: aCliente ? codigoSubcliente : null,
-        BodegaDestino: aCliente ? null : bodegaDestino,
-        RecibidoPor: aCliente ? null : recibidoPor,
+        BodegaDestino: aCliente || esMuestra ? null : bodegaDestino,
+        RecibidoPor: aCliente || esMuestra ? null : recibidoPor,
         CodigoPedido: pidePedido ? codigoPedido : null,
         EsMixta: pidePedido ? esMixta : false,
         Contenedor: contenedor, Sello: sello, Observaciones: observaciones,
@@ -216,6 +220,11 @@ function ModalRemision({ remision, series, clientes, bodegas, empleados, onGuard
                 </span>
               </label>
             </>
+          ) : esMuestra ? (
+            <p className="text-sm text-gray-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+              Lo que se escanee aquí sale de bodega para el análisis. Es la única salida permitida de un contenedor
+              pendiente de liberar. Anote en Observaciones para qué es la muestra.
+            </p>
           ) : aCliente ? (
             <div className="grid grid-cols-2 gap-4">
               <div>

@@ -1,7 +1,8 @@
 import { Router, Request, Response } from "express";
 import jwt from "jsonwebtoken";
 import prisma from "../lib/prisma.ts";
-import { requireAuth, requirePerm, AuthRequest } from "../middleware/auth.ts";
+import { requireAuth, requirePerm, tienePermiso, AuthRequest } from "../middleware/auth.ts";
+import { bloqueoDeSalida, DESTINO_MUESTRA } from "../lib/liberacionMP.ts";
 import { MASTER_SELECT, formatearMaster } from "../lib/masters.ts";
 import { normalizarCorrelativo, resolverEtiqueta } from "../lib/correlativo.ts";
 import {
@@ -85,6 +86,10 @@ function resolverEmbarque(serie: Serie, body: any) {
 // foto del momento. Si mañana alguien corrige el cliente del pedido, un documento ya impreso y
 // entregado no puede cambiar de destinatario retroactivamente.
 export async function resolverDestino(client: any, serie: Serie, body: any) {
+  // Muestra para análisis: sale de bodega para que la analicen, no va a un cliente ni al piso de nadie.
+  if (serie.Destino === DESTINO_MUESTRA) {
+    return { CodigoCliente: null, CodigoSubcliente: null, AreaDestino: null, BodegaDestino: null, CodigoPedido: null, RecibidoPor: null };
+  }
   if (serie.Destino === "Area") {
     // Se carga a una BODEGA, no a un área: el área dice dónde trabaja la gente, la bodega dónde queda
     // el producto. Solo las que llevan inventario al piso: si no, el producto sale de bodega y no
@@ -156,12 +161,15 @@ async function validarTipoCliente(client: any, serie: { Nombre: string; TipoClie
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 
 // GET /api/remisiones/series — catálogo para el selector de Tipo del formulario.
-router.get("/series", requireAuth, requirePerm("remisiones", "ver"), async (_req: Request, res: Response) => {
+router.get("/series", requireAuth, requirePerm("remisiones", "ver"), async (req: AuthRequest, res: Response) => {
   try {
-    const rows: any[] = await prisma.$queryRaw`
+    const todas: any[] = await prisma.$queryRaw`
       SELECT Tipo, Prefijo, Nombre, Destino, TipoCliente, PideEmbarque, PidePedido, PideLinea
       FROM SerieRemision WHERE Activo = 1 ORDER BY Orden ASC, Nombre ASC
     `;
+    // La muestra para análisis es la única salida de un contenedor sin liberar: solo la ve quien
+    // puede liberar materia prima.
+    const rows = todas.filter(r => r.Destino !== DESTINO_MUESTRA || tienePermiso(req, "liberar_mp", "liberar"));
     // Destino/PideEmbarque/PidePedido viajan al frontend para que el formulario sepa qué campos
     // mostrar sin repetir la regla en JS — misma fuente de verdad que usa la validación del backend.
     res.json(rows.map(r => ({
@@ -419,6 +427,9 @@ router.post("/", requireAuth, requirePerm("remisiones", "crear"), async (req: Re
       `;
       if (!serieRows.length) throw new ErrorNegocio(400, "Tipo de remisión no válido");
       if (!Number(serieRows[0].Activo)) throw new ErrorNegocio(400, "Esta serie de remisión está inactiva");
+      if (serieRows[0].Destino === DESTINO_MUESTRA && !tienePermiso(req as AuthRequest, "liberar_mp", "liberar")) {
+        throw new ErrorNegocio(403, `Una ${String(serieRows[0].Nombre).toLowerCase()} requiere el permiso "Liberar materia prima"`);
+      }
 
       // Todo se valida contra la serie ya leída, y ANTES de consumir el folio: si falta el pedido,
       // el cliente, el área o los datos de embarque, la transacción revienta sin haber gastado un
@@ -592,9 +603,21 @@ router.delete("/:id", requireAuth, requirePerm("remisiones", "eliminar"), async 
 // Toda alta/baja de líneas exige Borrador. Se resuelve aquí para no repetir el mismo chequeo (y el
 // mismo mensaje) en los cuatro endpoints de abajo. Devuelve además el contexto de la proforma
 // (CodigoPedido + EsMixta) que necesitan los dos endpoints de alta.
+// Una remisión de muestra se lleva lo que está pendiente de liberar: escanear en ella o confirmarla
+// exige el mismo permiso que crearla, no solo el de remisiones (si no, cualquiera de bodega usaría
+// un borrador de muestra ajeno como puerta trasera).
+async function exigirPermisoMuestra(req: Request, remisionId: number) {
+  const rows: any[] = await prisma.$queryRaw`
+    SELECT se.Nombre, se.Destino FROM Remisiones r JOIN SerieRemision se ON r.Tipo = se.Tipo WHERE r.RemisionId = ${remisionId} LIMIT 1`;
+  if (rows.length && rows[0].Destino === DESTINO_MUESTRA && !tienePermiso(req as AuthRequest, "liberar_mp", "liberar")) {
+    throw new ErrorNegocio(403, `Una ${String(rows[0].Nombre).toLowerCase()} requiere el permiso "Liberar materia prima"`);
+  }
+}
+
 async function exigirBorrador(tx: any, remisionId: number) {
   const rows: any[] = await tx.$queryRaw`
-    SELECT r.RemisionId, r.Folio, r.Estatus, r.CodigoPedido, r.EsMixta, r.AreaDestino, r.BodegaDestino, se.PideLinea
+    SELECT r.RemisionId, r.Folio, r.Estatus, r.CodigoPedido, r.EsMixta, r.AreaDestino, r.BodegaDestino, se.PideLinea,
+           se.Destino AS DestinoSerie
     FROM Remisiones r JOIN SerieRemision se ON r.Tipo = se.Tipo
     WHERE r.RemisionId = ${remisionId} LIMIT 1 FOR UPDATE
   `;
@@ -840,6 +863,8 @@ export async function agregarPallet(
     WHERE m.MasterId IN (${masters.map(() => "?").join(",")})
   `, ...masters.map(m => Number(m.MasterId)));
   validarProforma(remision, pedidosDelPallet.map(r => r.CodigoPedido));
+  const bloqueo = await bloqueoDeSalida(tx, masters.map(m => Number(m.MasterId)), remision.DestinoSerie);
+  if (bloqueo) throw new ErrorNegocio(400, `Polín ${pallet.Codigo}: ${bloqueo}`);
 
   // Un solo INSERT con todas las filas, no uno por master: un polín normal trae 50+ y contra una
   // base remota eso son 50 viajes de ida y vuelta — segundos de espera con el operador parado
@@ -858,6 +883,7 @@ router.post("/:id/agregar-pallet", requireAuth, requirePerm("remisiones", "edita
   try {
     const remisionId = Number(req.params.id);
     const operador = getOperador(req);
+    await exigirPermisoMuestra(req, remisionId);
     const respuesta = await prisma.$transaction(
       (tx) => agregarPallet(tx, remisionId, req.body ?? {}, operador), { timeout: 60_000 });
     res.status(201).json(respuesta);
@@ -908,6 +934,8 @@ export async function agregarMaster(
   if (master.Estatus === "Salido") throw new ErrorNegocio(400, "Este master ya salió de bodega en otra remisión");
 
   const masterId = Number(master.MasterId);
+  const bloqueo = await bloqueoDeSalida(tx, [masterId], remision.DestinoSerie);
+  if (bloqueo) throw new ErrorNegocio(400, bloqueo);
   await tx.$executeRaw`
     INSERT INTO RemisionDetalle (RemisionId, MasterId, LineaContenedor, AgregadoPor)
     VALUES (${remisionId}, ${masterId}, ${linea}, ${operador})
@@ -920,6 +948,7 @@ router.post("/:id/agregar-master", requireAuth, requirePerm("remisiones", "edita
   try {
     const remisionId = Number(req.params.id);
     const operador = getOperador(req);
+    await exigirPermisoMuestra(req, remisionId);
     const r = await prisma.$transaction(
       (tx) => agregarMaster(tx, remisionId, req.body ?? {}, operador), { timeout: 30_000 });
 
@@ -1097,6 +1126,11 @@ export async function confirmarRemision(tx: any, remisionId: number, operador: s
   `;
   validarProforma(remision, pedidosDeLineas.map(r => r.CodigoPedido));
 
+  // Respaldo del bloqueo al escanear: un borrador armado antes de que el contenedor quedara pendiente
+  // (o un contenedor rechazado después) tampoco se confirma.
+  const bloqueo = await bloqueoDeSalida(tx, lineas.map(l => Number(l.MasterId)), remision.DestinoSerie);
+  if (bloqueo) throw new ErrorNegocio(400, bloqueo);
+
   // Un master Salido con línea vigente aquí salió por ESTA remisión: el UNIQUE (MasterId, Vigente)
   // no deja que otra lo tenga a la vez.
   await sacarDeBodega(tx, remision, lineas.filter(l => l.Estatus !== "Salido").map(l => Number(l.MasterId)), operador);
@@ -1121,6 +1155,7 @@ router.post("/:id/confirmar", requireAuth, requirePerm("remisiones", "editar"), 
   try {
     const remisionId = Number(req.params.id);
     const operador = getOperador(req);
+    await exigirPermisoMuestra(req, remisionId);
     const respuesta = await prisma.$transaction(
       (tx) => confirmarRemision(tx, remisionId, operador), { timeout: 60_000 });
     res.json(respuesta);
