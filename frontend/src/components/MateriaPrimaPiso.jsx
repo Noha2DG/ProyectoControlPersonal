@@ -63,7 +63,9 @@ export function TomarDelPisoModal({ onHecho, onClose }) {
     setCargando(true); setError(""); setSel({}); setAbiertas(new Set());
     fetch(`${API}/saldo?bodega=${enc(bodega)}`, { headers: authHeader() }).then(leerJSON).then(d => {
       if (!vigente) return;
-      if (Array.isArray(d)) setLineas(d);
+      // Días al piso de menor a mayor, igual que el inventario impreso; con los mismos días se queda
+      // el orden del servidor (fecha del lote, remisión).
+      if (Array.isArray(d)) setLineas([...d].sort((a, b) => (a.DiasAlPiso ?? 0) - (b.DiasAlPiso ?? 0)));
       else { setLineas([]); setError(d.error || "No se pudo leer el piso"); }
     }).catch(e => { if (vigente) setError(e.message); })
       .finally(() => { if (vigente) setCargando(false); });
@@ -292,7 +294,8 @@ export function TomarDelPisoModal({ onHecho, onClose }) {
                 const nTermos = termos ? Object.keys(s?.termos ?? {}).length : 0;
                 return (
                   <Fragment key={l.Clave}>
-                  <tr className={s ? "bg-blue-50" : "hover:bg-gray-50"}>
+                  {/* Rojo claro: lleva 2 días o más al piso. Marcada, manda el azul de lo escogido. */}
+                  <tr className={s ? "bg-blue-50" : l.DiasAlPiso >= 2 ? "bg-red-50 hover:bg-red-100" : "hover:bg-gray-50"}>
                     <td className="px-3 py-2"><input type="checkbox" checked={!!s} onChange={() => alternar(l)} className="w-4 h-4" /></td>
                     <td className={`px-3 py-2 font-mono text-gray-800 whitespace-nowrap ${termos ? "cursor-pointer select-none" : ""}`}
                       onClick={termos ? () => abrir(l) : undefined}
@@ -308,8 +311,8 @@ export function TomarDelPisoModal({ onHecho, onClose }) {
                     <td className="px-3 py-2 text-gray-700 whitespace-nowrap">{l.Talla === 900 ? <span className="text-gray-300">—</span> : l.DescripcionTalla}</td>
                     <td className="px-3 py-2 text-right whitespace-nowrap">
                       <span className="font-semibold text-gray-800">{fmtNum(l.Kg)}</span>
-                      {/* Desde la primera entrada de esta línea al piso; de 3 días en adelante se resalta. */}
-                      <span className={`block text-[11px] ${l.DiasAlPiso >= 3 ? "text-red-600 font-semibold" : l.DiasAlPiso >= 1 ? "text-amber-700" : "text-gray-400"}`}>
+                      {/* Desde la primera entrada de esta línea al piso; de 2 días en adelante se resalta. */}
+                      <span className={`block text-[11px] ${l.DiasAlPiso >= 2 ? "text-red-600 font-semibold" : l.DiasAlPiso >= 1 ? "text-amber-700" : "text-gray-400"}`}>
                         {l.DiasAlPiso === 0 ? "entró hoy" : `${l.DiasAlPiso} día${l.DiasAlPiso !== 1 ? "s" : ""} al piso`}
                       </span>
                     </td>

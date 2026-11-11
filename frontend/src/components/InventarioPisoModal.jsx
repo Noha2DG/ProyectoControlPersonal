@@ -23,8 +23,8 @@ function vieneDe(l) {
   return l.FolioRemision ? `Remisión ${l.FolioRemision}` : "—";
 }
 
-// Por clase, en orden de código; dentro de cada clase por talla y, en la misma talla, el lote más
-// viejo primero (el orden en que se debería trabajar).
+// Por clase, en orden de código; dentro de cada clase por días al piso de menor a mayor y, con los
+// mismos días, por talla y el lote más viejo primero.
 function agruparPorClase(lineas) {
   const grupos = new Map();
   for (const l of lineas) {
@@ -38,7 +38,7 @@ function agruparPorClase(lineas) {
     .sort((a, b) => a.Clase.localeCompare(b.Clase))
     .map(g => ({
       ...g,
-      lineas: [...g.lineas].sort((a, b) => (a.Talla - b.Talla) || String(a.FechaLote ?? "").localeCompare(String(b.FechaLote ?? ""))),
+      lineas: [...g.lineas].sort((a, b) => ((a.DiasAlPiso ?? 0) - (b.DiasAlPiso ?? 0)) || (a.Talla - b.Talla) ||String(a.FechaLote ?? "").localeCompare(String(b.FechaLote ?? ""))),
     }));
 }
 
@@ -67,6 +67,13 @@ export function ContenidoInventarioPiso({ nombreBodega, lineas }) {
         <div><span className="text-gray-500">Clases:</span> <b>{grupos.length}</b></div>
         <div><span className="text-gray-500">Líneas:</span> <b>{lineas.length}</b></div>
       </div>
+      {lineas.some(l => l.DiasAlPiso >= 2) && (
+        <p className="text-xs text-gray-600 -mt-2 mb-4 flex items-center gap-1.5">
+          <span className="inline-block w-3 h-3 bg-red-50 border border-red-200"
+            style={{ printColorAdjust: "exact", WebkitPrintColorAdjust: "exact" }} />
+          Lleva 2 días o más al piso
+        </p>
+      )}
 
       {grupos.length === 0 && <p className="text-sm text-gray-500 py-6 text-center">No hay nada al piso.</p>}
 
@@ -93,13 +100,16 @@ export function ContenidoInventarioPiso({ nombreBodega, lineas }) {
             </thead>
             <tbody>
               {g.lineas.map(l => (
-                <tr key={l.Clave} className="border-t border-gray-200">
+                // Rojo claro: 2 días o más al piso, igual que en "Tomar del piso". print-color-adjust para
+                // que el navegador no quite el fondo al imprimir.
+                <tr key={l.Clave} className={`border-t border-gray-200 ${l.DiasAlPiso >= 2 ? "bg-red-50" : ""}`}
+                  style={l.DiasAlPiso >= 2 ? { printColorAdjust: "exact", WebkitPrintColorAdjust: "exact" } : undefined}>
                   <td className="py-1 pr-2 font-mono">{l.Lote}</td>
                   <td className="py-1 pr-2">{l.NombreFinca || "—"}</td>
                   <td className="py-1 pr-2">{l.Talla === 900 ? "—" : l.DescripcionTalla}</td>
                   <td className="py-1 pr-2">{vieneDe(l)}</td>
                   <td className="py-1 pr-2">{fmtDia(l.FechaLote)}</td>
-                  <td className="py-1 pr-2 text-right tabular-nums">{l.DiasAlPiso === 0 ? "hoy" : l.DiasAlPiso}</td>
+                  <td className={`py-1 pr-2 text-right tabular-nums ${l.DiasAlPiso >= 2 ? "text-red-700 font-semibold" : ""}`}>{l.DiasAlPiso === 0 ? "hoy" : l.DiasAlPiso}</td>
                   {conMasters && <td className="py-1 pr-2 text-right tabular-nums">{l.Masters || ""}</td>}
                   <td className="py-1 text-right tabular-nums font-semibold">{fmtNum(l.Kg)}</td>
                 </tr>
