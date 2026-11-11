@@ -43,6 +43,10 @@ export function ContenidoHoja({ hoja, filas }) {
   const merma = abierta
     ? Number((hoja.KgEntrada - hoja.KgDescongelado - hoja.KgDevuelto).toFixed(2))
     : hoja.KgMerma;
+  // En el papel va como DIFERENCIA = lo descongelado (más lo devuelto) − lo declarado (usuario,
+  // 11 nov 2026): positiva si se pesó de más, negativa si se perdió. Es la merma con el signo al revés;
+  // lo guardado (KgMerma) no cambia.
+  const diferencia = merma === 0 ? 0 : -merma;
   const masters = filas.reduce((s, f) => s + (f.entrada?.Masters || 0), 0);
 
   return (
@@ -77,7 +81,7 @@ export function ContenidoHoja({ hoja, filas }) {
           ["Entrada declarada", `${fmtNum(hoja.KgEntrada)} kg`],
           ["Descongelado", `${fmtNum(hoja.KgDescongelado)} kg`],
           ["Devuelto a bodega", `${fmtNum(hoja.KgDevuelto)} kg`],
-          [abierta ? "Merma al cerrar" : "Merma", `${fmtNum(merma)} kg`],
+          [abierta ? "Diferencia al cerrar" : "Diferencia", `${diferencia > 0 ? "+" : ""}${fmtNum(diferencia)} kg`],
           ["Rendimiento", hoja.Rendimiento != null ? `${fmtNum(hoja.Rendimiento)} %` : "—"],
         ].map(([t, v], i) => (
           <div key={t} className={`py-1.5 ${i ? "border-l border-gray-800" : ""}`}>
@@ -104,7 +108,8 @@ export function ContenidoHoja({ hoja, filas }) {
         </thead>
         <tbody className="divide-y divide-gray-200">
           {filas.map(({ clave, entrada, salida, ref }) => {
-            const dif = entrada && salida ? Number((entrada.PesoKg - salida.PesoKg).toFixed(2)) : null;
+            // Pesado − declarado: positivo si el termo pesó de más (mismo signo que la Diferencia de arriba).
+            const dif = entrada && salida ? Number((salida.PesoKg - entrada.PesoKg).toFixed(2)) : null;
             const o = origenDe(ref);
             return (
               <tr key={clave}>
@@ -117,7 +122,7 @@ export function ContenidoHoja({ hoja, filas }) {
                 <td className="py-1 pr-2 text-right">{entrada?.Masters ?? "—"}</td>
                 <td className="py-1 pr-2 text-right">{entrada ? fmtNum(entrada.PesoKg) : "—"}</td>
                 <td className="py-1 pr-2 text-right font-semibold">{salida ? fmtNum(salida.PesoKg) : "sin despachar"}</td>
-                <td className="py-1 pr-2 text-right">{dif ? fmtNum(dif) : "—"}</td>
+                <td className="py-1 pr-2 text-right">{dif ? `${dif > 0 ? "+" : ""}${fmtNum(dif)}` : "—"}</td>
                 <td className="py-1">{salida ? destinoDe(salida) : "—"}</td>
               </tr>
             );
@@ -132,7 +137,10 @@ export function ContenidoHoja({ hoja, filas }) {
             <td className="py-1 pr-2 text-right">{masters || "—"}</td>
             <td className="py-1 pr-2 text-right">{fmtNum(hoja.KgEntrada)}</td>
             <td className="py-1 pr-2 text-right">{fmtNum(hoja.KgDescongelado)}</td>
-            <td className="py-1 pr-2 text-right">{fmtNum(Number((hoja.KgEntrada - hoja.KgDescongelado - hoja.KgDevuelto).toFixed(2)))}</td>
+            <td className="py-1 pr-2 text-right">{(() => {
+              const d = Number((hoja.KgDescongelado + hoja.KgDevuelto - hoja.KgEntrada).toFixed(2));
+              return `${d > 0 ? "+" : ""}${fmtNum(d)}`;
+            })()}</td>
             <td colSpan={2}></td>
           </tr>
         </tfoot>
@@ -177,7 +185,7 @@ export function ContenidoHoja({ hoja, filas }) {
       )}
 
       {/* El papel trae impresa la regla, y se conserva: la diferencia se anota, no se ajusta. */}
-      <p className="text-[11px] text-gray-500 mb-10">La diferencia se anota, no se ajusta: la merma es lo que entró menos lo descongelado y lo devuelto.</p>
+      <p className="text-[11px] text-gray-500 mb-10">La diferencia se anota, no se ajusta: la diferencia es lo descongelado y lo devuelto menos lo que entró (positiva: se pesó de más; negativa: merma).</p>
 
       <div className="grid grid-cols-2 gap-16">
         <div className="text-center">
