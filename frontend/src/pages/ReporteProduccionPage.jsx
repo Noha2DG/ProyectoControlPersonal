@@ -841,7 +841,10 @@ export default function ReporteProduccionPage() {
     <>
     <div>
       {/* Filtros */}
-      <div className="flex flex-wrap items-end gap-2 mb-3 bg-white border border-gray-200 rounded-lg p-2.5 shadow-sm">
+      {/* La barra de reportes va en su propio renglón: Finca/Lote/Área aparecen o no según el
+          reporte, y en el mismo renglón la empujaban de lugar al cambiar de pestaña. */}
+      <div className="mb-3 bg-white border border-gray-200 rounded-lg p-2.5 shadow-sm space-y-2">
+      <div className="flex flex-wrap items-end gap-2">
         <div>
           <label className="block text-xs font-medium text-gray-500 mb-0.5">Desde</label>
           <input type="date" value={desde} onChange={e => setDesde(e.target.value)}
@@ -893,19 +896,6 @@ export default function ReporteProduccionPage() {
           Buscar
         </button>
 
-        <div className="flex gap-1 bg-blue-800 rounded-lg p-1 ml-4">
-          {SUB_TABS.map(t => (
-            <button key={t.key} onClick={() => setSubTab(t.key)}
-              className={`px-3 py-1.5 rounded-md text-xs font-semibold whitespace-nowrap transition ${
-                subTab === t.key
-                  ? "bg-white shadow text-blue-800"
-                  : "text-white hover:bg-blue-700"
-              }`}>
-              {t.label}
-            </button>
-          ))}
-        </div>
-
         {reporte && (
           <div className="ml-auto flex gap-2">
             <button onClick={() => window.print()}
@@ -921,6 +911,20 @@ export default function ReporteProduccionPage() {
             </button>
           </div>
         )}
+      </div>
+
+      <div className="inline-flex flex-wrap gap-1 bg-blue-800 rounded-lg p-1">
+        {SUB_TABS.map(t => (
+          <button key={t.key} onClick={() => setSubTab(t.key)}
+            className={`px-3 py-1.5 rounded-md text-xs font-semibold whitespace-nowrap transition ${
+              subTab === t.key
+                ? "bg-white shadow text-blue-800"
+                : "text-white hover:bg-blue-700"
+            }`}>
+            {t.label}
+          </button>
+        ))}
+      </div>
       </div>
 
       {loading ? (
