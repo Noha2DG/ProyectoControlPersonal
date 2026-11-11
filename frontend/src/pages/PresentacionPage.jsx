@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { authHeader, usePuede } from "../context/AuthContext.jsx";
 import { useColWidths, Th, Colgroup } from "../components/ResizableTh.jsx";
+import { LB_POR_KG } from "../utils/destajo.js";
 
 const API = "/api/presentacion";
 
@@ -8,9 +9,8 @@ const COL_DEFAULTS = { codigo: 90, descripcion: 180, abreviatura: 110, tipoMedid
 const COLS = Object.keys(COL_DEFAULTS);
 const EMPTY = { Codigo: "", Descripcion: "", Abreviatura: "", TipoMedida: "Kilos", PesoKG: "", PesoLb: "", CajasXMaster: "" };
 
-const LB_PER_KG = 2.2046226218;
-const KG_PER_LB = 0.45359237;
-const round3 = n => Math.round(n * 1000) / 1000;
+// Misma constante de kg↔lb que el resto de la aplicación (utils/destajo.js).
+const round5 = n => Math.round(n * 100000) / 100000;
 
 function PresentacionModal({ item, onSave, onClose }) {
   const isEdit = !!item;
@@ -20,12 +20,12 @@ function PresentacionModal({ item, onSave, onClose }) {
   const setPesoKG = e => {
     const val = e.target.value;
     const num = parseFloat(val);
-    setForm(p => ({ ...p, PesoKG: val, PesoLb: (val === "" || isNaN(num)) ? p.PesoLb : round3(num * LB_PER_KG) }));
+    setForm(p => ({ ...p, PesoKG: val, PesoLb: (val === "" || isNaN(num)) ? p.PesoLb : round5(num * LB_POR_KG) }));
   };
   const setPesoLb = e => {
     const val = e.target.value;
     const num = parseFloat(val);
-    setForm(p => ({ ...p, PesoLb: val, PesoKG: (val === "" || isNaN(num)) ? p.PesoKG : round3(num * KG_PER_LB) }));
+    setForm(p => ({ ...p, PesoLb: val, PesoKG: (val === "" || isNaN(num)) ? p.PesoKG : round5(num / LB_POR_KG) }));
   };
 
   const handleSubmit = e => { e.preventDefault(); onSave(form); };
@@ -64,12 +64,12 @@ function PresentacionModal({ item, onSave, onClose }) {
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1">Peso KG *</label>
-              <input required type="number" step="0.001" value={form.PesoKG} onChange={setPesoKG}
+              <input required type="number" step="0.00001" value={form.PesoKG} onChange={setPesoKG}
                 className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
             </div>
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1">Peso Lb *</label>
-              <input required type="number" step="0.001" value={form.PesoLb} onChange={setPesoLb}
+              <input required type="number" step="0.00001" value={form.PesoLb} onChange={setPesoLb}
                 className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
             </div>
           </div>
