@@ -819,12 +819,15 @@ export function MovimientosPisoLote({ lote, recarga, puedeEditar, onCambio }) {
     onCambio(d);
   };
 
+  // "Trasladado al siguiente proceso" (PROCESADO) no se muestra aquí (usuario, 11 nov 2026): ya se ve
+  // en el Estado de cada transacción ("Cerrada → Túnel").
+  const visibles = ["DESTAJO", "COLA", "BAJADO", "DESCARTE"];
   if (error) return <p className="text-xs text-red-600 mb-3">{error}</p>;
-  if (!movs.length) return null;
+  if (!movs.some(m => visibles.includes(m.Tipo))) return null;
 
   return (
     <div className="bg-white rounded-xl shadow mb-4 divide-y divide-gray-100">
-      {["DESTAJO", "COLA", "PROCESADO", "BAJADO", "DESCARTE"].map(tipo => {
+      {visibles.map(tipo => {
         const lista = movs.filter(m => m.Tipo === tipo);
         if (!lista.length) return null;
         return (
