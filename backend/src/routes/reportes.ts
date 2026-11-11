@@ -91,10 +91,17 @@ router.get("/produccion", requireAuth, requirePerm("destajo", "ver"), async (req
     const pTermo = () => prisma.$queryRawUnsafe(`
       SELECT t.TermoId, t.NumeroTermo, tp.Lote, tp.ClaseOrigen, tp.Talla, ta.Descripcion AS DescripcionTalla,
              tp.Proceso, pr.Descripcion AS DescripcionProceso, tp.FechaProduccion,
+             -- Solo para la vista en tarjetas (agrupa por lote + clase PT + talla); el Excel no los usa.
+             tp.ClasePT, cpt.Descripcion AS DescripcionClasePT, COUNT(pd.PesajeId) AS Pesadas,
+             DATE_FORMAT(MAX(pd.FechaHora), '%H:%i') AS UltimaPesada,
+             -- Tratamiento se llevó este termo con la transacción abierta (lib/tratamiento.ts, tomarTermoDePelado).
+             EXISTS (SELECT 1 FROM MovimientoPiso mt WHERE mt.Tipo = 'PROCESADO' AND mt.TransaccionId = t.TransaccionId
+                        AND mt.NumeroTermo = t.NumeroTermo) AS TomadoTratamiento,
              COALESCE(SUM(pd.Peso), 0) AS Procesado
       FROM Termos t
       JOIN TransaccionesProduccion tp ON t.TransaccionId = tp.TransaccionId
       JOIN Procesos pr ON tp.Proceso = pr.Proceso
+      LEFT JOIN Clase cpt ON tp.ClasePT = cpt.Clase
       JOIN Tallas ta ON tp.Talla = ta.Codigo
       JOIN Lotes l ON tp.Lote = l.Lote AND tp.ClaseOrigen = l.Clase
       JOIN Piscina p ON l.PiscinaId = p.PiscinaId
@@ -281,7 +288,7 @@ router.get("/produccion", requireAuth, requirePerm("destajo", "ver"), async (req
       });
     const detalleFmt = numerizar(porLoteTalla, ["Talla", "Procesado", "NumPesajes"]);
     const tallaFmt = numerizar(porTalla, ["Talla", "Procesado", "NumPesajes"]);
-    const termoFmt = numerizar(porTermo, ["TermoId", "Talla", "Proceso", "Procesado"]);
+    const termoFmt = numerizar(porTermo, ["TermoId", "Talla", "Proceso", "Procesado", "Pesadas", "TomadoTratamiento"]);
     const personaFmt = numerizar(porPersona, ["Talla", "Kilos"]);
 
     const totales = lotesFmt.reduce((acc, l) => ({

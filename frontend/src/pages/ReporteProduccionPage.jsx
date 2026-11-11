@@ -11,8 +11,6 @@ import {
 
 const LOTE_DET_COL_DEFAULTS = { talla: 160, producto: 180, estado: 110, procesado: 100, pesajes: 90 };
 const LOTE_DET_COLS = Object.keys(LOTE_DET_COL_DEFAULTS);
-const TERMO_DET_COL_DEFAULTS = { lote: 110, talla: 150, proceso: 130, fecha: 110, kg: 90 };
-const TERMO_DET_COLS = Object.keys(TERMO_DET_COL_DEFAULTS);
 const TALLA_DET_COL_DEFAULTS = { id: 100, nombre: 150, lb: 90, horas: 90, lbhora: 90, pesadas: 90 };
 const TALLA_DET_COLS = Object.keys(TALLA_DET_COL_DEFAULTS);
 
@@ -28,8 +26,6 @@ function rendimientoDe(salida, trabajadoRend) {
 const POR_LOTE_COLS = Object.keys(POR_LOTE_COL_DEFAULTS);
 const POR_TALLA_GEN_COL_DEFAULTS = { talla: 220, kg: 100, pct: 90 };
 const POR_TALLA_GEN_COLS = Object.keys(POR_TALLA_GEN_COL_DEFAULTS);
-const TERMOS_COL_DEFAULTS = { expand: 24, termo: 110, detalle: 220, kg: 110 };
-const TERMOS_COLS = Object.keys(TERMOS_COL_DEFAULTS);
 const EFICIENCIAS_COL_DEFAULTS = { id: 100, nombre: 150, area: 110, fecha: 100, hora: 80, lote: 120, producto: 130, talla: 150, kilos: 100 };
 const EFICIENCIAS_COLS = Object.keys(EFICIENCIAS_COL_DEFAULTS);
 const LBHORA_COL_DEFAULTS = { id: 100, nombre: 150, mesa: 110, area: 110, fecha: 130, clase: 160, talla: 190, lb: 90, horas: 90, lbhora: 90, pesadas: 90 };
@@ -351,60 +347,6 @@ function MarcaCola() {
   );
 }
 
-// La cola no va a ninguna persona: cada termo lleno se pesa en Materia Prima ("Cola (termo)") y se
-// traslada al cerrar la transacción de Descabezado. Su número lo teclea el área y puede repetir el de
-// un termo del pesaje, por eso va en su propio grupo.
-function FilaTermoCola({ numeroTermo, cargas, abierta, onToggle }) {
-  const subtotal = cargas.reduce((s, c) => s + c.Procesado, 0);
-  const destinos = [...new Set(cargas.map(c => c.NombreDestino || "por trasladar"))].join(", ");
-  return (
-    <>
-      <tr onClick={onToggle} className="cursor-pointer bg-emerald-50 hover:bg-emerald-100 transition font-semibold border-l-4 border-emerald-500">
-        <td className="px-2 py-1.5 text-emerald-500 w-6">
-          <span className={`inline-block transition-transform ${abierta ? "rotate-90" : ""}`}>▶</span>
-        </td>
-        <td className="px-2 py-1.5 font-mono font-bold text-emerald-800 whitespace-nowrap w-28">
-          <span className="inline-flex items-center gap-1"><IconoTermoCola />Termo {numeroTermo}</span>
-        </td>
-        <td className="px-2 py-1.5 text-emerald-700 whitespace-nowrap truncate">
-          <MarcaCola /> {cargas.length} carga{cargas.length !== 1 ? "s" : ""} · → {destinos}
-        </td>
-        <td className="px-2 py-1.5 text-right font-bold text-emerald-700 whitespace-nowrap w-28">{fmtNum(subtotal)}</td>
-      </tr>
-      {abierta && (
-        <tr>
-          <td colSpan={4} className="bg-emerald-50/60 px-3 py-2 border-l-4 border-emerald-500">
-            <table className="w-full text-xs">
-              <thead>
-                <tr className="text-emerald-700 uppercase tracking-wider">
-                  <th className="px-2 py-1 text-left">Lote</th>
-                  <th className="px-2 py-1 text-left">Talla</th>
-                  <th className="px-2 py-1 text-left">Cola</th>
-                  <th className="px-2 py-1 text-center">Fecha</th>
-                  <th className="px-2 py-1 text-left">Destino</th>
-                  <th className="px-2 py-1 text-right">Kg</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-emerald-100">
-                {cargas.map(c => (
-                  <tr key={c.MovimientoId}>
-                    <td className="px-2 py-1 font-mono">{c.Lote}</td>
-                    <td className="px-2 py-1">{c.Talla === 900 ? "—" : c.DescripcionTalla}</td>
-                    <td className="px-2 py-1">{c.DescripcionClaseCola}</td>
-                    <td className="px-2 py-1 text-center">{c.FechaProduccion?.slice(0, 10)}</td>
-                    <td className="px-2 py-1">{c.NombreDestino || <span className="text-amber-700">por trasladar</span>}</td>
-                    <td className="px-2 py-1 text-right font-semibold">{fmtNum(c.Procesado)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </td>
-        </tr>
-      )}
-    </>
-  );
-}
-
 // Materia prima BAJADA de las mesas (sobrante o rojo): no es procesado; es lo que vuelve al piso en
 // ese termo para tomarse otro día. Va en su propio grupo, en ámbar, y no suma al total del pesaje.
 function MarcaBajada() {
@@ -416,100 +358,106 @@ function MarcaBajada() {
   );
 }
 
-function FilaTermoBajado({ numeroTermo, cargas, abierta, onToggle }) {
-  const subtotal = cargas.reduce((s, c) => s + c.Procesado, 0);
-  const destinos = [...new Set(cargas.map(c => c.NombreDestino).filter(Boolean))].join(", ");
+// ── Reporte Termos en pantalla: mapa por lote ───────────────────────────────────────────────────
+// Mismo diseño que "Termos en Pelado" de Tratamiento: un renglón por lote + clase + talla y cada termo
+// como tarjeta con su número en etiqueta. Solo es la vista: el Excel y el PDF siguen con su tabla.
+// Tres familias, cada una en su color: pesaje (cian), cola de Descabezado (verde), MP bajada (ámbar).
+const ESTILO_TERMO = {
+  pesaje: { etiqueta: "bg-cyan-100 text-cyan-800", borde: "border-gray-200", kg: "text-gray-800" },
+  cola:   { etiqueta: "bg-emerald-100 text-emerald-800", borde: "border-emerald-200", kg: "text-emerald-800" },
+  bajado: { etiqueta: "bg-amber-100 text-amber-900", borde: "border-amber-200", kg: "text-amber-900" },
+};
+
+function agruparTermos(lista, llave, cabecera) {
+  const grupos = [];
+  const por = new Map();
+  for (const t of lista) {
+    const k = llave(t);
+    if (!por.has(k)) { const g = { k, ...cabecera(t), termos: [], kg: 0 }; por.set(k, g); grupos.push(g); }
+    const g = por.get(k);
+    g.termos.push(t); g.kg += t.Procesado;
+  }
+  return grupos;
+}
+
+// Termo de pesaje casi lleno (desde 140 kg, la meta es 150): borde verde. Tomado por Tratamiento: fondo gris.
+const KG_TERMO_LLENO = 140;
+
+function TarjetaTermo({ tipo, numero, kg, um, linea, title, lleno = false, tomado = false }) {
+  const e = ESTILO_TERMO[tipo];
+  const borde = lleno ? "border-2 border-green-500" : `border ${e.borde}`;
   return (
-    <>
-      <tr onClick={onToggle} className="cursor-pointer bg-amber-50 hover:bg-amber-100 transition font-semibold border-l-4 border-amber-500">
-        <td className="px-2 py-1.5 text-amber-500 w-6">
-          <span className={`inline-block transition-transform ${abierta ? "rotate-90" : ""}`}>▶</span>
-        </td>
-        <td className="px-2 py-1.5 font-mono font-bold text-amber-900 whitespace-nowrap w-28">Termo {numeroTermo}</td>
-        <td className="px-2 py-1.5 text-amber-800 whitespace-nowrap truncate">
-          <MarcaBajada /> {cargas.length} bajado{cargas.length !== 1 ? "s" : ""}{destinos ? ` · → ${destinos}` : ""}
-        </td>
-        <td className="px-2 py-1.5 text-right font-bold text-amber-800 whitespace-nowrap w-28">{fmtNum(subtotal)}</td>
-      </tr>
-      {abierta && (
-        <tr>
-          <td colSpan={4} className="bg-amber-50/60 px-3 py-2 border-l-4 border-amber-500">
-            <table className="w-full text-xs">
-              <thead>
-                <tr className="text-amber-800 uppercase tracking-wider">
-                  <th className="px-2 py-1 text-left">Lote</th>
-                  <th className="px-2 py-1 text-left">Talla</th>
-                  <th className="px-2 py-1 text-left">Motivo</th>
-                  <th className="px-2 py-1 text-center">Fecha</th>
-                  <th className="px-2 py-1 text-left">Piso</th>
-                  <th className="px-2 py-1 text-right">Peso</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-amber-100">
-                {cargas.map(c => (
-                  <tr key={c.MovimientoId}>
-                    <td className="px-2 py-1 font-mono">{c.Lote} {c.ClaseOrigen}</td>
-                    <td className="px-2 py-1">{c.Talla === 900 ? "—" : c.DescripcionTalla}</td>
-                    <td className="px-2 py-1 truncate max-w-[14rem]" title={c.Motivo || ""}>{c.Motivo || "—"}</td>
-                    <td className="px-2 py-1 text-center">{c.FechaProduccion?.slice(0, 10)}</td>
-                    <td className="px-2 py-1">{c.NombreDestino || "—"}</td>
-                    <td className="px-2 py-1 text-right font-semibold whitespace-nowrap">{fmtNum(c.Procesado)} {c.UM}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </td>
-        </tr>
-      )}
-    </>
+    <div title={title} className={`min-w-[8.5rem] rounded-lg ${borde} ${tomado ? "bg-gray-200" : "bg-white"} px-3 py-1.5`}>
+      <span className="flex items-baseline justify-between gap-2">
+        {/* El número del termo como etiqueta con fondo, para que no se confunda con los kg. */}
+        <span className={`rounded px-1.5 py-0.5 font-mono font-bold ${e.etiqueta}`}>{numero}</span>
+        <span className={`font-semibold ${e.kg}`}>{fmtNum(kg)} <span className="text-xs font-normal text-gray-400">{um || "kg"}</span></span>
+      </span>
+      <span className="block text-[11px] text-gray-500 truncate">{linea}</span>
+    </div>
   );
 }
 
-function FilaTermo({ numeroTermo, cargas, abierta, onToggle }) {
-  const [widths, startResize] = useColWidths("reporte_termo_detalle", TERMO_DET_COL_DEFAULTS);
-  const subtotal = cargas.reduce((s, c) => s + c.Procesado, 0);
+function GrupoTermos({ g, children }) {
   return (
-    <>
-      <tr onClick={onToggle} className="cursor-pointer hover:bg-blue-50 transition bg-gray-50 font-semibold">
-        <td className="px-2 py-1.5 text-gray-400 w-6">
-          <span className={`inline-block transition-transform ${abierta ? "rotate-90" : ""}`}>▶</span>
-        </td>
-        <td className="px-2 py-1.5 font-mono font-bold text-gray-800 whitespace-nowrap w-28">Termo {numeroTermo}</td>
-        <td className="px-2 py-1.5 text-gray-500 whitespace-nowrap">
-          {cargas.length} carga{cargas.length !== 1 ? "s" : ""}
-        </td>
-        <td className="px-2 py-1.5 text-right font-bold text-blue-700 whitespace-nowrap w-28">{fmtNum(subtotal)}</td>
-      </tr>
-      {abierta && (
-        <tr>
-          <td colSpan={4} className="bg-gray-50 px-3 py-2">
-            <table className="w-full text-xs table-fixed">
-              <Colgroup columns={TERMO_DET_COLS} widths={widths} />
-              <thead>
-                <tr className="text-gray-500 uppercase tracking-wider">
-                  <Th width={widths.lote} onResizeStart={startResize("lote")} className="px-2 py-1 text-left">Lote</Th>
-                  <Th width={widths.talla} onResizeStart={startResize("talla")} className="px-2 py-1 text-left">Talla</Th>
-                  <Th width={widths.proceso} onResizeStart={startResize("proceso")} className="px-2 py-1 text-left">Proceso</Th>
-                  <Th width={widths.fecha} onResizeStart={startResize("fecha")} className="px-2 py-1 text-center">Fecha Proceso</Th>
-                  <Th width={widths.kg} onResizeStart={startResize("kg")} className="px-2 py-1 text-right">Kg</Th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-200">
-                {cargas.map(c => (
-                  <tr key={c.TermoId}>
-                    <td className="px-2 py-1 font-mono">{c.Lote}</td>
-                    <td className="px-2 py-1">{c.Talla} — {c.DescripcionTalla}</td>
-                    <td className="px-2 py-1">{c.DescripcionProceso}</td>
-                    <td className="px-2 py-1 text-center">{c.FechaProduccion?.slice(0, 10)}</td>
-                    <td className="px-2 py-1 text-right font-semibold">{fmtNum(c.Procesado)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </td>
-        </tr>
-      )}
-    </>
+    <div className="px-4 py-2 flex flex-wrap items-start gap-x-4 gap-y-2">
+      <div className="w-52 shrink-0">
+        <p className="font-mono font-semibold text-gray-800">{g.Lote} <span className="text-xs font-normal text-gray-400" title="Clase de materia prima">{g.ClaseOrigen}</span></p>
+        <p className="text-xs text-gray-500">{g.descripcion}</p>
+        <p className="text-[11px] text-gray-400">{g.termos.length} termo{g.termos.length !== 1 ? "s" : ""} · {fmtNum(g.kg)} kg</p>
+      </div>
+      <div className="flex flex-1 flex-wrap gap-2">{children}</div>
+    </div>
+  );
+}
+
+function MapaTermos({ porTermo, porTermoCola, porTermoBajado, variosDias }) {
+  const talla = t => (t.Talla === 900 ? "" : ` · ${t.DescripcionTalla}`);
+  const cuando = (fecha, horaTxt) => [variosDias ? fecha?.slice(0, 10) : null, horaTxt].filter(Boolean).join(" ");
+
+  const pesaje = agruparTermos(porTermo,
+    t => `${t.Lote}|${t.ClaseOrigen}|${t.ClasePT ?? t.Proceso}|${t.Talla}`,
+    t => ({ Lote: t.Lote, ClaseOrigen: t.ClaseOrigen, descripcion: <><span className="font-semibold text-gray-700">{t.ClasePT}</span> {t.DescripcionClasePT || t.DescripcionProceso}{talla(t)}</> }));
+  const cola = agruparTermos(porTermoCola,
+    t => `${t.Lote}|${t.ClaseOrigen}|${t.ClaseCola}|${t.Talla}`,
+    t => ({ Lote: t.Lote, ClaseOrigen: t.ClaseOrigen, descripcion: <><MarcaCola /> {t.DescripcionClaseCola}{talla(t)}</> }));
+  const bajado = agruparTermos(porTermoBajado,
+    t => `${t.Lote}|${t.ClaseOrigen}|${t.Talla}`,
+    t => ({ Lote: t.Lote, ClaseOrigen: t.ClaseOrigen, descripcion: <><MarcaBajada /> {t.ClaseOrigen}{talla(t)}</> }));
+
+  const seccion = (titulo, color, grupos, tarjeta) => grupos.length > 0 && (
+    <div className={`bg-white border ${color} rounded-lg`}>
+      <div className="px-4 py-2 border-b border-gray-100 flex items-baseline gap-2">
+        <h3 className="font-semibold text-gray-800 text-sm">{titulo}</h3>
+        <span className="text-xs text-gray-500">
+          {grupos.reduce((s, g) => s + g.termos.length, 0)} termos · {fmtNum(grupos.reduce((s, g) => s + g.kg, 0))} kg
+        </span>
+      </div>
+      <div className="divide-y divide-gray-100">
+        {grupos.map(g => <GrupoTermos key={g.k} g={g}>{g.termos.map(tarjeta)}</GrupoTermos>)}
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="space-y-3">
+      {seccion("Pesaje", "border-cyan-300", pesaje, t => (
+        <TarjetaTermo key={t.TermoId} tipo="pesaje" numero={t.NumeroTermo} kg={t.Procesado}
+          lleno={t.Procesado >= KG_TERMO_LLENO} tomado={!!t.TomadoTratamiento}
+          linea={t.TomadoTratamiento ? "tomado por Tratamiento" : t.UltimaPesada ? `última pesada ${cuando(t.FechaProduccion, t.UltimaPesada)}` : "sin pesadas"}
+          title={`${t.DescripcionProceso} · ${t.Pesadas ?? 0} pesada${t.Pesadas !== 1 ? "s" : ""} · ${t.FechaProduccion?.slice(0, 10) ?? ""}`} />
+      ))}
+      {seccion("Cola de Descabezado", "border-emerald-300", cola, t => (
+        <TarjetaTermo key={t.MovimientoId} tipo="cola" numero={t.NumeroTermo} kg={t.Procesado} um={t.UM}
+          linea={t.NombreDestino ? `→ ${t.NombreDestino}` : "por trasladar"}
+          title={`${t.DescripcionClaseCola} · ${t.FechaProduccion ?? ""}`} />
+      ))}
+      {seccion("MP bajada de mesas", "border-amber-300", bajado, t => (
+        <TarjetaTermo key={t.MovimientoId} tipo="bajado" numero={t.NumeroTermo} kg={t.Procesado} um={t.UM}
+          linea={t.Motivo || (t.NombreDestino ? `→ ${t.NombreDestino}` : "—")}
+          title={`${t.Motivo || "Bajado"} · ${t.NombreDestino || ""} · ${t.FechaProduccion ?? ""}`} />
+      ))}
+    </div>
   );
 }
 
@@ -590,11 +538,9 @@ export default function ReporteProduccionPage() {
   const [loading, setLoading] = useState(false);
   const [subTab, setSubTab] = useState("general");
   const [loteAbierto, setLoteAbierto] = useState(null);
-  const [termoAbierto, setTermoAbierto] = useState(null);
   const [tallaAbierta, setTallaAbierta] = useState(null);
   const [widthsPorLote, startResizePorLote] = useColWidths("reporte_por_lote", POR_LOTE_COL_DEFAULTS);
   const [widthsPorTallaGen, startResizePorTallaGen] = useColWidths("reporte_por_talla_general", POR_TALLA_GEN_COL_DEFAULTS);
-  const [widthsTermos, startResizeTermos] = useColWidths("reporte_termos", TERMOS_COL_DEFAULTS);
   const [widthsEficiencias, startResizeEficiencias] = useColWidths("reporte_eficiencias", EFICIENCIAS_COL_DEFAULTS);
   const [ordenEfic, alternarOrdenEfic] = useOrden();
   const [ordenTallaGen, alternarOrdenTallaGen] = useOrden();
@@ -1241,60 +1187,32 @@ export default function ReporteProduccionPage() {
           {/* ── Reporte Termos ── */}
           {subTab === "termos" && (
             <div>
-              <h3 className="text-xs font-semibold text-gray-700 mb-1.5">Procesado por Termo</h3>
-              <div className="bg-white rounded-lg shadow overflow-hidden overflow-x-auto">
-                <table className="w-full text-xs table-fixed">
-                  <Colgroup columns={TERMOS_COLS} widths={widthsTermos} />
-                  <thead>
-                    <tr className="bg-gray-100 text-gray-600 uppercase text-[10px] tracking-wider">
-                      <Th width={widthsTermos.expand} onResizeStart={startResizeTermos("expand")} className="px-2 py-1.5"></Th>
-                      <Th width={widthsTermos.termo} onResizeStart={startResizeTermos("termo")} className="px-2 py-1.5 text-left whitespace-nowrap">Termo</Th>
-                      <Th width={widthsTermos.detalle} onResizeStart={startResizeTermos("detalle")} className="px-2 py-1.5 text-left whitespace-nowrap">Detalle</Th>
-                      <Th width={widthsTermos.kg} onResizeStart={startResizeTermos("kg")} className="px-2 py-1.5 text-right whitespace-nowrap">Kg Procesados</Th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-100">
-                    {gruposPorTermo().map(([numeroTermo, cargas]) => (
-                      <FilaTermo key={numeroTermo} numeroTermo={numeroTermo} cargas={cargas}
-                        abierta={termoAbierto === numeroTermo}
-                        onToggle={() => setTermoAbierto(termoAbierto === numeroTermo ? null : numeroTermo)} />
-                    ))}
-                    {gruposPorTermoCola().map(([numeroTermo, cargas]) => (
-                      <FilaTermoCola key={`cola-${numeroTermo}`} numeroTermo={numeroTermo} cargas={cargas}
-                        abierta={termoAbierto === `cola-${numeroTermo}`}
-                        onToggle={() => setTermoAbierto(termoAbierto === `cola-${numeroTermo}` ? null : `cola-${numeroTermo}`)} />
-                    ))}
-                    {gruposPorTermoBajado().map(([numeroTermo, cargas]) => (
-                      <FilaTermoBajado key={`bajado-${numeroTermo}`} numeroTermo={numeroTermo} cargas={cargas}
-                        abierta={termoAbierto === `bajado-${numeroTermo}`}
-                        onToggle={() => setTermoAbierto(termoAbierto === `bajado-${numeroTermo}` ? null : `bajado-${numeroTermo}`)} />
-                    ))}
-                    {!hayTermos && (
-                      <tr><td colSpan={4} className="px-3 py-6 text-center text-gray-400">Sin datos en este rango de fechas</td></tr>
+              {!hayTermos ? (
+                <div className="bg-white rounded-lg shadow px-3 py-6 text-center text-xs text-gray-400">Sin datos en este rango de fechas</div>
+              ) : (
+                <>
+                  <MapaTermos porTermo={datos?.porTermo ?? []} porTermoCola={datos?.porTermoCola ?? []}
+                    porTermoBajado={datos?.porTermoBajado ?? []} variosDias={desde !== hasta} />
+                  <div className="mt-3 bg-white rounded-lg shadow text-xs divide-y divide-gray-100">
+                    <div className="flex justify-between px-4 py-1.5 font-bold">
+                      <span>{totalColaTermo > 0 || totalBajadoTermo > 0 ? "Total pesaje" : "Total General"}</span>
+                      <span className="text-blue-800">{fmtNum(totalProcesadoTermo)}</span>
+                    </div>
+                    {totalColaTermo > 0 && (
+                      <div className="flex justify-between px-4 py-1.5 font-bold text-emerald-800">
+                        <span className="inline-flex items-center gap-1"><IconoTermoCola />Total cola (termos)</span>
+                        <span>{fmtNum(totalColaTermo)}</span>
+                      </div>
                     )}
-                  </tbody>
-                  {hayTermos && (
-                    <tfoot>
-                      <tr className="bg-gray-200 font-bold border-t-2 border-gray-300">
-                        <td className="px-2 py-1.5" colSpan={3}>{totalColaTermo > 0 || totalBajadoTermo > 0 ? "Total pesaje" : "Total General"}</td>
-                        <td className="px-2 py-1.5 text-right text-blue-800">{fmtNum(totalProcesadoTermo)}</td>
-                      </tr>
-                      {totalColaTermo > 0 && (
-                        <tr className="bg-emerald-100 font-bold text-emerald-800">
-                          <td className="px-2 py-1.5" colSpan={3}><span className="inline-flex items-center gap-1"><IconoTermoCola />Total cola (termos)</span></td>
-                          <td className="px-2 py-1.5 text-right">{fmtNum(totalColaTermo)}</td>
-                        </tr>
-                      )}
-                      {totalBajadoTermo > 0 && (
-                        <tr className="bg-amber-100 font-bold text-amber-900">
-                          <td className="px-2 py-1.5" colSpan={3}>↓ Total MP bajada de mesas (termos)</td>
-                          <td className="px-2 py-1.5 text-right">{fmtNum(totalBajadoTermo)}</td>
-                        </tr>
-                      )}
-                    </tfoot>
-                  )}
-                </table>
-              </div>
+                    {totalBajadoTermo > 0 && (
+                      <div className="flex justify-between px-4 py-1.5 font-bold text-amber-900">
+                        <span>↓ Total MP bajada de mesas (termos)</span>
+                        <span>{fmtNum(totalBajadoTermo)}</span>
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
             </div>
           )}
 
