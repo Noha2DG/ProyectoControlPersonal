@@ -304,9 +304,15 @@ export function TomarDelPisoModal({ onHecho, onClose }) {
                       {l.EsBajado && <span className="block text-[11px] font-sans text-amber-700">Bajado de la mesa{l.EsRojo ? " · rojo a revisar" : ""}</span>}
                       {l.EsCola && <span className="block text-[11px] font-sans text-emerald-700">Cola de Descabezado</span>}
                     </td>
-                    <td className="px-3 py-2 font-mono text-gray-700">{l.Clase}</td>
+                    <td className="px-3 py-2 text-gray-700" title={l.Clase}>{l.DescripcionClase || l.Clase}</td>
                     <td className="px-3 py-2 text-gray-700 whitespace-nowrap">{l.Talla === 900 ? <span className="text-gray-300">—</span> : l.DescripcionTalla}</td>
-                    <td className="px-3 py-2 text-right font-semibold text-gray-800 whitespace-nowrap">{fmtNum(l.Kg)}</td>
+                    <td className="px-3 py-2 text-right whitespace-nowrap">
+                      <span className="font-semibold text-gray-800">{fmtNum(l.Kg)}</span>
+                      {/* Desde la primera entrada de esta línea al piso; de 3 días en adelante se resalta. */}
+                      <span className={`block text-[11px] ${l.DiasAlPiso >= 3 ? "text-red-600 font-semibold" : l.DiasAlPiso >= 1 ? "text-amber-700" : "text-gray-400"}`}>
+                        {l.DiasAlPiso === 0 ? "entró hoy" : `${l.DiasAlPiso} día${l.DiasAlPiso !== 1 ? "s" : ""} al piso`}
+                      </span>
+                    </td>
                     <td className="px-3 py-2 text-right">
                       {/* Con termos, lo tomado es la suma de los termos marcados (se ajusta abajo). */}
                       {s && termos && <span className="font-semibold text-blue-700 whitespace-nowrap">{fmtNum(kgDe(l))}</span>}
