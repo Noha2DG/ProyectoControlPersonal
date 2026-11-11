@@ -40,6 +40,9 @@ const MODULOS = [
   // "anular" es la acción fuerte: devuelve al inventario producto ya despachado. Se separa de
   // "editar" (armar y confirmar, la operación diaria) y de "eliminar" (borrar borradores).
   { key: "remisiones",     label: "Bodega — Remisiones y Despacho",  acciones: ["ver","crear","editar","eliminar","imprimir","anular"], grupo: "Operación" },
+  // Un contenedor importado no sale de bodega hasta que alguien con "liberar" lo libera completo.
+  // También habilita la remisión "Muestra para análisis", la única salida mientras está pendiente.
+  { key: "liberar_mp",    label: "Liberar materia prima",            acciones: ["ver","liberar"], grupo: "Operación" },
   // ── Pedidos
   // Separado de `catalogos` porque es trabajo diario: capturar y corregir proformas, y dar de alta
   // clientes. Con `catalogos` venía de regalo Presentaciones, donde CajasXMaster define el objetivo
@@ -71,6 +74,7 @@ const ACCION_LABELS = {
   // Sin entrada acá se pinta la clave cruda en minúscula, que se lee como algo a medio hacer.
   trasladar: "Trasladar cajas",
   reporte: "Ver reporte",
+  liberar: "Liberar / rechazar",
 };
 
 // Deriva la matriz de permisos de MODULOS en vez de enumerarla a mano por rol:

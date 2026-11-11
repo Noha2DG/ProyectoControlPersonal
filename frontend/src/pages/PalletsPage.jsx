@@ -350,6 +350,7 @@ function PanelEscaneo({ palletId, onClose, onCambio }) {
                 </span>
               )}
               {pallet?.DescripcionOrigen && <span className="text-xs text-gray-400">Origen: {pallet.DescripcionOrigen}</span>}
+              {pallet?.TipoProducto && <span className="text-xs font-semibold text-gray-600 bg-gray-100 rounded px-1.5 py-0.5" title={TIPOS_PRODUCTO.find(t => t.codigo === pallet.TipoProducto)?.texto}>{pallet.TipoProducto}</span>}
               {pallet?.NombreBodegaVirtual && <span className="text-xs text-gray-400">· {pallet.NombreBodegaVirtual}</span>}
             </div>
             <button onClick={onClose} className="text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-lg p-2 text-xl leading-none transition">&times;</button>
@@ -611,8 +612,17 @@ function PanelEscaneo({ palletId, onClose, onCambio }) {
 // Se pide Origen y la cantidad de masters que se planea que lleve el polín ANTES de abrir el
 // escaneo — Origen es solo informativo (no filtra qué se puede escanear ahí) y la cantidad es una
 // meta de referencia (no bloquea, se compara contra lo escaneado como Completo/Incompleto/Sobrante).
+// Tipo de producto del polín (desde el 11 nov 2026; los de antes quedan sin tipo). Lo de un
+// contenedor importado pendiente de liberar solo entra a un polín MP.
+const TIPOS_PRODUCTO = [
+  { codigo: "PT", texto: "Producto terminado" },
+  { codigo: "MP", texto: "Materia prima" },
+  { codigo: "PE", texto: "Producto para empacar" },
+];
+
 function ModalNuevoPallet({ origenes, bodegas, onCrear, onClose }) {
   const [origen, setOrigen] = useState("");
+  const [tipoProducto, setTipoProducto] = useState("");
   const [bodegaCodigo, setBodegaCodigo] = useState("");
   const [cantidad, setCantidad] = useState("");
   const [motivo, setMotivo] = useState("");
@@ -625,7 +635,7 @@ function ModalNuevoPallet({ origenes, bodegas, onCrear, onClose }) {
     setError("");
     setCreando(true);
     try {
-      await onCrear({ Origen: origen, CantidadMaster: cantidad, BodegaCodigo: bodegaCodigo, Motivo: esDevolucion ? motivo : "" });
+      await onCrear({ Origen: origen, TipoProducto: tipoProducto, CantidadMaster: cantidad, BodegaCodigo: bodegaCodigo, Motivo: esDevolucion ? motivo : "" });
     } catch (err) {
       setError(err.message);
     } finally {
@@ -655,6 +665,20 @@ function ModalNuevoPallet({ origenes, bodegas, onCrear, onClose }) {
               <option value="">Selecciona...</option>
               {origenes.map(o => <option key={o.Codigo} value={o.Codigo}>{o.Descripcion}</option>)}
             </select>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Tipo de producto *</label>
+            <div className="grid grid-cols-3 gap-2">
+              {TIPOS_PRODUCTO.map(t => (
+                <label key={t.codigo} title={t.texto}
+                  className={`flex flex-col items-center rounded-lg border px-2 py-1.5 cursor-pointer text-center transition ${tipoProducto === t.codigo ? "border-blue-600 bg-blue-50 text-blue-800" : "border-gray-300 hover:bg-gray-50"}`}>
+                  <input type="radio" name="tipoProducto" required value={t.codigo} checked={tipoProducto === t.codigo}
+                    onChange={() => setTipoProducto(t.codigo)} className="sr-only" />
+                  <span className="font-bold text-sm">{t.codigo}</span>
+                  <span className="text-[11px] leading-tight text-gray-500">{t.texto}</span>
+                </label>
+              ))}
+            </div>
           </div>
           {esDevolucion && (
             <div>
@@ -746,11 +770,11 @@ export default function PalletsPage() {
     return () => clearTimeout(id);
   }, [busquedaPallet]);
 
-  const handleCrear = async ({ Origen, CantidadMaster, BodegaCodigo, Motivo }) => {
+  const handleCrear = async ({ Origen, TipoProducto, CantidadMaster, BodegaCodigo, Motivo }) => {
     const res = await fetch(API, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...authHeader() },
-      body: JSON.stringify({ Origen, CantidadMaster, BodegaCodigo, Motivo }),
+      body: JSON.stringify({ Origen, TipoProducto, CantidadMaster, BodegaCodigo, Motivo }),
     });
     const data = await leerJSON(res);
     if (!res.ok) throw new Error(data.error || "No se pudo crear el pallet");
@@ -848,7 +872,7 @@ export default function PalletsPage() {
                     </span>
                   </td>
                   <td className="px-4 py-3 truncate" title={p.NombreBodegaVirtual || ""}>{p.NombreBodegaVirtual || "-"}</td>
-                  <td className="px-4 py-3 truncate" title={p.DescripcionOrigen || ""}>{p.DescripcionOrigen || "-"}</td>
+                  <td className="px-4 py-3 truncate" title={p.DescripcionOrigen || ""}>{p.TipoProducto && <span className="mr-1.5 text-xs font-semibold text-gray-600 bg-gray-100 rounded px-1.5 py-0.5">{p.TipoProducto}</span>}{p.DescripcionOrigen || "-"}</td>
                   <td className="px-4 py-3 text-right font-mono">
                     {p.CantidadMasters}{p.CantidadMaster != null ? ` / ${p.CantidadMaster}` : ""}
                     {/* Un polín que despachó parte se ve "a medias" aquí: es la señal para ir a

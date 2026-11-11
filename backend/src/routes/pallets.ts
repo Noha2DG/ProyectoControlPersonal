@@ -4,6 +4,7 @@ import prisma from "../lib/prisma.ts";
 import { requireAuth, requirePerm, tienePermiso, AuthRequest } from "../middleware/auth.ts";
 import { buscarMasterPorEtiqueta, calcularTechoLinea, MASTER_SELECT, formatearMaster } from "../lib/masters.ts";
 import { normalizarCorrelativo, resolverEtiqueta } from "../lib/correlativo.ts";
+import { contenedorSinLiberarDeOrden, mensajeSoloPolinMP, TIPOS_PRODUCTO } from "../lib/liberacionMP.ts";
 
 const router = Router();
 
@@ -167,7 +168,7 @@ router.get("/", requireAuth, requirePerm("bodega", "ver"), async (req: Request, 
     }
     const where = condiciones.length ? `WHERE ${condiciones.join(" AND ")}` : "";
     const rows: any[] = await prisma.$queryRawUnsafe(`
-      SELECT p.PalletId, p.Codigo, p.Estatus, p.Origen, org.Descripcion AS DescripcionOrigen, p.CantidadMaster,
+      SELECT p.PalletId, p.Codigo, p.Estatus, p.Origen, org.Descripcion AS DescripcionOrigen, p.TipoProducto, p.CantidadMaster,
              p.BodegaVirtualCodigo, bv.Nombre AS NombreBodegaVirtual,
              p.PosicionId, po.Codigo AS PosicionCodigo,
              p.CreadoPor, p.CreadoEn, p.CerradoPor, p.CerradoEn,
@@ -309,7 +310,10 @@ async function detallePallet(palletId: number) {
   }
 }
 
-// POST /api/pallets  { Origen, CantidadMaster, BodegaCodigo, Motivo }
+// POST /api/pallets  { Origen, TipoProducto, CantidadMaster, BodegaCodigo, Motivo }
+// TipoProducto (PT producto terminado / MP materia prima / PE producto para empacar) es obligatorio
+// desde el 11 nov 2026; los polines de antes quedan sin tipo. Lo de un contenedor importado sin
+// liberar solo se escanea a un polín MP (ver lib/liberacionMP.ts).
 // Crea un pallet vacío y Abierto. Sin Pedido/Cliente/línea de pedido: se arma solo con lo que se
 // escanee después — pero SÍ requiere Origen (informativo, no filtra qué se puede escanear ahí),
 // CantidadMaster (meta de referencia, no bloquea el escaneo) y BodegaCodigo — la bodega donde se
@@ -331,6 +335,10 @@ router.post("/", requireAuth, requirePerm("bodega", "escanear"), async (req: Req
     const BodegaCodigo = String(req.body.BodegaCodigo ?? req.body.AreaCodigo ?? "").trim();
     const motivo = String(req.body.Motivo ?? "").trim();
     if (!Origen) { res.status(400).json({ error: "El origen es requerido" }); return; }
+    const tipoProducto = String(req.body.TipoProducto ?? "").trim().toUpperCase();
+    if (!(TIPOS_PRODUCTO as readonly string[]).includes(tipoProducto)) {
+      res.status(400).json({ error: "El tipo de producto es requerido: PT, MP o PE" }); return;
+    }
     if (!BodegaCodigo) { res.status(400).json({ error: "La bodega es requerida" }); return; }
     if (Origen === "DEVOLUCION" && !motivo) { res.status(400).json({ error: "El motivo de la devolución es requerido" }); return; }
     const cantidad = Number(CantidadMaster);
@@ -359,8 +367,8 @@ router.post("/", requireAuth, requirePerm("bodega", "escanear"), async (req: Req
       codigo = String(bvRows[0].Letra) + String(Number(secRows[0].UltimoSecuencial)).padStart(4, "0");
 
       await tx.$executeRaw`
-        INSERT INTO Pallets (Codigo, Origen, Motivo, CantidadMaster, BodegaVirtualCodigo, CreadoPor)
-        VALUES (${codigo}, ${Origen}, ${motivo || null}, ${cantidad}, ${bodegaCodigo}, ${operador})
+        INSERT INTO Pallets (Codigo, Origen, TipoProducto, Motivo, CantidadMaster, BodegaVirtualCodigo, CreadoPor)
+        VALUES (${codigo}, ${Origen}, ${tipoProducto}, ${motivo || null}, ${cantidad}, ${bodegaCodigo}, ${operador})
       `;
       const fila: any[] = await tx.$queryRaw`SELECT LAST_INSERT_ID() AS id`;
       nuevoPalletId = Number(fila[0].id);
@@ -397,7 +405,7 @@ router.post("/:id/escanear", requireAuth, requirePerm("bodega", "escanear"), asy
 
     await prisma.$transaction(async (tx) => {
       const palletRows: any[] = await tx.$queryRaw`
-        SELECT Codigo, Estatus, CantidadMaster FROM Pallets WHERE PalletId = ${palletId} FOR UPDATE
+        SELECT Codigo, Estatus, CantidadMaster, TipoProducto FROM Pallets WHERE PalletId = ${palletId} FOR UPDATE
       `;
       if (!palletRows.length) throw new ErrorNegocio(404, "Pallet no encontrado");
       if (palletRows[0].Estatus !== "Abierto") throw new ErrorNegocio(400, "Este pallet no está abierto");
@@ -425,6 +433,13 @@ router.post("/:id/escanear", requireAuth, requirePerm("bodega", "escanear"), asy
       if (!etiquetaRows.length) throw new ErrorNegocio(404, "QR no reconocido");
       etiquetaId = Number(etiquetaRows[0].EtiquetaId);
       if (etiquetaRows[0].Estatus !== "Activa") throw new ErrorNegocio(400, "Esta etiqueta está anulada, no se puede ingresar a bodega");
+
+      // Contenedor importado sin liberar: entra y se mueve en bodega, pero solo en polines de materia
+      // prima. Vale tanto para el ingreso como para el traslado desde otro polín.
+      const sinLiberar = await contenedorSinLiberarDeOrden(tx, Number(etiquetaRows[0].OrdenId));
+      if (sinLiberar && palletRows[0].TipoProducto !== "MP") {
+        throw new ErrorNegocio(400, mensajeSoloPolinMP(sinLiberar, String(palletRows[0].Codigo)));
+      }
 
       // Un master ya escaneado puede ser un doble-escaneo (error) o una CONSOLIDACIÓN de sobrantes
       // (legítima): quedaron 5 cajas de un polín y se pasan a otro para no dejar media posición de
