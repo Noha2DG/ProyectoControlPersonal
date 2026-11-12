@@ -87,6 +87,8 @@ function Marco({ titulo, ancho = "max-w-lg", onClose, children }) {
 }
 
 const campo = "w-full border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400";
+// El destino lleva borde marcado (usuario, 12 nov 2026): es lo que más se equivoca al dar salida.
+const campoDestino = (valor) => `w-full border-2 rounded px-2 py-1.5 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-blue-400 ${valor ? "border-blue-500 bg-white text-gray-800" : "border-amber-500 bg-amber-50 text-gray-600"}`;
 const Etiqueta = ({ children }) => <label className="block text-xs text-gray-500 mb-1">{children}</label>;
 
 function Botones({ onCancelar, onAceptar, texto, ocupado, deshabilitado }) {
@@ -381,7 +383,7 @@ function ModalSalidas({ termos, destinos, destinoSugerido, pickupMaximo, onConfi
         </div>
         <div className="min-w-[12rem]">
           <Etiqueta>Va a</Etiqueta>
-          <select value={destino} onChange={e => setDestino(e.target.value)} className={`${campo} ${destino ? "" : "border-amber-400 bg-amber-50"}`}>
+          <select value={destino} onChange={e => setDestino(e.target.value)} className={campoDestino(destino)}>
             <option value="">¿A dónde va?…</option>
             {destinos.map(d => <option key={d.Codigo} value={d.Codigo}>{d.Nombre}</option>)}
           </select>
@@ -518,11 +520,17 @@ function ModalEntrada({ linea, termo, quimicos, quimicoSugerido, onConfirmar, on
 }
 
 /* ── Salida del termo ─────────────────────────────────────────────── */
-function ModalSalida({ termo, destinos, destinoSugerido, pickupMaximo, onConfirmar, onCerrar }) {
+// Un termo que ya salió se edita aquí completo (usuario, 12 nov 2026: un solo botón "Editar" en vez de
+// "Editar" + "Corregir salida"): lo de la entrada (# termo, inicio, químico) y lo de la salida.
+function ModalSalida({ termo, destinos, destinoSugerido, pickupMaximo, quimicos = [], onConfirmar, onCerrar }) {
+  const editando = termo.KgTratadas != null;
+  const dePelado = termo.TransaccionPelado != null;
   const [f, setF] = useState({
     HoraSalida: hora(termo.HoraSalida) || horaGT(), ConteoFinal: termo.ConteoFinal ?? "",
     BodegaDestino: termo.BodegaDestino || destinoSugerido || "",
   });
+  const [ent, setEnt] = useState({ NumeroTermo: termo.NumeroTermo ?? "", HoraInicio: hora(termo.HoraInicio), Quimico: termo.QuimicoCodigo ?? "" });
+  const setE = (k) => (e) => setEnt(x => ({ ...x, [k]: e.target.value }));
   // Al corregir se parte del total guardado como una sola canasta: el desglose no se guarda.
   const [lineas, setLineas] = useState(() => (termo.KgTratadas != null ? [String(termo.KgTratadas), ""] : [""]));
   const kgTratadas = sumaCanastas(lineas);
@@ -532,11 +540,26 @@ function ModalSalida({ termo, destinos, destinoSugerido, pickupMaximo, onConfirm
   const alerta = alertaDe(p, pickupMaximo);
 
   return (
-    <Marco titulo={`Salida de ${nombreTermo(termo)}`} onClose={onCerrar}>
+    <Marco titulo={`${editando ? "Editar" : "Salida de"} ${nombreTermo(termo)}`} onClose={onCerrar}>
       <div className="text-sm bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
         <p><span className="font-mono font-bold">{termo.Lote}</span> · {termo.DescripcionTalla}</p>
         <p className="text-xs text-gray-500">Entró a las {hora(termo.HoraInicio)} con <b>{fmtNum(termo.KgSinTratar)} kg</b> sin tratar</p>
       </div>
+      {editando && (
+        <div className="grid grid-cols-3 gap-3">
+          <div><Etiqueta># Termo</Etiqueta><input value={ent.NumeroTermo} onChange={setE("NumeroTermo")} disabled={dePelado}
+            className={`${campo} ${dePelado ? "bg-gray-100" : ""}`} /></div>
+          <div><Etiqueta>Inicio trat.</Etiqueta><input type="time" value={ent.HoraInicio} onChange={setE("HoraInicio")} className={campo} /></div>
+          <div>
+            <Etiqueta>Tipo de químico</Etiqueta>
+            <select value={ent.Quimico} onChange={setE("Quimico")} className={campo}>
+              <option value="">—</option>
+              {quimicos.map(q => <option key={q.Codigo} value={q.Codigo}>{q.Nombre}</option>)}
+            </select>
+          </div>
+          <p className="col-span-3 -mt-1 text-xs text-gray-400">Los kg sin tratar no se cambian aquí: para eso, quite la salida.</p>
+        </div>
+      )}
       <div className="grid grid-cols-2 gap-3">
         <div><Etiqueta>Salida trat.</Etiqueta><input type="time" value={f.HoraSalida} onChange={set("HoraSalida")} className={campo} /></div>
         <div><Etiqueta>Conteo final</Etiqueta><input type="number" inputMode="numeric" value={f.ConteoFinal} onChange={set("ConteoFinal")} className={campo} /></div>
@@ -546,7 +569,7 @@ function ModalSalida({ termo, destinos, destinoSugerido, pickupMaximo, onConfirm
         </div>
         <div>
           <Etiqueta>Va a</Etiqueta>
-          <select value={f.BodegaDestino} onChange={set("BodegaDestino")} className={`${campo} ${f.BodegaDestino ? "" : "border-amber-400 bg-amber-50"}`}>
+          <select value={f.BodegaDestino} onChange={set("BodegaDestino")} className={campoDestino(f.BodegaDestino)}>
             <option value="">¿A dónde va?…</option>
             {destinos.map(d => <option key={d.Codigo} value={d.Codigo}>{d.Nombre}</option>)}
           </select>
@@ -558,11 +581,18 @@ function ModalSalida({ termo, destinos, destinoSugerido, pickupMaximo, onConfirm
       </div>
       {alerta === "PERDIDA" && <p className="text-xs text-red-600">Sale pesando menos de lo que entró. Se registra tal cual, como alerta: revise tiempo y dosis.</p>}
       {alerta === "EXCEDE" && <p className="text-xs text-amber-700">Pasa del máximo de {pickupMaximo} %. Se registra, pero conviene revisar el peso o la dosis.</p>}
-      <Botones texto="Registrar salida" ocupado={ocupado}
-        deshabilitado={!f.HoraSalida || !(kgTratadas > 0) || !f.BodegaDestino} onCancelar={onCerrar}
+      <Botones texto={editando ? "Guardar" : "Registrar salida"} ocupado={ocupado}
+        deshabilitado={!f.HoraSalida || !(kgTratadas > 0) || !f.BodegaDestino || (editando && !ent.HoraInicio)} onCancelar={onCerrar}
         onAceptar={async () => {
           setOcupado(true);
-          await onConfirmar({ ...f, ConteoFinal: f.ConteoFinal === "" ? null : Number(f.ConteoFinal), KgTratadas: kgTratadas });
+          // Solo lo de la entrada que cambió: el número de un termo de Pelado no se toca.
+          const entrada = {};
+          if (editando) {
+            if (!dePelado && ent.NumeroTermo !== (termo.NumeroTermo ?? "")) entrada.NumeroTermo = ent.NumeroTermo;
+            if (ent.HoraInicio !== hora(termo.HoraInicio)) entrada.HoraInicio = ent.HoraInicio;
+            if (ent.Quimico !== (termo.QuimicoCodigo ?? "")) entrada.Quimico = ent.Quimico;
+          }
+          await onConfirmar({ ...f, ConteoFinal: f.ConteoFinal === "" ? null : Number(f.ConteoFinal), KgTratadas: kgTratadas }, entrada);
           setOcupado(false);
         }} />
     </Marco>
@@ -886,13 +916,15 @@ function TablaTermos({ hoja, abierta, pickupMaximo, puedeCrear, puedeEditar, pue
                   <td className="px-2 py-1.5 text-right whitespace-nowrap"><Pickup valor={t.Pickup} alerta={t.Alerta} /></td>
                   <td className="px-2 py-1.5 whitespace-nowrap">{t.NombreDestino || "—"}</td>
                   <td className="px-2 py-1.5 whitespace-nowrap text-right space-x-1">
-                    {abierta && puedeCrear && (
-                      <button onClick={() => (t.KgTratadas == null ? onSalidas([t]) : onCorregirSalida(t))}
-                        className={`text-xs font-semibold rounded px-2 py-1 border ${t.KgTratadas == null ? "bg-blue-600 text-white border-blue-600 hover:bg-blue-700" : "text-blue-700 border-blue-300 hover:bg-blue-50"}`}>
-                        {t.KgTratadas == null ? "Salida" : "Corregir salida"}
-                      </button>
+                    {abierta && puedeCrear && t.KgTratadas == null && (
+                      <button onClick={() => onSalidas([t])}
+                        className="text-xs font-semibold rounded px-2 py-1 border bg-blue-600 text-white border-blue-600 hover:bg-blue-700">Salida</button>
                     )}
-                    {abierta && puedeEditar && <button onClick={() => onEditar(t)} className="text-xs text-gray-600 border border-gray-300 rounded px-2 py-1 hover:bg-gray-50">Editar</button>}
+                    {/* Un solo "Editar": si ya salió, edita entrada y salida juntas (la salida pide permiso de crear). */}
+                    {abierta && puedeEditar && (t.KgTratadas == null || puedeCrear) && (
+                      <button onClick={() => (t.KgTratadas == null ? onEditar(t) : onCorregirSalida(t))}
+                        className="text-xs text-gray-600 border border-gray-300 rounded px-2 py-1 hover:bg-gray-50">Editar</button>
+                    )}
                     {abierta && puedeEditar && t.KgTratadas != null && (
                       <button onClick={() => onQuitarSalida(t)} className="text-xs text-amber-700 border border-amber-300 rounded px-2 py-1 hover:bg-amber-50">Quitar salida</button>
                     )}
@@ -1079,7 +1111,8 @@ export default function TratamientoPage() {
     await recargar();
   };
 
-  const registrarSalida = async (termo, datos) => {
+  const registrarSalida = async (termo, datos, entrada = {}) => {
+    if (Object.keys(entrada).length && !(await conAviso(await enviar(`${API}/termos/${termo.TermoId}`, entrada, "PUT")))) return;
     const r = await enviar(`${API}/termos/${termo.TermoId}/salida`, datos, "PUT");
     if (!(await conAviso(r))) return;
     setModal(null);
@@ -1148,8 +1181,8 @@ export default function TratamientoPage() {
         <ModalEntrada termo={modal.termo} quimicos={quimicos} onConfirmar={d => editarEntrada(modal.termo, d)} onCerrar={() => setModal(null)} />
       )}
       {modal?.tipo === "salida" && (
-        <ModalSalida termo={modal.termo} destinos={cat.Destinos} destinoSugerido={destinoSugerido} pickupMaximo={cat.PickupMaximo}
-          onConfirmar={d => registrarSalida(modal.termo, d)} onCerrar={() => setModal(null)} />
+        <ModalSalida termo={modal.termo} destinos={cat.Destinos} destinoSugerido={destinoSugerido} pickupMaximo={cat.PickupMaximo} quimicos={quimicos}
+          onConfirmar={(d, e) => registrarSalida(modal.termo, d, e)} onCerrar={() => setModal(null)} />
       )}
       {modal?.tipo === "cerrar" && sel && <ModalCerrar hoja={sel} onConfirmar={cerrarHoja} onCerrar={() => setModal(null)} />}
       {imprimir && sel && <HojaTratamientoModal hoja={sel} pickupMaximo={cat.PickupMaximo} onCerrar={() => setImprimir(false)} />}
