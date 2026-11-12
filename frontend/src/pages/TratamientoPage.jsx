@@ -23,6 +23,7 @@ import AvisoModal from "../components/AvisoModal.jsx";
 import EmpleadoAutocomplete from "../components/EmpleadoAutocomplete.jsx";
 import HojaTratamientoModal from "../components/HojaTratamientoModal.jsx";
 import ReporteTratamientoModal from "../components/ReporteTratamientoModal.jsx";
+import { cintaDe } from "../utils/cintaHoja.js";
 
 const API = "/api/tratamiento";
 
@@ -109,8 +110,8 @@ function Botones({ onCancelar, onAceptar, texto, ocupado, deshabilitado }) {
 // pesa al entrar.
 //   - Termo de Pelado: su número y los kg de sus pesadas (lib/tratamiento.ts, tomarTermoDePelado).
 //   - Línea del piso: completa, con los kg que tenga al piso en ese momento (TodaLaLinea).
-// Lo único que se pone es la hora de inicio, una vez para todos ("〃" en el papel) y corregible por
-// renglón. El pick-up se mide a la salida, cuando se pesa lo tratado.
+// Lo único que se pone es la hora de inicio de cada renglón (usuario, 12 nov 2026: se quitaron la
+// hora de la hoja y la de "todos", que repetían lo mismo); la hoja nueva toma la más temprana. El pick-up se mide a la salida, cuando se pesa lo tratado.
 const claveLinea = (l) => `${l.RemisionId ?? ""}|${l.Lote}|${l.Clase}|${l.Talla}|${l.FechaLote ?? ""}`;
 const llavePelado = (t) => `${t.TransaccionId}|${t.NumeroTermo}`;
 
@@ -122,8 +123,6 @@ function ModalTratar({ termosPiso = [], termosPelado = [], fecha, hojas, cliente
   const [filtro, setFiltro] = useState("");
   const [cliente, setCliente] = useState("");
   const [encargado, setEncargado] = useState("");
-  const [inicioHoja, setInicioHoja] = useState(horaGT());
-  const [horaComun, setHoraComun] = useState(horaGT());
   // Un renglón por cosa que entra: primero los termos de Pelado, luego las líneas del piso.
   const [items, setItems] = useState(() => [
     ...termosPelado.map(t => ({ tipo: "PELADO", key: `P|${llavePelado(t)}`, t, Kg: t.Kg, HoraInicio: horaGT() })),
@@ -154,7 +153,8 @@ function ModalTratar({ termosPiso = [], termosPelado = [], fecha, hojas, cliente
   const guardar = async () => {
     setOcupado(true); setErrorEn(null);
     const r = await onConfirmar({
-      ClienteCodigo: Number(cliente), Encargado: encargado || null, HoraInicio: inicioHoja, FechaProduccion: fecha,
+      ClienteCodigo: Number(cliente), Encargado: encargado || null, // La hoja nueva arranca con la hora más temprana de sus renglones: ya no se pide aparte.
+      HoraInicio: items.map(x => x.HoraInicio).filter(Boolean).sort()[0] ?? horaGT(), FechaProduccion: fecha,
       // Cada termo del piso entra completo, con lo que le queda (el servidor lo calcula).
       Termos: piso.map(({ l, b, HoraInicio }) => ({
         RemisionId: l.RemisionId, Lote: l.Lote, Clase: l.Clase, Talla: l.Talla, FechaLote: l.FechaLote,
@@ -218,25 +218,13 @@ function ModalTratar({ termosPiso = [], termosPelado = [], fecha, hojas, cliente
               <Etiqueta>Encargado</Etiqueta>
               <EmpleadoAutocomplete empleados={empleados} value={encargado} onSelect={setEncargado} />
             </div>
-            <div>
-              <Etiqueta>Inicio de la hoja</Etiqueta>
-              <input type="time" value={inicioHoja} onChange={e => setInicioHoja(e.target.value)} className="border border-gray-300 rounded px-2 py-1.5 text-sm bg-white" />
-            </div>
           </div>
         ))}
       </section>
 
       {/* 2 · Lo que entra: tal como llega de Pelado */}
       <section className="space-y-2 border-t border-gray-200 pt-4">
-        <div className="flex flex-wrap items-end gap-4">
-          <div className="self-end pb-2"><Paso n="2">Lo que entra a tratamiento</Paso></div>
-          <div className="ml-auto">
-            <Etiqueta>Inicio trat. (todos)</Etiqueta>
-            <input type="time" value={horaComun}
-              onChange={e => { setHoraComun(e.target.value); setItems(xs => xs.map(x => ({ ...x, HoraInicio: e.target.value }))); }}
-              className="border border-gray-300 rounded px-2 py-1.5 text-sm" />
-          </div>
-        </div>
+        <Paso n="2">Lo que entra a tratamiento</Paso>
         <p className="text-xs text-gray-500">Entra tal como llega de Pelado: cada termo completo, con lo que pesaron en él.</p>
 
         <div className="rounded-lg border border-gray-200 divide-y divide-gray-100">
@@ -1195,9 +1183,10 @@ export default function TratamientoPage() {
           <span className="text-xs font-semibold text-gray-500 uppercase mr-1">Hojas de la jornada</span>
           {hojas.map(h => (
             <button key={h.HojaId} onClick={() => abrirDetalle(h.HojaId)}
-              className={`rounded px-3 py-1 text-xs font-semibold border ${selId === h.HojaId ? "bg-blue-600 text-white border-blue-600" : "border-gray-300 text-gray-600 hover:bg-gray-50"}`}>
+              className={`rounded px-3 py-1 text-xs font-semibold border ${selId === h.HojaId ? `${cintaDe(hojas, h.HojaId).cinta} text-white border-transparent` : "border-gray-300 text-gray-600 hover:bg-gray-50"}`}>
+              <span className={`inline-block w-2.5 h-2.5 rounded-full mr-1.5 align-middle ${selId === h.HojaId ? "bg-white/80" : cintaDe(hojas, h.HojaId).punto}`} />
               #{h.HojaId} · {h.NombreCliente || "sin cliente"} · {h.Termos} termo{h.Termos !== 1 ? "s" : ""}
-              <span className={`ml-1.5 font-normal ${h.Estatus === "Abierta" ? "text-green-500" : "opacity-60"}`}>{h.Estatus}</span>
+              <span className={`ml-1.5 font-normal ${h.Estatus !== "Abierta" ? "opacity-60" : selId === h.HojaId ? "text-green-300" : "text-green-600"}`}>{h.Estatus}</span>
             </button>
           ))}
         </div>
@@ -1209,10 +1198,10 @@ export default function TratamientoPage() {
 
       {sel && (
         <div className="space-y-3">
-          <div className="bg-gray-800 text-white rounded-lg px-4 py-3 flex flex-wrap items-center gap-4">
+          <div className={`${cintaDe(hojas, sel.HojaId).cinta} text-white rounded-lg px-4 py-3 flex flex-wrap items-center gap-4`}>
             <div className="min-w-0">
               <h2 className="font-bold">Hoja #{sel.HojaId} · {sel.NombreCliente || "sin cliente"}</h2>
-              <p className="text-gray-300 text-xs mt-0.5">
+              <p className="text-white/75 text-xs mt-0.5">
                 {[fmtDia(sel.FechaProduccion), sel.NombreEncargado || sel.Encargado,
                   sel.HoraInicio ? `inicio ${hora(sel.HoraInicio)}` : null, sel.HoraFin ? `fin ${hora(sel.HoraFin)}` : null,
                   sel.Personas != null ? `${sel.Personas} persona${sel.Personas !== 1 ? "s" : ""}` : null,
@@ -1222,12 +1211,12 @@ export default function TratamientoPage() {
             <div className="ml-auto flex flex-wrap items-center gap-2">
               <button onClick={() => setImprimir(true)}
                 title={abierta ? "Se imprime como borrador: la hoja sigue abierta" : "Imprimir o guardar como PDF"}
-                className="border border-gray-500 rounded px-4 py-1.5 text-sm font-semibold hover:bg-gray-700">
+                className="border border-white/40 rounded px-4 py-1.5 text-sm font-semibold hover:bg-white/10">
                 Imprimir
               </button>
               {abierta && puedeEditar && (
                 <select value={sel.ClienteCodigo ?? ""} onChange={e => cambiarCliente(e.target.value)} title="Cliente previsto"
-                  className="bg-gray-700 border border-gray-500 rounded px-2 py-1 text-xs max-w-[14rem]">
+                  className="bg-black/25 border border-white/40 rounded px-2 py-1 text-xs max-w-[14rem] [&>option]:text-gray-800">
                   {!cat.Clientes.some(c => c.Codigo === sel.ClienteCodigo) && sel.ClienteCodigo != null && (
                     <option value={sel.ClienteCodigo}>{sel.NombreCliente} (sin pedido activo)</option>
                   )}
@@ -1235,7 +1224,7 @@ export default function TratamientoPage() {
                 </select>
               )}
               {abierta && puedeBorrar && sel.Termos.length === 0 && (
-                <button onClick={eliminarHoja} className="border border-gray-500 rounded px-3 py-1.5 text-sm hover:bg-gray-700">Eliminar</button>
+                <button onClick={eliminarHoja} className="border border-white/40 rounded px-3 py-1.5 text-sm hover:bg-white/10">Eliminar</button>
               )}
               {abierta && puedeCerrar && (
                 <button onClick={() => setModal({ tipo: "cerrar" })} className="bg-green-600 rounded px-4 py-1.5 text-sm font-semibold hover:bg-green-700">Cerrar hoja</button>

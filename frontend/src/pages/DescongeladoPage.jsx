@@ -20,6 +20,7 @@ import HojaDescongeladoModal, { origenDe } from "../components/HojaDescongeladoM
 import ReporteDescongeladoModal from "../components/ReporteDescongeladoModal.jsx";
 import InventarioDescongeladoModal, { entregaDe } from "../components/InventarioDescongeladoModal.jsx";
 import PesarPorTermo, { termosDeHoja, fueraDeRango, pctDif, textoPct, RANGO } from "../components/PesarPorTermo.jsx";
+import { cintaDe } from "../utils/cintaHoja.js";
 
 // Columna Dif. de la tabla de la hoja: en KILOS, pesado − declarado (usuario, 11 nov 2026; antes %).
 // El % sigue en el title y es el que decide si el termo está fuera de rango.
@@ -1708,12 +1709,13 @@ export default function DescongeladoPage() {
           {hojas.map(h => (
             <button key={h.HojaId} onClick={() => abrirDetalle(h.HojaId)}
               className={`rounded px-3 py-1 text-xs font-semibold border ${
-                selId === h.HojaId ? "bg-blue-600 text-white border-blue-600"
+                selId === h.HojaId ? `${cintaDe(hojas, h.HojaId).cinta} text-white border-transparent`
                                    : "border-gray-300 text-gray-600 hover:bg-gray-50"}`}>
+              <span className={`inline-block w-2.5 h-2.5 rounded-full mr-1.5 align-middle ${selId === h.HojaId ? "bg-white/80" : cintaDe(hojas, h.HojaId).punto}`} />
               #{h.HojaId} · {h.NombreEncargado || h.Encargado || h.Propiedad}
               {h.HoraInicio ? ` · ${h.HoraInicio.slice(11)}–${h.HoraFin ? h.HoraFin.slice(11) : "…"}` : ""}
               {" · "}{fmtNum(h.KgDescongelado)} kg
-              <span className={`ml-1.5 font-normal ${h.Estatus === "Abierta" ? "text-green-500" : "opacity-60"}`}>
+              <span className={`ml-1.5 font-normal ${h.Estatus !== "Abierta" ? "opacity-60" : selId === h.HojaId ? "text-green-300" : "text-green-600"}`}>
                 {h.Estatus}
               </span>
             </button>
@@ -1733,15 +1735,15 @@ export default function DescongeladoPage() {
       {/* La hoja */}
       {sel && (
         <div className="space-y-3">
-          <div className="bg-gray-800 text-white rounded-lg px-4 py-3 flex flex-wrap items-center gap-4">
+          <div className={`${cintaDe(hojas, sel.HojaId).cinta} text-white rounded-lg px-4 py-3 flex flex-wrap items-center gap-4`}>
             <div>
               <h2 className="font-bold">Hoja #{sel.HojaId}</h2>
-              <p className="text-gray-300 text-xs mt-0.5">{cabecera}</p>
+              <p className="text-white/75 text-xs mt-0.5">{cabecera}</p>
             </div>
             <div className="ml-auto flex items-center gap-2">
               <button onClick={() => setImprimir(true)}
                 title={sel.Estatus === "Cerrada" ? "Imprimir o guardar como PDF" : "Se imprime como borrador: la hoja sigue abierta"}
-                className="border border-gray-500 rounded px-4 py-1.5 text-sm font-semibold hover:bg-gray-700">
+                className="border border-white/40 rounded px-4 py-1.5 text-sm font-semibold hover:bg-white/10">
                 Imprimir
               </button>
               {sel.Estatus === "Abierta" && puedeCerrar && (
