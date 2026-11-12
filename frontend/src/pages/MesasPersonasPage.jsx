@@ -205,9 +205,18 @@ export default function MesasPersonasPage() {
   useEffect(() => { cargar(); }, []);
 
   const mesasAsignables = mesas;
+  // En el tablero solo va quien SIGUE en la mesa (sin FechaFin). A quien ya se quitó con último día
+  // hoy la base todavía la cuenta para hoy (sus pesadas de hoy son de esa mesa), pero ya no está:
+  // mostrarla invitaba a quitarla otra vez y daba "no tiene mesa vigente" (usuario, 12 nov 2026).
+  // Queda solo como número en la franja de su mesa.
+  const vigentes = useMemo(() => asignaciones.filter(a => !a.FechaFin), [asignaciones]);
   const porMesa = useMemo(() => {
-    const mapa = new Map(mesasAsignables.map(m => [m.Codigo, []]));
-    for (const a of asignaciones) mapa.get(a.MesaCodigo)?.push(a);
+    const mapa = new Map(mesasAsignables.map(m => [m.Codigo, { lista: [], salen: 0 }]));
+    for (const a of asignaciones) {
+      const g = mapa.get(a.MesaCodigo);
+      if (!g) continue;
+      if (a.FechaFin) g.salen++; else g.lista.push(a);
+    }
     return mapa;
   }, [mesasAsignables, asignaciones]);
 
@@ -257,7 +266,7 @@ export default function MesasPersonasPage() {
   return (
     <div>
       <div className="flex flex-wrap items-center gap-3 mb-4">
-        <span className="text-sm text-gray-600">{asignaciones.length} personas en mesa hoy</span>
+        <span className="text-sm text-gray-600">{vigentes.length} personas en mesa hoy</span>
         {error && <span className="text-sm text-red-600">{error}</span>}
         {puedeEditar && (
           <button onClick={() => setModal({ tipo: "asignar", persona: null })}
@@ -267,11 +276,12 @@ export default function MesasPersonasPage() {
 
       <div className="space-y-3">
         {mesasAsignables.map(m => {
-          const lista = porMesa.get(m.Codigo) ?? [];
+          const { lista, salen } = porMesa.get(m.Codigo) ?? { lista: [], salen: 0 };
           const tipo = tipoMesa(m.Tipo);
           return (
             <Franja key={m.Codigo} nombre={m.Nombre} etiqueta={tipo.label} claseEtiqueta={tipo.clase}
-              resumen={`${lista.length} persona${lista.length !== 1 ? "s" : ""}${lista.some(p => p.EsLider) ? "" : " · sin líder"}`}>
+              resumen={`${lista.length} persona${lista.length !== 1 ? "s" : ""}${lista.some(p => p.EsLider) ? "" : " · sin líder"}`}
+              nota={salen ? `${salen} quitada${salen !== 1 ? "s" : ""} hoy` : null}>
               {lista.map(p => <Persona key={p.Codigo} p={p} />)}
               {lista.length === 0 && <li className="text-xs text-gray-400 px-1 py-2">Sin personas</li>}
             </Franja>
