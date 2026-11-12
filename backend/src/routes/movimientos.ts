@@ -4,6 +4,7 @@ import prisma from "../lib/prisma.ts";
 import { nowGT, hoyInicioGT, diaSemanaDe } from "../lib/dateGT.ts";
 import { requireAuth, requirePerm } from "../middleware/auth.ts";
 import { aplicarCorteMedianoche, LIMITE_HORAS_JORNADA } from "../lib/corteMedianoche.ts";
+import { leerMarcaje, registrarBitacora, listarBitacora } from "../lib/bitacoraMarcaje.ts";
 
 const router = Router();
 
@@ -199,6 +200,14 @@ router.get("/", requireAuth, requirePerm("movimientos", "ver"), async (req: Requ
   } catch (err: any) { res.status(500).json({ error: err.message }); }
 });
 
+// GET /api/movimientos/bitacora?codigo= — quién creó a mano, corrigió o borró entradas/salidas.
+router.get("/bitacora", requireAuth, requirePerm("movimientos", "ver"), async (req: Request, res: Response) => {
+  try {
+    const codigo = req.query.codigo ? String(req.query.codigo).trim().toUpperCase() : undefined;
+    res.json(await listarBitacora(prisma, "Movimientos", codigo));
+  } catch (err: any) { res.status(500).json({ error: err.message }); }
+});
+
 // POST /api/movimientos  { Codigo, Tipo, FechaHora }  (alta manual de admin — corrección por falta de gafete)
 router.post("/", requireAuth, requirePerm("movimientos", "editar"), async (req: Request, res: Response) => {
   try {
@@ -216,11 +225,17 @@ router.post("/", requireAuth, requirePerm("movimientos", "editar"), async (req: 
     const diaSemana = diaSemanaDe(fh);
     const operador  = getOperador(req);
 
+    // El alta y su renglón de bitácora van juntos (lib/bitacoraMarcaje.ts).
     try {
-      await prisma.$executeRaw`
-        INSERT INTO Movimientos (Codigo, NombreEmpleado, Tipo, FechaHora, DiaSemana, Operador)
-        VALUES (${Codigo}, ${empleados[0].NombreCompleto}, ${Tipo}, ${fh}, ${diaSemana}, ${operador})
-      `;
+      await prisma.$transaction(async tx => {
+        await tx.$executeRaw`
+          INSERT INTO Movimientos (Codigo, NombreEmpleado, Tipo, FechaHora, DiaSemana, Operador)
+          VALUES (${Codigo}, ${empleados[0].NombreCompleto}, ${Tipo}, ${fh}, ${diaSemana}, ${operador})
+        `;
+        const [{ id }]: any[] = await tx.$queryRawUnsafe(`SELECT LAST_INSERT_ID() AS id`);
+        await registrarBitacora(tx, { tabla: "Movimientos", id: Number(id), accion: "CREAR", antes: null,
+          despues: await leerMarcaje(tx, "Movimientos", Number(id)), usuario: operador });
+      });
     } catch (err: any) {
       if (esDuplicado(err)) { res.status(400).json({ error: "Ya existe un registro idéntico para ese empleado, fecha/hora y tipo" }); return; }
       throw err;
@@ -248,13 +263,24 @@ router.put("/:id", requireAuth, requirePerm("movimientos", "editar"), async (req
     const fh = FechaHora.replace("T", " ") + (FechaHora.length === 16 ? ":00" : "");
     const diaSemana = diaSemanaDe(fh);
 
+    // La corrección conserva el Operador original (quién marcó); quién corrigió va a la bitácora,
+    // con lo que había antes, en la misma transacción.
     try {
-      await prisma.$executeRaw`
-        UPDATE Movimientos
-        SET Codigo = ${Codigo}, NombreEmpleado = ${empleados[0].NombreCompleto},
-            Tipo = ${Tipo}, FechaHora = ${fh}, DiaSemana = ${diaSemana}
-        WHERE id = ${id}
-      `;
+      const existe = await prisma.$transaction(async tx => {
+        const antes = await leerMarcaje(tx, "Movimientos", id);
+        if (!antes) return false;
+        await tx.$executeRaw`
+          UPDATE Movimientos
+          SET Codigo = ${Codigo}, NombreEmpleado = ${empleados[0].NombreCompleto},
+              Tipo = ${Tipo}, FechaHora = ${fh}, DiaSemana = ${diaSemana}
+          WHERE id = ${id}
+        `;
+        const despues = await leerMarcaje(tx, "Movimientos", id);
+        if (JSON.stringify(antes) !== JSON.stringify(despues))
+          await registrarBitacora(tx, { tabla: "Movimientos", id, accion: "EDITAR", antes, despues, usuario: getOperador(req) });
+        return true;
+      });
+      if (!existe) { res.status(404).json({ error: "El marcaje ya no existe" }); return; }
     } catch (err: any) {
       if (esDuplicado(err)) { res.status(400).json({ error: "Ya existe un registro idéntico para ese empleado, fecha/hora y tipo" }); return; }
       throw err;
@@ -268,7 +294,12 @@ router.put("/:id", requireAuth, requirePerm("movimientos", "editar"), async (req
 router.delete("/:id", requireAuth, requirePerm("movimientos", "eliminar"), async (req: Request, res: Response) => {
   try {
     const id = parseInt(req.params.id);
-    await prisma.$executeRaw`DELETE FROM Movimientos WHERE id = ${id}`;
+    await prisma.$transaction(async tx => {
+      const antes = await leerMarcaje(tx, "Movimientos", id);
+      if (!antes) return;
+      await tx.$executeRaw`DELETE FROM Movimientos WHERE id = ${id}`;
+      await registrarBitacora(tx, { tabla: "Movimientos", id, accion: "BORRAR", antes, despues: null, usuario: getOperador(req) });
+    });
     res.json({ ok: true });
   } catch (err: any) { res.status(500).json({ error: err.message }); }
 });

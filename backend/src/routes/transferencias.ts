@@ -4,6 +4,7 @@ import prisma from "../lib/prisma.ts";
 import { nowGT, hoyInicioGT } from "../lib/dateGT.ts";
 import { requireAuth, requirePerm } from "../middleware/auth.ts";
 import { aplicarCorteMedianoche } from "../lib/corteMedianoche.ts";
+import { leerMarcaje, registrarBitacora, listarBitacora } from "../lib/bitacoraMarcaje.ts";
 
 const router = Router();
 
@@ -146,10 +147,15 @@ router.post("/manual", requireAuth, requirePerm("transferencias", "editar"), asy
     if (fhs && fhs < fh) { res.status(400).json({ error: "La hora de salida no puede ser anterior a la de entrada" }); return; }
 
     const operador = getOperador(req);
-    await prisma.$executeRaw`
-      INSERT INTO Transferencias (Codigo, CodigoArea, FechaHora, FechaSalida, RegistradoPor)
-      VALUES (${Codigo}, ${CodigoArea}, ${fh}, ${fhs}, ${operador})
-    `;
+    await prisma.$transaction(async tx => {
+      await tx.$executeRaw`
+        INSERT INTO Transferencias (Codigo, CodigoArea, FechaHora, FechaSalida, RegistradoPor)
+        VALUES (${Codigo}, ${CodigoArea}, ${fh}, ${fhs}, ${operador})
+      `;
+      const [{ id }]: any[] = await tx.$queryRawUnsafe(`SELECT LAST_INSERT_ID() AS id`);
+      await registrarBitacora(tx, { tabla: "Transferencias", id: Number(id), accion: "CREAR", antes: null,
+        despues: await leerMarcaje(tx, "Transferencias", Number(id)), usuario: operador });
+    });
     res.status(201).json({ ok: true });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -217,6 +223,14 @@ router.get("/", requireAuth, requirePerm("transferencias", "ver"), async (req: R
   } catch (err: any) { res.status(500).json({ error: err.message }); }
 });
 
+// GET /api/transferencias/bitacora?codigo= — quién creó a mano, corrigió o borró transferencias.
+router.get("/bitacora", requireAuth, requirePerm("transferencias", "ver"), async (req: Request, res: Response) => {
+  try {
+    const codigo = req.query.codigo ? String(req.query.codigo).trim().toUpperCase() : undefined;
+    res.json(await listarBitacora(prisma, "Transferencias", codigo));
+  } catch (err: any) { res.status(500).json({ error: err.message }); }
+});
+
 // PUT /api/transferencias/:id  { Codigo, CodigoArea, FechaHora, FechaSalida }
 router.put("/:id", requireAuth, requirePerm("transferencias", "editar"), async (req: Request, res: Response) => {
   try {
@@ -239,9 +253,19 @@ router.put("/:id", requireAuth, requirePerm("transferencias", "editar"), async (
       : null;
     if (fhs && fhs < fh) { res.status(400).json({ error: "La hora de salida no puede ser anterior a la de entrada" }); return; }
 
-    await prisma.$executeRaw`
-      UPDATE Transferencias SET Codigo = ${Codigo}, CodigoArea = ${CodigoArea}, FechaHora = ${fh}, FechaSalida = ${fhs} WHERE id = ${id}
-    `;
+    // Quién corrigió y lo que había antes van a la bitácora, en la misma transacción.
+    const existe = await prisma.$transaction(async tx => {
+      const antes = await leerMarcaje(tx, "Transferencias", id);
+      if (!antes) return false;
+      await tx.$executeRaw`
+        UPDATE Transferencias SET Codigo = ${Codigo}, CodigoArea = ${CodigoArea}, FechaHora = ${fh}, FechaSalida = ${fhs} WHERE id = ${id}
+      `;
+      const despues = await leerMarcaje(tx, "Transferencias", id);
+      if (JSON.stringify(antes) !== JSON.stringify(despues))
+        await registrarBitacora(tx, { tabla: "Transferencias", id, accion: "EDITAR", antes, despues, usuario: getOperador(req) });
+      return true;
+    });
+    if (!existe) { res.status(404).json({ error: "La transferencia ya no existe" }); return; }
     res.json({ ok: true });
   } catch (err: any) { res.status(500).json({ error: err.message }); }
 });
@@ -250,7 +274,12 @@ router.put("/:id", requireAuth, requirePerm("transferencias", "editar"), async (
 router.delete("/:id", requireAuth, requirePerm("transferencias", "eliminar"), async (req: Request, res: Response) => {
   try {
     const id = parseInt(req.params.id);
-    await prisma.$executeRaw`DELETE FROM Transferencias WHERE id = ${id}`;
+    await prisma.$transaction(async tx => {
+      const antes = await leerMarcaje(tx, "Transferencias", id);
+      if (!antes) return;
+      await tx.$executeRaw`DELETE FROM Transferencias WHERE id = ${id}`;
+      await registrarBitacora(tx, { tabla: "Transferencias", id, accion: "BORRAR", antes, despues: null, usuario: getOperador(req) });
+    });
     res.json({ ok: true });
   } catch (err: any) { res.status(500).json({ error: err.message }); }
 });
