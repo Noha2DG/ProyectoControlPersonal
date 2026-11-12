@@ -152,6 +152,8 @@ router.get("/sin-mesa", requireAuth, requirePerm("mesas", "ver"), async (req: Re
   try {
     const dias = Math.min(Math.max(Number(req.query.dias) || 14, 1), 60);
     const hoy = hoyGT();
+    // FORCE INDEX (12 nov 2026): sin él MariaDB recorría PesajeDetalle ENTERA y buscaba el área de cada
+    // pesada de la historia, no solo de los N días. Medido contra producción: 153 s → 0.5 s, mismas filas.
     const rows: any[] = await prisma.$queryRawUnsafe(`
       SELECT x.Codigo, e.PrimerNombre, e.SegundoNombre, e.PrimerApellido, e.SegundoApellido,
              CONCAT_WS(' ', e.PrimerNombre, e.SegundoNombre, e.PrimerApellido, e.SegundoApellido) AS Nombre,
@@ -163,7 +165,7 @@ router.get("/sin-mesa", requireAuth, requirePerm("mesas", "ver"), async (req: Re
                 WHERE tr.Codigo = pd.Codigo AND tr.FechaHora <= pd.FechaHora
                   AND (tr.FechaSalida IS NULL OR tr.FechaSalida >= pd.FechaHora)
                 ORDER BY tr.FechaHora DESC LIMIT 1) AS CodigoArea
-        FROM PesajeDetalle pd
+        FROM PesajeDetalle pd FORCE INDEX (idx_pesaje_fecha)
         WHERE pd.FechaHora >= DATE_SUB(?, INTERVAL ? DAY) AND pd.FechaHora < DATE_ADD(?, INTERVAL 1 DAY)
       ) x
       JOIN Empleados e ON e.Codigo = x.Codigo AND e.Estado = 'Activo'
@@ -171,7 +173,7 @@ router.get("/sin-mesa", requireAuth, requirePerm("mesas", "ver"), async (req: Re
         AND NOT EXISTS (SELECT 1 FROM MesaAsignacion ma
                         WHERE ma.Codigo = x.Codigo AND (ma.FechaFin IS NULL OR ma.FechaFin >= ?))
       GROUP BY x.Codigo
-      ORDER BY UltimoDia DESC, Pesadas DESC
+      ORDER BY UltimoDia DESC, Pesadas DESC, x.Codigo
     `, hoy, hoy, dias - 1, hoy, ...AREAS_MESA, hoy);
     res.json(rows.map(r => ({ ...r, Pesadas: Number(r.Pesadas), PesadasHoy: Number(r.PesadasHoy) })));
   } catch (err: any) {
