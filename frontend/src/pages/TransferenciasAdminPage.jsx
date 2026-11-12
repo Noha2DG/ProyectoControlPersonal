@@ -4,6 +4,7 @@ import { authHeader, usePuede } from "../context/AuthContext.jsx";
 import { exportarTransferencias } from "../utils/exportExcel.js";
 import { fmtRango } from "../utils/permisos.js";
 import EmpleadoAutocomplete from "../components/EmpleadoAutocomplete.jsx";
+import BitacoraMarcajeModal from "../components/BitacoraMarcajeModal.jsx";
 import { useColWidths, useOrden, ordenarFilas, Th, Colgroup } from "../components/ResizableTh.jsx";
 
 const COL_DEFAULTS = { fecha: 100, codigo: 100, nombre: 190, area: 90, nombreArea: 180, entrada: 100, salida: 100, duracion: 100, acciones: 110 };
@@ -109,6 +110,7 @@ export default function TransferenciasAdminPage() {
   const [areasTodas, setAreasTodas] = useState([]);
   const [loading, setLoading]   = useState(false);
   const [modal, setModal] = useState({ open: false, registro: null });
+  const [verBitacora, setVerBitacora] = useState(false);
   const [permisosEmpleado, setPermisosEmpleado] = useState([]);
   const [widths, startResize] = useColWidths("transferencias", COL_DEFAULTS);
   const [orden, alternarOrden] = useOrden();
@@ -276,6 +278,11 @@ export default function TransferenciasAdminPage() {
         <button onClick={fetchData} className="text-blue-600 hover:text-blue-800 text-sm font-medium px-3 py-1.5 rounded-lg hover:bg-blue-50 border border-blue-200 transition">
           Actualizar
         </button>
+        <button onClick={() => setVerBitacora(true)} title="Quién creó a mano, corrigió o borró registros"
+          className="text-gray-600 text-sm font-medium px-3 py-1.5 rounded-lg border border-gray-300 hover:bg-gray-50 transition">
+          Correcciones
+        </button>
+        {verBitacora && <BitacoraMarcajeModal tabla="transferencias" titulo="Correcciones de transferencias" onClose={() => setVerBitacora(false)} />}
         {puedeEditar && (
           <button
             onClick={() => setModal({ open: true, registro: null })}

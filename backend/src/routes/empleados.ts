@@ -214,6 +214,32 @@ router.delete("/:codigo", requirePerm("empleados", "baja"), async (req: Request,
     const operador = getOperador(req);
     const recontratable = Recontratable === false || Recontratable === 0 ? 0 : 1;
 
+    // Baja con fecha atrasada (12 nov 2026): el kiosco y la báscula solo rechazan a quien YA está de
+    // baja, así que lo marcado o pesado entre la fecha de baja y hoy quedó registrado. Si hay algo, se
+    // avisa antes de guardar: o la fecha está mal, o es la persona equivocada, u otra persona usa su
+    // código. Con Confirmar = true se guarda igual. No cuenta lo del Sistema (corte de medianoche).
+    if (!req.body.Confirmar) {
+      const [act]: any[] = await prisma.$queryRaw`
+        SELECT
+          (SELECT COUNT(*) FROM Movimientos WHERE Codigo = ${codigo} AND Operador <> 'Sistema'
+              AND FechaHora >= DATE_ADD(${fechaBaja}, INTERVAL 1 DAY)) AS Marcajes,
+          (SELECT DATE_FORMAT(MAX(FechaHora), '%d/%m/%Y %H:%i') FROM Movimientos WHERE Codigo = ${codigo}
+              AND Operador <> 'Sistema' AND FechaHora >= DATE_ADD(${fechaBaja}, INTERVAL 1 DAY)) AS UltimoMarcaje,
+          (SELECT COUNT(*) FROM PesajeDetalle WHERE Codigo = ${codigo}
+              AND FechaHora >= DATE_ADD(${fechaBaja}, INTERVAL 1 DAY)) AS Pesadas,
+          (SELECT DATE_FORMAT(MAX(FechaHora), '%d/%m/%Y %H:%i') FROM PesajeDetalle WHERE Codigo = ${codigo}
+              AND FechaHora >= DATE_ADD(${fechaBaja}, INTERVAL 1 DAY)) AS UltimaPesada
+      `;
+      const marcajes = Number(act.Marcajes), pesadas = Number(act.Pesadas);
+      if (marcajes || pesadas) {
+        res.status(409).json({
+          error: "Tiene actividad después de la fecha de baja",
+          aviso: { Marcajes: marcajes, UltimoMarcaje: act.UltimoMarcaje, Pesadas: pesadas, UltimaPesada: act.UltimaPesada },
+        });
+        return;
+      }
+    }
+
     await prisma.$executeRaw`
       UPDATE Empleados
       SET Estado = 'Baja', FechaBaja = ${fechaBaja}

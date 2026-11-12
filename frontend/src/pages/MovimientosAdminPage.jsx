@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { authHeader, usePuede } from "../context/AuthContext.jsx";
 import { exportarMovimientos } from "../utils/exportExcel.js";
 import EmpleadoAutocomplete from "../components/EmpleadoAutocomplete.jsx";
+import BitacoraMarcajeModal from "../components/BitacoraMarcajeModal.jsx";
 import { useColWidths, useOrden, ordenarFilas, Th, Colgroup } from "../components/ResizableTh.jsx";
 
 const TIPOS = ["Entrada", "Salida"];
@@ -100,6 +101,7 @@ export default function MovimientosAdminPage() {
   const [empleados, setEmpleados] = useState([]);
   const [loading, setLoading]   = useState(false);
   const [modal, setModal] = useState({ open: false, registro: null, cierre: null });
+  const [verBitacora, setVerBitacora] = useState(false);
   const [widths, startResize] = useColWidths("movimientos", COL_DEFAULTS);
   const [orden, alternarOrden] = useOrden();
   const [ciclosAbiertos, setCiclosAbiertos] = useState([]);
@@ -178,6 +180,11 @@ export default function MovimientosAdminPage() {
         <button onClick={fetchData} className="text-blue-600 hover:text-blue-800 text-sm font-medium px-3 py-1.5 rounded-lg hover:bg-blue-50 border border-blue-200 transition">
           Actualizar
         </button>
+        <button onClick={() => setVerBitacora(true)} title="Quién creó a mano, corrigió o borró registros"
+          className="text-gray-600 text-sm font-medium px-3 py-1.5 rounded-lg border border-gray-300 hover:bg-gray-50 transition">
+          Correcciones
+        </button>
+        {verBitacora && <BitacoraMarcajeModal tabla="movimientos" titulo="Correcciones de entradas y salidas" onClose={() => setVerBitacora(false)} />}
         {puedeEditar && (
           <button
             onClick={() => setModal({ open: true, registro: null, cierre: null })}

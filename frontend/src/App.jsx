@@ -110,13 +110,33 @@ function EmpleadosSection({ canCrear, canEditar, canBaja }) {
     else { const err = await res.json(); alert("Error: " + err.error); }
   };
 
+  // Si la persona marcó o pesó DESPUÉS de la fecha de baja, el servidor no guarda y avisa (409): o la
+  // fecha está mal, o es la persona equivocada, u otra persona usa su código (12 nov 2026). Se guarda
+  // solo si quien da la baja lo confirma.
   const handleBaja = async (codigo, datosBaja) => {
-    const res = await fetch(`${API}/${codigo}`, {
+    const enviar = (datos) => fetch(`${API}/${codigo}`, {
       method: "DELETE",
       headers: { "Content-Type": "application/json", ...authHeader() },
-      body: JSON.stringify(datosBaja),
+      body: JSON.stringify(datos),
     });
+    let res = await enviar(datosBaja);
+    if (res.status === 409) {
+      const { aviso } = await res.json().catch(() => ({}));
+      const [a, m, d] = String(datosBaja.FechaBaja).split("-");
+      const lineas = [
+        `${codigo} tiene actividad DESPUÉS del ${d}/${m}/${a}:`,
+        aviso?.Marcajes ? `• ${aviso.Marcajes} marcaje(s), el último ${aviso.UltimoMarcaje}` : null,
+        aviso?.Pesadas ? `• ${aviso.Pesadas} pesada(s), la última ${aviso.UltimaPesada}` : null,
+        "",
+        "Revise la fecha y que sea la persona correcta. Si dejó de venir, alguien más podría estar usando su código.",
+        "",
+        "¿Dar de baja con esa fecha de todos modos?",
+      ].filter(l => l !== null);
+      if (!window.confirm(lineas.join("\n"))) return;
+      res = await enviar({ ...datosBaja, Confirmar: true });
+    }
     if (res.ok) { setBajaModal({ open: false, empleado: null }); fetchEmpleados(); }
+    else { const err = await res.json().catch(() => ({})); alert("Error: " + (err.error || "no se pudo dar de baja")); }
   };
 
   const abrirReactivar = (emp) => {
