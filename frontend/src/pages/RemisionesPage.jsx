@@ -7,6 +7,7 @@ import HojaRemisionModal from "../components/HojaRemisionModal.jsx";
 import ModalEscaneo from "../components/ModalEscaneo.jsx";
 import PisoDeRemision from "../components/PisoDeRemision.jsx";
 import ResumenCarga, { textoDeLinea } from "../components/ResumenCarga.jsx";
+import EstibaContenedor from "../components/EstibaContenedor.jsx";
 import EmpleadoAutocomplete from "../components/EmpleadoAutocomplete.jsx";
 import { useAviso } from "../hooks/useAviso.js";
 import { fmtFechaHora } from "../utils/fecha.js";
@@ -462,6 +463,7 @@ function PanelRemision({ remisionId, onClose, onCambio }) {
   const [escaneando, setEscaneando] = useState(null); // "pallet" | "master" | null
   const [modalAnular, setModalAnular] = useState(false);
   const [mostrarHoja, setMostrarHoja] = useState(false);
+  const [verEstiba, setVerEstiba] = useState(false);
   const [avance, setAvance] = useState({}); // DetalleId -> avance de esa línea de la proforma
   const [widths, startResize] = useColWidths("remision_lineas", LINEAS_COL_DEFAULTS);
 
@@ -701,6 +703,16 @@ Antes de confirmar, quita de la remisión las cajas que regresaron, por el corre
                       {descalzadas} línea(s) con etiqueta de otro cliente
                     </span>
                   )}
+                  {/* El dibujo del contenedor fila por fila; se actualiza solo mientras está abierto. */}
+                  {pideLinea && remision?.Estatus !== "Anulada" && (
+                    <button onClick={() => setVerEstiba(true)}
+                      className="ml-auto inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-bold text-white bg-teal-600 shadow-sm hover:bg-teal-700 active:bg-teal-800 transition">
+                      <svg viewBox="0 0 24 24" className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                        <path d="M3 7l9-4 9 4v10l-9 4-9-4V7z" /><path d="M3 7l9 4 9-4M12 11v10" />
+                      </svg>
+                      Ver estiba
+                    </button>
+                  )}
                 </div>
 
                 {excedidas.length > 0 && (
@@ -905,6 +917,7 @@ Antes de confirmar, quita de la remisión las cajas que regresaron, por el corre
         <ModalAnularRemision remision={remision} onConfirmar={handleAnular} onCerrar={() => setModalAnular(false)} />
       )}
       {mostrarHoja && <HojaRemisionModal remisionId={remisionId} onCerrar={() => setMostrarHoja(false)} />}
+      {verEstiba && <EstibaContenedor remisionId={remisionId} onCerrar={() => setVerEstiba(false)} />}
       {aviso && <AvisoModal {...aviso} onCerrar={() => cerrar(true)} onCancelar={() => cerrar(false)} />}
     </>
   );
