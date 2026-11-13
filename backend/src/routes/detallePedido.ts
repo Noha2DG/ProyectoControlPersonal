@@ -442,10 +442,14 @@ router.get("/avance", requireAuth, requireAnyPerm([["pedidos", "ver"], ["etiquet
 
     const lineas: any[] = await prisma.$queryRaw`
       SELECT dp.DetalleId, dp.Clase, dp.Proceso, dp.Talla, dp.Presentacion,
-             dp.CantidadCajas, dp.KgPedido, dp.LibrasPedido, dp.EsGranel, dp.Anulada, pr.CajasXMaster, ped.EsGeneral
+             dp.CantidadCajas, dp.KgPedido, dp.LibrasPedido, dp.EsGranel, dp.Anulada, pr.CajasXMaster, ped.EsGeneral,
+             pc.Descripcion AS DescripcionProceso, ta.Descripcion AS DescripcionTalla, pr.Descripcion AS DescripcionPresentacion
       FROM DetallePedido dp
       JOIN Presentacion pr ON pr.Codigo = dp.Presentacion
       JOIN Pedidos ped ON ped.CodigoPedido = dp.CodigoPedido
+      LEFT JOIN Clase cl ON cl.Clase = dp.Clase
+      LEFT JOIN Procesos pc ON pc.Proceso = cl.Proceso
+      LEFT JOIN Tallas ta ON ta.Codigo = dp.Talla
       WHERE dp.CodigoPedido = ${pedido}
       ORDER BY dp.DetalleId ASC LIMIT 2000
     `;
@@ -486,6 +490,9 @@ router.get("/avance", requireAuth, requireAnyPerm([["pedidos", "ver"], ["etiquet
       return {
         DetalleId: detalleId,
         Clase: l.Clase, Proceso: Number(l.Proceso), Talla: Number(l.Talla), Presentacion: l.Presentacion,
+        // Descripciones para quien pinta la línea sin tener un master de ella (ResumenCarga).
+        DescripcionProceso: l.DescripcionProceso ?? null, DescripcionTalla: l.DescripcionTalla ?? null,
+        DescripcionPresentacion: l.DescripcionPresentacion ?? null,
         CantidadCajas: Number(l.CantidadCajas),
         CajasXMaster: Number(l.CajasXMaster),
         EsGranel: Number(l.EsGranel) === 1,

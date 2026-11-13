@@ -22,6 +22,9 @@ const TONOS = {
 export default function ModalEscaneo({
   titulo, descripcion, placeholder, Icono, pideLinea, onEscanear, onCerrar,
   tono = "azul", verbo = "agregado", pideMotivo = false,
+  // Opcionales, para la carga de un contenedor: infoLinea(n) dice lo que ya lleva esa línea e
+  // infoTotal el avance de toda la carga, para no cerrar la ventana a ver cuánto va.
+  infoLinea, infoTotal,
 }) {
   const [valor, setValor] = useState("");
   const [linea, setLinea] = useState("");
@@ -154,8 +157,11 @@ export default function ModalEscaneo({
                   : "border-gray-200 bg-gray-50 text-gray-400 cursor-not-allowed focus:ring-gray-200"
               }`} />
           </form>
+          {infoTotal && <p className="text-xs text-gray-600 mt-1.5">{infoTotal}</p>}
           {pideLinea && lineaLista && (
-            <p className="text-xs text-amber-700 mt-1.5 font-medium">Escaneando hacia la línea {lineaNum}</p>
+            <p className="text-xs text-amber-700 mt-1.5 font-medium">
+              Escaneando hacia la línea {lineaNum}{infoLinea ? <span className="text-gray-700"> — {infoLinea(lineaNum)}</span> : null}
+            </p>
           )}
 
           {historial.length > 0 && (

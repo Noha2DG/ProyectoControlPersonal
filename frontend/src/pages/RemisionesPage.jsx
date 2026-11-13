@@ -6,6 +6,7 @@ import AvisoModal from "../components/AvisoModal.jsx";
 import HojaRemisionModal from "../components/HojaRemisionModal.jsx";
 import ModalEscaneo from "../components/ModalEscaneo.jsx";
 import PisoDeRemision from "../components/PisoDeRemision.jsx";
+import ResumenCarga, { textoDeLinea } from "../components/ResumenCarga.jsx";
 import EmpleadoAutocomplete from "../components/EmpleadoAutocomplete.jsx";
 import { useAviso } from "../hooks/useAviso.js";
 import { fmtFechaHora } from "../utils/fecha.js";
@@ -717,6 +718,9 @@ Antes de confirmar, quita de la remisión las cajas que regresaron, por el corre
                   </div>
                 )}
 
+                {/* Carga de contenedor: cuánto va contra la proforma y qué lleva cada línea. */}
+                {pideLinea && <ResumenCarga remision={remision} />}
+
                 <PisoDeRemision piso={remision?.Piso} borrador={borrador} />
 
                 {/* El área se llevó todo pero no lo usó todo (2 nov 2026): lo que dejó por regresar
@@ -885,12 +889,16 @@ Antes de confirmar, quita de la remisión las cajas que regresaron, por el corre
         <ModalEscaneo titulo="Escanear polín" Icono={IconoPallet} pideLinea={remision?.PideLinea === true}
           descripcion="Apunta el lector al QR de la hoja del polín. Entra completo, con todos sus masters."
           placeholder="QR del polín (ej. T0012)"
+          infoLinea={pideLinea ? (n => textoDeLinea(remision?.Lineas, n)) : undefined}
+          infoTotal={pideLinea ? `Cargado hasta ahora: ${remision?.CantidadMasters ?? 0} masters · ${(remision?.PesoKg ?? 0).toFixed(2)} kg` : undefined}
           onEscanear={escanearPallet} onCerrar={() => setEscaneando(null)} />
       )}
       {escaneando === "master" && (
         <ModalEscaneo titulo="Escanear master" Icono={IconoMaster} pideLinea={remision?.PideLinea === true}
           descripcion="Apunta el lector al QR de la caja. El polín conserva su posición y las cajas que no se lleven."
           placeholder="QR del master (ej. E120)"
+          infoLinea={pideLinea ? (n => textoDeLinea(remision?.Lineas, n)) : undefined}
+          infoTotal={pideLinea ? `Cargado hasta ahora: ${remision?.CantidadMasters ?? 0} masters · ${(remision?.PesoKg ?? 0).toFixed(2)} kg` : undefined}
           onEscanear={escanearMaster} onCerrar={() => setEscaneando(null)} />
       )}
       {modalAnular && (
