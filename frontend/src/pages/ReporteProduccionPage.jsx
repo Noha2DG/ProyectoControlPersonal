@@ -1,10 +1,9 @@
 import { useState, useEffect, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { authHeader, useAuth, usePuede } from "../context/AuthContext.jsx";
-import { exportarReporteTermos, exportarHojaLote, exportarEficiencias, exportarLbHora, exportarLbHoraPorTalla, exportarLbPorPersona } from "../utils/exportExcel.js";
+import { exportarReporteTermos, exportarHojasLote, exportarEficiencias, exportarLbHora, exportarLbHoraPorTalla, exportarLbPorPersona } from "../utils/exportExcel.js";
 import { useColWidths, useOrden, ordenarFilas, FiltroColumna, Th, Colgroup } from "../components/ResizableTh.jsx";
 import { fmtNum } from "../utils/numero.js";
-import ReportePeladoDia from "../components/ReportePeladoDia.jsx";
 import HojaLote from "../components/HojaLote.jsx";
 import {
   LB_POR_KG, MINIMO_BLOQUE_MINUTOS, AREAS_DESTAJO, calcularLbHora, agruparPorArea, agruparPorProductoTalla,
@@ -50,7 +49,6 @@ function hoy() { return new Date().toLocaleDateString("sv-SE", { timeZone: "Amer
 const fechaCorta = (f) => f ? f.split("-").reverse().join("/") : "";
 
 const SUB_TABS = [
-  { key: "dia",         label: "Reporte del Día" },
   { key: "termos",      label: "Reporte Termos" },
   { key: "hojalote",    label: "Reporte x Lote" },
   { key: "eficiencias", label: "Eficiencias" },
@@ -62,14 +60,10 @@ const SUB_TABS = [
 // Eficiencias, Lb/Hora, Por Talla y Lb/Persona son vistas por persona, no por lote de Materia Prima —
 // no tiene sentido mostrarles el resumen de Ingreso/Procesado/Pendiente/Rendimiento. Hoja de Lote
 // tampoco: ya trae su propia comparación Ingreso vs. Pelado dentro de la hoja.
-// Reporte del Día tampoco: es de UN día de Pelado y trae su propio cuadre.
-const SUB_TABS_SIN_TOTALES = ["dia", "eficiencias", "lbhora", "portalla", "lbpersona", "hojalote"];
+const SUB_TABS_SIN_TOTALES = ["eficiencias", "lbhora", "portalla", "lbpersona", "hojalote"];
 // Ninguna de estas cuatro usa Finca (son vistas por persona, no por lote/origen). Eficiencias
 // estaba fuera de la lista por descuido: mostraba el selector aunque la vista es por persona.
-// Reporte del Día es de todo Pelado en una fecha: sin finca ni lote.
-const SUB_TABS_SIN_FINCA = ["dia", "eficiencias", "lbhora", "portalla", "lbpersona"];
-// Áreas cuyo pesaje es de peladoras: el ritmo del Reporte del Día sale solo de ellas.
-const AREAS_PELADORAS = ["PELADO Y DEVENADO", "PELADO Y PINCHADO"];
+const SUB_TABS_SIN_FINCA = ["eficiencias", "lbhora", "portalla", "lbpersona"];
 // Solo Lb/Hora y Por Talla filtran por Área — Lb/Persona siempre muestra Descabezado y
 // Pelado y Devenado lado a lado, así que un filtro de Área no tendría sentido ahí.
 const SUB_TABS_CON_AREA = ["lbhora", "portalla"];
@@ -425,8 +419,7 @@ export default function ReporteProduccionPage() {
   const [areaLbHora, setAreaLbHora] = useState("");
   const [reporte, setReporte] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [subTab, setSubTab] = useState("dia");
-  const [reporteDia, setReporteDia] = useState(null);
+  const [subTab, setSubTab] = useState("termos");
   const [tallaAbierta, setTallaAbierta] = useState(null);
   const [widthsEficiencias, startResizeEficiencias] = useColWidths("reporte_eficiencias", EFICIENCIAS_COL_DEFAULTS);
   const [ordenEfic, alternarOrdenEfic] = useOrden();
@@ -444,13 +437,10 @@ export default function ReporteProduccionPage() {
   // usuario puede cambiar arrastrando) y se centra; si la pantalla es más angosta, encoge sola.
   // +16 px por la barra de scroll vertical de la lista, para que no le robe ancho a las columnas.
 
-  // Reporte del Día es de UNA fecha: Hasta se ignora y vale Desde, así el /produccion que da el ritmo
-  // queda de ese mismo día.
-  const hastaEf = subTab === "dia" ? desde : hasta;
   const buscar = useCallback(async () => {
     setLoading(true);
     try {
-      const params = new URLSearchParams({ desde, hasta: hastaEf, ...(finca ? { finca } : {}) });
+      const params = new URLSearchParams({ desde, hasta, ...(finca ? { finca } : {}) });
       const res = await fetch(`/api/reportes/produccion?${params}`, { headers: authHeader() });
       const data = await res.json();
       if (res.ok) setReporte(data);
@@ -461,22 +451,9 @@ export default function ReporteProduccionPage() {
     } finally {
       setLoading(false);
     }
-  }, [desde, hastaEf, finca]);
+  }, [desde, hasta, finca]);
 
   useEffect(() => { buscar(); }, [buscar]);
-
-  const buscarDia = useCallback(async () => {
-    if (subTab !== "dia") return;
-    try {
-      const res = await fetch(`/api/reportes/pelado-dia?fecha=${desde}`, { headers: authHeader() });
-      const data = await res.json();
-      if (res.ok) setReporteDia(data);
-      else alert("Error: " + data.error);
-    } catch (err) {
-      console.error("Error al cargar el reporte del día:", err);
-    }
-  }, [subTab, desde]);
-  useEffect(() => { buscarDia(); }, [buscarDia]);
 
   // Lotes "en proceso" para el filtro de Lote: el mismo rango/Finca que ya se trajo, sin volver a
   // pedirle nada al backend — se filtra en el cliente sobre reporte.porLote (Pendiente > 0 = todavía
@@ -581,29 +558,6 @@ export default function ReporteProduccionPage() {
     ...totalLbHora(filasPorTalla),
     NumPersonas: new Set(filasPorTalla.map(f => f.IdEmpleado)).size,
   };
-  // Ritmo del Reporte del Día: Lb/hr por producto y talla de las peladoras, con el mismo cálculo de
-  // Por Talla (bloques entre pesadas, mínimo 15 min, pausas fuera) pero sin el filtro de Área.
-  const ritmoDia = (() => {
-    const filas = calcularLbHora((datos?.porPersona ?? []).filter(p => AREAS_PELADORAS.includes(p.Area)),
-      agruparPorProductoTalla, pausasNoPaga);
-    const resumir = fs => {
-      const conTasa = fs.filter(f => f.LbPorHora != null);
-      return {
-        Lb: fs.reduce((s, f) => s + f.Lb, 0), Horas: conTasa.reduce((s, f) => s + f.Horas, 0),
-        Personas: new Set(fs.map(f => f.IdEmpleado)).size, LbHora: totalLbHora(fs).PromedioLbHora,
-      };
-    };
-    const mapa = new Map();
-    for (const f of filas) {
-      const k = `${f.Producto}|${f.Talla}`;
-      if (!mapa.has(k)) mapa.set(k, { Producto: f.Producto, Talla: f.Talla, DescripcionTalla: f.DescripcionTalla, filas: [] });
-      mapa.get(k).filas.push(f);
-    }
-    // Sin libras válidas no hay ritmo que mostrar: esas pesadas ya van en la nota de "sin tiempo".
-    const grupos = [...mapa.values()].map(g => ({ ...g, ...resumir(g.filas) })).filter(g => g.Lb > 0.05)
-      .sort((a, b) => String(a.Producto).localeCompare(String(b.Producto)) || a.Talla - b.Talla);
-    return { grupos, total: resumir(filas), lbSinTiempo: resumenValidez(filas).LbSinTiempo };
-  })();
   // Hoja de Lote: el ritmo de cada lote se calcula sobre TODAS las pesadas del rango (reporte, no
   // datos) con el lote dentro de la llave. Filtrar primero por lote le cargaba al lote el tiempo que
   // la persona pasó en otro (ver loteFiltroObj); con el lote en la llave, cambiar de lote corta el
@@ -722,7 +676,7 @@ export default function ReporteProduccionPage() {
     ? [...fincasConLotes, { Codigo: finca, Descripcion: "sin lotes en el rango" }]
     : fincasConLotes;
   const nombreFincaSeleccionada = fincas.find(f => f.Codigo === finca)?.Descripcion;
-  const rangoFechasTexto = desde === hastaEf ? fechaCorta(desde) : `${fechaCorta(desde)} — ${fechaCorta(hastaEf)}`;
+  const rangoFechasTexto = desde === hasta ? fechaCorta(desde) : `${fechaCorta(desde)} — ${fechaCorta(hasta)}`;
   const impresoEn = new Date().toLocaleString("sv-SE", { timeZone: "America/Guatemala", hour12: false }).slice(0, 16);
 
   const gruposPorTermo = () => {
@@ -756,7 +710,8 @@ export default function ReporteProduccionPage() {
   const exportar = () => {
     if (!reporte) return;
     if (subTab === "termos") exportarReporteTermos(datos.porTermo, desde, hasta, datos.porTermoCola ?? [], datos.porTermoBajado ?? []);
-    else if (subTab === "hojalote") { if (loteHoja) exportarHojaLote(termosHoja, loteHoja); }
+    // Todos los lotes del rango, no solo el que está en pantalla: es para tablas dinámicas.
+    else if (subTab === "hojalote") exportarHojasLote(lotesParaImprimir, termosDeLote, desde, hasta);
     else if (subTab === "lbhora") exportarLbHora(filasLbHora, desde, hasta, verMesas);
     else if (subTab === "portalla") exportarLbHoraPorTalla(filasPorTalla, desde, hasta);
     else if (subTab === "lbpersona") exportarLbPorPersona(filasLbPersona, desde, hasta, areasLbPersona);
@@ -774,15 +729,15 @@ export default function ReporteProduccionPage() {
       <div className="mb-3 bg-white border border-gray-200 rounded-lg p-2.5 shadow-sm space-y-2">
       <div className="flex flex-wrap items-end gap-2">
         <div>
-          <label className="block text-xs font-medium text-gray-500 mb-0.5">{subTab === "dia" ? "Fecha" : "Desde"}</label>
+          <label className="block text-xs font-medium text-gray-500 mb-0.5">Desde</label>
           <input type="date" value={desde} onChange={e => setDesde(e.target.value)}
             className="border border-gray-300 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
         </div>
-        {subTab !== "dia" && <div>
+        <div>
           <label className="block text-xs font-medium text-gray-500 mb-0.5">Hasta</label>
           <input type="date" value={hasta} onChange={e => setHasta(e.target.value)}
             className="border border-gray-300 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
-        </div>}
+        </div>
         {!SUB_TABS_SIN_FINCA.includes(subTab) && (
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-0.5">Finca</label>
@@ -819,7 +774,7 @@ export default function ReporteProduccionPage() {
             </select>
           </div>
         )}
-        <button onClick={() => { buscar(); buscarDia(); }}
+        <button onClick={buscar}
           className="bg-blue-600 text-white text-sm font-semibold px-3 py-1.5 rounded-lg hover:bg-blue-700 transition">
           Buscar
         </button>
@@ -833,10 +788,10 @@ export default function ReporteProduccionPage() {
               </svg>
               Descargar PDF
             </button>
-            {subTab !== "dia" && <button onClick={exportar}
+            <button onClick={exportar}
               className="bg-green-600 text-white text-sm font-semibold px-3 py-1.5 rounded-lg hover:bg-green-700 transition">
               Exportar Excel
-            </button>}
+            </button>
           </div>
         )}
       </div>
@@ -891,17 +846,6 @@ export default function ReporteProduccionPage() {
                 <p className="text-base font-bold text-gray-700">{fmtNum(datos.totales.Rendimiento, 1)}%</p>
               </div>
             </div>
-          )}
-
-          {/* ── Reporte del Día (Pelado) ── */}
-          {subTab === "dia" && (
-            reporteDia?.Fecha === desde ? (
-              <div className="bg-white rounded-xl shadow p-6 max-w-[1100px]">
-                <ReportePeladoDia r={reporteDia} ritmo={ritmoDia} />
-              </div>
-            ) : (
-              <div className="flex justify-center py-16"><div className="w-7 h-7 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" /></div>
-            )
           )}
 
           {/* ── Reporte Termos ── */}
@@ -1240,8 +1184,6 @@ export default function ReporteProduccionPage() {
             {user?.nombre && <p className="text-[10px] text-gray-500 mt-0.5">Generado por <span className="font-semibold text-slate-700">{user.nombre}</span></p>}
           </div>
         </div>
-
-        {subTab === "dia" && reporteDia?.Fecha === desde && <ReportePeladoDia r={reporteDia} ritmo={ritmoDia} />}
 
         {subTab === "termos" && (
           <table className="print-table w-full border-collapse text-[11px] leading-tight">

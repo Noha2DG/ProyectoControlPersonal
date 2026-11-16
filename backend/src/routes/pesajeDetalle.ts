@@ -51,14 +51,22 @@ function getOperador(req: Request): string {
   }
 }
 
-// El número de termo es el pintado en el recipiente: solo dígitos. Sin validar, el escáner metía ahí
-// carnets (MON0010), termo y carnet pegados (400RAM0042) o un punto del teclado (357.), y cada uno
-// creaba un termo nuevo que, ya corregida la pesada, quedaba vacío en los reportes con 0.00 kg
-// (40 así al 16 nov 2026). El punto final se quita solo; lo demás se rechaza con el aviso.
-function normalizarTermo(valor: unknown): { numero: string } | { error: string } {
-  const numero = String(valor ?? "").trim().replace(/\.+$/, "");
-  if (!/^\d{1,7}$/.test(numero)) {
-    return { error: `"${String(valor ?? "").trim()}" no es un número de termo: solo lleva dígitos. ¿Se escaneó el carnet en el campo del termo?` };
+// El número de termo es TEXTO libre (decisión del usuario, 16 nov 2026): puede llevar letras. Lo que
+// no puede llevar es un carnet: el escáner metía ahí el código del empleado (MON0010) o lo pegaba al
+// termo (400RAM0042), y cada uno creaba un termo nuevo que, ya corregida la pesada, quedaba vacío en
+// los reportes con 0.00 kg. Se rechaza solo si el texto ES o TERMINA en el código de un empleado que
+// existe; el punto final del teclado (357.) y los espacios se quitan solos.
+async function normalizarTermo(valor: unknown): Promise<{ numero: string } | { error: string }> {
+  const crudo = String(valor ?? "").trim();
+  const numero = crudo.replace(/\.+$/, "").trim();
+  if (!numero) return { error: "El número de termo es requerido" };
+  if (numero.length > 20) return { error: `"${crudo}" es demasiado largo para un número de termo` };
+  const carnet = numero.match(/[A-Za-z]{3}\d{4}$/)?.[0];
+  if (carnet) {
+    const emp: any[] = await prisma.$queryRaw`SELECT Codigo FROM Empleados WHERE Codigo = ${carnet.toUpperCase()} LIMIT 1`;
+    if (emp.length) {
+      return { error: `"${crudo}" trae el carnet ${emp[0].Codigo}: se escaneó el carnet en el campo del termo. Escriba solo el número del termo.` };
+    }
   }
   return { numero };
 }
@@ -302,7 +310,7 @@ router.post("/", requireAuth, requirePerm("destajo", "crear"), async (req: Reque
       res.status(400).json({ error: "Transacción, Número de Termo, Código de empleado y Peso son requeridos" });
       return;
     }
-    const termo = normalizarTermo(NumeroTermo);
+    const termo = await normalizarTermo(NumeroTermo);
     if ("error" in termo) { res.status(400).json({ error: termo.error }); return; }
     const numeroTermo = termo.numero;
 
@@ -378,7 +386,7 @@ router.put("/:id", requireAuth, requirePerm("destajo", "editar"), async (req: Re
     const id = Number(req.params.id);
     const { Peso, NumeroTermo } = req.body;
     if (!NumeroTermo || Peso == null) { res.status(400).json({ error: "Número de Termo y Peso son requeridos" }); return; }
-    const termo = normalizarTermo(NumeroTermo);
+    const termo = await normalizarTermo(NumeroTermo);
     if ("error" in termo) { res.status(400).json({ error: termo.error }); return; }
     const numeroTermo = termo.numero;
 
