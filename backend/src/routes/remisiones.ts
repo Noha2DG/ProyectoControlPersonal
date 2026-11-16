@@ -183,7 +183,7 @@ router.get("/series", requireAuth, requirePerm("remisiones", "ver"), async (req:
   }
 });
 
-// GET /api/remisiones?tipo=&estatus=&fecha= — lista con los agregados de su contenido.
+// GET /api/remisiones?tipo=&estatus=&fecha=&q= — lista con los agregados de su contenido.
 // Los totales salen del mismo join de siempre, colapsado por remisión: nada de esto se guarda
 // denormalizado en la cabecera (se recalcula solo si se agrega o quita una línea).
 router.get("/", requireAuth, requirePerm("remisiones", "ver"), async (req: Request, res: Response) => {
@@ -193,6 +193,19 @@ router.get("/", requireAuth, requirePerm("remisiones", "ver"), async (req: Reque
     if (req.query.tipo)    { condiciones.push("r.Tipo = ?");    params.push(req.query.tipo); }
     if (req.query.estatus) { condiciones.push("r.Estatus = ?"); params.push(req.query.estatus); }
     if (req.query.fecha)   { condiciones.push("r.Fecha = ?");   params.push(req.query.fecha); }
+    // Rango Desde/Hasta (cualquiera de los dos puede ir solo).
+    if (req.query.desde)   { condiciones.push("r.Fecha >= ?");  params.push(req.query.desde); }
+    if (req.query.hasta)   { condiciones.push("r.Fecha <= ?");  params.push(req.query.hasta); }
+    // Se busca aquí y no sobre lo ya cargado en pantalla: la lista se corta en 500, y una remisión
+    // vieja quedaría fuera de una búsqueda en el navegador. Cubre el folio y todo lo que arma el
+    // "Destino" de la tabla: cliente, subcliente, área, bodega y quién recibe.
+    const busqueda = String(req.query.q ?? "").trim();
+    if (busqueda) {
+      condiciones.push(`(r.Folio LIKE ? OR cli.RazonSocial LIKE ? OR sub.RazonSocial LIKE ? OR ar.Nombre LIKE ?
+        OR bv.Nombre LIKE ? OR r.RecibidoPor LIKE ?
+        OR CONCAT_WS(' ', emp.PrimerNombre, emp.SegundoNombre, emp.PrimerApellido, emp.SegundoApellido) LIKE ?)`);
+      params.push(...Array(7).fill(`%${busqueda}%`));
+    }
     const where = condiciones.length ? `WHERE ${condiciones.join(" AND ")}` : "";
 
     const rows: any[] = await prisma.$queryRawUnsafe(`
@@ -310,6 +323,73 @@ router.get("/disponibles/masters", requireAuth, requirePerm("remisiones", "ver")
       ORDER BY m.MasterId ASC LIMIT 300
     `, ...params);
     res.json(rows.map(formatearMaster));
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/remisiones/exportar?desde=&hasta=&tipo=&estatus=&q= — todo el contenido de las remisiones
+// de un rango de fechas, para el Excel: la cabecera de cada una y una línea por master con su detalle
+// completo (MASTER_SELECT, el mismo de la pantalla). Va antes de /:id para que "exportar" no se lea
+// como un id. El rango es obligatorio y de a lo sumo un año: sin tope, una descarga del histórico
+// completo pesaba sobre la base que comparten pesaje y kioscos.
+router.get("/exportar", requireAuth, requirePerm("remisiones", "ver"), async (req: Request, res: Response) => {
+  try {
+    const desde = String(req.query.desde ?? ""), hasta = String(req.query.hasta ?? "");
+    if (!esFechaValida(desde) || !esFechaValida(hasta)) { res.status(400).json({ error: "Indique el rango Desde y Hasta" }); return; }
+    if (desde > hasta) { res.status(400).json({ error: "La fecha Desde es posterior a Hasta" }); return; }
+    if ((Date.parse(hasta) - Date.parse(desde)) / 86_400_000 > 366) { res.status(400).json({ error: "El rango puede ser de un año como máximo" }); return; }
+
+    const condiciones = ["r.Fecha BETWEEN ? AND ?"];
+    const params: any[] = [desde, hasta];
+    if (req.query.tipo)    { condiciones.push("r.Tipo = ?");    params.push(req.query.tipo); }
+    if (req.query.estatus) { condiciones.push("r.Estatus = ?"); params.push(req.query.estatus); }
+    const busqueda = String(req.query.q ?? "").trim();
+    if (busqueda) {
+      condiciones.push(`(r.Folio LIKE ? OR cli.RazonSocial LIKE ? OR sub.RazonSocial LIKE ? OR ar.Nombre LIKE ?
+        OR bv.Nombre LIKE ? OR r.RecibidoPor LIKE ?
+        OR CONCAT_WS(' ', emp.PrimerNombre, emp.SegundoNombre, emp.PrimerApellido, emp.SegundoApellido) LIKE ?)`);
+      params.push(...Array(7).fill(`%${busqueda}%`));
+    }
+
+    const cabeceras: any[] = await prisma.$queryRawUnsafe(`
+      SELECT r.RemisionId, r.Folio, r.Tipo, se.Nombre AS NombreTipo, r.Estatus, DATE_FORMAT(r.Fecha, '%Y-%m-%d') AS Fecha,
+             cli.RazonSocial AS NombreCliente, sub.RazonSocial AS NombreSubcliente,
+             ar.Nombre AS NombreAreaDestino, bv.Nombre AS NombreBodegaDestino,
+             CONCAT_WS(' ', emp.PrimerNombre, emp.SegundoNombre, emp.PrimerApellido, emp.SegundoApellido) AS NombreRecibidoPor,
+             r.CodigoPedido, ped.Descripcion AS DescripcionPedido, r.Contenedor, r.Sello, r.Observaciones,
+             r.CreadoPor, DATE_FORMAT(r.CreadoEn, '%Y-%m-%d %H:%i') AS CreadoEn,
+             r.ConfirmadaPor, DATE_FORMAT(r.ConfirmadaEn, '%Y-%m-%d %H:%i') AS ConfirmadaEn,
+             r.AnuladaPor, DATE_FORMAT(r.AnuladaEn, '%Y-%m-%d %H:%i') AS AnuladaEn, r.MotivoAnulacion
+        FROM Remisiones r
+        JOIN SerieRemision se ON r.Tipo = se.Tipo
+        LEFT JOIN Clientes cli ON r.CodigoCliente = cli.Codigo
+        LEFT JOIN Subcliente sub ON r.CodigoCliente = sub.CodigoCliente AND r.CodigoSubcliente = sub.CodigoSubcliente
+        LEFT JOIN Areas ar ON r.AreaDestino = ar.Codigo
+        LEFT JOIN BodegaVirtual bv ON r.BodegaDestino = bv.Codigo
+        LEFT JOIN Pedidos ped ON r.CodigoPedido = ped.CodigoPedido
+        LEFT JOIN Empleados emp ON r.RecibidoPor = emp.Codigo
+       WHERE ${condiciones.join(" AND ")}
+       ORDER BY r.Fecha, r.Folio`, ...params);
+
+    const ids = cabeceras.map(c => Number(c.RemisionId));
+    const lineas: any[] = ids.length ? await prisma.$queryRawUnsafe(`
+      SELECT rd.RemisionId, rd.LineaContenedor, rd.AgregadoPor, DATE_FORMAT(rd.AgregadoEn, '%Y-%m-%d %H:%i') AS AgregadoEn,
+             DATE_FORMAT(rd.RecibidoEn, '%Y-%m-%d %H:%i') AS RecibidoEnArea, rd.RecibidoPor AS RecibidoPorArea, sub2.*
+        FROM RemisionDetalle rd
+        JOIN (${MASTER_SELECT}) sub2 ON rd.MasterId = sub2.MasterId
+       WHERE rd.RemisionId IN (${ids.map(() => "?").join(",")}) AND rd.Vigente = 1
+       ORDER BY rd.RemisionId, rd.LineaContenedor, rd.DetalleId`, ...ids) : [];
+
+    res.json({
+      desde, hasta,
+      cabeceras: cabeceras.map(c => ({ ...c, RemisionId: Number(c.RemisionId) })),
+      lineas: lineas.map(l => ({
+        ...formatearMaster(l),
+        RemisionId: Number(l.RemisionId),
+        LineaContenedor: l.LineaContenedor == null ? null : Number(l.LineaContenedor),
+      })),
+    });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
