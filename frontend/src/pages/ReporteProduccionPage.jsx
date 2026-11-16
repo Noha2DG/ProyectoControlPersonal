@@ -1,20 +1,18 @@
-import { useState, useEffect, useCallback, Fragment } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { authHeader, useAuth, usePuede } from "../context/AuthContext.jsx";
-import { exportarReporteGeneral, exportarEnteroCola, exportarReporteTermos, exportarHojaLote, exportarEficiencias, exportarLbHora, exportarLbHoraPorTalla, exportarLbPorPersona } from "../utils/exportExcel.js";
+import { exportarReporteTermos, exportarHojaLote, exportarEficiencias, exportarLbHora, exportarLbHoraPorTalla, exportarLbPorPersona } from "../utils/exportExcel.js";
 import { useColWidths, useOrden, ordenarFilas, FiltroColumna, Th, Colgroup } from "../components/ResizableTh.jsx";
 import { fmtNum } from "../utils/numero.js";
+import ReportePeladoDia from "../components/ReportePeladoDia.jsx";
+import HojaLote from "../components/HojaLote.jsx";
 import {
   LB_POR_KG, MINIMO_BLOQUE_MINUTOS, AREAS_DESTAJO, calcularLbHora, agruparPorArea, agruparPorProductoTalla,
   totalLbHora, resumenValidez,
 } from "../utils/destajo.js";
 
-const LOTE_DET_COL_DEFAULTS = { talla: 160, producto: 180, estado: 110, procesado: 100, pesajes: 90 };
-const LOTE_DET_COLS = Object.keys(LOTE_DET_COL_DEFAULTS);
 const TALLA_DET_COL_DEFAULTS = { id: 100, nombre: 150, lb: 90, horas: 90, lbhora: 90, pesadas: 90 };
 const TALLA_DET_COLS = Object.keys(TALLA_DET_COL_DEFAULTS);
-
-const POR_LOTE_COL_DEFAULTS = { expand: 30, lote: 130, finca: 130, clase: 150, fecha: 100, ingreso: 100, procesado: 100, cola: 90, bajado: 90, descarte: 90, pendiente: 100, rend: 90, transac: 90 };
 
 // Rendimiento de un grupo de lotes sobre lo TRABAJADO (ingreso − bajado al piso). Cada lote trae del
 // backend su Salida (la COLA en un lote entero, lo procesado en los demás) y su TrabajadoRend, que es
@@ -23,9 +21,6 @@ const POR_LOTE_COL_DEFAULTS = { expand: 30, lote: 130, finca: 130, clase: 150, f
 function rendimientoDe(salida, trabajadoRend) {
   return trabajadoRend > 0 ? (salida / trabajadoRend * 100) : 0;
 }
-const POR_LOTE_COLS = Object.keys(POR_LOTE_COL_DEFAULTS);
-const POR_TALLA_GEN_COL_DEFAULTS = { talla: 220, kg: 100, pct: 90 };
-const POR_TALLA_GEN_COLS = Object.keys(POR_TALLA_GEN_COL_DEFAULTS);
 const EFICIENCIAS_COL_DEFAULTS = { id: 100, nombre: 150, area: 110, fecha: 100, hora: 80, lote: 120, producto: 130, talla: 150, kilos: 100 };
 const EFICIENCIAS_COLS = Object.keys(EFICIENCIAS_COL_DEFAULTS);
 const LBHORA_COL_DEFAULTS = { id: 100, nombre: 150, mesa: 110, area: 110, fecha: 130, clase: 160, talla: 190, lb: 90, horas: 90, lbhora: 90, pesadas: 90 };
@@ -54,43 +49,8 @@ const LBPERSONA_AREA_COL = { DU: "descabezado", DS: "pelado", DT: "pinchado", RD
 function hoy() { return new Date().toLocaleDateString("sv-SE", { timeZone: "America/Guatemala" }); }
 const fechaCorta = (f) => f ? f.split("-").reverse().join("/") : "";
 
-// Lo bajado al piso y lo descartado de un lote, renglón por renglón — reemplaza a las notas que se
-// escribían a mano ("se bajó 22 kg de 51/60…"). Una nota vieja se sigue mostrando, solo para leer.
-function AjustesLote({ l, compacto = false }) {
-  const ajustes = l.Ajustes ?? [];
-  const tam = compacto ? "text-[11px]" : "text-sm";
-  const hayCola = ajustes.some(a => a.Tipo === "COLA");
-  return (
-    <div className={compacto ? "border border-slate-400 rounded" : "border border-gray-400 rounded"}>
-      <p className={compacto ? "text-[9px] font-bold text-gray-500 px-2 pt-1" : "text-xs font-semibold text-gray-500 px-2 pt-1.5"}>
-        {hayCola ? "Cola, bajado al piso y descarte" : "Bajado al piso y descarte"}
-      </p>
-      <div className={`px-2 py-1.5 ${compacto ? "min-h-[3rem]" : "min-h-[4rem]"}`}>
-        {ajustes.length === 0 ? (
-          <p className={`${tam} text-gray-400`}>Sin bajados ni descartes</p>
-        ) : ajustes.map((a, i) => (
-          <p key={i} className={`${tam} flex justify-between gap-3`}>
-            <span className="truncate">
-              <span className={a.Tipo === "DESCARTE" ? "text-red-700 font-semibold" : a.Tipo === "COLA" ? "text-emerald-700 font-semibold" : "font-semibold"}>
-                {a.Tipo === "DESCARTE" ? "Descarte" : a.Tipo === "COLA" ? "Cola" : "Bajado al piso"}
-              </span>
-              {a.Tipo === "COLA" ? ` · termo ${a.NumeroTermo} · ${a.DescripcionClaseCola || a.ClaseCola} · ${a.NombreDestino ? `→ ${a.NombreDestino}` : "por trasladar"}` : `${a.NumeroTermo ? ` · termo ${a.NumeroTermo}` : ""}${a.Motivo ? ` · ${a.Motivo}` : ""}`}
-              {a.Talla !== 900 ? ` · ${a.DescripcionTalla}` : ""}
-            </span>
-            <span className="tabular-nums whitespace-nowrap">{fmtNum(a.Peso)} {a.UM}</span>
-          </p>
-        ))}
-        {l.Notas && (
-          <p className={`${compacto ? "text-[10px]" : "text-xs"} text-gray-500 italic whitespace-pre-wrap mt-1`}>Nota anterior: {l.Notas}</p>
-        )}
-      </div>
-    </div>
-  );
-}
-
 const SUB_TABS = [
-  { key: "general",     label: "Reporte General" },
-  { key: "enterocola",  label: "Entero → Cola" },
+  { key: "dia",         label: "Reporte del Día" },
   { key: "termos",      label: "Reporte Termos" },
   { key: "hojalote",    label: "Reporte x Lote" },
   { key: "eficiencias", label: "Eficiencias" },
@@ -102,11 +62,14 @@ const SUB_TABS = [
 // Eficiencias, Lb/Hora, Por Talla y Lb/Persona son vistas por persona, no por lote de Materia Prima —
 // no tiene sentido mostrarles el resumen de Ingreso/Procesado/Pendiente/Rendimiento. Hoja de Lote
 // tampoco: ya trae su propia comparación Ingreso vs. Pelado dentro de la hoja.
-// Entero → Cola tampoco: lleva su propio cuadre (cabeza, cola, total) en vez del general.
-const SUB_TABS_SIN_TOTALES = ["eficiencias", "lbhora", "portalla", "lbpersona", "hojalote", "enterocola"];
+// Reporte del Día tampoco: es de UN día de Pelado y trae su propio cuadre.
+const SUB_TABS_SIN_TOTALES = ["dia", "eficiencias", "lbhora", "portalla", "lbpersona", "hojalote"];
 // Ninguna de estas cuatro usa Finca (son vistas por persona, no por lote/origen). Eficiencias
 // estaba fuera de la lista por descuido: mostraba el selector aunque la vista es por persona.
-const SUB_TABS_SIN_FINCA = ["eficiencias", "lbhora", "portalla", "lbpersona"];
+// Reporte del Día es de todo Pelado en una fecha: sin finca ni lote.
+const SUB_TABS_SIN_FINCA = ["dia", "eficiencias", "lbhora", "portalla", "lbpersona"];
+// Áreas cuyo pesaje es de peladoras: el ritmo del Reporte del Día sale solo de ellas.
+const AREAS_PELADORAS = ["PELADO Y DEVENADO", "PELADO Y PINCHADO"];
 // Solo Lb/Hora y Por Talla filtran por Área — Lb/Persona siempre muestra Descabezado y
 // Pelado y Devenado lado a lado, así que un filtro de Área no tendría sentido ahí.
 const SUB_TABS_CON_AREA = ["lbhora", "portalla"];
@@ -251,80 +214,6 @@ function gruposPorProductoTalla(filas) {
 
   grupos.sort((a, b) => b.resumen.TotalLb - a.resumen.TotalLb);
   return grupos;
-}
-
-function FilaLote({ l, detalle, abierta, onToggle }) {
-  const [widths, startResize] = useColWidths("reporte_lote_detalle", LOTE_DET_COL_DEFAULTS);
-  return (
-    <>
-      <tr onClick={onToggle} className="cursor-pointer hover:bg-gray-50 transition">
-        <td className="px-3 py-2.5 text-gray-400">
-          <span className={`inline-block transition-transform ${abierta ? "rotate-90" : ""}`}>▶</span>
-        </td>
-        <td className="px-3 py-2.5 font-mono font-bold text-gray-700 whitespace-nowrap">{l.Lote}</td>
-        <td className="px-3 py-2.5 text-gray-700">{l.NombreFinca}</td>
-        <td className="px-3 py-2.5 font-mono text-gray-600">{l.Clase} — {l.DescripcionClase}</td>
-        <td className="px-3 py-2.5 text-center text-gray-600">{l.Fecha?.slice(0, 10)}</td>
-        <td className="px-3 py-2.5 text-right font-semibold text-gray-800">{fmtNum(l.PesoIngreso)} {l.UM}</td>
-        <td className="px-3 py-2.5 text-right font-semibold text-blue-700" title={l.EsEntero ? "Lote entero: lo pesado es cabeza" : undefined}>{fmtNum(l.Procesado)}</td>
-        <td className="px-3 py-2.5 text-right text-emerald-700">{l.EsEntero ? fmtNum(l.Cola) : <span className="text-gray-300">—</span>}</td>
-        <td className="px-3 py-2.5 text-right text-gray-600">{l.Bajado ? fmtNum(l.Bajado) : <span className="text-gray-300">—</span>}</td>
-        <td className="px-3 py-2.5 text-right text-red-600">{l.Descarte ? fmtNum(l.Descarte) : <span className="text-gray-300">—</span>}</td>
-        <td className="px-3 py-2.5 text-right font-semibold text-amber-600">{fmtNum(l.Pendiente)}</td>
-        <td className="px-3 py-2.5 text-right">
-          {l.SinCola ? (
-            <span className="text-[11px] text-gray-400" title="Lote entero sin termos de cola registrados: no entra al rendimiento total">sin cola</span>
-          ) : (
-          <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${l.Rendimiento >= 50 ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-600"}`}
-            title={l.EsEntero ? "Lote entero: rendimiento de cola" : undefined}>
-            {fmtNum(l.Rendimiento, 1)}%
-          </span>
-          )}
-          {l.EsEntero && !l.SinCola && (
-            <span className="block text-[10px] text-gray-400 mt-0.5" title="Cabeza + Cola sobre lo trabajado">total {fmtNum(l.RendimientoTotal, 1)}%</span>
-          )}
-        </td>
-        <td className="px-3 py-2.5 text-center text-gray-500">{l.NumTransacciones}</td>
-      </tr>
-      {abierta && (
-        <tr>
-          <td colSpan={13} className="bg-gray-50 px-6 py-3">
-            {detalle.length === 0 ? (
-              <p className="text-sm text-gray-400">Sin transacciones para este lote</p>
-            ) : (
-              <table className="w-full text-xs table-fixed">
-                <Colgroup columns={LOTE_DET_COLS} widths={widths} />
-                <thead>
-                  <tr className="text-gray-500 uppercase tracking-wider">
-                    <Th width={widths.talla} onResizeStart={startResize("talla")} className="px-2 py-1 text-left">Talla</Th>
-                    <Th width={widths.producto} onResizeStart={startResize("producto")} className="px-2 py-1 text-left">Producto Terminado</Th>
-                    <Th width={widths.estado} onResizeStart={startResize("estado")} className="px-2 py-1 text-center">Estado</Th>
-                    <Th width={widths.procesado} onResizeStart={startResize("procesado")} className="px-2 py-1 text-right">Procesado</Th>
-                    <Th width={widths.pesajes} onResizeStart={startResize("pesajes")} className="px-2 py-1 text-right">Pesajes</Th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-200">
-                  {detalle.map((d, i) => (
-                    <tr key={i}>
-                      <td className="px-2 py-1.5 font-mono">{d.Talla} — {d.DescripcionTalla}</td>
-                      <td className="px-2 py-1.5">{d.ClasePT} — {d.DescripcionClasePT}</td>
-                      <td className="px-2 py-1.5 text-center">
-                        <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${d.Estado === "Abierta" ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-600"}`}>
-                          {d.Estado}
-                        </span>
-                      </td>
-                      <td className="px-2 py-1.5 text-right font-semibold">{fmtNum(d.Procesado)}</td>
-                      <td className="px-2 py-1.5 text-right">{d.NumPesajes}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </td>
-        </tr>
-      )}
-    </>
-  );
 }
 
 // Termo de COLA (Descabezado): un balde, para distinguirlo de un vistazo de los termos del pesaje.
@@ -536,14 +425,11 @@ export default function ReporteProduccionPage() {
   const [areaLbHora, setAreaLbHora] = useState("");
   const [reporte, setReporte] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [subTab, setSubTab] = useState("general");
-  const [loteAbierto, setLoteAbierto] = useState(null);
+  const [subTab, setSubTab] = useState("dia");
+  const [reporteDia, setReporteDia] = useState(null);
   const [tallaAbierta, setTallaAbierta] = useState(null);
-  const [widthsPorLote, startResizePorLote] = useColWidths("reporte_por_lote", POR_LOTE_COL_DEFAULTS);
-  const [widthsPorTallaGen, startResizePorTallaGen] = useColWidths("reporte_por_talla_general", POR_TALLA_GEN_COL_DEFAULTS);
   const [widthsEficiencias, startResizeEficiencias] = useColWidths("reporte_eficiencias", EFICIENCIAS_COL_DEFAULTS);
   const [ordenEfic, alternarOrdenEfic] = useOrden();
-  const [ordenTallaGen, alternarOrdenTallaGen] = useOrden();
   const [ordenLbHora, alternarOrdenLbHora] = useOrden();
   const [ordenPortalla, alternarOrdenPortalla] = useOrden();
   const [ordenLbPersona, alternarOrdenLbPersona] = useOrden();
@@ -558,10 +444,13 @@ export default function ReporteProduccionPage() {
   // usuario puede cambiar arrastrando) y se centra; si la pantalla es más angosta, encoge sola.
   // +16 px por la barra de scroll vertical de la lista, para que no le robe ancho a las columnas.
 
+  // Reporte del Día es de UNA fecha: Hasta se ignora y vale Desde, así el /produccion que da el ritmo
+  // queda de ese mismo día.
+  const hastaEf = subTab === "dia" ? desde : hasta;
   const buscar = useCallback(async () => {
     setLoading(true);
     try {
-      const params = new URLSearchParams({ desde, hasta, ...(finca ? { finca } : {}) });
+      const params = new URLSearchParams({ desde, hasta: hastaEf, ...(finca ? { finca } : {}) });
       const res = await fetch(`/api/reportes/produccion?${params}`, { headers: authHeader() });
       const data = await res.json();
       if (res.ok) setReporte(data);
@@ -572,9 +461,22 @@ export default function ReporteProduccionPage() {
     } finally {
       setLoading(false);
     }
-  }, [desde, hasta, finca]);
+  }, [desde, hastaEf, finca]);
 
   useEffect(() => { buscar(); }, [buscar]);
+
+  const buscarDia = useCallback(async () => {
+    if (subTab !== "dia") return;
+    try {
+      const res = await fetch(`/api/reportes/pelado-dia?fecha=${desde}`, { headers: authHeader() });
+      const data = await res.json();
+      if (res.ok) setReporteDia(data);
+      else alert("Error: " + data.error);
+    } catch (err) {
+      console.error("Error al cargar el reporte del día:", err);
+    }
+  }, [subTab, desde]);
+  useEffect(() => { buscarDia(); }, [buscarDia]);
 
   // Lotes "en proceso" para el filtro de Lote: el mismo rango/Finca que ya se trajo, sin volver a
   // pedirle nada al backend — se filtra en el cliente sobre reporte.porLote (Pendiente > 0 = todavía
@@ -635,25 +537,6 @@ export default function ReporteProduccionPage() {
     };
   })();
 
-  // Lote (texto) puede repetirse entre Clases del mismo Piscina+Ciclo+Fecha (ver
-  // project_destajo_lote_clase_en_codigo) — hace falta también la Clase para no mezclar el detalle de
-  // dos filas de Materia Prima distintas.
-  const detalleDeLote = (lote, clase) => (datos?.porLoteTalla ?? []).filter(d => d.Lote === lote && d.ClaseOrigen === clase);
-
-  // Si hay un lote abierto (tocado en la tabla de la izquierda), la tabla de Talla se
-  // filtra a solo lo procesado de ese lote; si no, muestra el total del rango de fechas.
-  const tallasMostradas = (() => {
-    if (!loteAbierto) return datos?.porTalla ?? [];
-    const mapa = new Map();
-    for (const d of detalleDeLote(loteAbierto.Lote, loteAbierto.Clase)) {
-      if (!mapa.has(d.Talla)) mapa.set(d.Talla, { Talla: d.Talla, DescripcionTalla: d.DescripcionTalla, Procesado: 0, NumPesajes: 0 });
-      const acc = mapa.get(d.Talla);
-      acc.Procesado += d.Procesado;
-      acc.NumPesajes += d.NumPesajes;
-    }
-    return [...mapa.values()].sort((a, b) => b.Procesado - a.Procesado);
-  })();
-  const totalProcesadoTalla = tallasMostradas.reduce((s, t) => s + t.Procesado, 0);
   const totalProcesadoTermo = (datos?.porTermo ?? []).reduce((s, t) => s + t.Procesado, 0);
 
   // Hoja de Lote: datos ya viene recortado al Lote+Clase elegidos (ver loteFiltroObj/datos arriba),
@@ -698,6 +581,77 @@ export default function ReporteProduccionPage() {
     ...totalLbHora(filasPorTalla),
     NumPersonas: new Set(filasPorTalla.map(f => f.IdEmpleado)).size,
   };
+  // Ritmo del Reporte del Día: Lb/hr por producto y talla de las peladoras, con el mismo cálculo de
+  // Por Talla (bloques entre pesadas, mínimo 15 min, pausas fuera) pero sin el filtro de Área.
+  const ritmoDia = (() => {
+    const filas = calcularLbHora((datos?.porPersona ?? []).filter(p => AREAS_PELADORAS.includes(p.Area)),
+      agruparPorProductoTalla, pausasNoPaga);
+    const resumir = fs => {
+      const conTasa = fs.filter(f => f.LbPorHora != null);
+      return {
+        Lb: fs.reduce((s, f) => s + f.Lb, 0), Horas: conTasa.reduce((s, f) => s + f.Horas, 0),
+        Personas: new Set(fs.map(f => f.IdEmpleado)).size, LbHora: totalLbHora(fs).PromedioLbHora,
+      };
+    };
+    const mapa = new Map();
+    for (const f of filas) {
+      const k = `${f.Producto}|${f.Talla}`;
+      if (!mapa.has(k)) mapa.set(k, { Producto: f.Producto, Talla: f.Talla, DescripcionTalla: f.DescripcionTalla, filas: [] });
+      mapa.get(k).filas.push(f);
+    }
+    // Sin libras válidas no hay ritmo que mostrar: esas pesadas ya van en la nota de "sin tiempo".
+    const grupos = [...mapa.values()].map(g => ({ ...g, ...resumir(g.filas) })).filter(g => g.Lb > 0.05)
+      .sort((a, b) => String(a.Producto).localeCompare(String(b.Producto)) || a.Talla - b.Talla);
+    return { grupos, total: resumir(filas), lbSinTiempo: resumenValidez(filas).LbSinTiempo };
+  })();
+  // Hoja de Lote: el ritmo de cada lote se calcula sobre TODAS las pesadas del rango (reporte, no
+  // datos) con el lote dentro de la llave. Filtrar primero por lote le cargaba al lote el tiempo que
+  // la persona pasó en otro (ver loteFiltroObj); con el lote en la llave, cambiar de lote corta el
+  // bloque como cualquier cambio de grupo.
+  const ritmoPorLote = (() => {
+    const mapa = new Map();
+    if (subTab !== "hojalote") return mapa;
+    const agrupar = p => ({
+      key: `${p.Lote}|${p.ClaseOrigen}|${p.Producto}|${p.Talla}`,
+      campos: { Lote: p.Lote, ClaseOrigen: p.ClaseOrigen, Producto: p.Producto, Talla: p.Talla, DescripcionTalla: p.DescripcionTalla },
+    });
+    for (const f of calcularLbHora(reporte?.porPersona ?? [], agrupar, reporte?.pausasNoPaga ?? [])) {
+      const k = `${f.Lote}|${f.ClaseOrigen}`;
+      if (!mapa.has(k)) mapa.set(k, []);
+      mapa.get(k).push(f);
+    }
+    return mapa;
+  })();
+  const turnoDeLote = (l) => {
+    const fecha = l.Fecha?.slice(0, 10);
+    const area = c => (reporte?.personalDia ?? []).find(x => x.Fecha === fecha && x.CodigoArea === c);
+    const filas = ritmoPorLote.get(`${l.Lote}|${l.Clase}`) ?? [];
+    const resumir = fs => ({
+      Lb: fs.reduce((s, f) => s + f.Lb, 0),
+      Horas: fs.filter(f => f.LbPorHora != null).reduce((s, f) => s + f.Horas, 0),
+      Personas: new Set(fs.map(f => f.IdEmpleado)).size,
+      LbHora: totalLbHora(fs).PromedioLbHora,
+    });
+    const grupos = new Map();
+    for (const f of filas) {
+      const k = `${f.Producto}|${f.Talla}`;
+      if (!grupos.has(k)) grupos.set(k, { Producto: f.Producto, Talla: f.Talla, DescripcionTalla: f.DescripcionTalla, filas: [] });
+      grupos.get(k).filas.push(f);
+    }
+    return {
+      EsEntero: l.EsEntero,
+      Encargado: area("DB")?.Nombres ?? null,
+      Personas: new Set((reporte?.porPersona ?? []).filter(p => p.Lote === l.Lote && p.ClaseOrigen === l.Clase).map(p => p.IdEmpleado)).size,
+      Soportes: area(l.EsEntero ? "SD" : "DY")?.Personas ?? 0,
+      Chequeadores: area("DJ")?.Personas ?? 0,
+      QC: area("DC")?.Personas ?? 0,
+      Ritmo: {
+        ...resumir(filas), LbSinTiempo: resumenValidez(filas).LbSinTiempo,
+        grupos: [...grupos.values()].map(g => ({ ...g, ...resumir(g.filas) })).filter(g => g.Lb > 0.05)
+          .sort((a, b) => String(a.Producto).localeCompare(String(b.Producto)) || a.Talla - b.Talla),
+      },
+    };
+  };
   const filasLbPersona = calcularLbPorPersona(datos?.porPersona ?? []);
   // Acá sí cuadra sumar columna por columna: calcularLbPorPersona define LbTotal como la suma de
   // las áreas de destajo, y cada persona aparece en una sola fila (agrupada por IdEmpleado), así
@@ -715,10 +669,6 @@ export default function ReporteProduccionPage() {
   const anchoLbPersona = 16 + colsLbPersona.reduce((s, k) => s + (widthsLbPersona[k] ?? LBPERSONA_COL_DEFAULTS[k] ?? 0), 0);
 
 
-  // El % de Talla se ordena por Procesado: es proporcional, y así no depende del redondeo.
-  const tallasOrdenadas = ordenarFilas(tallasMostradas, ordenTallaGen, {
-    talla: t => t.Talla, kg: t => t.Procesado, pct: t => t.Procesado,
-  });
   const lbHoraOrdenadas = ordenarFilas(filasLbHora, ordenLbHora, {
     id: f => f.IdEmpleado, nombre: f => f.Nombre, mesa: f => f.Mesa ?? "", area: f => f.Area,
     fecha: f => f.Fecha ?? "", clase: f => f.Producto ?? "", talla: f => f.Talla ?? "",
@@ -772,28 +722,8 @@ export default function ReporteProduccionPage() {
     ? [...fincasConLotes, { Codigo: finca, Descripcion: "sin lotes en el rango" }]
     : fincasConLotes;
   const nombreFincaSeleccionada = fincas.find(f => f.Codigo === finca)?.Descripcion;
-  const rangoFechasTexto = desde === hasta ? fechaCorta(desde) : `${fechaCorta(desde)} — ${fechaCorta(hasta)}`;
+  const rangoFechasTexto = desde === hastaEf ? fechaCorta(desde) : `${fechaCorta(desde)} — ${fechaCorta(hastaEf)}`;
   const impresoEn = new Date().toLocaleString("sv-SE", { timeZone: "America/Guatemala", hour12: false }).slice(0, 16);
-
-  const gruposPorFinca = () => {
-    const mapa = new Map();
-    for (const l of datos?.porLote ?? []) {
-      if (!mapa.has(l.NombreFinca)) mapa.set(l.NombreFinca, []);
-      mapa.get(l.NombreFinca).push(l);
-    }
-    return [...mapa.entries()];
-  };
-
-  const sumar = (lotes) => lotes.reduce((acc, l) => ({
-    PesoIngreso: acc.PesoIngreso + l.PesoIngreso,
-    Procesado: acc.Procesado + l.Procesado,
-    Bajado: acc.Bajado + (l.Bajado || 0),
-    Descarte: acc.Descarte + (l.Descarte || 0),
-    Cola: acc.Cola + (l.Cola || 0),
-    Salida: acc.Salida + (l.Salida ?? l.Procesado),
-    TrabajadoRend: acc.TrabajadoRend + (l.TrabajadoRend ?? (l.PesoIngreso - (l.Bajado || 0))),
-    Pendiente: acc.Pendiente + l.Pendiente,
-  }), { PesoIngreso: 0, Procesado: 0, Bajado: 0, Descarte: 0, Cola: 0, Salida: 0, TrabajadoRend: 0, Pendiente: 0 });
 
   const gruposPorTermo = () => {
     const mapa = new Map();
@@ -825,9 +755,7 @@ export default function ReporteProduccionPage() {
 
   const exportar = () => {
     if (!reporte) return;
-    if (subTab === "general") exportarReporteGeneral(datos.porLote, datos.porTalla, desde, hasta);
-    else if (subTab === "enterocola") exportarEnteroCola(datos.porLote.filter(l => l.EsEntero), desde, hasta);
-    else if (subTab === "termos") exportarReporteTermos(datos.porTermo, desde, hasta, datos.porTermoCola ?? [], datos.porTermoBajado ?? []);
+    if (subTab === "termos") exportarReporteTermos(datos.porTermo, desde, hasta, datos.porTermoCola ?? [], datos.porTermoBajado ?? []);
     else if (subTab === "hojalote") { if (loteHoja) exportarHojaLote(termosHoja, loteHoja); }
     else if (subTab === "lbhora") exportarLbHora(filasLbHora, desde, hasta, verMesas);
     else if (subTab === "portalla") exportarLbHoraPorTalla(filasPorTalla, desde, hasta);
@@ -846,15 +774,15 @@ export default function ReporteProduccionPage() {
       <div className="mb-3 bg-white border border-gray-200 rounded-lg p-2.5 shadow-sm space-y-2">
       <div className="flex flex-wrap items-end gap-2">
         <div>
-          <label className="block text-xs font-medium text-gray-500 mb-0.5">Desde</label>
+          <label className="block text-xs font-medium text-gray-500 mb-0.5">{subTab === "dia" ? "Fecha" : "Desde"}</label>
           <input type="date" value={desde} onChange={e => setDesde(e.target.value)}
             className="border border-gray-300 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
         </div>
-        <div>
+        {subTab !== "dia" && <div>
           <label className="block text-xs font-medium text-gray-500 mb-0.5">Hasta</label>
           <input type="date" value={hasta} onChange={e => setHasta(e.target.value)}
             className="border border-gray-300 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
-        </div>
+        </div>}
         {!SUB_TABS_SIN_FINCA.includes(subTab) && (
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-0.5">Finca</label>
@@ -891,7 +819,7 @@ export default function ReporteProduccionPage() {
             </select>
           </div>
         )}
-        <button onClick={buscar}
+        <button onClick={() => { buscar(); buscarDia(); }}
           className="bg-blue-600 text-white text-sm font-semibold px-3 py-1.5 rounded-lg hover:bg-blue-700 transition">
           Buscar
         </button>
@@ -905,10 +833,10 @@ export default function ReporteProduccionPage() {
               </svg>
               Descargar PDF
             </button>
-            <button onClick={exportar}
+            {subTab !== "dia" && <button onClick={exportar}
               className="bg-green-600 text-white text-sm font-semibold px-3 py-1.5 rounded-lg hover:bg-green-700 transition">
               Exportar Excel
-            </button>
+            </button>}
           </div>
         )}
       </div>
@@ -965,228 +893,16 @@ export default function ReporteProduccionPage() {
             </div>
           )}
 
-          {/* ── Reporte General ── */}
-          {subTab === "general" && (
-            <div className="grid grid-cols-3 gap-5">
-              {/* Por Lote */}
-              <div className="col-span-2 min-w-0">
-                <h3 className="text-sm font-semibold text-gray-700 mb-2">Materia Prima y Procesado por Lote</h3>
-                <div className="bg-white rounded-xl shadow overflow-hidden overflow-x-auto">
-                  <table className="w-full text-sm table-fixed">
-                    <Colgroup columns={POR_LOTE_COLS} widths={widthsPorLote} />
-                    <thead>
-                      <tr className="bg-gray-100 text-gray-600 uppercase text-xs tracking-wider">
-                        <Th width={widthsPorLote.expand} onResizeStart={startResizePorLote("expand")} className="px-3 py-3"></Th>
-                        <Th width={widthsPorLote.lote} onResizeStart={startResizePorLote("lote")} className="px-3 py-3 text-left">Lote</Th>
-                        <Th width={widthsPorLote.finca} onResizeStart={startResizePorLote("finca")} className="px-3 py-3 text-left">Finca</Th>
-                        <Th width={widthsPorLote.clase} onResizeStart={startResizePorLote("clase")} className="px-3 py-3 text-left">Clase MP</Th>
-                        <Th width={widthsPorLote.fecha} onResizeStart={startResizePorLote("fecha")} className="px-3 py-3 text-center">Fecha</Th>
-                        <Th width={widthsPorLote.ingreso} onResizeStart={startResizePorLote("ingreso")} className="px-3 py-3 text-right">Ingreso</Th>
-                        <Th width={widthsPorLote.procesado} onResizeStart={startResizePorLote("procesado")} className="px-3 py-3 text-right">Procesado</Th>
-                        <Th width={widthsPorLote.cola} onResizeStart={startResizePorLote("cola")} className="px-3 py-3 text-right">Cola</Th>
-                        <Th width={widthsPorLote.bajado} onResizeStart={startResizePorLote("bajado")} className="px-3 py-3 text-right">Bajado</Th>
-                        <Th width={widthsPorLote.descarte} onResizeStart={startResizePorLote("descarte")} className="px-3 py-3 text-right">Descarte</Th>
-                        <Th width={widthsPorLote.pendiente} onResizeStart={startResizePorLote("pendiente")} className="px-3 py-3 text-right">Pendiente</Th>
-                        <Th width={widthsPorLote.rend} onResizeStart={startResizePorLote("rend")} className="px-3 py-3 text-right">Rend.</Th>
-                        <Th width={widthsPorLote.transac} onResizeStart={startResizePorLote("transac")} className="px-3 py-3 text-center">Transac.</Th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-100">
-                      {gruposPorFinca().map(([nombreFinca, lotes]) => {
-                        const sub = sumar(lotes);
-                        const rendSub = rendimientoDe(sub.Salida, sub.TrabajadoRend);
-                        return (
-                          <Fragment key={nombreFinca}>
-                            {lotes.map(l => (
-                              <FilaLote key={`${l.Lote}-${l.Clase}`} l={l} detalle={detalleDeLote(l.Lote, l.Clase)}
-                                abierta={loteAbierto?.Lote === l.Lote && loteAbierto?.Clase === l.Clase}
-                                onToggle={() => setLoteAbierto(loteAbierto?.Lote === l.Lote && loteAbierto?.Clase === l.Clase ? null : { Lote: l.Lote, Clase: l.Clase })} />
-                            ))}
-                            <tr className="bg-gray-50 font-semibold">
-                              <td className="px-3 py-2" colSpan={5}>Subtotal — {nombreFinca}</td>
-                              <td className="px-3 py-2 text-right text-gray-800">{fmtNum(sub.PesoIngreso)}</td>
-                              <td className="px-3 py-2 text-right text-blue-700">{fmtNum(sub.Procesado)}</td>
-                              <td className="px-3 py-2 text-right text-emerald-700">{fmtNum(sub.Cola)}</td>
-                              <td className="px-3 py-2 text-right text-gray-600">{fmtNum(sub.Bajado)}</td>
-                              <td className="px-3 py-2 text-right text-red-600">{fmtNum(sub.Descarte)}</td>
-                              <td className="px-3 py-2 text-right text-amber-600">{fmtNum(sub.Pendiente)}</td>
-                              <td className="px-3 py-2 text-right text-gray-600">{fmtNum(rendSub, 1)}%</td>
-                              <td className="px-3 py-2"></td>
-                            </tr>
-                          </Fragment>
-                        );
-                      })}
-                      {datos.porLote.length === 0 && (
-                        <tr><td colSpan={13} className="px-4 py-8 text-center text-gray-400">Sin lotes en este rango de fechas</td></tr>
-                      )}
-                    </tbody>
-                    {datos.porLote.length > 0 && (
-                      <tfoot>
-                        <tr className="bg-gray-200 font-bold border-t-2 border-gray-300">
-                          <td className="px-3 py-2.5" colSpan={5}>Total General</td>
-                          <td className="px-3 py-2.5 text-right text-gray-900">{fmtNum(datos.totales.PesoIngreso)}</td>
-                          <td className="px-3 py-2.5 text-right text-blue-800">{fmtNum(datos.totales.Procesado)}</td>
-                          <td className="px-3 py-2.5 text-right text-emerald-800">{fmtNum(datos.totales.Cola || 0)}</td>
-                          <td className="px-3 py-2.5 text-right text-gray-700">{fmtNum(datos.totales.Bajado)}</td>
-                          <td className="px-3 py-2.5 text-right text-red-700">{fmtNum(datos.totales.Descarte)}</td>
-                          <td className="px-3 py-2.5 text-right text-amber-700">{fmtNum(datos.totales.Pendiente)}</td>
-                          <td className="px-3 py-2.5 text-right text-gray-800">{fmtNum(datos.totales.Rendimiento, 1)}%</td>
-                          <td className="px-3 py-2.5"></td>
-                        </tr>
-                      </tfoot>
-                    )}
-                  </table>
-                </div>
+          {/* ── Reporte del Día (Pelado) ── */}
+          {subTab === "dia" && (
+            reporteDia?.Fecha === desde ? (
+              <div className="bg-white rounded-xl shadow p-6 max-w-[1100px]">
+                <ReportePeladoDia r={reporteDia} ritmo={ritmoDia} />
               </div>
-
-              {/* Por Talla */}
-              <div className="min-w-0">
-                <div className="flex items-center justify-between mb-2 gap-2">
-                  <h3 className="text-sm font-semibold text-gray-700">Procesado por Talla</h3>
-                  {loteAbierto && (
-                    <button onClick={() => setLoteAbierto(null)}
-                      className="flex items-center gap-1 text-xs font-medium text-blue-700 bg-blue-50 hover:bg-blue-100 px-2 py-1 rounded-full transition">
-                      <span className="font-mono">{loteAbierto.Lote} — {loteAbierto.Clase}</span>
-                      <span className="text-blue-400">&times;</span>
-                    </button>
-                  )}
-                </div>
-                <div className="bg-white rounded-xl shadow overflow-hidden">
-                  <table className="w-full text-sm table-fixed">
-                    <Colgroup columns={POR_TALLA_GEN_COLS} widths={widthsPorTallaGen} />
-                    <thead>
-                      <tr className="bg-gray-100 text-gray-600 uppercase text-xs tracking-wider">
-                        <Th width={widthsPorTallaGen.talla} onResizeStart={startResizePorTallaGen("talla")} sortKey="talla" orden={ordenTallaGen} onOrdenar={alternarOrdenTallaGen} className="px-3 py-3 text-left">Talla</Th>
-                        <Th width={widthsPorTallaGen.kg} onResizeStart={startResizePorTallaGen("kg")} sortKey="kg" orden={ordenTallaGen} onOrdenar={alternarOrdenTallaGen} className="px-3 py-3 text-right">Kg</Th>
-                        <Th width={widthsPorTallaGen.pct} onResizeStart={startResizePorTallaGen("pct")} sortKey="pct" orden={ordenTallaGen} onOrdenar={alternarOrdenTallaGen} className="px-3 py-3 text-right">%</Th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-100">
-                      {tallasOrdenadas.map(t => (
-                        <tr key={t.Talla} className="hover:bg-gray-50 transition">
-                          <td className="px-3 py-2.5 text-gray-700">
-                            <span className="font-mono">{t.Talla}</span> — {t.DescripcionTalla}
-                          </td>
-                          <td className="px-3 py-2.5 text-right font-semibold text-blue-700">{fmtNum(t.Procesado)}</td>
-                          <td className="px-3 py-2.5 text-right text-gray-500">
-                            {totalProcesadoTalla > 0 ? (t.Procesado / totalProcesadoTalla * 100).toFixed(1) : "0.0"}%
-                          </td>
-                        </tr>
-                      ))}
-                      {tallasMostradas.length === 0 && (
-                        <tr><td colSpan={3} className="px-4 py-8 text-center text-gray-400">Sin datos</td></tr>
-                      )}
-                    </tbody>
-                    {tallasMostradas.length > 0 && (
-                      <tfoot>
-                        <tr className="bg-gray-200 font-bold border-t-2 border-gray-300">
-                          <td className="px-3 py-2.5">Total General</td>
-                          <td className="px-3 py-2.5 text-right text-blue-800">{fmtNum(totalProcesadoTalla)}</td>
-                          <td className="px-3 py-2.5 text-right text-gray-800">100.0%</td>
-                        </tr>
-                      </tfoot>
-                    )}
-                  </table>
-                </div>
-              </div>
-            </div>
+            ) : (
+              <div className="flex justify-center py-16"><div className="w-7 h-7 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" /></div>
+            )
           )}
-
-          {/* ── Entero → Cola (Descabezado) ── */}
-          {/* Lo pesado por persona en un lote entero es CABEZA (el pago); la cola se registra por termo en
-              Materia Prima. El rendimiento es el de la cola, y Cabeza + Cola es el cuadre contra lo
-              trabajado (ingreso − bajado al piso). Ver backend/src/lib/destajoPiso.ts. */}
-          {subTab === "enterocola" && (() => {
-            const lotes = (datos.porLote ?? []).filter(l => l.EsEntero);
-            const t = lotes.reduce((a, l) => ({
-              PesoIngreso: a.PesoIngreso + l.PesoIngreso, Bajado: a.Bajado + (l.Bajado || 0),
-              Cabeza: a.Cabeza + l.Procesado, Cola: a.Cola + (l.Cola || 0), Descarte: a.Descarte + (l.Descarte || 0),
-            }), { PesoIngreso: 0, Bajado: 0, Cabeza: 0, Cola: 0, Descarte: 0 });
-            const trab = t.PesoIngreso - t.Bajado;
-            const pct = x => trab > 0 ? x / trab * 100 : 0;
-            const dif = trab - t.Descarte - t.Cabeza - t.Cola;
-            const Tarjeta = ({ titulo, valor, extra, color = "text-gray-800" }) => (
-              <div className="bg-white rounded-lg shadow px-3 py-2 text-center">
-                <p className="text-xs text-gray-400">{titulo}</p>
-                <p className={`text-base font-bold ${color}`}>{valor}</p>
-                {extra && <p className="text-[11px] text-gray-500">{extra}</p>}
-              </div>
-            );
-            return (
-              <div>
-                <div className="grid grid-cols-2 lg:grid-cols-5 gap-2 mb-3">
-                  <Tarjeta titulo="Entero trabajado" valor={`${fmtNum(trab)} kg`} extra={t.Bajado ? `ingreso ${fmtNum(t.PesoIngreso)} − bajado ${fmtNum(t.Bajado)}` : null} />
-                  <Tarjeta titulo="Cabeza (descabezado)" valor={`${fmtNum(t.Cabeza)} kg`} extra={`${fmtNum(pct(t.Cabeza), 1)}%`} color="text-blue-700" />
-                  <Tarjeta titulo="Cola" valor={`${fmtNum(t.Cola)} kg`} extra={`rendimiento ${fmtNum(pct(t.Cola), 1)}%`} color="text-emerald-700" />
-                  <Tarjeta titulo="Cabeza + Cola" valor={`${fmtNum(t.Cabeza + t.Cola)} kg`} extra={`${fmtNum(pct(t.Cabeza + t.Cola), 1)}%`} />
-                  <Tarjeta titulo="Diferencia" valor={`${fmtNum(dif)} kg`} extra={t.Descarte ? `descarte ${fmtNum(t.Descarte)} kg aparte` : "trabajado − cabeza − cola"}
-                    color={dif < 0 ? "text-amber-600" : "text-gray-700"} />
-                </div>
-                <div className="bg-white rounded-xl shadow overflow-x-auto">
-                  <table className="w-full text-xs">
-                    <thead>
-                      <tr className="bg-gray-100 text-gray-600 uppercase text-[10px] tracking-wider">
-                        <th className="px-2 py-2 text-left">Lote</th>
-                        <th className="px-2 py-2 text-left">Finca</th>
-                        <th className="px-2 py-2 text-left">Clase</th>
-                        <th className="px-2 py-2 text-center">Fecha</th>
-                        <th className="px-2 py-2 text-right">Ingreso</th>
-                        <th className="px-2 py-2 text-right">Bajado</th>
-                        <th className="px-2 py-2 text-right">Cabeza</th>
-                        <th className="px-2 py-2 text-right">% Cab.</th>
-                        <th className="px-2 py-2 text-right">Cola</th>
-                        <th className="px-2 py-2 text-right">% Cola</th>
-                        <th className="px-2 py-2 text-right">Cab. + Cola</th>
-                        <th className="px-2 py-2 text-right">% Total</th>
-                        <th className="px-2 py-2 text-right">Descarte</th>
-                        <th className="px-2 py-2 text-right" title="Trabajado − descarte − cabeza − cola. Negativa: se pesó más de lo que entró (agua, hielo).">Diferencia</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-100">
-                      {lotes.map(l => (
-                        <tr key={`${l.Lote}-${l.Clase}`} className="hover:bg-gray-50">
-                          <td className="px-2 py-1.5 font-mono font-bold text-gray-700 whitespace-nowrap">{l.Lote}</td>
-                          <td className="px-2 py-1.5 text-gray-700 truncate max-w-[9rem]">{l.NombreFinca}</td>
-                          <td className="px-2 py-1.5 font-mono text-gray-600">{l.Clase}</td>
-                          <td className="px-2 py-1.5 text-center text-gray-600 whitespace-nowrap">{l.Fecha?.slice(0, 10)}</td>
-                          <td className="px-2 py-1.5 text-right tabular-nums">{fmtNum(l.PesoIngreso)}</td>
-                          <td className="px-2 py-1.5 text-right tabular-nums text-gray-500">{l.Bajado ? fmtNum(l.Bajado) : "—"}</td>
-                          <td className="px-2 py-1.5 text-right tabular-nums text-blue-700">{fmtNum(l.Procesado)}</td>
-                          <td className="px-2 py-1.5 text-right tabular-nums text-blue-700">{fmtNum(l.RendimientoCabeza, 1)}%</td>
-                          <td className="px-2 py-1.5 text-right tabular-nums text-emerald-700">{l.Cola ? fmtNum(l.Cola) : <span className="text-gray-300">sin registrar</span>}</td>
-                          <td className="px-2 py-1.5 text-right tabular-nums font-semibold text-emerald-700">{l.Cola ? `${fmtNum(l.RendimientoCola, 1)}%` : "—"}</td>
-                          <td className="px-2 py-1.5 text-right tabular-nums">{fmtNum(l.Total)}</td>
-                          <td className="px-2 py-1.5 text-right tabular-nums font-semibold">{fmtNum(l.RendimientoTotal, 1)}%</td>
-                          <td className="px-2 py-1.5 text-right tabular-nums text-red-600">{l.Descarte ? fmtNum(l.Descarte) : "—"}</td>
-                          <td className={`px-2 py-1.5 text-right tabular-nums ${l.Diferencia < 0 ? "text-amber-600 font-semibold" : "text-gray-600"}`}>{fmtNum(l.Diferencia)}</td>
-                        </tr>
-                      ))}
-                      {lotes.length === 0 && (
-                        <tr><td colSpan={14} className="px-4 py-8 text-center text-gray-400">Sin lotes entero en este rango de fechas</td></tr>
-                      )}
-                    </tbody>
-                    {lotes.length > 0 && (
-                      <tfoot>
-                        <tr className="bg-gray-200 font-bold border-t-2 border-gray-300">
-                          <td className="px-2 py-2" colSpan={4}>Total</td>
-                          <td className="px-2 py-2 text-right tabular-nums">{fmtNum(t.PesoIngreso)}</td>
-                          <td className="px-2 py-2 text-right tabular-nums">{fmtNum(t.Bajado)}</td>
-                          <td className="px-2 py-2 text-right tabular-nums text-blue-800">{fmtNum(t.Cabeza)}</td>
-                          <td className="px-2 py-2 text-right tabular-nums text-blue-800">{fmtNum(pct(t.Cabeza), 1)}%</td>
-                          <td className="px-2 py-2 text-right tabular-nums text-emerald-800">{fmtNum(t.Cola)}</td>
-                          <td className="px-2 py-2 text-right tabular-nums text-emerald-800">{fmtNum(pct(t.Cola), 1)}%</td>
-                          <td className="px-2 py-2 text-right tabular-nums">{fmtNum(t.Cabeza + t.Cola)}</td>
-                          <td className="px-2 py-2 text-right tabular-nums">{fmtNum(pct(t.Cabeza + t.Cola), 1)}%</td>
-                          <td className="px-2 py-2 text-right tabular-nums text-red-700">{fmtNum(t.Descarte)}</td>
-                          <td className="px-2 py-2 text-right tabular-nums">{fmtNum(dif)}</td>
-                        </tr>
-                      </tfoot>
-                    )}
-                  </table>
-                </div>
-              </div>
-            );
-          })()}
 
           {/* ── Reporte Termos ── */}
           {subTab === "termos" && (
@@ -1232,120 +948,11 @@ export default function ReporteProduccionPage() {
             ) : !loteHoja ? (
               <div className="bg-white rounded-xl shadow px-4 py-8 text-center text-gray-400 text-sm">Ese Lote no aparece en el rango de fechas elegido</div>
             ) : (
-              <div className="bg-white rounded-xl shadow p-5 max-w-2xl mx-auto">
-                <h3 className="text-center text-base font-bold uppercase tracking-wide text-gray-800 border-2 border-gray-800 rounded py-1.5 mb-4">
-                  Camarón Pelado
-                </h3>
-                <table className="w-full text-sm mb-4">
-                  <tbody>
-                    <tr className="border-b border-gray-200">
-                      <td className="py-1.5 pr-3 font-semibold text-gray-500 w-28">Fecha</td>
-                      <td className="py-1.5 text-center font-semibold text-gray-800">{fechaCorta(loteHoja.Fecha?.slice(0, 10))}</td>
-                    </tr>
-                    <tr className="border-b border-gray-200">
-                      <td className="py-1.5 pr-3 font-semibold text-gray-500">Nombre</td>
-                      <td className="py-1.5 text-center font-semibold text-gray-800">{loteHoja.RegistradoPor || "—"}</td>
-                    </tr>
-                    <tr className="border-b border-gray-200">
-                      <td className="py-1.5 pr-3 font-semibold text-gray-500">Lote</td>
-                      <td className="py-1.5 text-center font-mono font-bold text-gray-800">{loteHoja.Lote}</td>
-                    </tr>
-                    <tr className="border-b border-gray-200">
-                      <td className="py-1.5 pr-3 font-semibold text-gray-500">Clase de Materia Prima</td>
-                      <td className="py-1.5 text-center font-semibold text-gray-800">{loteHoja.Clase} — {loteHoja.DescripcionClase}</td>
-                    </tr>
-                  </tbody>
-                </table>
-
-                <table className="w-full text-sm border border-gray-300 mb-4">
-                  <thead>
-                    <tr className="bg-gray-100 text-gray-600 uppercase text-xs">
-                      <th className="border border-gray-300 py-1.5 px-2 text-left">Termo</th>
-                      <th className="border border-gray-300 py-1.5 px-2 text-left">Talla</th>
-                      <th className="border border-gray-300 py-1.5 px-2 text-left">Producto</th>
-                      <th className="border border-gray-300 py-1.5 px-2 text-right">Kilos</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {termosHoja.map(t => (
-                      <tr key={t.TermoId}>
-                        <td className="border border-gray-300 py-1 px-2 font-mono">{t.NumeroTermo}</td>
-                        <td className="border border-gray-300 py-1 px-2">{t.DescripcionTalla}</td>
-                        <td className="border border-gray-300 py-1 px-2">{t.DescripcionProceso}</td>
-                        <td className="border border-gray-300 py-1 px-2 text-right tabular-nums">{fmtNum(t.Procesado)}</td>
-                      </tr>
-                    ))}
-                    {termosHoja.length === 0 && (
-                      <tr><td colSpan={4} className="border border-gray-300 py-4 text-center text-gray-400">Sin termos registrados para este Lote</td></tr>
-                    )}
-                  </tbody>
-                  <tfoot>
-                    <tr className="font-bold">
-                      <td className="border border-gray-300 py-1.5 px-2" colSpan={3}></td>
-                      <td className="border border-gray-300 py-1.5 px-2 text-right">{fmtNum(totalPeladoHoja)}</td>
-                    </tr>
-                  </tfoot>
-                </table>
-
-                {/* Comparación contra la Materia Prima Ingresada del lote (loteHoja.PesoIngreso ya
-                    viene del mismo endpoint que Materia Prima, así que siempre cuadra con esa pantalla). */}
-                <div className="grid grid-cols-5 gap-3 mb-4">
-                  <div className="border-2 border-gray-800 rounded px-3 py-2 text-center">
-                    <p className="text-xs text-gray-500">Materia Prima Ingresada</p>
-                    <p className="text-lg font-bold text-gray-800">{fmtNum(loteHoja.PesoIngreso)}</p>
-                  </div>
-                  {/* Lo bajado al piso (sobrante o rojo a revisar) no se trabajó en este lote y sale del
-                      rendimiento; el descarte es merma y se queda dentro. */}
-                  <div className="border-2 border-gray-800 rounded px-3 py-2 text-center">
-                    <p className="text-xs text-gray-500">Bajado al piso</p>
-                    <p className="text-lg font-bold text-gray-700">{fmtNum(loteHoja.Bajado || 0)}</p>
-                  </div>
-                  <div className="border-2 border-gray-800 rounded px-3 py-2 text-center">
-                    <p className="text-xs text-gray-500">Descarte</p>
-                    <p className="text-lg font-bold text-red-600">{fmtNum(loteHoja.Descarte || 0)}</p>
-                  </div>
-                  {/* Entero: Ingresada − Bajado − Descarte → Total Cola → Rendimiento cola, en ese orden. */}
-                  {loteHoja.EsEntero ? (
-                    <div className="border-2 border-gray-800 rounded px-3 py-2 text-center">
-                      <p className="text-xs text-gray-500">Total Cola</p>
-                      <p className="text-lg font-bold text-emerald-700">{fmtNum(loteHoja.Cola || 0)}</p>
-                    </div>
-                  ) : (
-                    <div className="border-2 border-gray-800 rounded px-3 py-2 text-center">
-                      <p className="text-xs text-gray-500">Total Pelado</p>
-                      <p className="text-lg font-bold text-blue-700">{fmtNum(totalPeladoHoja)}</p>
-                    </div>
-                  )}
-                  <div className="border-2 border-gray-800 rounded px-3 py-2 text-center">
-                    <p className="text-xs text-gray-500">{loteHoja.EsEntero ? "Rendimiento cola" : "Rendimiento"}</p>
-                    <p className="text-lg font-bold text-gray-800">{loteHoja.SinCola ? "sin cola" : `${fmtNum(loteHoja.Rendimiento, 0)}%`}</p>
-                  </div>
-                </div>
-                {/* Lote entero: lo pesado es cabeza; la cola viene de los termos registrados en Materia Prima. */}
-                {loteHoja.EsEntero && (
-                  <div className="grid grid-cols-3 gap-3 mb-4">
-                    <div className="border-2 border-gray-800 rounded px-3 py-2 text-center">
-                      <p className="text-xs text-gray-500">Total Cabeza</p>
-                      <p className="text-lg font-bold text-blue-700">{fmtNum(totalPeladoHoja)}</p>
-                    </div>
-                    <div className="border-2 border-gray-800 rounded px-3 py-2 text-center">
-                      <p className="text-xs text-gray-500">Cabeza + Cola</p>
-                      <p className="text-lg font-bold text-gray-800">{fmtNum(loteHoja.Total)}</p>
-                    </div>
-                    <div className="border-2 border-gray-800 rounded px-3 py-2 text-center">
-                      <p className="text-xs text-gray-500">Rendimiento total</p>
-                      <p className="text-lg font-bold text-gray-800">{fmtNum(loteHoja.RendimientoTotal, 0)}%</p>
-                    </div>
-                  </div>
-                )}
-                {Math.abs(totalPeladoHoja - loteHoja.Procesado) > 0.5 && (
-                  <p className="text-xs text-amber-600 mb-4">
-                    ● El Total Pelado de la hoja ({fmtNum(totalPeladoHoja)}) no cuadra con el Procesado del Lote ({fmtNum(loteHoja.Procesado)}):
-                    hay {fmtNum(Math.abs(totalPeladoHoja - loteHoja.Procesado))} kg pesados sin Termo asignado.
-                  </p>
-                )}
-
-                <AjustesLote l={loteHoja} />
+              <div className="bg-white rounded-xl shadow p-6 max-w-3xl mx-auto">
+                <HojaLote l={loteHoja} termos={termosHoja} d={turnoDeLote(loteHoja)}
+                  aviso={Math.abs(totalPeladoHoja - loteHoja.Procesado) > 0.5
+                    ? `El total de los termos (${fmtNum(totalPeladoHoja)} kg) no cuadra con lo procesado del lote (${fmtNum(loteHoja.Procesado)} kg): hay ${fmtNum(Math.abs(totalPeladoHoja - loteHoja.Procesado))} kg pesados sin termo asignado.`
+                    : null} />
               </div>
             )}
             </>
@@ -1613,7 +1220,7 @@ export default function ReporteProduccionPage() {
             <img src="/favicon.png" alt="" className="w-8 h-8 shrink-0" />
             <div>
               <p className="text-lg font-extrabold italic text-blue-700 tracking-tight">ORO BI</p>
-              {/* Hoja de Lote ya lleva su propio título ("Camarón Pelado") y su propio Lote/Fecha
+              {/* Hoja de Lote ya lleva su propio título ("Hoja de Lote — Pelado") y su propio Lote/Fecha
                   dentro de cada hoja — este título+subtítulo genérico sobraba repetido arriba. */}
               {subTab !== "hojalote" && (
                 <>
@@ -1634,67 +1241,7 @@ export default function ReporteProduccionPage() {
           </div>
         </div>
 
-        {subTab === "general" && (
-          <>
-            <table className="print-table w-full border-collapse text-[11px] leading-tight mb-4">
-              <thead>
-                <tr>
-                  <th className="text-left font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Lote</th>
-                  <th className="text-left font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Finca</th>
-                  <th className="text-left font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Clase MP</th>
-                  <th className="text-center font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Fecha</th>
-                  <th className="text-right font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Ingreso</th>
-                  <th className="text-right font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Procesado</th>
-                  <th className="text-right font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Pendiente</th>
-                  <th className="text-right font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Rend.</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(datos.porLote ?? []).map(l => (
-                  <tr key={`${l.Lote}-${l.Clase}`} className="border-b border-gray-100">
-                    <td className="py-0.5 px-1 font-mono font-bold text-blue-700">{l.Lote}</td>
-                    <td className="py-0.5 px-1">{l.NombreFinca}</td>
-                    <td className="py-0.5 px-1 font-mono">{l.Clase} — {l.DescripcionClase}</td>
-                    <td className="py-0.5 px-1 text-center tabular-nums">{l.Fecha?.slice(0, 10)}</td>
-                    <td className="py-0.5 px-1 text-right tabular-nums">{fmtNum(l.PesoIngreso)}</td>
-                    <td className="py-0.5 px-1 text-right font-semibold tabular-nums">{fmtNum(l.Procesado)}</td>
-                    <td className="py-0.5 px-1 text-right tabular-nums">{fmtNum(l.Pendiente)}</td>
-                    <td className="py-0.5 px-1 text-right tabular-nums">{fmtNum(l.Rendimiento, 1)}%</td>
-                  </tr>
-                ))}
-              </tbody>
-              <tfoot>
-                <tr className="font-bold border-t-2 border-slate-900">
-                  <td className="py-1 px-1" colSpan={4}>Total General</td>
-                  <td className="py-1 px-1 text-right tabular-nums">{fmtNum(datos.totales.PesoIngreso)}</td>
-                  <td className="py-1 px-1 text-right tabular-nums">{fmtNum(datos.totales.Procesado)}</td>
-                  <td className="py-1 px-1 text-right tabular-nums">{fmtNum(datos.totales.Pendiente)}</td>
-                  <td className="py-1 px-1 text-right tabular-nums">{fmtNum(datos.totales.Rendimiento, 1)}%</td>
-                </tr>
-              </tfoot>
-            </table>
-
-            <h2 className="text-xs font-bold uppercase tracking-wider text-slate-900 mb-1">Procesado por Talla</h2>
-            <table className="print-table w-full border-collapse text-[11px] leading-tight">
-              <thead>
-                <tr>
-                  <th className="text-left font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Talla</th>
-                  <th className="text-right font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Kg</th>
-                  <th className="text-right font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">%</th>
-                </tr>
-              </thead>
-              <tbody>
-                {tallasMostradas.map(t => (
-                  <tr key={t.Talla} className="border-b border-gray-100">
-                    <td className="py-0.5 px-1"><span className="font-mono">{t.Talla}</span> — {t.DescripcionTalla}</td>
-                    <td className="py-0.5 px-1 text-right font-semibold tabular-nums">{fmtNum(t.Procesado)}</td>
-                    <td className="py-0.5 px-1 text-right tabular-nums">{totalProcesadoTalla > 0 ? (t.Procesado / totalProcesadoTalla * 100).toFixed(1) : "0.0"}%</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </>
-        )}
+        {subTab === "dia" && reporteDia?.Fecha === desde && <ReportePeladoDia r={reporteDia} ritmo={ritmoDia} />}
 
         {subTab === "termos" && (
           <table className="print-table w-full border-collapse text-[11px] leading-tight">
@@ -1769,90 +1316,10 @@ export default function ReporteProduccionPage() {
           lotesParaImprimir.length === 0 ? (
             <p className="text-center text-sm text-gray-400">Sin lotes con producción en este rango de fechas</p>
           ) : lotesParaImprimir.map((l, i) => {
-            const termos = termosDeLote(l.Lote, l.Clase);
-            const totalPelado = termos.reduce((s, t) => s + t.Procesado, 0);
             return (
-              <div key={`${l.Lote}-${l.Clase}`} className="max-w-xl mx-auto"
+              <div key={`${l.Lote}-${l.Clase}`} className="max-w-2xl mx-auto"
                 style={i < lotesParaImprimir.length - 1 ? { breakAfter: "page" } : undefined}>
-                <h2 className="text-center text-base font-bold uppercase tracking-wide text-slate-900 border-2 border-slate-900 rounded py-1.5 mb-3">
-                  Camarón Pelado
-                </h2>
-                <table className="w-full text-[11px] mb-3">
-                  <tbody>
-                    <tr className="border-b border-gray-300">
-                      <td className="py-1 pr-2 font-bold text-gray-500 w-24">Fecha</td>
-                      <td className="py-1 text-center font-bold">{fechaCorta(l.Fecha?.slice(0, 10))}</td>
-                    </tr>
-                    <tr className="border-b border-gray-300">
-                      <td className="py-1 pr-2 font-bold text-gray-500">Nombre</td>
-                      <td className="py-1 text-center font-bold">{l.RegistradoPor || "—"}</td>
-                    </tr>
-                    <tr className="border-b border-gray-300">
-                      <td className="py-1 pr-2 font-bold text-gray-500">Lote</td>
-                      <td className="py-1 text-center font-mono font-bold">{l.Lote}</td>
-                    </tr>
-                    <tr className="border-b border-gray-300">
-                      <td className="py-1 pr-2 font-bold text-gray-500">Clase de Materia Prima</td>
-                      <td className="py-1 text-center font-bold">{l.Clase} — {l.DescripcionClase}</td>
-                    </tr>
-                  </tbody>
-                </table>
-
-                <table className="print-table w-full border-collapse text-[11px] leading-tight mb-3">
-                  <thead>
-                    <tr>
-                      <th className="text-left font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Termo</th>
-                      <th className="text-left font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Talla</th>
-                      <th className="text-left font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Producto</th>
-                      <th className="text-right font-bold uppercase tracking-wider text-gray-400 border-b-2 border-slate-900 py-1 px-1">Kilos</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {termos.map(t => (
-                      <tr key={t.TermoId} className="border-b border-gray-100">
-                        <td className="py-0.5 px-1 font-mono">{t.NumeroTermo}</td>
-                        <td className="py-0.5 px-1">{t.DescripcionTalla}</td>
-                        <td className="py-0.5 px-1">{t.DescripcionProceso}</td>
-                        <td className="py-0.5 px-1 text-right tabular-nums">{fmtNum(t.Procesado)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                  <tfoot>
-                    <tr className="font-bold border-t-2 border-slate-900">
-                      <td className="py-1 px-1" colSpan={3}></td>
-                      <td className="py-1 px-1 text-right tabular-nums">{fmtNum(totalPelado)}</td>
-                    </tr>
-                  </tfoot>
-                </table>
-
-                <div className={l.EsEntero ? "grid grid-cols-5 gap-2 mb-3" : "grid grid-cols-3 gap-2 mb-3"}>
-                  <div className="border-2 border-slate-900 rounded px-2 py-1.5 text-center">
-                    <p className="text-[9px] text-gray-500">Materia Prima Ingresada</p>
-                    <p className="text-sm font-bold">{fmtNum(l.PesoIngreso)}</p>
-                  </div>
-                  <div className="border-2 border-slate-900 rounded px-2 py-1.5 text-center">
-                    <p className="text-[9px] text-gray-500">{l.EsEntero ? "Total Cabeza" : "Total Pelado"}</p>
-                    <p className="text-sm font-bold">{fmtNum(totalPelado)}</p>
-                  </div>
-                  {l.EsEntero && (
-                    <div className="border-2 border-slate-900 rounded px-2 py-1.5 text-center">
-                      <p className="text-[9px] text-gray-500">Total Cola</p>
-                      <p className="text-sm font-bold">{fmtNum(l.Cola || 0)}</p>
-                    </div>
-                  )}
-                  <div className="border-2 border-slate-900 rounded px-2 py-1.5 text-center">
-                    <p className="text-[9px] text-gray-500">{l.EsEntero ? "Rend. cola" : "Rendimiento"}</p>
-                    <p className="text-sm font-bold">{l.SinCola ? "sin cola" : `${fmtNum(l.Rendimiento, 0)}%`}</p>
-                  </div>
-                  {l.EsEntero && (
-                    <div className="border-2 border-slate-900 rounded px-2 py-1.5 text-center">
-                      <p className="text-[9px] text-gray-500">Rend. total</p>
-                      <p className="text-sm font-bold">{fmtNum(l.RendimientoTotal, 0)}%</p>
-                    </div>
-                  )}
-                </div>
-
-                <AjustesLote l={l} compacto />
+                <HojaLote l={l} termos={termosDeLote(l.Lote, l.Clase)} d={turnoDeLote(l)} compacto />
               </div>
             );
           })

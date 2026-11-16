@@ -51,6 +51,29 @@ function getOperador(req: Request): string {
   }
 }
 
+// El número de termo es el pintado en el recipiente: solo dígitos. Sin validar, el escáner metía ahí
+// carnets (MON0010), termo y carnet pegados (400RAM0042) o un punto del teclado (357.), y cada uno
+// creaba un termo nuevo que, ya corregida la pesada, quedaba vacío en los reportes con 0.00 kg
+// (40 así al 16 nov 2026). El punto final se quita solo; lo demás se rechaza con el aviso.
+function normalizarTermo(valor: unknown): { numero: string } | { error: string } {
+  const numero = String(valor ?? "").trim().replace(/\.+$/, "");
+  if (!/^\d{1,7}$/.test(numero)) {
+    return { error: `"${String(valor ?? "").trim()}" no es un número de termo: solo lleva dígitos. ¿Se escaneó el carnet en el campo del termo?` };
+  }
+  return { numero };
+}
+
+// Un termo que se quedó sin pesadas (se corrigió o se borró la que lo creó) ya no existe en la
+// planta: se borra para que no salga con 0.00 kg en los reportes. Solo PesajeDetalle apunta a Termos
+// por llave; el piso lo nombra por número, así que también se revisa que nada en el piso lo mencione.
+async function borrarTermoSiQuedoVacio(tx: any, termoId: number) {
+  await tx.$executeRaw`
+    DELETE t FROM Termos t
+     WHERE t.TermoId = ${termoId}
+       AND NOT EXISTS (SELECT 1 FROM PesajeDetalle pd WHERE pd.TermoId = t.TermoId)
+       AND NOT EXISTS (SELECT 1 FROM MovimientoPiso m WHERE m.TransaccionId = t.TransaccionId AND m.NumeroTermo = t.NumeroTermo)`;
+}
+
 async function resolverTermo(tx: any, transaccionId: number, numeroTermo: string, almacenOrigen: string) {
   let termos: any[] = await tx.$queryRaw`
     SELECT TermoId FROM Termos WHERE TransaccionId = ${transaccionId} AND NumeroTermo = ${numeroTermo} LIMIT 1
@@ -279,6 +302,9 @@ router.post("/", requireAuth, requirePerm("destajo", "crear"), async (req: Reque
       res.status(400).json({ error: "Transacción, Número de Termo, Código de empleado y Peso son requeridos" });
       return;
     }
+    const termo = normalizarTermo(NumeroTermo);
+    if ("error" in termo) { res.status(400).json({ error: termo.error }); return; }
+    const numeroTermo = termo.numero;
 
     const empleados: any[] = await prisma.$queryRaw`
       SELECT Codigo, CONCAT_WS(' ', PrimerNombre, SegundoNombre, PrimerApellido, SegundoApellido) AS NombreCompleto, Estado
@@ -321,13 +347,13 @@ router.post("/", requireAuth, requirePerm("destajo", "crear"), async (req: Reque
         }
       }
 
-      const enTrat = await termoEnTratamiento(tx, Number(TransaccionId), String(NumeroTermo).trim());
+      const enTrat = await termoEnTratamiento(tx, Number(TransaccionId), numeroTermo);
       if (enTrat) return enTrat;
 
       const disponibilidad = await verificarDisponibilidad(tx, bloqueo.trans.Lote, bloqueo.trans.ClaseOrigen, Number(Peso));
       if (!disponibilidad.ok) return disponibilidad;
 
-      const termoId = await resolverTermo(tx, Number(TransaccionId), String(NumeroTermo).trim(), bloqueo.trans.AlmacenOrigen);
+      const termoId = await resolverTermo(tx, Number(TransaccionId), numeroTermo, bloqueo.trans.AlmacenOrigen);
 
       await tx.$executeRaw`
         INSERT INTO PesajeDetalle (TransaccionId, TermoId, Codigo, Peso, RegistradoPor)
@@ -352,9 +378,12 @@ router.put("/:id", requireAuth, requirePerm("destajo", "editar"), async (req: Re
     const id = Number(req.params.id);
     const { Peso, NumeroTermo } = req.body;
     if (!NumeroTermo || Peso == null) { res.status(400).json({ error: "Número de Termo y Peso son requeridos" }); return; }
+    const termo = normalizarTermo(NumeroTermo);
+    if ("error" in termo) { res.status(400).json({ error: termo.error }); return; }
+    const numeroTermo = termo.numero;
 
     const actual: any[] = await prisma.$queryRaw`
-      SELECT pd.TransaccionId, t.NumeroTermo FROM PesajeDetalle pd JOIN Termos t ON t.TermoId = pd.TermoId
+      SELECT pd.TransaccionId, pd.TermoId, t.NumeroTermo FROM PesajeDetalle pd JOIN Termos t ON t.TermoId = pd.TermoId
        WHERE pd.PesajeId = ${id} LIMIT 1`;
     if (!actual.length) { res.status(404).json({ error: "Pesaje no encontrado" }); return; }
     const transaccionId = Number(actual[0].TransaccionId);
@@ -364,7 +393,7 @@ router.put("/:id", requireAuth, requirePerm("destajo", "editar"), async (req: Re
       if ("error" in bloqueo) return bloqueo;
 
       // Ni el termo en que estaba la pesada ni al que se quiere mover pueden estar en Tratamiento.
-      for (const n of new Set([String(actual[0].NumeroTermo), String(NumeroTermo).trim()])) {
+      for (const n of new Set([String(actual[0].NumeroTermo), numeroTermo])) {
         const enTrat = await termoEnTratamiento(tx, transaccionId, n);
         if (enTrat) return enTrat;
       }
@@ -372,9 +401,11 @@ router.put("/:id", requireAuth, requirePerm("destajo", "editar"), async (req: Re
       const disponibilidad = await verificarDisponibilidad(tx, bloqueo.trans.Lote, bloqueo.trans.ClaseOrigen, Number(Peso), id);
       if (!disponibilidad.ok) return disponibilidad;
 
-      const termoId = await resolverTermo(tx, transaccionId, String(NumeroTermo).trim(), bloqueo.trans.AlmacenOrigen);
+      const termoId = await resolverTermo(tx, transaccionId, numeroTermo, bloqueo.trans.AlmacenOrigen);
 
       await tx.$executeRaw`UPDATE PesajeDetalle SET TermoId = ${Number(termoId)}, Peso = ${Number(Peso)} WHERE PesajeId = ${id}`;
+      // La pesada se fue a otro termo: el de antes puede haber quedado vacío.
+      if (Number(termoId) !== Number(actual[0].TermoId)) await borrarTermoSiQuedoVacio(tx, Number(actual[0].TermoId));
       return { ok: true };
     });
 
@@ -394,7 +425,7 @@ router.delete("/:id", requireAuth, requirePerm("destajo", "eliminar"), async (re
     const id = Number(req.params.id);
     const resultado: any = await prisma.$transaction(async (tx) => {
       const filas: any[] = await tx.$queryRaw`
-        SELECT pd.TransaccionId, t.NumeroTermo FROM PesajeDetalle pd JOIN Termos t ON t.TermoId = pd.TermoId
+        SELECT pd.TransaccionId, pd.TermoId, t.NumeroTermo FROM PesajeDetalle pd JOIN Termos t ON t.TermoId = pd.TermoId
          WHERE pd.PesajeId = ${id} LIMIT 1`;
       if (!filas.length) return { ok: true };
       const p = filas[0];
@@ -402,6 +433,7 @@ router.delete("/:id", requireAuth, requirePerm("destajo", "eliminar"), async (re
       const enTrat = await termoEnTratamiento(tx, Number(p.TransaccionId), String(p.NumeroTermo));
       if (enTrat) return enTrat;
       await tx.$executeRaw`DELETE FROM PesajeDetalle WHERE PesajeId = ${id}`;
+      await borrarTermoSiQuedoVacio(tx, Number(p.TermoId));
       return { ok: true };
     });
     if (!resultado.ok) { res.status(resultado.status).json({ error: resultado.error }); return; }
