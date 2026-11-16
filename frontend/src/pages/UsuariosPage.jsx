@@ -43,6 +43,8 @@ const MODULOS = [
   // Un contenedor importado no sale de bodega hasta que alguien con "liberar" lo libera completo.
   // También habilita la remisión "Muestra para análisis", la única salida mientras está pendiente.
   { key: "liberar_mp",    label: "Liberar materia prima",            acciones: ["ver","liberar"], grupo: "Operación" },
+  // Panorama de planta para gerencia: solo consulta (recorrido del producto por área).
+  { key: "gerencia",      label: "Reportes — Panorama de planta",    acciones: ["ver"], grupo: "Operación" },
   // ── Pedidos
   // Separado de `catalogos` porque es trabajo diario: capturar y corregir proformas, y dar de alta
   // clientes. Con `catalogos` venía de regalo Presentaciones, donde CajasXMaster define el objetivo

@@ -47,6 +47,8 @@ export interface Permisos {
   // lo libera completo (ver lib/liberacionMP.ts). También es el único que puede hacer una remisión de
   // muestra para análisis, la única salida permitida mientras está pendiente.
   liberar_mp?:     { ver?: boolean; liberar?: boolean };
+  // Gerencia: el panorama de planta (recorrido del producto por área, ver lib/panoramaPlanta.ts).
+  gerencia?:       { ver?: boolean };
 }
 
 export interface AuthPayload {
