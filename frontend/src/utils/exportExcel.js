@@ -138,44 +138,51 @@ export function exportarReporteTermos(porTermo, desde, hasta, porTermoCola = [],
   XLSX.writeFile(wb, `ReporteTermos_${desde}_a_${hasta}.xlsx`);
 }
 
-export function exportarHojaLote(termos, lote) {
-  const filas = termos.map(t => ({
-    "Termo":   t.NumeroTermo,
-    "Talla":   t.DescripcionTalla,
-    "Producto": t.DescripcionProceso,
-    "Kilos":   +t.Procesado.toFixed(2),
-  }));
-  const totalPelado = termos.reduce((s, t) => s + t.Procesado, 0);
-  filas.push({ "Termo": "", "Talla": "", "Producto": "Total Pelado", "Kilos": +totalPelado.toFixed(2) });
-  filas.push({ "Termo": "", "Talla": "", "Producto": "Materia Prima Ingresada", "Kilos": +lote.PesoIngreso.toFixed(2) });
-  if (lote.Bajado) filas.push({ "Termo": "", "Talla": "", "Producto": "Bajado al piso", "Kilos": +lote.Bajado.toFixed(2) });
-  if (lote.Descarte) filas.push({ "Termo": "", "Talla": "", "Producto": "Descarte", "Kilos": +lote.Descarte.toFixed(2) });
-  filas.push({ "Termo": "", "Talla": "", "Producto": "Rendimiento", "Kilos": `${lote.Rendimiento.toFixed(0)}%` });
+// Reporte x Lote → Excel TABULAR de todos los lotes del rango (los mismos que imprime el PDF), para
+// tablas dinámicas: cada hoja tiene un solo renglón de encabezados, sin celdas combinadas ni
+// renglones de total, números como números, y Fecha + Lote + Clase MP en cada renglón para cruzar
+// las hojas entre sí. La fecha va como fecha de Excel (se arma local, sin la Z del backend).
+//   lotes:    porLote del rango (con Recibido)
+//   termosDe: (lote, clase) → termos de pesaje del lote
+export function exportarHojasLote(lotes, termosDe, desde, hasta) {
+  const fecha = (iso) => {
+    const [a, m, d] = String(iso ?? "").slice(0, 10).split("-").map(Number);
+    return a ? new Date(a, m - 1, d) : null;
+  };
+  const n2 = (v) => (v == null || Number.isNaN(Number(v)) ? null : +Number(v).toFixed(2));
+  const llave = (l) => ({ "Fecha": fecha(l.Fecha), "Lote": l.Lote, "Clase MP": l.Clase });
+
+  // Dos hojas: Termos y Materia prima. Lotes, Ritmo y Bajado y descarte se quitaron (usuario,
+  // 16 nov 2026): lo de Lotes se saca de estas dos con la tabla dinámica.
+  const filasTermos = [], filasRecibido = [];
+  for (const l of lotes) {
+    const k = llave(l);
+    const termos = termosDe(l.Lote, l.Clase);
+    for (const t of termos) {
+      filasTermos.push({
+        ...k, "Termo": String(t.NumeroTermo), "Talla": t.DescripcionTalla,
+        "Clase PT": t.ClasePT ?? null, "Producto": t.DescripcionClasePT || t.DescripcionProceso,
+        "Pesadas": t.Pesadas ?? null, "Kilos": n2(t.Procesado), "Libras": n2(t.Procesado * 2.20462),
+      });
+    }
+    for (const r of l.Recibido ?? []) {
+      filasRecibido.push({
+        ...k, "Lote origen": r.LoteOrigen, "Talla": r.DescripcionTalla, "Clase": r.Clase,
+        "Descripción": r.DescripcionClase, "Enviado por": r.EnviadoPor ?? null, "Termos": r.Termos, "Kilos": n2(r.Kg),
+      });
+    }
+  }
 
   const wb = XLSX.utils.book_new();
-  const ws = XLSX.utils.aoa_to_sheet([
-    ["Fecha", lote.Fecha?.slice(0, 10) ?? ""],
-    ["Nombre", lote.RegistradoPor ?? ""],
-    ["Lote", lote.Lote],
-    ["Clase de Materia Prima", `${lote.Clase} — ${lote.DescripcionClase}`],
-    [],
-  ]);
-  XLSX.utils.sheet_add_json(ws, filas, { origin: -1 });
-  const ajustes = (lote.Ajustes ?? []).map(a => [
-    a.Tipo === "DESCARTE" ? "Descarte" : a.Tipo === "COLA" ? "Cola" : "Bajado al piso",
-    a.Tipo === "COLA" ? `termo ${a.NumeroTermo} · ${a.DescripcionClaseCola || a.ClaseCola}`
-      : [a.NumeroTermo ? `termo ${a.NumeroTermo}` : "", a.Motivo ?? ""].filter(Boolean).join(" · "),
-    a.Talla !== 900 ? a.DescripcionTalla : "", a.Peso, a.UM]);
-  if (ajustes.length) XLSX.utils.sheet_add_aoa(ws, [[], ["Cola, bajado al piso y descarte"], ...ajustes], { origin: -1 });
-  if (lote.EsEntero) {
-    XLSX.utils.sheet_add_aoa(ws, [[], ["Total Cola", +(lote.Cola || 0).toFixed(2)], ["Cabeza + Cola", +lote.Total.toFixed(2)],
-      ["Rendimiento cola %", +lote.RendimientoCola.toFixed(1)], ["Rendimiento total %", +lote.RendimientoTotal.toFixed(1)]], { origin: -1 });
-  }
-  if (lote.Notas) XLSX.utils.sheet_add_aoa(ws, [[], ["Nota anterior", lote.Notas]], { origin: -1 });
-  autoWidth(ws, filas);
-  XLSX.utils.book_append_sheet(wb, ws, "Camaron Pelado");
-
-  XLSX.writeFile(wb, `HojaLote_${lote.Lote}.xlsx`);
+  const hoja = (nombre, filas) => {
+    const ws = XLSX.utils.json_to_sheet(filas.length ? filas : [{ "Sin datos": "" }], { cellDates: true, dateNF: "dd/mm/yyyy" });
+    autoWidth(ws, filas.length ? filas.map(f => ({ ...f, Fecha: "00/00/0000" })) : [{ "Sin datos": "" }]);
+    if (filas.length) ws["!autofilter"] = { ref: ws["!ref"] };
+    XLSX.utils.book_append_sheet(wb, ws, nombre);
+  };
+  hoja("Termos", filasTermos);
+  hoja("Materia prima", filasRecibido);
+  XLSX.writeFile(wb, `ReporteLotes_${desde}_a_${hasta}.xlsx`);
 }
 
 export function exportarEficiencias(porPersona, desde, hasta) {

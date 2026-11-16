@@ -2,7 +2,6 @@ import { Router, Request, Response } from "express";
 import prisma from "../lib/prisma.ts";
 import { requireAuth, requirePerm, tienePermiso, AuthRequest } from "../middleware/auth.ts";
 import { sqlAjustesLote, rendimientoLote, rendimientosEntero, esEntero } from "../lib/destajoPiso.ts";
-import { reportePeladoDia } from "../lib/reportePeladoDia.ts";
 
 const router = Router();
 
@@ -371,17 +370,6 @@ router.get("/produccion", requireAuth, requirePerm("destajo", "ver"), async (req
       totales: { ...totales, Pendiente: totales.PesoIngreso - totales.Bajado - totales.Descarte - totales.Procesado,
                  Rendimiento: totales.TrabajadoRend > 0 ? totales.Salida / totales.TrabajadoRend * 100 : 0 },
     });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// GET /api/reportes/pelado-dia?fecha=YYYY-MM-DD — Reporte del Día de Pelado (lib/reportePeladoDia.ts).
-router.get("/pelado-dia", requireAuth, requirePerm("destajo", "ver"), async (req: Request, res: Response) => {
-  try {
-    const fecha = String(req.query.fecha || hoyGT());
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha)) return res.status(400).json({ error: "Fecha inválida" });
-    res.json(await reportePeladoDia(prisma, fecha));
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
