@@ -1,5 +1,6 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { fmtNum } from "../utils/numero.js";
+import { exportarRemisiones } from "../utils/exportExcel.js";
 import { authHeader, usePuede, useAuth } from "../context/AuthContext.jsx";
 import { useColWidths, useOrden, ordenarFilas, Th, Colgroup } from "../components/ResizableTh.jsx";
 import AvisoModal from "../components/AvisoModal.jsx";
@@ -933,7 +934,16 @@ export default function RemisionesPage() {
   const [loading, setLoading] = useState(true);
   const [filtroTipo, setFiltroTipo] = useState("");
   const [filtroEstatus, setFiltroEstatus] = useState("");
-  const [filtroFecha, setFiltroFecha] = useState("");
+  // Rango de fechas: filtra la lista y es el rango del Excel (los dos pueden ir solos en la lista;
+  // el Excel pide los dos).
+  const [filtroDesde, setFiltroDesde] = useState("");
+  const [filtroHasta, setFiltroHasta] = useState("");
+  const [descargando, setDescargando] = useState(false);
+  const [busqueda, setBusqueda] = useState("");
+  // Lo que ya se mandó a buscar: va unos instantes detrás de lo que se escribe, para no pedir la
+  // lista completa al servidor con cada letra.
+  const [busquedaEnviada, setBusquedaEnviada] = useState("");
+  const ultimaPeticion = useRef(0);
   const [series, setSeries] = useState([]);
   const [clientes, setClientes] = useState([]);
   const [bodegas, setBodegas] = useState([]);
@@ -967,14 +977,45 @@ export default function RemisionesPage() {
     const params = new URLSearchParams();
     if (filtroTipo) params.set("tipo", filtroTipo);
     if (filtroEstatus) params.set("estatus", filtroEstatus);
-    if (filtroFecha) params.set("fecha", filtroFecha);
+    if (filtroDesde) params.set("desde", filtroDesde);
+    if (filtroHasta) params.set("hasta", filtroHasta);
+    if (busquedaEnviada) params.set("q", busquedaEnviada);
+    // Si una búsqueda vieja responde después que la nueva, no debe pisarla.
+    const peticion = ++ultimaPeticion.current;
     const res = await fetch(`${API}?${params}`, { headers: authHeader() });
     const data = await res.json();
+    if (peticion !== ultimaPeticion.current) return;
     if (Array.isArray(data)) setRemisiones(data);
     setLoading(false);
-  }, [filtroTipo, filtroEstatus, filtroFecha]);
+  }, [filtroTipo, filtroEstatus, filtroDesde, filtroHasta, busquedaEnviada]);
 
   useEffect(() => { fetchRemisiones(); }, [fetchRemisiones]);
+
+  useEffect(() => {
+    const id = setTimeout(() => setBusquedaEnviada(busqueda.trim()), 300);
+    return () => clearTimeout(id);
+  }, [busqueda]);
+
+  // Excel del rango Desde/Hasta con los mismos filtros de tipo, estatus y búsqueda que la lista.
+  const descargarExcel = async () => {
+    if (!filtroDesde || !filtroHasta) { alert("Elija el rango de fechas Desde y Hasta para descargar."); return; }
+    setDescargando(true);
+    try {
+      const params = new URLSearchParams({ desde: filtroDesde, hasta: filtroHasta });
+      if (filtroTipo) params.set("tipo", filtroTipo);
+      if (filtroEstatus) params.set("estatus", filtroEstatus);
+      if (busquedaEnviada) params.set("q", busquedaEnviada);
+      const res = await fetch(`${API}/exportar?${params}`, { headers: authHeader() });
+      const data = await res.json();
+      if (!res.ok) { alert(data.error || "No se pudo descargar"); return; }
+      if (!data.cabeceras.length) { alert("No hay remisiones en ese rango."); return; }
+      exportarRemisiones(data, filtroDesde, filtroHasta);
+    } catch {
+      alert("No se pudo conectar con el servidor.");
+    } finally {
+      setDescargando(false);
+    }
+  };
 
   const handleGuardar = async (datos) => {
     const editando = !!modal?.remision;
@@ -1007,6 +1048,14 @@ export default function RemisionesPage() {
   return (
     <>
       <div className="flex flex-wrap gap-3 items-center mb-4">
+        <div className="relative">
+          <input type="search" value={busqueda} onChange={e => setBusqueda(e.target.value)}
+            placeholder="Buscar folio o destino..." aria-label="Buscar folio o destino"
+            className="border border-gray-300 rounded-lg pl-9 pr-3 py-2 text-sm w-64 focus:outline-none focus:ring-2 focus:ring-blue-400" />
+          <svg className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-4.35-4.35M17 10.5a6.5 6.5 0 11-13 0 6.5 6.5 0 0113 0z" />
+          </svg>
+        </div>
         <select value={filtroTipo} onChange={e => setFiltroTipo(e.target.value)}
           className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400">
           <option value="">Todos los tipos</option>
@@ -1019,9 +1068,20 @@ export default function RemisionesPage() {
           <option value="Confirmada">Confirmada</option>
           <option value="Anulada">Anulada</option>
         </select>
-        <input type="date" value={filtroFecha} onChange={e => setFiltroFecha(e.target.value)}
-          className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
+        <div className="flex items-center gap-1.5">
+          <span className="text-xs font-medium text-gray-500">Desde</span>
+          <input type="date" value={filtroDesde} max={filtroHasta || undefined} onChange={e => setFiltroDesde(e.target.value)}
+            aria-label="Desde" className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
+          <span className="text-xs font-medium text-gray-500">Hasta</span>
+          <input type="date" value={filtroHasta} min={filtroDesde || undefined} onChange={e => setFiltroHasta(e.target.value)}
+            aria-label="Hasta" className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
+        </div>
         <span className="text-sm text-gray-500 ml-auto">{remisiones.length} remisi{remisiones.length !== 1 ? "ones" : "ón"}</span>
+        <button onClick={descargarExcel} disabled={descargando}
+          title={filtroDesde && filtroHasta ? "Descarga las remisiones del rango con todo su detalle" : "Elija el rango Desde y Hasta"}
+          className="bg-green-600 text-white font-semibold px-4 py-2 rounded-lg hover:bg-green-700 transition text-sm disabled:opacity-60">
+          {descargando ? "Descargando…" : "Descargar Excel"}
+        </button>
         {puedeCrear && (
           <button onClick={() => setModal({ remision: null })} className="bg-blue-600 text-white font-semibold px-4 py-2 rounded-lg hover:bg-blue-700 transition text-sm">
             + Nueva remisión

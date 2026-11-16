@@ -138,6 +138,68 @@ export function exportarReporteTermos(porTermo, desde, hasta, porTermoCola = [],
   XLSX.writeFile(wb, `ReporteTermos_${desde}_a_${hasta}.xlsx`);
 }
 
+// Remisiones → Excel TABULAR de un rango de fechas (GET /api/remisiones/exportar): una hoja con la
+// cabecera de cada remisión y otra con una fila por master, con el folio, la fecha y el tipo en cada
+// renglón para hacer tablas dinámicas. Mismos criterios que exportarHojasLote: un solo encabezado,
+// números como números y la fecha como fecha de Excel (armada local, sin la Z del backend).
+export function exportarRemisiones({ cabeceras, lineas }, desde, hasta) {
+  const fecha = (iso) => {
+    const [a, m, d] = String(iso ?? "").slice(0, 10).split("-").map(Number);
+    return a ? new Date(a, m - 1, d) : null;
+  };
+  const n2 = (v) => (v == null || Number.isNaN(Number(v)) ? null : +Number(v).toFixed(2));
+  const destino = (c) => c.NombreCliente
+    ? [c.NombreCliente, c.NombreSubcliente].filter(Boolean).join(" / ")
+    : c.NombreBodegaDestino || c.NombreAreaDestino || c.NombreTipo;
+  const porId = new Map(cabeceras.map(c => [c.RemisionId, c]));
+  const totales = new Map();
+  for (const l of lineas) {
+    const t = totales.get(l.RemisionId) ?? { masters: 0, kg: 0, lb: 0 };
+    t.masters += 1; t.kg += l.PesoMasterKG || 0; t.lb += l.PesoMasterLb || 0;
+    totales.set(l.RemisionId, t);
+  }
+
+  const filasCab = cabeceras.map(c => {
+    const t = totales.get(c.RemisionId) ?? { masters: 0, kg: 0, lb: 0 };
+    return {
+      "Fecha": fecha(c.Fecha), "Folio": c.Folio, "Tipo": c.NombreTipo, "Estatus": c.Estatus,
+      "Destino": destino(c), "Cliente": c.NombreCliente ?? null, "Subcliente": c.NombreSubcliente ?? null,
+      "Bodega destino": c.NombreBodegaDestino ?? null, "Área destino": c.NombreAreaDestino ?? null,
+      "Recibe": c.NombreRecibidoPor || null, "Pedido": c.CodigoPedido ?? null,
+      "Contenedor": c.Contenedor ?? null, "Sello": c.Sello ?? null,
+      "Masters": t.masters, "Kg": n2(t.kg), "Lb": n2(t.lb),
+      "Creada por": c.CreadoPor ?? null, "Creada": c.CreadoEn ?? null,
+      "Confirmada por": c.ConfirmadaPor ?? null, "Confirmada": c.ConfirmadaEn ?? null,
+      "Anulada por": c.AnuladaPor ?? null, "Anulada": c.AnuladaEn ?? null, "Motivo de anulación": c.MotivoAnulacion ?? null,
+      "Observaciones": c.Observaciones ?? null,
+    };
+  });
+  const filasDet = lineas.map(l => {
+    const c = porId.get(l.RemisionId) ?? {};
+    return {
+      "Fecha": fecha(c.Fecha), "Folio": c.Folio, "Tipo": c.NombreTipo, "Estatus": c.Estatus, "Destino": destino(c),
+      "Línea contenedor": l.LineaContenedor, "Master": l.Correlativo, "Polín": l.PalletCodigo,
+      "Lote": l.Lote, "Fecha de producción": fecha(l.FechaProduccion), "Área de empaque": l.NombreArea ?? null,
+      "Pedido del master": l.CodigoPedido, "Cliente del master": l.NombreCliente, "Subcliente del master": l.NombreSubcliente ?? null,
+      "Clase": l.Clase, "Proceso": l.DescripcionProceso, "Talla": l.DescripcionTalla,
+      "Presentación": l.DescripcionPresentacion, "Kg": n2(l.PesoMasterKG), "Lb": n2(l.PesoMasterLb),
+      "Agregado por": l.AgregadoPor ?? null, "Agregado": l.AgregadoEn ?? null,
+      "Recibido en área": l.RecibidoEnArea ?? null, "Recibido por": l.RecibidoPorArea ?? null,
+    };
+  });
+
+  const wb = XLSX.utils.book_new();
+  const hoja = (nombre, filas) => {
+    const ws = XLSX.utils.json_to_sheet(filas.length ? filas : [{ "Sin datos": "" }], { cellDates: true, dateNF: "dd/mm/yyyy" });
+    autoWidth(ws, filas.length ? filas.map(f => ({ ...f, Fecha: "00/00/0000", "Fecha de producción": f["Fecha de producción"] ? "00/00/0000" : "" })) : [{ "Sin datos": "" }]);
+    if (filas.length) ws["!autofilter"] = { ref: ws["!ref"] };
+    XLSX.utils.book_append_sheet(wb, ws, nombre);
+  };
+  hoja("Remisiones", filasCab);
+  hoja("Detalle", filasDet);
+  XLSX.writeFile(wb, `Remisiones_${desde}_a_${hasta}.xlsx`);
+}
+
 // Reporte x Lote → Excel TABULAR de todos los lotes del rango (los mismos que imprime el PDF), para
 // tablas dinámicas: cada hoja tiene un solo renglón de encabezados, sin celdas combinadas ni
 // renglones de total, números como números, y Fecha + Lote + Clase MP en cada renglón para cruzar
