@@ -2,6 +2,7 @@ import { Router, Request, Response } from "express";
 import prisma from "../lib/prisma.ts";
 import { requireAuth, requirePerm, tienePermiso, AuthRequest } from "../middleware/auth.ts";
 import { sqlAjustesLote, rendimientoLote, rendimientosEntero, esEntero } from "../lib/destajoPiso.ts";
+import { reportePeladoDia } from "../lib/reportePeladoDia.ts";
 
 const router = Router();
 
@@ -109,6 +110,8 @@ router.get("/produccion", requireAuth, requirePerm("destajo", "ver"), async (req
       LEFT JOIN PesajeDetalle pd ON pd.TermoId = t.TermoId
       WHERE l.Fecha BETWEEN ? AND ? ${filtroFinca}
       GROUP BY t.TermoId
+      -- Un termo sin pesadas es uno mal capturado y ya corregido (400RAM0042): no existe en la planta.
+      HAVING COUNT(pd.PesajeId) > 0
       ORDER BY tp.FechaProduccion DESC, tp.Lote DESC, t.NumeroTermo ASC
     `, desde, hasta, ...argsFinca);
 
@@ -234,6 +237,49 @@ router.get("/produccion", requireAuth, requirePerm("destajo", "ver"), async (req
       ORDER BY f.Codigo
     `, desde, hasta);
 
+    // Materia prima que recibió cada lote del piso (DESTAJO: piso → lote), para la Hoja de Lote: el
+    // lote y la talla de ORIGEN —  un lote unificado junta varios—, de qué bodega salió y cuántos
+    // termos. Un lote capturado a mano no tiene renglones aquí.
+    const pRecibidoLote = () => prisma.$queryRawUnsafe(`
+      SELECT m.LoteProceso AS Lote, m.ClaseProceso AS ClaseLote, m.Lote AS LoteOrigen, m.Clase,
+             cl.Descripcion AS DescripcionClase, m.Talla, ta.Descripcion AS DescripcionTalla,
+             bv.Nombre AS Bodega, COUNT(*) AS Termos, ROUND(SUM(m.PesoKg), 2) AS Kg,
+             -- Quién mandó esa materia prima al piso: las entradas al mismo piso del mismo lote, clase
+             -- y talla. Descongelado traslada con su hoja; la cola llega de Descabezado; lo bajado de
+             -- una mesa y retomado otro día dice "Bajado de mesa".
+             (SELECT GROUP_CONCAT(DISTINCT COALESCE(bh.Nombre,
+                       CASE WHEN e.Tipo = 'COLA' THEN 'Descabezado' WHEN e.Tipo = 'BAJADO' THEN 'Bajado de mesa'
+                            WHEN e.RemisionId IS NOT NULL THEN 'Bodega (remisión)' ELSE e.Tipo END)
+                     ORDER BY 1 SEPARATOR ', ')
+                FROM MovimientoPiso e
+                LEFT JOIN HojaProceso h ON h.HojaId = e.HojaOrigenId
+                LEFT JOIN BodegaVirtual bh ON bh.Codigo = h.BodegaCodigo
+               WHERE e.BodegaDestino = m.BodegaOrigen AND e.Lote = m.Lote AND e.Clase = m.Clase
+                 AND e.Talla = m.Talla AND e.Tipo <> 'AJUSTE') AS EnviadoPor
+        FROM MovimientoPiso m
+        JOIN Lotes l ON l.Lote = m.LoteProceso AND l.Clase = m.ClaseProceso
+        JOIN Clase cl ON cl.Clase = m.Clase
+        JOIN Tallas ta ON ta.Codigo = m.Talla
+        LEFT JOIN BodegaVirtual bv ON bv.Codigo = m.BodegaOrigen
+       WHERE m.Tipo = 'DESTAJO' AND l.Fecha BETWEEN ? AND ?
+       GROUP BY m.LoteProceso, m.ClaseProceso, m.Lote, m.Clase, cl.Descripcion, m.Talla, ta.Descripcion, m.BodegaOrigen, bv.Nombre
+       ORDER BY m.Lote, m.Talla
+    `, desde, hasta);
+
+    // Encargado y personal de apoyo por día, para la Hoja de Lote: quién marcó en las áreas de
+    // encargado, soporte (Pelado DY, Descabezado SD), chequeador y QC. Las Transferencias que
+    // EMPIEZAN en el día (el corte de medianoche abre una por día). La gente que pesó en el lote sale
+    // de porPersona, no de aquí.
+    const pPersonalDia = () => prisma.$queryRawUnsafe(`
+      SELECT DATE_FORMAT(tr.FechaHora, '%Y-%m-%d') AS Fecha, tr.CodigoArea, COUNT(DISTINCT tr.Codigo) AS Personas,
+             GROUP_CONCAT(DISTINCT CONCAT_WS(' ', e.PrimerNombre, e.PrimerApellido) ORDER BY e.PrimerNombre SEPARATOR ', ') AS Nombres
+        FROM Transferencias tr
+        JOIN Empleados e ON e.Codigo = tr.Codigo
+       WHERE tr.CodigoArea IN ('DB', 'DY', 'SD', 'DJ', 'DC')
+         AND tr.FechaHora >= ? AND tr.FechaHora < DATE_ADD(?, INTERVAL 1 DAY)
+       GROUP BY Fecha, tr.CodigoArea
+    `, desde, hasta);
+
     // pPersona es la más pesada: va primero para que las livianas corran en el otro carril mientras tanto.
     // Lo bajado al piso y lo descartado de cada lote, renglón por renglón: es lo que antes se anotaba
     // a mano en Lotes.Notas ("se bajó 22 kg de 51/60…") y ahora sale del control de Materia Prima.
@@ -251,8 +297,16 @@ router.get("/produccion", requireAuth, requirePerm("destajo", "ver"), async (req
        ORDER BY m.MovimientoId
     `, desde, hasta);
 
-    const [porPersona, porLote, porTermo, porLoteTalla, porTalla, pausasNoPaga, fincasConLotes, ajustes, termosCola, termosBajado] =
-      await conLimite([pPersona, pLote, pTermo, pLoteTalla, pTalla, pPausas, pFincas, pAjustes, pTermoCola, pTermoBajado], MAX_CONSULTAS_REPORTE) as any[][];
+    const [porPersona, porLote, porTermo, porLoteTalla, porTalla, pausasNoPaga, fincasConLotes, ajustes, termosCola, termosBajado, personalDia, recibidoLote] =
+      await conLimite([pPersona, pLote, pTermo, pLoteTalla, pTalla, pPausas, pFincas, pAjustes, pTermoCola, pTermoBajado, pPersonalDia, pRecibidoLote], MAX_CONSULTAS_REPORTE) as any[][];
+    const recibidoDe = new Map<string, any[]>();
+    for (const r of recibidoLote) {
+      const k = `${r.Lote}|${r.ClaseLote}`;
+      recibidoDe.set(k, [...(recibidoDe.get(k) ?? []),
+        { LoteOrigen: r.LoteOrigen, Clase: r.Clase, DescripcionClase: r.DescripcionClase, Talla: Number(r.Talla),
+          DescripcionTalla: r.DescripcionTalla, Bodega: r.Bodega, EnviadoPor: r.EnviadoPor ?? null,
+          Termos: Number(r.Termos), Kg: Number(r.Kg) }]);
+    }
     const ajustesDe = new Map<string, any[]>();
     for (const a of ajustes) {
       const k = `${a.Lote}|${a.Clase}`;
@@ -278,6 +332,7 @@ router.get("/produccion", requireAuth, requirePerm("destajo", "ver"), async (req
         const sinCola = entero && !(l.Cola > 0);
         const base = { ...l,
           Ajustes: ajustesDe.get(`${l.Lote}|${l.Clase}`) ?? [],
+          Recibido: recibidoDe.get(`${l.Lote}|${l.Clase}`) ?? [],
           Pendiente: l.PesoIngreso - l.Bajado - l.Descarte - l.Procesado,
           EsEntero: entero, SinCola: sinCola,
           Salida: sinCola ? 0 : entero ? l.Cola : l.Procesado,
@@ -312,9 +367,21 @@ router.get("/produccion", requireAuth, requirePerm("destajo", "ver"), async (req
       porPersona: personaFmt,
       pausasNoPaga,
       fincasConLotes,
+      personalDia: numerizar(personalDia, ["Personas"]),
       totales: { ...totales, Pendiente: totales.PesoIngreso - totales.Bajado - totales.Descarte - totales.Procesado,
                  Rendimiento: totales.TrabajadoRend > 0 ? totales.Salida / totales.TrabajadoRend * 100 : 0 },
     });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/reportes/pelado-dia?fecha=YYYY-MM-DD — Reporte del Día de Pelado (lib/reportePeladoDia.ts).
+router.get("/pelado-dia", requireAuth, requirePerm("destajo", "ver"), async (req: Request, res: Response) => {
+  try {
+    const fecha = String(req.query.fecha || hoyGT());
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha)) return res.status(400).json({ error: "Fecha inválida" });
+    res.json(await reportePeladoDia(prisma, fecha));
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

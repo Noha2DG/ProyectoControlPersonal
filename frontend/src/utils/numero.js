@@ -6,9 +6,12 @@ const cache = new Map();
 
 function formateador(decimales) {
   if (!cache.has(decimales)) {
+    // useGrouping "always": en español algunos navegadores no separan los miles en números de cuatro
+    // cifras (2706.30 en vez de 2,706.30); en planta los quieren siempre con coma.
     cache.set(decimales, new Intl.NumberFormat("es-GT", {
       minimumFractionDigits: decimales,
       maximumFractionDigits: decimales,
+      useGrouping: "always",
     }));
   }
   return cache.get(decimales);
