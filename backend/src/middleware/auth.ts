@@ -53,6 +53,10 @@ export interface Permisos {
   // `editar` las corrige, las marca recibidas/pagadas, las anula y lleva los ajustes del módulo;
   // `eliminar` solo borra lo que nunca se envió.
   importaciones?:  { ver?: boolean; crear?: boolean; editar?: boolean; eliminar?: boolean };
+  // Básculas de empaque: `configurar` registra equipos, cambia su bodega/modo y emite tokens;
+  // `comandos` reinicia o cambia parámetros de un cabezal en marcha. Separados porque mandar un
+  // comando a una báscula que está pesando es operación de turno; dar de alta equipos, no.
+  basculas?:       { ver?: boolean; configurar?: boolean; comandos?: boolean };
 }
 
 export interface AuthPayload {

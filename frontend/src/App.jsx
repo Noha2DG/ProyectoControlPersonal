@@ -26,6 +26,7 @@ import RemisionesPage from "./pages/RemisionesPage.jsx";
 import LiberarMateriaPrimaPage from "./pages/LiberarMateriaPrimaPage.jsx";
 import ReportesPage from "./pages/ReportesPage.jsx";
 import ImportacionesPage from "./pages/ImportacionesPage.jsx";
+import BasculasPage from "./pages/BasculasPage.jsx";
 import EmpleadosTable from "./components/EmpleadosTable.jsx";
 import { exportarEmpleados } from "./utils/exportExcel.js";
 import EmpleadoModal from "./components/EmpleadoModal.jsx";
@@ -76,6 +77,8 @@ const Icon = {
   existencias: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M3.75 3.75v16.5h16.5M7.5 15.75l3-3 3 3 4.5-4.5" />,
   // Gráfica de área: Reportes (panorama de planta, permiso `gerencia`).
   gerencia: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M3 3v18h18M7 15l4-4 3 3 6-6" />,
+  // Señal de conexión: las básculas y si están en línea.
+  basculas: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M8.288 15.038a5.25 5.25 0 017.424 0M5.106 11.856c3.807-3.808 9.98-3.808 13.788 0M1.924 8.674c5.565-5.565 14.587-5.565 20.152 0M12.53 18.22l-.53.53-.53-.53a.75.75 0 011.06 0z" />,
   // Candado abierto: liberar el contenedor importado.
   liberar: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M13.5 10.5V6.75a4.5 4.5 0 119 0v3.75M3.75 21.75h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H3.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z" />,
   // Barco: la materia prima que llega importada en contenedor.
@@ -255,6 +258,7 @@ function Dashboard({ inicio }) {
   if (perm("remisiones",    "ver")) nav.push({ key: "remisiones", label: "Bodega — Remisiones",   icon: "remisiones" });
   if (perm("liberar_mp",    "ver")) nav.push({ key: "liberarMP",  label: "Liberar materia prima", icon: "liberar" });
   if (perm("gerencia",      "ver")) nav.push({ key: "reportes",   label: "Reportes",              icon: "gerencia" });
+  if (perm("basculas",      "ver")) nav.push({ key: "basculas",   label: "Básculas",              icon: "basculas" });
   if (perm("permisos",       "ver")) nav.push({ key: "permisos",  label: "Permisos",            icon: "permisos" });
   if (perm("usuarios",       "ver")) nav.push({ key: "usuarios",  label: "Usuarios",            icon: "usuarios" });
   // Mesas de Pelado, Tarifas, Áreas y Tipos de Permiso viven dentro de Catálogos, cada una con su
@@ -290,6 +294,7 @@ function Dashboard({ inicio }) {
     remisiones: "Bodega — Remisiones y Despacho",
     liberarMP: "Liberar materia prima",
     reportes: "Reportes",
+    basculas: "Básculas — Equipos en línea",
     permisos:  "Permisos",
     usuarios:  "Usuarios",
     pedidos: "Pedidos y Clientes",
@@ -446,6 +451,9 @@ function Dashboard({ inicio }) {
             {seccion === "remisiones" && perm("remisiones", "ver") && <RemisionesPage />}
             {seccion === "liberarMP" && perm("liberar_mp", "ver") && <LiberarMateriaPrimaPage />}
             {seccion === "reportes" && perm("gerencia", "ver") && <ReportesPage />}
+            {seccion === "basculas" && perm("basculas", "ver") && (
+              <BasculasPage puedeConfigurar={perm("basculas", "configurar")} puedeComandos={perm("basculas", "comandos")} />
+            )}
             {seccion === "permisos" && perm("permisos",       "ver") && <PermisosPage />}
             {seccion === "usuarios" && perm("usuarios",       "ver") && <UsuariosPage />}
             {seccion === "catalogos" && verCatalogos && <CatalogosPage />}
