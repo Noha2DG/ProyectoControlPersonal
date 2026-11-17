@@ -114,7 +114,7 @@ function ModalRegistrar({ bodegas, onCerrar, onRegistrada }) {
         </label>
         <p className="text-xs text-slate-500">
           La bodega y el modo no se fijan aquí: las básculas se mueven por la planta. Salen del área en que
-          entró hoy la pesadora que inicia sesión (Catálogos → Áreas → "Usa básculas").
+          entró hoy la pesadora que inicia sesión (Básculas → "Áreas que pesan").
         </p>
         {error && <p className="text-sm text-red-600">{error}</p>}
         <div className="flex justify-end gap-2 pt-2">
@@ -300,7 +300,7 @@ function Panel({ b, bodegas, puedeConfigurar, puedeComandos, onCambio, onToken }
   );
 }
 
-export default function BasculasPage({ puedeConfigurar, puedeComandos }) {
+function Equipos({ puedeConfigurar, puedeComandos }) {
   const [datos, setDatos] = useState({ balanzas: [], segEnLinea: 120 });
   const [bodegas, setBodegas] = useState([]);
   const [sel, setSel] = useState(null);
@@ -397,6 +397,119 @@ export default function BasculasPage({ puedeConfigurar, puedeComandos }) {
           onRegistrada={(r) => { setRegistrar(false); setToken(r); setSel(r.Codigo); cargar(); }} />
       )}
       {token && <ModalToken datos={token} onCerrar={() => setToken(null)} />}
+    </div>
+  );
+}
+
+// ─── Áreas que pesan ─────────────────────────────────────────────────────────────────────────
+// Las básculas se mueven por la planta: la bodega y el modo no son del equipo sino del área en que
+// entró hoy la pesadora. Aquí se marca qué áreas usan básculas y con qué modo; la bodega es la que
+// el área ya tiene (Catálogos → Áreas).
+function AreasPesaje({ puedeConfigurar }) {
+  const [areas, setAreas] = useState([]);
+  const [soloPesadoras, setSoloPesadoras] = useState(true);
+  const [buscar, setBuscar] = useState("");
+  const [error, setError] = useState("");
+  const [guardando, setGuardando] = useState(null);
+
+  const cargar = useCallback(async () => {
+    try { setAreas(await api("/api/balanzas/areas")); setError(""); } catch (e) { setError(e.message); }
+  }, []);
+  useEffect(() => { cargar(); }, [cargar]);
+
+  const guardar = async (a, cambios) => {
+    const nuevo = { ...a, ...cambios };
+    setGuardando(a.Codigo); setError("");
+    setAreas(l => l.map(x => (x.Codigo === a.Codigo ? nuevo : x)));
+    try {
+      await api(`/api/balanzas/areas/${encodeURIComponent(a.Codigo)}`, {
+        method: "PUT", body: JSON.stringify({ EsPesadora: nuevo.EsPesadora, ModoPesaje: nuevo.ModoPesaje || null }),
+      });
+    } catch (e) { setError(`${a.Codigo}: ${e.message}`); cargar(); }
+    finally { setGuardando(null); }
+  };
+
+  const q = buscar.trim().toLowerCase();
+  const lista = areas.filter(a =>
+    (!soloPesadoras || a.EsPesadora) &&
+    (!q || a.Codigo.toLowerCase().includes(q) || a.Nombre.toLowerCase().includes(q) || (a.Grupo ?? "").toLowerCase().includes(q)));
+
+  return (
+    <div className="bg-white rounded-xl border overflow-hidden">
+      <div className="px-4 py-3 border-b flex items-center gap-3 flex-wrap">
+        <h2 className="font-semibold">Áreas que pesan</h2>
+        <span className="text-xs text-slate-500">quien entra hoy a estas áreas puede iniciar sesión en cualquier báscula</span>
+        <label className="ml-auto flex items-center gap-2 text-sm text-slate-600">
+          <input type="checkbox" checked={soloPesadoras} onChange={e => setSoloPesadoras(e.target.checked)} />
+          Solo las que usan básculas
+        </label>
+        <input value={buscar} onChange={e => setBuscar(e.target.value)} placeholder="Buscar área…"
+          className="border border-slate-300 rounded-lg px-3 py-1.5 text-sm w-48" />
+      </div>
+      {error && <p className="px-4 py-2 text-sm text-red-600">{error}</p>}
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm table-fixed min-w-[760px]">
+          <thead className="bg-slate-50 text-slate-500 text-xs uppercase">
+            <tr>
+              <th className="text-left px-4 py-2 w-20">Código</th>
+              <th className="text-left px-2">Área</th>
+              <th className="text-left px-2 w-48">Bodega (de las pesadas)</th>
+              <th className="text-center px-2 w-32">Usa básculas</th>
+              <th className="text-left px-4 w-64">Modo de pesaje</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y">
+            {lista.map(a => (
+              <tr key={a.Codigo} className={guardando === a.Codigo ? "opacity-60" : ""}>
+                <td className="px-4 py-2.5 font-mono font-semibold">{a.Codigo}</td>
+                <td className="px-2 truncate" title={a.Grupo ?? ""}>{a.Nombre}</td>
+                <td className="px-2 truncate">
+                  {a.BodegaNombre ?? <span className="text-amber-600">sin bodega: la pesadora la elige</span>}
+                </td>
+                <td className="px-2 text-center">
+                  <input type="checkbox" disabled={!puedeConfigurar} checked={a.EsPesadora}
+                    onChange={e => guardar(a, { EsPesadora: e.target.checked, ModoPesaje: e.target.checked ? a.ModoPesaje : null })} />
+                </td>
+                <td className="px-4">
+                  {a.EsPesadora ? (
+                    <select disabled={!puedeConfigurar} value={a.ModoPesaje ?? ""} onChange={e => guardar(a, { ModoPesaje: e.target.value || null })}
+                      className="w-full border border-slate-300 rounded-lg px-2 py-1.5 text-sm">
+                      <option value="">Lo elige la pesadora al entrar</option>
+                      <option value="PERSONA">Por persona (carnet por caja)</option>
+                      <option value="PRODUCTO">Por producto</option>
+                    </select>
+                  ) : <span className="text-slate-300">—</span>}
+                </td>
+              </tr>
+            ))}
+            {lista.length === 0 && (
+              <tr><td colSpan={5} className="px-4 py-6 text-sm text-slate-500">
+                {soloPesadoras ? "Ninguna área usa básculas todavía. Quita el filtro para marcarlas." : "Sin resultados."}
+              </td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+const PESTANAS = [["equipos", "Equipos"], ["areas", "Áreas que pesan"]];
+
+export default function BasculasPage({ puedeConfigurar, puedeComandos }) {
+  const [pestana, setPestana] = useState("equipos");
+  return (
+    <div className="space-y-4">
+      <div className="flex gap-1 border-b border-slate-200">
+        {PESTANAS.map(([k, t]) => (
+          <button key={k} onClick={() => setPestana(k)}
+            className={`px-4 py-2 text-sm font-medium -mb-px border-b-2 ${pestana === k ? "border-blue-700 text-blue-700" : "border-transparent text-slate-500 hover:text-slate-700"}`}>
+            {t}
+          </button>
+        ))}
+      </div>
+      {pestana === "equipos" && <Equipos puedeConfigurar={puedeConfigurar} puedeComandos={puedeComandos} />}
+      {pestana === "areas" && <AreasPesaje puedeConfigurar={puedeConfigurar} />}
     </div>
   );
 }

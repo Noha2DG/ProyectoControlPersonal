@@ -239,6 +239,43 @@ router.post("/:codigo/comandos", requireAuth, requirePerm("basculas", "comandos"
   }
 });
 
+// ─── Áreas que pesan ─────────────────────────────────────────────────────────────────────────
+// Toda la configuración de básculas vive en este módulo (decisión del usuario): qué áreas usan
+// básculas y con qué modo se editan aquí, aunque las columnas estén en Areas (alterAreasPesaje.ts).
+// Va ANTES de "/:codigo/..." para que "areas" no se lea como un código de báscula.
+
+// GET /api/balanzas/areas — áreas activas con su bodega y su configuración de pesaje.
+router.get("/areas", requireAuth, requirePerm("basculas", "ver"), async (_req: AuthRequest, res: Response) => {
+  try {
+    const rows: any[] = await prisma.$queryRawUnsafe(`
+      SELECT a.Codigo, a.Nombre, a.Grupo, a.BodegaVirtualCodigo, bv.Nombre AS BodegaNombre,
+             a.EsPesadora, a.ModoPesaje
+        FROM Areas a
+        LEFT JOIN BodegaVirtual bv ON bv.Codigo = a.BodegaVirtualCodigo
+       WHERE a.Activa = 1
+       ORDER BY a.EsPesadora DESC, a.Grupo, a.Nombre`);
+    res.json(rows.map(r => ({ ...r, EsPesadora: Number(r.EsPesadora) === 1 })));
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PUT /api/balanzas/areas/:codigo — { EsPesadora, ModoPesaje: PERSONA | PRODUCTO | null }
+router.put("/areas/:codigo", requireAuth, requirePerm("basculas", "configurar"), async (req: AuthRequest, res: Response) => {
+  try {
+    const codigo = String(req.params.codigo);
+    const es = req.body?.EsPesadora ? 1 : 0;
+    const m = String(req.body?.ModoPesaje ?? "").toUpperCase();
+    const modo = MODOS.includes(m) ? m : null;
+    const n = await prisma.$executeRaw`
+      UPDATE Areas SET EsPesadora = ${es}, ModoPesaje = ${es ? modo : null} WHERE Codigo = ${codigo}`;
+    if (!n) { res.status(404).json({ error: "No existe el área" }); return; }
+    res.json({ ok: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/balanzas/:codigo/comandos — los últimos 30, con su resultado.
 router.get("/:codigo/comandos", requireAuth, requirePerm("basculas", "ver"), async (req: AuthRequest, res: Response) => {
   try {
