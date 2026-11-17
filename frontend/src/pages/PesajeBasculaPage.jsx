@@ -143,10 +143,17 @@ function Pesaje({ sesion, b, onCerrar }) {
     try { setResumen(await api(`/api/pesaje-bascula/sesion/${sesion.SesionId}/resumen`)); } catch { /* siguiente */ }
   }, [sesion.SesionId]);
 
+  // Catálogos al entrar y cada minuto: un tipo de empaque creado con la sesión ya abierta aparece
+  // solo (17 nov 2026: YENS480 se creó después de entrar y la lista seguía vacía).
+  const cargarCatalogos = useCallback(() =>
+    api(`/api/pesaje-bascula/sesion/${sesion.SesionId}/catalogos`).then(setCat).catch(e => setAviso({ tipo: "error", texto: e.message })),
+  [sesion.SesionId]);
   useEffect(() => {
-    api(`/api/pesaje-bascula/sesion/${sesion.SesionId}/catalogos`).then(setCat).catch(e => setAviso({ tipo: "error", texto: e.message }));
+    cargarCatalogos();
     cargarResumen();
-  }, [sesion.SesionId, cargarResumen]);
+    const id = setInterval(cargarCatalogos, 60_000);
+    return () => clearInterval(id);
+  }, [cargarCatalogos, cargarResumen]);
 
   // Buscar un lote que no esté al piso.
   useEffect(() => {
@@ -197,11 +204,15 @@ function Pesaje({ sesion, b, onCerrar }) {
     return () => clearInterval(id);
   }, [cola, enviar]);
 
+  // "Caja retirada" = el peso baja de la MITAD del mínimo del empaque, no de 20 g fijos: el plato de
+  // BAL-01 marcaba 172 g vacío (algo encima o sin tarar) y nunca bajaba de 20 → nunca se guardaba.
+  const vacioBajo = empaque ? Math.max(UMBRAL_VACIO_G, Math.round(empaque.MinG / 2)) : UMBRAL_VACIO_G;
+
   // Regla de guardado: el último peso estable con caja en el plato decide; al retirar la caja se guarda
   // si estaba dentro del rango, y se avisa SIN GUARDAR si estaba fuera.
   useEffect(() => {
     if (!b.vigente || !empaque) return;
-    if (b.gramos >= UMBRAL_VACIO_G) {
+    if (b.gramos >= vacioBajo) {
       if (b.estable) {
         actividadRef.current = Date.now();
         const dentro = b.gramos >= empaque.MinG && b.gramos <= empaque.MaxG;
@@ -242,8 +253,11 @@ function Pesaje({ sesion, b, onCerrar }) {
   // Color del peso.
   let fondo = "bg-slate-700", estado = "SIN LECTURA", sub = "revise la báscula o la app Báscula Puente";
   if (b.vigente) {
-    if (!empaque) { fondo = "bg-slate-700"; estado = "ELIJA EL TIPO DE EMPAQUE"; sub = ""; }
-    else if (b.gramos < UMBRAL_VACIO_G) { fondo = "bg-slate-800"; estado = "PLATO VACÍO"; sub = `rango ${g(empaque.MinG)} – ${g(empaque.MaxG)} g`; }
+    if (!empaque) { fondo = "bg-slate-700"; estado = "ELIJA EL TIPO DE EMPAQUE"; sub = "sin tipo de empaque no se evalúa ni se guarda"; }
+    else if (b.gramos < vacioBajo) {
+      fondo = "bg-slate-800"; estado = "PLATO VACÍO";
+      sub = `rango ${g(empaque.MinG)} – ${g(empaque.MaxG)} g` + (b.gramos >= UMBRAL_VACIO_G ? ` · el plato marca ${g(b.gramos)} g: ¿tarar la báscula?` : "");
+    }
     else if (b.gramos < empaque.MinG) { fondo = "bg-amber-400 text-amber-950"; estado = "BAJO PESO"; sub = `faltan ${g(empaque.MinG - b.gramos)} g · no se guarda`; }
     else if (b.gramos > empaque.MaxG) { fondo = "bg-red-600"; estado = "SOBREPESO"; sub = `sobran ${g(b.gramos - empaque.MaxG)} g · no se guarda`; }
     else { fondo = "bg-emerald-600"; estado = b.estable ? "PESO CORRECTO · ESTABLE" : "PESO CORRECTO"; sub = b.estable ? "retire la caja para guardar" : "esperando que se estabilice"; }
@@ -328,6 +342,16 @@ function Pesaje({ sesion, b, onCerrar }) {
 
         <div className="flex-1 flex flex-col gap-4 min-w-0">
           <div className={`flex-1 rounded-2xl ${fondo} flex flex-col items-center justify-center relative`}>
+            {/* Estable / moviendo: siempre a la vista, esté o no en rango. */}
+            <div className="absolute top-4 left-4">
+              {!b.vigente ? (
+                <span className="rounded-full bg-black/30 px-4 py-2 text-lg font-bold">SIN LECTURA</span>
+              ) : b.estable ? (
+                <span className="rounded-full bg-white/90 text-slate-900 px-4 py-2 text-lg font-bold">● ESTABLE</span>
+              ) : (
+                <span className="rounded-full bg-black/30 px-4 py-2 text-lg font-bold animate-pulse">◌ MOVIENDO</span>
+              )}
+            </div>
             {aviso && (
               <div className={`absolute top-4 right-4 left-4 flex justify-end`}>
                 <div className={`flex items-center gap-2 rounded-full px-5 py-2 text-xl font-bold shadow ${insignia}`}>
