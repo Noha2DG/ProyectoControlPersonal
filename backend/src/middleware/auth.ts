@@ -27,7 +27,9 @@ export interface Permisos {
   // del módulo (mismo criterio con que `bodega.editar` gobierna desubicar/desarmar, y no `escanear`).
   // `eliminar` solo borra borradores, que nunca tocaron inventario — compartirlos daría el poder de
   // revertir embarques a quien solo necesita limpiar sus propios borradores.
-  remisiones?:     { ver?: boolean; crear?: boolean; editar?: boolean; eliminar?: boolean; imprimir?: boolean; anular?: boolean };
+  // `muestra` habilita la remisión "Muestra para análisis" (sale lo pendiente de liberar) sin dar
+  // el poder de liberar el contenedor completo.
+  remisiones?:     { ver?: boolean; crear?: boolean; editar?: boolean; eliminar?: boolean; imprimir?: boolean; anular?: boolean; muestra?: boolean };
   // Pedidos, Clientes y Subcliente salieron de `catalogos` para vivir acá. El motivo no es de menú:
   // quien captura proformas necesita corregirlas a diario, y con `catalogos` eso le entregaba además
   // Presentaciones — donde vive CajasXMaster, el número que convierte cajas a master y define el
@@ -44,8 +46,8 @@ export interface Permisos {
   // registra el salario mínimo — así quien carga los precios no es por fuerza quien los autoriza.
   tarifas?:        { ver?: boolean; editar?: boolean; aprobar?: boolean };
   // Liberar materia prima: un contenedor importado no sale de bodega hasta que alguien con `liberar`
-  // lo libera completo (ver lib/liberacionMP.ts). También es el único que puede hacer una remisión de
-  // muestra para análisis, la única salida permitida mientras está pendiente.
+  // lo libera completo (ver lib/liberacionMP.ts). También puede hacer la remisión de muestra para
+  // análisis, igual que quien tenga `remisiones.muestra`.
   liberar_mp?:     { ver?: boolean; liberar?: boolean };
   // Gerencia: el panorama de planta (recorrido del producto por área, ver lib/panoramaPlanta.ts).
   gerencia?:       { ver?: boolean };

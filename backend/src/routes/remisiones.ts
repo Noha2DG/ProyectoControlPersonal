@@ -168,8 +168,8 @@ router.get("/series", requireAuth, requirePerm("remisiones", "ver"), async (req:
       FROM SerieRemision WHERE Activo = 1 ORDER BY Orden ASC, Nombre ASC
     `;
     // La muestra para análisis es la única salida de un contenedor sin liberar: solo la ve quien
-    // puede liberar materia prima.
-    const rows = todas.filter(r => r.Destino !== DESTINO_MUESTRA || tienePermiso(req, "liberar_mp", "liberar"));
+    // tiene `remisiones.muestra` (o puede liberar materia prima).
+    const rows = todas.filter(r => r.Destino !== DESTINO_MUESTRA || puedeMuestra(req));
     // Destino/PideEmbarque/PidePedido viajan al frontend para que el formulario sepa qué campos
     // mostrar sin repetir la regla en JS — misma fuente de verdad que usa la validación del backend.
     res.json(rows.map(r => ({
@@ -507,8 +507,8 @@ router.post("/", requireAuth, requirePerm("remisiones", "crear"), async (req: Re
       `;
       if (!serieRows.length) throw new ErrorNegocio(400, "Tipo de remisión no válido");
       if (!Number(serieRows[0].Activo)) throw new ErrorNegocio(400, "Esta serie de remisión está inactiva");
-      if (serieRows[0].Destino === DESTINO_MUESTRA && !tienePermiso(req as AuthRequest, "liberar_mp", "liberar")) {
-        throw new ErrorNegocio(403, `Una ${String(serieRows[0].Nombre).toLowerCase()} requiere el permiso "Liberar materia prima"`);
+      if (serieRows[0].Destino === DESTINO_MUESTRA && !puedeMuestra(req as AuthRequest)) {
+        throw new ErrorNegocio(403, `Una ${String(serieRows[0].Nombre).toLowerCase()} requiere el permiso "Remisiones → Muestra"`);
       }
 
       // Todo se valida contra la serie ya leída, y ANTES de consumir el folio: si falta el pedido,
@@ -683,14 +683,20 @@ router.delete("/:id", requireAuth, requirePerm("remisiones", "eliminar"), async 
 // Toda alta/baja de líneas exige Borrador. Se resuelve aquí para no repetir el mismo chequeo (y el
 // mismo mensaje) en los cuatro endpoints de abajo. Devuelve además el contexto de la proforma
 // (CodigoPedido + EsMixta) que necesitan los dos endpoints de alta.
+// Sacar muestras para análisis es operación de bodega (`remisiones.muestra`); liberar el contenedor
+// completo es otra cosa (`liberar_mp.liberar`). Quien puede liberar también puede sacar muestra.
+function puedeMuestra(req: AuthRequest): boolean {
+  return tienePermiso(req, "remisiones", "muestra") || tienePermiso(req, "liberar_mp", "liberar");
+}
+
 // Una remisión de muestra se lleva lo que está pendiente de liberar: escanear en ella o confirmarla
 // exige el mismo permiso que crearla, no solo el de remisiones (si no, cualquiera de bodega usaría
 // un borrador de muestra ajeno como puerta trasera).
 async function exigirPermisoMuestra(req: Request, remisionId: number) {
   const rows: any[] = await prisma.$queryRaw`
     SELECT se.Nombre, se.Destino FROM Remisiones r JOIN SerieRemision se ON r.Tipo = se.Tipo WHERE r.RemisionId = ${remisionId} LIMIT 1`;
-  if (rows.length && rows[0].Destino === DESTINO_MUESTRA && !tienePermiso(req as AuthRequest, "liberar_mp", "liberar")) {
-    throw new ErrorNegocio(403, `Una ${String(rows[0].Nombre).toLowerCase()} requiere el permiso "Liberar materia prima"`);
+  if (rows.length && rows[0].Destino === DESTINO_MUESTRA && !puedeMuestra(req as AuthRequest)) {
+    throw new ErrorNegocio(403, `Una ${String(rows[0].Nombre).toLowerCase()} requiere el permiso "Remisiones → Muestra"`);
   }
 }
 
