@@ -45,6 +45,9 @@ const MODULOS = [
   { key: "liberar_mp",    label: "Liberar materia prima",            acciones: ["ver","liberar"], grupo: "Operación" },
   // Panorama de planta para gerencia: solo consulta (recorrido del producto por área).
   { key: "gerencia",      label: "Reportes — Panorama de planta",    acciones: ["ver"], grupo: "Operación" },
+  // Básculas de empaque: "configurar" registra equipos y emite tokens; "comandos" reinicia o cambia
+  // parámetros de un cabezal en marcha (operación de turno, no de alta de equipos).
+  { key: "basculas",      label: "Básculas — Equipos en línea",      acciones: ["ver","configurar","comandos"], grupo: "Operación" },
   // ── Pedidos
   // Separado de `catalogos` porque es trabajo diario: capturar y corregir proformas, y dar de alta
   // clientes. Con `catalogos` venía de regalo Presentaciones, donde CajasXMaster define el objetivo
@@ -77,6 +80,8 @@ const ACCION_LABELS = {
   trasladar: "Trasladar cajas",
   reporte: "Ver reporte",
   liberar: "Liberar / rechazar",
+  configurar: "Registrar y configurar",
+  comandos: "Enviar comandos",
 };
 
 // Deriva la matriz de permisos de MODULOS en vez de enumerarla a mano por rol:

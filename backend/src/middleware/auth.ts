@@ -49,6 +49,10 @@ export interface Permisos {
   liberar_mp?:     { ver?: boolean; liberar?: boolean };
   // Gerencia: el panorama de planta (recorrido del producto por área, ver lib/panoramaPlanta.ts).
   gerencia?:       { ver?: boolean };
+  // Básculas de empaque: `configurar` registra equipos, cambia su bodega/modo y emite tokens;
+  // `comandos` reinicia o cambia parámetros de un cabezal en marcha. Separados porque mandar un
+  // comando a una báscula que está pesando es operación de turno; dar de alta equipos, no.
+  basculas?:       { ver?: boolean; configurar?: boolean; comandos?: boolean };
 }
 
 export interface AuthPayload {
