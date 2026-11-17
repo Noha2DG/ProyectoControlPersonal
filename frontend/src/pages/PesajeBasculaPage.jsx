@@ -302,12 +302,12 @@ function Pesaje({ sesion, b, onCerrar }) {
     catch (e) { setAviso({ tipo: "error", texto: "NO SE ANULÓ", detalle: e.message }); }
   };
 
-  // Color y textos del recuadro del peso.
+  // Color y textos del recuadro: SIEMPRE según el peso. Lo que falta para poder guardar va en un aviso
+  // aparte arriba; antes reemplazaba el color y en rango se veía gris (usuario, 17 nov 2026).
+  const faltaTodo = [...faltan, faltaCarnet && "carnet de la bandeja"].filter(Boolean);
   let fondo = "bg-slate-700", estado = "SIN LECTURA", sub = "revise la báscula o la app Báscula Puente";
   if (b.vigente) {
-    if (faltan.length) { fondo = "bg-slate-700"; estado = `FALTA: ${faltan[0].toUpperCase()}`; sub = faltan.length > 1 ? `y ${faltan.slice(1).join(", ")}` : "complete para poder guardar"; }
-    else if (faltaCarnet) { fondo = "bg-violet-700"; estado = "ESCANEE EL CARNET"; sub = "antes de poner la bandeja"; }
-    else if (b.gramos < vacioBajo) {
+    if (b.gramos < vacioBajo) {
       fondo = "bg-slate-800"; estado = "PESA VACÍA";
       sub = conRango ? `debe pesar ${g(empaque.MinG)} – ${g(empaque.MaxG)} g` : "ponga la bandeja";
       if (b.gramos >= UMBRAL_VACIO_G) sub += ` · marca ${g(b.gramos)} g: ¿tarar la báscula?`;
@@ -315,6 +315,7 @@ function Pesaje({ sesion, b, onCerrar }) {
     else if (conRango && b.gramos < empaque.MinG) { fondo = "bg-amber-400 text-amber-950"; estado = "BAJO PESO"; sub = `faltan ${g(empaque.MinG - b.gramos)} g · no se guarda`; }
     else if (conRango && b.gramos > empaque.MaxG) { fondo = "bg-red-600"; estado = "SOBREPESO"; sub = `sobran ${g(b.gramos - empaque.MaxG)} g · no se guarda`; }
     else { fondo = "bg-emerald-600"; estado = conRango ? "PESO CORRECTO" : "PESO REGISTRABLE"; sub = b.estable ? "retire la bandeja para guardar" : "esperando que se estabilice"; }
+    if (faltaTodo.length && b.gramos >= vacioBajo) sub = "no se guardará: complete lo que falta";
   }
   const insignia = aviso && {
     guardado: "bg-white text-emerald-700", sin_guardar: "bg-white text-red-700", pendiente: "bg-white text-amber-700", error: "bg-white text-red-700",
@@ -329,7 +330,9 @@ function Pesaje({ sesion, b, onCerrar }) {
   const etq = "text-[11px] text-slate-300 uppercase tracking-wide";
 
   return (
-    <div className={`h-screen ${tema.pagina} text-white flex flex-col`}>
+    // 100dvh y no h-screen (100vh): en Chrome de Android 100vh incluye la barra de direcciones y la
+    // barra del rango quedaba cortada abajo.
+    <div className={`${tema.pagina} text-white flex flex-col`} style={{ height: "100dvh" }}>
       <header className={`h-12 shrink-0 flex items-center px-4 gap-3 ${tema.barra}`}>
         <span className="font-mono font-bold">{sesion.BalanzaCodigo}</span>
         <span className="text-slate-200 font-semibold">{sesion.BodegaNombre ?? "—"}</span>
@@ -452,6 +455,14 @@ function Pesaje({ sesion, b, onCerrar }) {
                 <div className={`flex items-center gap-2 rounded-2xl px-4 py-1.5 text-lg font-bold shadow ${insignia}`}>
                   <span>{icono}</span><span>{aviso.texto}</span>
                   {aviso.detalle && <span className="text-sm font-medium opacity-80 truncate">· {aviso.detalle}</span>}
+                </div>
+              </div>
+            )}
+            {/* Lo que falta para poder guardar: aviso aparte, sin tapar el color del peso. */}
+            {faltaTodo.length > 0 && (
+              <div className="absolute top-14 left-3 right-3 flex justify-center">
+                <div className="rounded-xl bg-amber-300 text-amber-950 px-4 py-1.5 text-lg font-bold shadow">
+                  FALTA: {faltaTodo.join(" · ").toUpperCase()}
                 </div>
               </div>
             )}
