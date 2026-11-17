@@ -257,26 +257,27 @@ router.get("/areas", requireAuth, requirePerm("basculas", "ver"), async (_req: A
   try {
     const rows: any[] = await prisma.$queryRawUnsafe(`
       SELECT a.Codigo, a.Nombre, a.Grupo, a.BodegaVirtualCodigo, bv.Nombre AS BodegaNombre,
-             a.EsPesadora, a.ModoPesaje
+             a.EsPesadora, a.ModoPesaje, a.PideCarrito
         FROM Areas a
         LEFT JOIN BodegaVirtual bv ON bv.Codigo = a.BodegaVirtualCodigo
        WHERE a.Activa = 1
        ORDER BY a.EsPesadora DESC, a.Grupo, a.Nombre`);
-    res.json(rows.map(r => ({ ...r, EsPesadora: Number(r.EsPesadora) === 1 })));
+    res.json(rows.map(r => ({ ...r, EsPesadora: Number(r.EsPesadora) === 1, PideCarrito: Number(r.PideCarrito) === 1 })));
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// PUT /api/balanzas/areas/:codigo — { EsPesadora, ModoPesaje: PERSONA | PRODUCTO | null }
+// PUT /api/balanzas/areas/:codigo — { EsPesadora, ModoPesaje: PERSONA | PRODUCTO | null, PideCarrito }
 router.put("/areas/:codigo", requireAuth, requirePerm("basculas", "configurar"), async (req: AuthRequest, res: Response) => {
   try {
     const codigo = String(req.params.codigo);
     const es = req.body?.EsPesadora ? 1 : 0;
     const m = String(req.body?.ModoPesaje ?? "").toUpperCase();
     const modo = MODOS.includes(m) ? m : null;
+    const carrito = es && req.body?.PideCarrito ? 1 : 0;
     const n = await prisma.$executeRaw`
-      UPDATE Areas SET EsPesadora = ${es}, ModoPesaje = ${es ? modo : null} WHERE Codigo = ${codigo}`;
+      UPDATE Areas SET EsPesadora = ${es}, ModoPesaje = ${es ? modo : null}, PideCarrito = ${carrito} WHERE Codigo = ${codigo}`;
     if (!n) { res.status(404).json({ error: "No existe el área" }); return; }
     res.json({ ok: true });
   } catch (err: any) {
@@ -295,10 +296,10 @@ router.get("/empaques", requireAuth, requireAnyPerm([["basculas", "ver"], ["pesa
       const soloActivos = String(req.query.activos ?? "") === "1";
       const rows: any[] = await prisma.$queryRawUnsafe(`
         SELECT Codigo, Nombre, Unidad, PesoNetoG, TaraG, DeshidratacionPct, DeshidratacionG, PesoBrutoG,
-               MargenPosG, MargenNegG, MinG, MaxG, Activo, ModificadoPor,
+               MargenPosG, MargenNegG, MinG, MaxG, ConRango, Activo, ModificadoPor,
                DATE_FORMAT(COALESCE(ModificadoEn, CreadoEn), '%Y-%m-%d %H:%i') AS Modificado
           FROM EmpaquePesaje ${soloActivos ? "WHERE Activo = 1" : ""} ORDER BY Activo DESC, Nombre`);
-      res.json(rows.map(r => ({ ...r, Activo: Number(r.Activo) === 1, DeshidratacionPct: Number(r.DeshidratacionPct) })));
+      res.json(rows.map(r => ({ ...r, Activo: Number(r.Activo) === 1, ConRango: Number(r.ConRango) === 1, DeshidratacionPct: Number(r.DeshidratacionPct) })));
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -318,9 +319,9 @@ router.post("/empaques", requireAuth, requirePerm("basculas", "configurar"), asy
     if (ya) { res.status(409).json({ error: `Ya existe el tipo de empaque ${codigo}` }); return; }
     await prisma.$executeRaw`
       INSERT INTO EmpaquePesaje (Codigo, Nombre, Unidad, PesoNetoG, TaraG, DeshidratacionPct, DeshidratacionG,
-                                 PesoBrutoG, MargenPosG, MargenNegG, MinG, MaxG, ModificadoPor)
+                                 PesoBrutoG, MargenPosG, MargenNegG, MinG, MaxG, ConRango, ModificadoPor)
       VALUES (${codigo}, ${e.Nombre}, ${e.Unidad}, ${e.PesoNetoG}, ${e.TaraG}, ${e.DeshidratacionPct}, ${e.DeshidratacionG},
-              ${e.PesoBrutoG}, ${e.MargenPosG}, ${e.MargenNegG}, ${e.MinG}, ${e.MaxG}, ${req.user!.username})`;
+              ${e.PesoBrutoG}, ${e.MargenPosG}, ${e.MargenNegG}, ${e.MinG}, ${e.MaxG}, ${e.ConRango}, ${req.user!.username})`;
     res.status(201).json({ ok: true, Codigo: codigo });
   } catch (err: any) {
     res.status(400).json({ error: err.message });
@@ -338,7 +339,7 @@ router.put("/empaques/:codigo", requireAuth, requirePerm("basculas", "configurar
       UPDATE EmpaquePesaje
          SET Nombre = ${e.Nombre}, Unidad = ${e.Unidad}, PesoNetoG = ${e.PesoNetoG}, TaraG = ${e.TaraG},
              DeshidratacionPct = ${e.DeshidratacionPct}, DeshidratacionG = ${e.DeshidratacionG}, PesoBrutoG = ${e.PesoBrutoG},
-             MargenPosG = ${e.MargenPosG}, MargenNegG = ${e.MargenNegG}, MinG = ${e.MinG}, MaxG = ${e.MaxG},
+             MargenPosG = ${e.MargenPosG}, MargenNegG = ${e.MargenNegG}, MinG = ${e.MinG}, MaxG = ${e.MaxG}, ConRango = ${e.ConRango},
              Activo = ${activo}, ModificadoEn = NOW(), ModificadoPor = ${req.user!.username}
        WHERE Codigo = ${codigo}`;
     if (!n) { res.status(404).json({ error: "No existe" }); return; }
