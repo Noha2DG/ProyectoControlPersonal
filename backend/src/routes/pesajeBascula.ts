@@ -55,7 +55,10 @@ async function datosSesion(tx: any, id: number) {
       LEFT JOIN BodegaVirtual bv ON bv.Codigo = s.BodegaVirtualCodigo
       LEFT JOIN Empleados e ON e.Codigo = s.OperadoraCodigo
      WHERE s.SesionId = ${id}`;
-  return s ?? null;
+  if (!s) return null;
+  // TIMESTAMPDIFF y otros enteros calculados llegan como BigInt, que JSON no sabe mandar
+  // ("Do not know how to serialize a BigInt" en la pantalla de la báscula, 17 nov 2026).
+  return Object.fromEntries(Object.entries(s).map(([k, v]) => [k, typeof v === "bigint" ? Number(v) : v])) as any;
 }
 
 async function cerrar(tx: any, id: number, motivo: string) {
