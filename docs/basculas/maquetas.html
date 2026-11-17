@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Maquetas básculas</title>
+<script src="https://cdn.tailwindcss.com/3.4.17"></script>
+<style>
+  body { font-family: "Segoe UI", system-ui, sans-serif; }
+  .pantalla { display: none !important; }
+  .pantalla.activa { display: flex !important; }
+  .pantalla.activa.grid { display: grid !important; }
+  .tab-on { border-bottom: 3px solid #1d4ed8; color: #1d4ed8; }
+  .mono { font-family: Consolas, "Cascadia Mono", monospace; }
+</style>
+</head>
+<body class="bg-slate-200">
+
+<!-- ============================================================ 1. CONFIGURACIÓN DE BÁSCULAS (escritorio) -->
+<section id="config" class="pantalla w-[1440px] h-[900px] bg-slate-100 flex flex-col">
+  <header class="h-14 bg-blue-800 text-white flex items-center px-6 gap-6">
+    <span class="font-bold text-lg">Planta · Básculas</span>
+    <nav class="flex gap-1 text-sm">
+      <span class="px-3 py-1.5 rounded bg-white/20 font-semibold">Equipos</span>
+      <span class="px-3 py-1.5 rounded hover:bg-white/10">Tipos de empaque</span>
+      <span class="px-3 py-1.5 rounded hover:bg-white/10">Pesadas</span>
+      <span class="px-3 py-1.5 rounded hover:bg-white/10">Verificaciones</span>
+    </nav>
+    <span class="ml-auto text-sm opacity-80">Nehemías · admin</span>
+  </header>
+
+  <div class="flex-1 flex gap-5 p-5 min-h-0">
+    <div class="flex-1 flex flex-col gap-4 min-w-0">
+      <div class="grid grid-cols-4 gap-4">
+        <div class="bg-white rounded-xl border p-4"><p class="text-xs text-slate-500">En línea y leyendo</p><p class="text-3xl font-bold text-emerald-600">12</p></div>
+        <div class="bg-white rounded-xl border p-4"><p class="text-xs text-slate-500">En línea, báscula sin datos</p><p class="text-3xl font-bold text-amber-500">2</p></div>
+        <div class="bg-white rounded-xl border p-4"><p class="text-xs text-slate-500">Fuera de línea (&gt; 2 min)</p><p class="text-3xl font-bold text-red-600">1</p></div>
+        <div class="bg-white rounded-xl border p-4"><p class="text-xs text-slate-500">Pesadas hoy</p><p class="text-3xl font-bold text-slate-800">4,812</p></div>
+      </div>
+
+      <div class="bg-white rounded-xl border flex-1 min-h-0 overflow-hidden">
+        <div class="px-4 py-3 border-b flex items-center gap-3">
+          <h2 class="font-semibold">Equipos</h2>
+          <span class="text-xs text-slate-500">el cabezal avisa cada 30 s; sin aviso en 2 min = fuera de línea</span>
+          <button class="ml-auto px-3 py-1.5 text-sm rounded-lg bg-blue-700 text-white">+ Registrar báscula</button>
+        </div>
+        <table class="w-full text-sm table-fixed">
+          <thead class="bg-slate-50 text-slate-500 text-xs uppercase">
+            <tr><th class="text-left px-4 py-2 w-24">Código</th><th class="text-left px-2 w-44">Ubicación</th><th class="text-left px-2 w-28">Modo</th>
+                <th class="text-left px-2 w-44">Estado</th><th class="text-left px-2 w-24">Contacto</th><th class="text-left px-2">Operadora</th>
+                <th class="text-right px-2 w-20">Hoy</th><th class="text-left px-4 w-24">Versión</th></tr>
+          </thead>
+          <tbody class="divide-y">
+            <tr><td class="px-4 py-2.5 font-mono font-semibold">BAL-01</td><td class="px-2 truncate">Empaque IQF</td><td class="px-2"><span class="text-xs bg-slate-100 rounded px-2 py-0.5">Producto</span></td>
+                <td class="px-2"><span class="inline-flex items-center gap-1.5 text-emerald-700"><span class="w-2 h-2 rounded-full bg-emerald-500"></span>Leyendo</span></td><td class="px-2 text-slate-500">hace 12 s</td><td class="px-2 truncate">Rosa Méndez</td><td class="px-2 text-right">512</td><td class="px-4 text-slate-500">1.1.0</td></tr>
+            <tr class="bg-blue-50"><td class="px-4 py-2.5 font-mono font-semibold">BAL-03</td><td class="px-2 truncate">Empinchado</td><td class="px-2"><span class="text-xs bg-violet-100 text-violet-700 rounded px-2 py-0.5">Por persona</span></td>
+                <td class="px-2"><span class="inline-flex items-center gap-1.5 text-emerald-700"><span class="w-2 h-2 rounded-full bg-emerald-500"></span>Leyendo</span></td><td class="px-2 text-slate-500">hace 4 s</td><td class="px-2 truncate">Ana Pérez</td><td class="px-2 text-right">214</td><td class="px-4 text-slate-500">1.1.0</td></tr>
+            <tr><td class="px-4 py-2.5 font-mono font-semibold">BAL-05</td><td class="px-2 truncate">Empanizado</td><td class="px-2"><span class="text-xs bg-violet-100 text-violet-700 rounded px-2 py-0.5">Por persona</span></td>
+                <td class="px-2"><span class="inline-flex items-center gap-1.5 text-amber-600"><span class="w-2 h-2 rounded-full bg-amber-500"></span>Sin datos de báscula</span></td><td class="px-2 text-slate-500">hace 9 s</td><td class="px-2 truncate text-slate-400">—</td><td class="px-2 text-right">0</td><td class="px-4 text-slate-500">1.1.0</td></tr>
+            <tr><td class="px-4 py-2.5 font-mono font-semibold">BAL-09</td><td class="px-2 truncate">Clasificado Entero</td><td class="px-2"><span class="text-xs bg-violet-100 text-violet-700 rounded px-2 py-0.5">Por persona</span></td>
+                <td class="px-2"><span class="inline-flex items-center gap-1.5 text-emerald-700"><span class="w-2 h-2 rounded-full bg-emerald-500"></span>Leyendo</span></td><td class="px-2 text-slate-500">hace 21 s</td><td class="px-2 truncate">Marta Gómez</td><td class="px-2 text-right">388</td><td class="px-4 text-slate-500">1.1.0</td></tr>
+            <tr><td class="px-4 py-2.5 font-mono font-semibold">BAL-11</td><td class="px-2 truncate">Reempaque</td><td class="px-2"><span class="text-xs bg-slate-100 rounded px-2 py-0.5">Producto</span></td>
+                <td class="px-2"><span class="inline-flex items-center gap-1.5 text-red-600"><span class="w-2 h-2 rounded-full bg-red-500"></span>Fuera de línea</span></td><td class="px-2 text-red-600">hace 47 min</td><td class="px-2 truncate text-slate-400">—</td><td class="px-2 text-right">96</td><td class="px-4 text-amber-600">1.0.3 ⚠</td></tr>
+            <tr><td class="px-4 py-2.5 font-mono font-semibold">BAL-12</td><td class="px-2 truncate">Empaque IQF</td><td class="px-2"><span class="text-xs bg-slate-100 rounded px-2 py-0.5">Producto</span></td>
+                <td class="px-2"><span class="inline-flex items-center gap-1.5 text-emerald-700"><span class="w-2 h-2 rounded-full bg-emerald-500"></span>Leyendo</span></td><td class="px-2 text-slate-500">hace 2 s</td><td class="px-2 truncate">Lucía Ramírez</td><td class="px-2 text-right">601</td><td class="px-4 text-slate-500">1.1.0</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- panel lateral de la báscula elegida -->
+    <aside class="w-[400px] bg-white rounded-xl border flex flex-col min-h-0">
+      <div class="px-5 py-4 border-b">
+        <div class="flex items-center gap-2"><span class="font-mono font-bold text-xl">BAL-03</span><span class="w-2.5 h-2.5 rounded-full bg-emerald-500"></span><span class="text-sm text-emerald-700">Leyendo · 1,489 g</span></div>
+        <p class="text-xs text-slate-500 mt-1">IP 192.168.0.203 · Android 8.1 · app 1.1.0 · encendida hace 3 d 4 h</p>
+      </div>
+      <div class="px-5 py-4 border-b space-y-3 text-sm">
+        <h3 class="font-semibold">Asignación</h3>
+        <div class="grid grid-cols-2 gap-2">
+          <label class="text-slate-500">Bodega / área<select class="mt-1 w-full border rounded-lg px-2 py-1.5 text-slate-800"><option>Empinchado</option></select></label>
+          <label class="text-slate-500">Modo<select class="mt-1 w-full border rounded-lg px-2 py-1.5 text-slate-800"><option>Por persona</option></select></label>
+        </div>
+        <h3 class="font-semibold pt-1">Parámetros del lector</h3>
+        <div class="grid grid-cols-3 gap-2">
+          <label class="text-slate-500 text-xs">Lecturas p/ estable<input value="4" class="mt-1 w-full border rounded-lg px-2 py-1.5 text-sm text-slate-800"></label>
+          <label class="text-slate-500 text-xs">Tolerancia (± g)<input value="2" class="mt-1 w-full border rounded-lg px-2 py-1.5 text-sm text-slate-800"></label>
+          <label class="text-slate-500 text-xs">Plato vacío (&lt; g)<input value="20" class="mt-1 w-full border rounded-lg px-2 py-1.5 text-sm text-slate-800"></label>
+        </div>
+        <button class="w-full py-2 rounded-lg bg-blue-700 text-white font-medium">Enviar parámetros</button>
+      </div>
+      <div class="px-5 py-4 border-b">
+        <h3 class="font-semibold text-sm mb-2">Comandos</h3>
+        <div class="grid grid-cols-2 gap-2 text-sm">
+          <button class="py-2 rounded-lg border">↻ Reiniciar lector</button>
+          <button class="py-2 rounded-lg border">⟳ Reiniciar app</button>
+          <button class="py-2 rounded-lg border">⌁ Ver tramas (prueba)</button>
+          <button class="py-2 rounded-lg border">⚖ Verificar con pesa patrón</button>
+          <button class="py-2 rounded-lg border">⇩ Pedir bitácora</button>
+          <button class="py-2 rounded-lg border text-red-600 border-red-200">⊘ Cerrar sesión operadora</button>
+        </div>
+      </div>
+      <div class="px-5 py-4 flex-1 min-h-0 overflow-hidden">
+        <h3 class="font-semibold text-sm mb-2">Historial de comandos</h3>
+        <ul class="text-xs space-y-1.5">
+          <li class="flex gap-2"><span class="text-slate-400 w-12">09:14</span><span class="flex-1">Parámetros: estable 4, ±2 g</span><span class="text-emerald-600">✓ aplicado 09:14</span></li>
+          <li class="flex gap-2"><span class="text-slate-400 w-12">08:02</span><span class="flex-1">Verificar 1,000 g → leyó 1,001 g</span><span class="text-emerald-600">✓ OK</span></li>
+          <li class="flex gap-2"><span class="text-slate-400 w-12">07:41</span><span class="flex-1">Reiniciar lector</span><span class="text-emerald-600">✓ aplicado 07:41</span></li>
+          <li class="flex gap-2"><span class="text-slate-400 w-12">ayer</span><span class="flex-1">Ver tramas (5 min)</span><span class="text-slate-500">terminado</span></li>
+        </ul>
+      </div>
+    </aside>
+  </div>
+</section>
+
+<!-- ============================================================ 2. TIPO DE EMPAQUE (escritorio) -->
+<section id="empaque" class="pantalla w-[1440px] h-[900px] bg-slate-100 flex flex-col">
+  <header class="h-14 bg-blue-800 text-white flex items-center px-6 gap-6">
+    <span class="font-bold text-lg">Planta · Básculas</span>
+    <nav class="flex gap-1 text-sm">
+      <span class="px-3 py-1.5 rounded hover:bg-white/10">Equipos</span>
+      <span class="px-3 py-1.5 rounded bg-white/20 font-semibold">Tipos de empaque</span>
+      <span class="px-3 py-1.5 rounded hover:bg-white/10">Pesadas</span>
+      <span class="px-3 py-1.5 rounded hover:bg-white/10">Verificaciones</span>
+    </nav>
+  </header>
+  <div class="flex-1 flex gap-5 p-5 min-h-0">
+    <div class="w-[520px] bg-white rounded-xl border flex flex-col min-h-0">
+      <div class="px-4 py-3 border-b flex items-center gap-2">
+        <input placeholder="Buscar código o nombre…" class="flex-1 border rounded-lg px-3 py-1.5 text-sm">
+        <button class="px-3 py-1.5 text-sm rounded-lg bg-blue-700 text-white">+ Nuevo</button>
+      </div>
+      <table class="w-full text-sm table-fixed">
+        <thead class="bg-slate-50 text-slate-500 text-xs uppercase"><tr><th class="text-left px-4 py-2 w-24">Código</th><th class="text-left px-2">Nombre</th><th class="text-right px-2 w-20">Neto</th><th class="text-right px-4 w-32">Rango bruto</th></tr></thead>
+        <tbody class="divide-y">
+          <tr class="bg-blue-50"><td class="px-4 py-2.5 font-mono">YEN650</td><td class="px-2 truncate">YENS 650 g</td><td class="px-2 text-right">650 g</td><td class="px-4 text-right font-mono">713–727</td></tr>
+          <tr><td class="px-4 py-2.5 font-mono">GLB600</td><td class="px-2 truncate">GL Bella IQF 600 g</td><td class="px-2 text-right">600 g</td><td class="px-4 text-right font-mono">626–629</td></tr>
+          <tr><td class="px-4 py-2.5 font-mono">MEXLOR</td><td class="px-2 truncate">Mex Lorenzo 2 kg</td><td class="px-2 text-right">2,000 g</td><td class="px-4 text-right font-mono">2102–2112</td></tr>
+          <tr><td class="px-4 py-2.5 font-mono">PIN2125</td><td class="px-2 truncate">Pinchos T-On 21/25</td><td class="px-2 text-right">1,125 g</td><td class="px-4 text-right font-mono">1483–1494</td></tr>
+          <tr><td class="px-4 py-2.5 font-mono">VL4LB</td><td class="px-2 truncate">Venta Local 4 lb</td><td class="px-2 text-right">1,816 g</td><td class="px-4 text-right font-mono">1916–1931</td></tr>
+          <tr><td class="px-4 py-2.5 font-mono">T5L12</td><td class="px-2 truncate">Empaque 5 lb Túnel PND 12 %</td><td class="px-2 text-right">2,292 g</td><td class="px-4 text-right font-mono">2564–2575</td></tr>
+        </tbody>
+      </table>
+      <p class="text-xs text-slate-500 px-4 py-3 mt-auto border-t">Se cargan de inicio los 54 empaques que usaba Sofia (tabla ApiSofia), para revisarlos uno por uno.</p>
+    </div>
+
+    <div class="flex-1 bg-white rounded-xl border p-6 flex flex-col gap-5">
+      <div class="flex items-center gap-3"><h2 class="text-xl font-bold">YENS 650 g</h2><span class="text-xs bg-emerald-100 text-emerald-700 rounded px-2 py-0.5">Activo</span></div>
+      <div class="grid grid-cols-4 gap-4 text-sm">
+        <label class="text-slate-500">Código<input value="YEN650" class="mt-1 w-full border rounded-lg px-3 py-2 font-mono text-slate-800"></label>
+        <label class="text-slate-500 col-span-2">Nombre<input value="YENS 650 g" class="mt-1 w-full border rounded-lg px-3 py-2 text-slate-800"></label>
+        <label class="text-slate-500">Mostrar en<select class="mt-1 w-full border rounded-lg px-3 py-2 text-slate-800"><option>gramos (g)</option><option>kilos</option><option>libras</option></select></label>
+        <label class="text-slate-500">Presentación (opcional)<select class="mt-1 w-full border rounded-lg px-3 py-2 text-slate-800"><option>— ninguna —</option></select></label>
+        <label class="text-slate-500 col-span-3">Material de empaque (opcional)<select class="mt-1 w-full border rounded-lg px-3 py-2 text-slate-800"><option>C34 · Caja 500gr YENS Tapa y Fondo</option></select></label>
+      </div>
+
+      <div class="grid grid-cols-6 gap-3 text-sm">
+        <label class="text-slate-500">Peso neto<div class="mt-1 flex"><input value="650" class="w-full border rounded-l-lg px-3 py-2 text-right text-slate-800"><span class="border border-l-0 rounded-r-lg px-2 py-2 bg-slate-50">g</span></div></label>
+        <label class="text-slate-500">Tara material<div class="mt-1 flex"><input value="50" class="w-full border rounded-l-lg px-3 py-2 text-right text-slate-800"><span class="border border-l-0 rounded-r-lg px-2 py-2 bg-slate-50">g</span></div></label>
+        <label class="text-slate-500">Deshidratación<div class="mt-1 flex"><input value="2.0" class="w-full border rounded-l-lg px-3 py-2 text-right text-slate-800"><span class="border border-l-0 rounded-r-lg px-2 py-2 bg-slate-50">%</span></div></label>
+        <div class="text-slate-500">Deshidratación<div class="mt-1 border rounded-lg px-3 py-2 bg-slate-50 text-right text-slate-800">13 g</div><p class="text-[11px] mt-0.5">= 650 × 2 %</p></div>
+        <label class="text-slate-500">Margen +<div class="mt-1 flex"><input value="14" class="w-full border rounded-l-lg px-3 py-2 text-right text-slate-800"><span class="border border-l-0 rounded-r-lg px-2 py-2 bg-slate-50">g</span></div></label>
+        <label class="text-slate-500">Margen −<div class="mt-1 flex"><input value="0" class="w-full border rounded-l-lg px-3 py-2 text-right text-slate-800"><span class="border border-l-0 rounded-r-lg px-2 py-2 bg-slate-50">g</span></div></label>
+      </div>
+
+      <div class="rounded-xl bg-slate-50 border p-5">
+        <div class="flex items-end gap-8">
+          <div><p class="text-xs text-slate-500">Peso bruto (objetivo)</p><p class="text-4xl font-bold">713 g</p><p class="text-xs text-slate-500">650 neto + 50 tara + 13 deshidratación</p></div>
+          <div><p class="text-xs text-slate-500">Rango que acepta la báscula</p><p class="text-4xl font-bold text-emerald-600">713 – 727 g</p><p class="text-xs text-slate-500">713 − 0 · 713 + 14</p></div>
+        </div>
+        <div class="mt-6">
+          <div class="relative h-10 rounded-lg overflow-hidden flex text-xs font-semibold text-white">
+            <div class="w-[38%] bg-amber-400 flex items-center justify-center">BAJO PESO &lt; 713</div>
+            <div class="w-[30%] bg-emerald-500 flex items-center justify-center">CORRECTO 713–727</div>
+            <div class="flex-1 bg-red-500 flex items-center justify-center">SOBREPESO &gt; 727</div>
+          </div>
+          <div class="flex justify-between text-[11px] text-slate-500 mt-1 font-mono"><span>690</span><span class="ml-[18%]">713</span><span class="mr-[22%]">727</span><span>750</span></div>
+        </div>
+      </div>
+      <div class="flex gap-3 mt-auto">
+        <button class="px-5 py-2.5 rounded-lg bg-blue-700 text-white font-medium">Guardar</button>
+        <button class="px-5 py-2.5 rounded-lg border">Desactivar</button>
+        <p class="text-xs text-slate-500 self-center">Cambiar el rango no toca pesadas anteriores: cada pesada guarda el rango con el que se pesó.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ 3. PESAJE (tablet 1280×800) -->
+<section id="pesaje" class="pantalla w-[1280px] h-[800px] bg-slate-900 flex flex-col text-white">
+  <header class="h-14 flex items-center px-5 gap-4 bg-slate-800">
+    <span class="font-mono font-bold text-lg">BAL-03</span>
+    <span class="text-slate-300">Empinchado</span>
+    <span class="text-xs bg-violet-500/30 text-violet-200 rounded px-2 py-0.5">Por persona</span>
+    <span class="ml-auto text-sm">Operadora: <b>Ana Pérez</b> <span class="text-slate-400 font-mono">EJE0001</span></span>
+    <button class="ml-3 px-3 py-1.5 rounded-lg bg-white/10 text-sm">Salir</button>
+  </header>
+
+  <div class="flex-1 flex gap-4 p-4 min-h-0">
+    <!-- trabajo elegido -->
+    <div class="w-[330px] flex flex-col gap-3">
+      <div class="bg-slate-800 rounded-xl p-4">
+        <p class="text-xs text-slate-400 uppercase">Talla</p>
+        <p class="text-2xl font-bold">21/25</p>
+      </div>
+      <div class="bg-slate-800 rounded-xl p-4">
+        <p class="text-xs text-slate-400 uppercase">Lote</p>
+        <p class="text-2xl font-bold font-mono">2611-P07 · C20</p>
+        <p class="text-xs text-slate-400">en el piso de Empinchado: 312 kg</p>
+      </div>
+      <div class="bg-slate-800 rounded-xl p-4">
+        <p class="text-xs text-slate-400 uppercase">Tipo de empaque</p>
+        <p class="text-xl font-bold">Pinchos T-On 21/25</p>
+        <p class="text-xs text-slate-400">neto 1,125 g · bruto 1,483 g</p>
+      </div>
+      <button class="rounded-xl border border-slate-600 py-3 text-slate-200">Cambiar talla / lote / empaque</button>
+      <div class="bg-violet-600/20 border border-violet-400/40 rounded-xl p-4 mt-auto">
+        <p class="text-xs text-violet-200 uppercase">Carnet de esta caja</p>
+        <p class="text-xl font-bold">Rosa López</p>
+        <p class="text-sm text-violet-200 font-mono">EJE0101 · Empinchado y alineado</p>
+        <p class="text-xs text-violet-300 mt-2">Se pide un carnet por cada caja: al guardar, se vacía para la siguiente</p>
+      </div>
+    </div>
+
+    <!-- peso -->
+    <div class="flex-1 flex flex-col gap-4 min-w-0">
+      <div class="flex-1 rounded-2xl bg-emerald-600 flex flex-col items-center justify-center relative">
+        <div class="absolute top-4 right-4 flex items-center gap-2 rounded-full bg-white text-emerald-700 px-4 py-2 text-lg font-bold shadow">
+          <span class="w-7 h-7 rounded-full bg-emerald-600 text-white flex items-center justify-center text-base">✓</span>GUARDADO #214
+        </div>
+        <p class="text-[150px] leading-none font-bold mono tracking-tight">1,489<span class="text-5xl ml-3 font-semibold">g</span></p>
+        <p class="text-3xl font-bold mt-3 tracking-wide">PESO CORRECTO · ESTABLE</p>
+        <p class="text-lg mt-1 text-emerald-100">Rango 1,483 – 1,494 g · retire la caja para guardar</p>
+      </div>
+      <div class="h-9 rounded-lg overflow-hidden flex text-xs font-semibold relative">
+        <div class="w-[40%] bg-amber-400 text-amber-950 flex items-center justify-center">BAJO</div>
+        <div class="w-[25%] bg-emerald-500 flex items-center justify-center">1,483 – 1,494</div>
+        <div class="flex-1 bg-red-500 flex items-center justify-center">SOBREPESO</div>
+        <div class="absolute top-0 bottom-0 w-1 bg-white left-[54%]"></div>
+      </div>
+    </div>
+
+    <!-- contadores -->
+    <div class="w-[250px] flex flex-col gap-3">
+      <div class="bg-slate-800 rounded-xl p-4"><p class="text-xs text-slate-400">Cajas hoy (báscula)</p><p class="text-3xl font-bold">214</p><p class="text-xs text-slate-400">318.6 kg netos</p></div>
+      <div class="bg-slate-800 rounded-xl p-4"><p class="text-xs text-slate-400">Rosa López hoy</p><p class="text-3xl font-bold">37</p></div>
+      <div class="bg-slate-800 rounded-xl p-4 flex-1 min-h-0">
+        <p class="text-xs text-slate-400 mb-2">Últimas cajas guardadas</p>
+        <ul class="space-y-1.5 text-sm mono">
+          <li class="flex justify-between"><span>1,489 g</span><span class="text-emerald-400">✓ EJE0101</span></li>
+          <li class="flex justify-between"><span>1,487 g</span><span class="text-emerald-400">✓ EJE0102</span></li>
+          <li class="flex justify-between"><span>1,491 g</span><span class="text-emerald-400">✓ EJE0101</span></li>
+          <li class="flex justify-between"><span>1,485 g</span><span class="text-emerald-400">✓ EJE0103</span></li>
+          <li class="flex justify-between"><span>1,484 g</span><span class="text-emerald-400">✓ EJE0102</span></li>
+        </ul>
+        <p class="text-[11px] text-slate-500 mt-3">Fuera de rango no se guarda: no aparece aquí.</p>
+      </div>
+      <button class="rounded-xl bg-white/10 py-3 text-sm">Anular última (supervisor)</button>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ 4. INICIO DE SESIÓN (tablet 1280×800): solo el carnet -->
+<section id="login" class="pantalla w-[1280px] h-[800px] bg-slate-900 text-white flex flex-col">
+  <div class="px-6 py-4 flex items-center gap-3 border-b border-white/10"><span class="font-mono font-bold text-lg">BAL-03</span><span class="text-slate-300">Empinchado</span></div>
+  <div class="flex-1 flex flex-col items-center justify-center gap-6 px-8 text-center">
+    <p class="text-slate-400 text-base uppercase tracking-[0.3em]">Inicio de sesión</p>
+    <p class="text-6xl font-bold">Pase su carnet</p>
+    <div class="w-[420px] h-16 rounded-xl border-2 border-blue-400 bg-white/5 flex items-center justify-center mono text-2xl tracking-widest text-blue-200">▌</div>
+    <div class="w-[560px] rounded-xl bg-red-500/15 border border-red-400/40 px-4 py-3 text-base text-red-200">EJE0140 · Juana Cruz: hoy no tiene entrada en un área de pesadora. Pase primero por el kiosco de áreas.</div>
+  </div>
+</section>
+
+<!-- ============================================================ 5. ESTADOS DEL PESO Y GUARDADO (tablet 1280×800) -->
+<section id="estados" class="pantalla w-[1280px] h-[800px] bg-slate-200 p-5 grid grid-cols-2 grid-rows-2 gap-5">
+  <div class="rounded-2xl bg-amber-400 text-amber-950 flex flex-col items-center justify-center relative">
+    <div class="absolute top-4 right-4 flex items-center gap-2 rounded-full bg-white text-red-700 px-4 py-2 font-bold shadow"><span class="w-6 h-6 rounded-full bg-red-600 text-white flex items-center justify-center text-sm">✗</span>SIN GUARDAR</div>
+    <p class="text-8xl font-bold mono">1,470 g</p><p class="text-3xl font-bold mt-2">BAJO PESO</p><p class="text-lg">faltan 13 g · complete la caja</p>
+  </div>
+  <div class="rounded-2xl bg-emerald-600 text-white flex flex-col items-center justify-center relative">
+    <div class="absolute top-4 right-4 flex items-center gap-2 rounded-full bg-white text-amber-700 px-4 py-2 font-bold shadow"><span class="w-6 h-6 rounded-full bg-amber-500 text-white flex items-center justify-center text-sm">…</span>RETIRE PARA GUARDAR</div>
+    <p class="text-8xl font-bold mono">1,489 g</p><p class="text-3xl font-bold mt-2">PESO CORRECTO</p><p class="text-lg text-emerald-100">estable · dentro de 1,483 – 1,494 g</p>
+  </div>
+  <div class="rounded-2xl bg-red-600 text-white flex flex-col items-center justify-center relative">
+    <div class="absolute top-4 right-4 flex items-center gap-2 rounded-full bg-white text-red-700 px-4 py-2 font-bold shadow"><span class="w-6 h-6 rounded-full bg-red-600 text-white flex items-center justify-center text-sm">✗</span>SIN GUARDAR</div>
+    <p class="text-8xl font-bold mono">1,512 g</p><p class="text-3xl font-bold mt-2">SOBREPESO</p><p class="text-lg text-red-100">sobran 18 g · quite producto</p>
+  </div>
+  <div class="rounded-2xl bg-slate-800 text-white flex flex-col items-center justify-center relative">
+    <div class="absolute top-4 right-4 flex items-center gap-2 rounded-full bg-white text-emerald-700 px-4 py-2 font-bold shadow"><span class="w-6 h-6 rounded-full bg-emerald-600 text-white flex items-center justify-center text-sm">✓</span>GUARDADO #214</div>
+    <p class="text-8xl font-bold mono text-slate-400">0 g</p><p class="text-3xl font-bold mt-2">CAJA GUARDADA</p><p class="text-lg text-slate-300">1,489 g · Rosa López · escanee el carnet de la siguiente</p>
+  </div>
+</section>
+
+<script>
+  const id = new URLSearchParams(location.search).get("p") || (location.hash || "#config").slice(1);
+  const s = document.getElementById(id);
+  if (s) s.classList.add("activa");
+</script>
+</body>
+</html>
