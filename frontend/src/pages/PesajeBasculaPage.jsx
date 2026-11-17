@@ -377,40 +377,6 @@ function Pesaje({ sesion, b, onCerrar }) {
             </select>
           </label>
 
-          {pt && (
-            <>
-              <label className={etq}>Producto que sale
-                <select value={trabajo.claseSalida} onChange={set("claseSalida")} className={sel + " mt-0.5"}>
-                  <option value="">— elija —</option>
-                  {cat.clases.map(c => <option key={c.Clase} value={c.Clase}>{c.Clase} · {c.Descripcion}</option>)}
-                </select>
-              </label>
-              <div className={etq}>Destino
-                <div className="mt-0.5 grid grid-cols-2 gap-2">
-                  {[["EXPORTACION", "Exportación"], ["LOCAL", "Venta local"]].map(([v, t]) => (
-                    <button key={v} onClick={() => setTrabajo(x => ({ ...x, destino: v, pedido: v === "LOCAL" ? "" : x.pedido }))}
-                      className={`py-2 rounded-lg border text-sm font-bold normal-case ${trabajo.destino === v ? "bg-amber-400 text-amber-950 border-amber-300" : `${tema.campo} text-white`}`}>{t}</button>
-                  ))}
-                </div>
-              </div>
-              {trabajo.destino === "EXPORTACION" && (
-                <label className={etq}>Pedido de exportación
-                  <select value={trabajo.pedido} onChange={set("pedido")} className={sel + " mt-0.5"}>
-                    <option value="">— elija —</option>
-                    {cat.pedidos.map(p => <option key={p.CodigoPedido} value={p.CodigoPedido}>{p.CodigoPedido} · {p.Cliente}</option>)}
-                  </select>
-                  {cat.pedidos.length === 0 && <span className="block mt-1 text-amber-300 normal-case">No hay pedidos de exportación en proceso.</span>}
-                </label>
-              )}
-            </>
-          )}
-
-          <label className={etq}>Tipo de empaque{pt ? " (opcional)" : ""}
-            <select value={trabajo.empaque} onChange={set("empaque")} className={sel + " mt-0.5"}>
-              <option value="">{pt ? "— peso libre —" : "— elija —"}</option>
-              {cat.empaques.map(e => <option key={e.Codigo} value={e.Codigo}>{e.Nombre}{e.ConRango ? ` · ${g(e.MinG)}–${g(e.MaxG)} g` : " · libre"}</option>)}
-            </select>
-          </label>
 
           {pideCarrito && (
             <label className={etq}>N.º de carrito *
@@ -490,10 +456,46 @@ function Pesaje({ sesion, b, onCerrar }) {
           })()}
         </div>
 
-        {/* Contadores */}
-        <div className="w-[220px] shrink-0 flex flex-col gap-3 min-h-0">
-          <div className={`${tema.panel} rounded-xl p-3`}><p className="text-xs text-slate-300">Bandejas hoy (báscula)</p><p className="text-3xl font-bold">{g(resumen.Cajas)}</p><p className="text-xs text-slate-300">{(resumen.NetoG / 1000).toLocaleString("es", { maximumFractionDigits: 1 })} kg</p></div>
-          <div className={`${tema.panel} rounded-xl p-3 flex-1 min-h-0 overflow-auto`}>
+        {/* Lo que sale (producto, destino, pedido, empaque) y contadores */}
+        <div className="w-[300px] shrink-0 flex flex-col gap-2 min-h-0 overflow-y-auto pl-1">
+          <div className="flex flex-col gap-2">
+            {pt && (
+              <>
+                <label className={etq}>Producto que sale
+                  <select value={trabajo.claseSalida} onChange={set("claseSalida")} className={sel + " mt-0.5"}>
+                    <option value="">— elija —</option>
+                    {cat.clases.map(c => <option key={c.Clase} value={c.Clase}>{c.Clase} · {c.Descripcion}</option>)}
+                  </select>
+                </label>
+                <div className={etq}>Destino
+                  <div className="mt-0.5 grid grid-cols-2 gap-2">
+                    {[["EXPORTACION", "Exportación"], ["LOCAL", "Venta local"]].map(([v, t]) => (
+                      <button key={v} onClick={() => setTrabajo(x => ({ ...x, destino: v, pedido: v === "LOCAL" ? "" : x.pedido }))}
+                        className={`py-2 rounded-lg border text-sm font-bold normal-case ${trabajo.destino === v ? "bg-amber-400 text-amber-950 border-amber-300" : `${tema.campo} text-white`}`}>{t}</button>
+                    ))}
+                  </div>
+                </div>
+                {trabajo.destino === "EXPORTACION" && (
+                  <label className={etq}>Pedido de exportación
+                    <select value={trabajo.pedido} onChange={set("pedido")} className={sel + " mt-0.5"}>
+                      <option value="">— elija —</option>
+                      {cat.pedidos.map(p => <option key={p.CodigoPedido} value={p.CodigoPedido}>{p.CodigoPedido} · {p.Cliente}</option>)}
+                    </select>
+                    {cat.pedidos.length === 0 && <span className="block mt-1 text-amber-300 normal-case">No hay pedidos de exportación en proceso.</span>}
+                  </label>
+                )}
+              </>
+            )}
+  
+            <label className={etq}>Tipo de empaque{pt ? " (opcional)" : ""}
+              <select value={trabajo.empaque} onChange={set("empaque")} className={sel + " mt-0.5"}>
+                <option value="">{pt ? "— peso libre —" : "— elija —"}</option>
+                {cat.empaques.map(e => <option key={e.Codigo} value={e.Codigo}>{e.Nombre}{e.ConRango ? ` · ${g(e.MinG)}–${g(e.MaxG)} g` : " · libre"}</option>)}
+              </select>
+            </label>
+          </div>
+          <div className={`${tema.panel} rounded-xl px-3 py-2 flex items-baseline gap-2 mt-1`}><span className="text-xs text-slate-300">Bandejas hoy</span><span className="text-2xl font-bold">{g(resumen.Cajas)}</span><span className="text-xs text-slate-300 ml-auto">{(resumen.NetoG / 1000).toLocaleString("es", { maximumFractionDigits: 1 })} kg</span></div>
+          <div className={`${tema.panel} rounded-xl p-3 flex-1 min-h-[90px] overflow-auto`}>
             <p className="text-xs text-slate-300 mb-2">Últimas guardadas</p>
             <ul className="space-y-1.5 text-sm font-mono">
               {resumen.ultimas.map(u => (
