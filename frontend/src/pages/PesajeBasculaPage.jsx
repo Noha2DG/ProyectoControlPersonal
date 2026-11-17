@@ -139,6 +139,15 @@ function Pesaje({ sesion, b, onCerrar }) {
 
   useEffect(() => { escribirLS(claveTrabajo(sesion.BalanzaCodigo), trabajo); }, [trabajo, sesion.BalanzaCodigo]);
 
+  // Con un solo tipo de empaque activo no hay nada que elegir: queda puesto. Sin empaque la pantalla
+  // no evalúa ni guarda, y al retirar la caja no decía nada (17 nov 2026, BAL-01: 0 pesadas).
+  // También se limpia un empaque guardado que ya no está activo.
+  useEffect(() => {
+    if (!cat.empaques.length) return;
+    const existe = cat.empaques.some(e => e.Codigo === trabajo.empaque);
+    if (!existe) setTrabajo(t => ({ ...t, empaque: cat.empaques.length === 1 ? cat.empaques[0].Codigo : "" }));
+  }, [cat.empaques]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const cargarResumen = useCallback(async () => {
     try { setResumen(await api(`/api/pesaje-bascula/sesion/${sesion.SesionId}/resumen`)); } catch { /* siguiente */ }
   }, [sesion.SesionId]);
@@ -347,7 +356,8 @@ function Pesaje({ sesion, b, onCerrar }) {
               {!b.vigente ? (
                 <span className="rounded-full bg-black/30 px-4 py-2 text-lg font-bold">SIN LECTURA</span>
               ) : b.estable ? (
-                <span className="rounded-full bg-white/90 text-slate-900 px-4 py-2 text-lg font-bold">● ESTABLE</span>
+                // Verde suave: se distingue del verde fuerte de "peso correcto" (usuario, 17 nov 2026).
+                <span className="rounded-full bg-emerald-200 text-emerald-900 px-4 py-2 text-lg font-bold">● ESTABLE</span>
               ) : (
                 <span className="rounded-full bg-black/30 px-4 py-2 text-lg font-bold animate-pulse">◌ MOVIENDO</span>
               )}
