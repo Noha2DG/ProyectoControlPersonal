@@ -25,6 +25,7 @@ import ExistenciaBodegaPage from "./pages/ExistenciaBodegaPage.jsx";
 import RemisionesPage from "./pages/RemisionesPage.jsx";
 import LiberarMateriaPrimaPage from "./pages/LiberarMateriaPrimaPage.jsx";
 import ReportesPage from "./pages/ReportesPage.jsx";
+import BasculaPruebaPage from "./pages/BasculaPruebaPage.jsx";
 import EmpleadosTable from "./components/EmpleadosTable.jsx";
 import { exportarEmpleados } from "./utils/exportExcel.js";
 import EmpleadoModal from "./components/EmpleadoModal.jsx";
@@ -460,6 +461,10 @@ export default function App() {
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
+
+  // Prueba del puente con la báscula del cabezal: no toca el servidor (solo lee ws://127.0.0.1
+  // del propio equipo), por eso no pide sesión. La pantalla de pesaje real sí llevará permiso.
+  if (hash === "#/bascula-prueba") return <BasculaPruebaPage />;
 
   if (loading) return (
     <div className="min-h-screen flex items-center justify-center bg-blue-700">
