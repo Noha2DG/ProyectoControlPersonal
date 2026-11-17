@@ -42,9 +42,10 @@ const MODULOS = [
   { key: "bodega",         label: "Bodega — Pallets y Escaneo",      acciones: ["ver","escanear","editar","trasladar","eliminar"], grupo: "Operación" },
   // "anular" es la acción fuerte: devuelve al inventario producto ya despachado. Se separa de
   // "editar" (armar y confirmar, la operación diaria) y de "eliminar" (borrar borradores).
-  { key: "remisiones",     label: "Bodega — Remisiones y Despacho",  acciones: ["ver","crear","editar","eliminar","imprimir","anular"], grupo: "Operación" },
+  // "muestra" habilita la remisión "Muestra para análisis" sin dar el poder de liberar contenedores.
+  { key: "remisiones",     label: "Bodega — Remisiones y Despacho",  acciones: ["ver","crear","editar","eliminar","imprimir","anular","muestra"], grupo: "Operación" },
   // Un contenedor importado no sale de bodega hasta que alguien con "liberar" lo libera completo.
-  // También habilita la remisión "Muestra para análisis", la única salida mientras está pendiente.
+  // También habilita la remisión "Muestra para análisis" (igual que remisiones → muestra).
   { key: "liberar_mp",    label: "Liberar materia prima",            acciones: ["ver","liberar"], grupo: "Operación" },
   // Panorama de planta para gerencia: solo consulta (recorrido del producto por área).
   { key: "gerencia",      label: "Reportes — Panorama de planta",    acciones: ["ver"], grupo: "Operación" },
@@ -91,6 +92,7 @@ const ACCION_LABELS = {
   comandos: "Enviar comandos",
   usar: "Usar",
   anular_caja: "Anular caja",
+  muestra: "Muestra para análisis",
 };
 
 // Deriva la matriz de permisos de MODULOS en vez de enumerarla a mano por rol:
