@@ -127,7 +127,8 @@ const UMBRAL_LIBRE_G = 30;
 function Pesaje({ sesion, b, onCerrar }) {
   const puedeAnular = usePuede("pesaje_bascula", "anular_caja");
   const pt = sesion.Modo === "PERSONA";
-  const pideCarrito = Number(sesion.PideCarrito) === 1;
+  // Carrito: solo en producto terminado y donde el área lo pide (usuario, 17 nov 2026: "por producto" no lleva).
+  const pideCarrito = pt && Number(sesion.PideCarrito) === 1;
   const [cat, setCat] = useState({ empaques: [], tallas: [], lotes: [], clases: [], pedidos: [] });
   const [trabajo, setTrabajo] = useState(() => {
     const t = leerLS(claveTrabajo(sesion.BalanzaCodigo)) ?? {};
