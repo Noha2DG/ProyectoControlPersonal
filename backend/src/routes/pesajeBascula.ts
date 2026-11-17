@@ -243,7 +243,8 @@ router.post("/pesadas", requirePerm("pesaje_bascula", "usar"), async (req: AuthR
 
       // Carrito: obligatorio donde el área lo pide (Empanizado), como el termo en Pelado.
       const carrito = String(b.Carrito ?? "").trim().toUpperCase().slice(0, 20) || null;
-      if (Number(s.PideCarrito) === 1 && !carrito) throw new ErrorNegocio(400, "Escriba el número de carrito");
+      // Solo en producto terminado: "por producto" no lleva carrito (usuario, 17 nov 2026).
+      if (pt && Number(s.PideCarrito) === 1 && !carrito) throw new ErrorNegocio(400, "Escriba el número de carrito");
 
       // Producto terminado: producto que sale y destino (exportación con pedido en Proceso, o venta local).
       let claseSalida: string | null = null, destino: string | null = null, pedido: string | null = null;
