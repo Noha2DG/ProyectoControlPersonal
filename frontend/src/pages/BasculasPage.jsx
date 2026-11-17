@@ -63,7 +63,14 @@ function estadoDe(b) {
   return { t: "En línea, sin datos de báscula", punto: "bg-amber-500", c: "text-amber-600" };
 }
 
-const inputCls = "w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400";
+/** "Empinchado · por persona · Ana Pérez", o "sin sesión". */
+function dondeEsta(b) {
+  if (!b.SesionId) return "sin sesión";
+  return [b.SesionBodega ?? b.SesionArea, b.SesionModo === "PERSONA" ? "por persona" : "por producto", b.SesionOperadora]
+    .filter(Boolean).join(" · ");
+}
+
+const inputCls ="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400";
 
 function ModalToken({ datos, onCerrar }) {
   const comando = `.\\instalar-bascula.ps1 -Ip <IP del cabezal> -Balanza ${datos.Codigo} -Token ${datos.Token} -Pin <PIN>`;
@@ -222,7 +229,7 @@ function Panel({ b, bodegas, puedeConfigurar, puedeComandos, onCambio, onToken }
           <input disabled={!puedeConfigurar} value={f.Nombre} onChange={e => setF({ ...f, Nombre: e.target.value })} className={inputCls + " mt-1"} />
         </label>
         <p className="text-xs text-slate-500">
-          Dónde está ahora: <b>sin sesión</b>. La bodega y el modo los trae la pesadora al pasar su carnet
+          Dónde está ahora: <b>{dondeEsta(b)}</b>. La bodega y el modo los trae la pesadora al pasar su carnet
           (según el área en que entró hoy).
         </p>
         <label className="flex items-center gap-2 text-xs text-slate-600">
@@ -372,7 +379,7 @@ function Equipos({ puedeConfigurar, puedeComandos }) {
                         className={`cursor-pointer hover:bg-slate-50 ${sel === b.Codigo ? "bg-blue-50" : ""} ${b.Activa ? "" : "opacity-60"}`}>
                         <td className="px-4 py-2.5 font-mono font-semibold truncate">{b.Codigo}</td>
                         {/* Se llenará con la sesión de la pesadora (bodega · modo · nombre). */}
-                        <td className="px-2 truncate text-slate-400" title={b.Nombre}>sin sesión{b.Nombre ? ` · ${b.Nombre}` : ""}</td>
+                        <td className={`px-2 truncate ${b.SesionId ? "text-slate-800" : "text-slate-400"}`} title={b.Nombre}>{dondeEsta(b)}</td>
                         <td className="px-2 truncate"><span className={`inline-flex items-center gap-1.5 ${est.c}`}><span className={`w-2 h-2 rounded-full shrink-0 ${est.punto}`} />{est.t}</span></td>
                         <td className={`px-2 truncate ${b.Activa && !b.EnLinea ? "text-red-600" : "text-slate-500"}`}>{hace(b.SegSinContacto)}</td>
                         <td className="px-2 text-right font-mono">{b.EnLinea && b.UltimoPesoG !== null ? `${b.UltimoPesoG.toLocaleString("es")} g` : "—"}</td>
@@ -494,7 +501,175 @@ function AreasPesaje({ puedeConfigurar }) {
   );
 }
 
-const PESTANAS = [["equipos", "Equipos"], ["areas", "Áreas que pesan"]];
+// ─── Tipos de empaque ────────────────────────────────────────────────────────────────────────
+// Bruto = neto + tara + deshidratación (neto × %); rango = [bruto − margen−, bruto + margen+]. El
+// cálculo lo hace el servidor (lib/empaquePesaje.ts) y aquí solo se muestra: un solo lugar con la
+// fórmula. Cambiar un tipo no altera lo ya pesado: cada pesada guarda su rango.
+const EMPAQUE_VACIO = { Codigo: "", Nombre: "", Unidad: "g", PesoNetoG: "", TaraG: "0", DeshidratacionPct: "0", MargenPosG: "0", MargenNegG: "0", Activo: true };
+
+function FormEmpaque({ inicial, nuevo, puedeConfigurar, onGuardado, onCancelar }) {
+  const [f, setF] = useState(inicial);
+  const [calc, setCalc] = useState(null);
+  const [error, setError] = useState("");
+  const [guardando, setGuardando] = useState(false);
+  const set = k => e => setF(p => ({ ...p, [k]: e.target.value }));
+
+  useEffect(() => { setF(inicial); setError(""); }, [inicial]);
+  useEffect(() => {
+    const id = setTimeout(async () => {
+      if (f.PesoNetoG === "") { setCalc(null); return; }
+      try { setCalc(await api("/api/balanzas/empaques/calcular", { method: "POST", body: JSON.stringify(f) })); setError(""); }
+      catch (e) { setCalc(null); setError(e.message); }
+    }, 250);
+    return () => clearTimeout(id);
+  }, [f]);
+
+  const guardar = async (e) => {
+    e.preventDefault();
+    setGuardando(true); setError("");
+    try {
+      if (nuevo) await api("/api/balanzas/empaques", { method: "POST", body: JSON.stringify(f) });
+      else await api(`/api/balanzas/empaques/${encodeURIComponent(f.Codigo)}`, { method: "PUT", body: JSON.stringify(f) });
+      onGuardado(f.Codigo.toUpperCase());
+    } catch (err) { setError(err.message); }
+    finally { setGuardando(false); }
+  };
+
+  const num = (k, etiqueta, sufijo) => (
+    <label className="text-slate-500 text-xs">{etiqueta}
+      <div className="mt-1 flex">
+        <input disabled={!puedeConfigurar} value={f[k]} onChange={set(k)} inputMode="decimal"
+          className="w-full border border-slate-300 rounded-l-lg px-3 py-2 text-sm text-right" />
+        <span className="border border-l-0 border-slate-300 rounded-r-lg px-2 py-2 bg-slate-50 text-sm">{sufijo}</span>
+      </div>
+    </label>
+  );
+
+  // Barra: de (mín − 5 %) a (máx + 5 %).
+  const barra = calc && (() => {
+    const lo = calc.MinG * 0.97, hi = calc.MaxG * 1.03, w = hi - lo || 1;
+    return { bajo: ((calc.MinG - lo) / w) * 100, ok: ((calc.MaxG - calc.MinG) / w) * 100 };
+  })();
+
+  return (
+    <form onSubmit={guardar} className="flex-1 bg-white rounded-xl border p-5 space-y-4">
+      <div className="flex items-center gap-3">
+        <h2 className="text-lg font-bold">{nuevo ? "Nuevo tipo de empaque" : f.Nombre || f.Codigo}</h2>
+        {!nuevo && <span className={`text-xs rounded px-2 py-0.5 ${f.Activo ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-600"}`}>{f.Activo ? "Activo" : "Inactivo"}</span>}
+      </div>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+        <label className="text-slate-500 text-xs">Código
+          <input required disabled={!nuevo || !puedeConfigurar} value={f.Codigo} onChange={e => setF(p => ({ ...p, Codigo: e.target.value.toUpperCase() }))}
+            className="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2 font-mono text-sm disabled:bg-slate-50" placeholder="YEN650" />
+        </label>
+        <label className="text-slate-500 text-xs md:col-span-2">Nombre
+          <input required disabled={!puedeConfigurar} value={f.Nombre} onChange={set("Nombre")}
+            className="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" placeholder="YENS 650 g" />
+        </label>
+        <label className="text-slate-500 text-xs">Mostrar en
+          <select disabled={!puedeConfigurar} value={f.Unidad} onChange={set("Unidad")} className="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2 text-sm">
+            <option value="g">gramos (g)</option><option value="kg">kilos (kg)</option><option value="lb">libras (lb)</option>
+          </select>
+        </label>
+      </div>
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+        {num("PesoNetoG", "Peso neto", "g")}
+        {num("TaraG", "Tara material", "g")}
+        {num("DeshidratacionPct", "Deshidratación", "%")}
+        {num("MargenPosG", "Margen +", "g")}
+        {num("MargenNegG", "Margen −", "g")}
+      </div>
+
+      <div className="rounded-xl bg-slate-50 border p-4">
+        {calc ? (
+          <>
+            <div className="flex flex-wrap items-end gap-8">
+              <div><p className="text-xs text-slate-500">Deshidratación</p><p className="text-2xl font-bold">{calc.DeshidratacionG} g</p></div>
+              <div><p className="text-xs text-slate-500">Peso bruto (objetivo)</p><p className="text-3xl font-bold">{calc.PesoBrutoG.toLocaleString("es")} g</p>
+                <p className="text-xs text-slate-500">{calc.PesoNetoG} neto + {calc.TaraG} tara + {calc.DeshidratacionG} deshidratación</p></div>
+              <div><p className="text-xs text-slate-500">Rango que se guarda</p><p className="text-3xl font-bold text-emerald-600">{calc.MinG.toLocaleString("es")} – {calc.MaxG.toLocaleString("es")} g</p></div>
+            </div>
+            <div className="mt-4 h-9 rounded-lg overflow-hidden flex text-xs font-semibold text-white">
+              <div style={{ width: `${barra.bajo}%` }} className="bg-amber-400 text-amber-950 flex items-center justify-center">BAJO</div>
+              <div style={{ width: `${barra.ok}%` }} className="bg-emerald-500 flex items-center justify-center min-w-[80px]">GUARDA</div>
+              <div className="flex-1 bg-red-500 flex items-center justify-center">SOBREPESO</div>
+            </div>
+          </>
+        ) : <p className="text-sm text-slate-500">Escriba el peso neto para ver el rango.</p>}
+      </div>
+
+      {error && <p className="text-sm text-red-600">{error}</p>}
+      {puedeConfigurar && (
+        <div className="flex flex-wrap items-center gap-3">
+          <button disabled={guardando} className="px-5 py-2 rounded-lg bg-blue-700 text-white font-medium disabled:opacity-50">{guardando ? "Guardando…" : "Guardar"}</button>
+          {!nuevo && (
+            <label className="flex items-center gap-2 text-sm text-slate-600">
+              <input type="checkbox" checked={f.Activo} onChange={e => setF(p => ({ ...p, Activo: e.target.checked }))} /> Activo (aparece en la pantalla de pesaje)
+            </label>
+          )}
+          <button type="button" onClick={onCancelar} className="px-4 py-2 rounded-lg text-sm text-slate-600 hover:bg-slate-100">Cancelar</button>
+          <p className="text-xs text-slate-500 w-full">Cambiar el rango no toca lo ya pesado: cada pesada guarda el rango con que se pesó.</p>
+        </div>
+      )}
+    </form>
+  );
+}
+
+function TiposEmpaque({ puedeConfigurar }) {
+  const [lista, setLista] = useState([]);
+  const [sel, setSel] = useState(null); // código, o "__nuevo"
+  const [buscar, setBuscar] = useState("");
+  const [error, setError] = useState("");
+
+  const cargar = useCallback(async () => {
+    try { setLista(await api("/api/balanzas/empaques")); setError(""); } catch (e) { setError(e.message); }
+  }, []);
+  useEffect(() => { cargar(); }, [cargar]);
+
+  const q = buscar.trim().toLowerCase();
+  const filtrada = lista.filter(e => !q || e.Codigo.toLowerCase().includes(q) || e.Nombre.toLowerCase().includes(q));
+  const elegido = lista.find(e => e.Codigo === sel);
+  const inicial = sel === "__nuevo" ? EMPAQUE_VACIO
+    : elegido ? { ...elegido, PesoNetoG: String(elegido.PesoNetoG), TaraG: String(elegido.TaraG), DeshidratacionPct: String(elegido.DeshidratacionPct),
+                  MargenPosG: String(elegido.MargenPosG), MargenNegG: String(elegido.MargenNegG) } : null;
+
+  return (
+    <div className="flex flex-col lg:flex-row gap-4 items-start">
+      <div className="w-full lg:w-[460px] shrink-0 bg-white rounded-xl border overflow-hidden">
+        <div className="px-4 py-3 border-b flex items-center gap-2">
+          <input value={buscar} onChange={e => setBuscar(e.target.value)} placeholder="Buscar código o nombre…" className="flex-1 border border-slate-300 rounded-lg px-3 py-1.5 text-sm" />
+          {puedeConfigurar && <button onClick={() => setSel("__nuevo")} className="px-3 py-1.5 text-sm rounded-lg bg-blue-700 text-white">+ Nuevo</button>}
+        </div>
+        {error && <p className="px-4 py-2 text-sm text-red-600">{error}</p>}
+        {lista.length === 0 ? <p className="p-5 text-sm text-slate-500">Todavía no hay tipos de empaque.</p> : (
+          <table className="w-full text-sm table-fixed">
+            <thead className="bg-slate-50 text-slate-500 text-xs uppercase">
+              <tr><th className="text-left px-4 py-2 w-24">Código</th><th className="text-left px-2">Nombre</th><th className="text-right px-2 w-20">Neto</th><th className="text-right px-4 w-28">Rango</th></tr>
+            </thead>
+            <tbody className="divide-y">
+              {filtrada.map(e => (
+                <tr key={e.Codigo} onClick={() => setSel(e.Codigo)} className={`cursor-pointer hover:bg-slate-50 ${sel === e.Codigo ? "bg-blue-50" : ""} ${e.Activo ? "" : "opacity-50"}`}>
+                  <td className="px-4 py-2.5 font-mono truncate">{e.Codigo}</td>
+                  <td className="px-2 truncate" title={e.Nombre}>{e.Nombre}</td>
+                  <td className="px-2 text-right">{e.PesoNetoG.toLocaleString("es")} g</td>
+                  <td className="px-4 text-right font-mono">{e.MinG}–{e.MaxG}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+      {inicial ? (
+        <FormEmpaque inicial={inicial} nuevo={sel === "__nuevo"} puedeConfigurar={puedeConfigurar}
+          onGuardado={(c) => { cargar(); setSel(c); }} onCancelar={() => setSel(null)} />
+      ) : (
+        <p className="text-sm text-slate-500 p-4">Elija un tipo de empaque o cree uno nuevo.</p>
+      )}
+    </div>
+  );
+}
+
+const PESTANAS = [["equipos", "Equipos"], ["empaques", "Tipos de empaque"], ["areas", "Áreas que pesan"]];
 
 export default function BasculasPage({ puedeConfigurar, puedeComandos }) {
   const [pestana, setPestana] = useState("equipos");
@@ -509,6 +684,7 @@ export default function BasculasPage({ puedeConfigurar, puedeComandos }) {
         ))}
       </div>
       {pestana === "equipos" && <Equipos puedeConfigurar={puedeConfigurar} puedeComandos={puedeComandos} />}
+      {pestana === "empaques" && <TiposEmpaque puedeConfigurar={puedeConfigurar} />}
       {pestana === "areas" && <AreasPesaje puedeConfigurar={puedeConfigurar} />}
     </div>
   );

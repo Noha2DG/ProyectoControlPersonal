@@ -1,7 +1,8 @@
 import { Router, Request, Response } from "express";
 import crypto from "crypto";
 import prisma from "../lib/prisma.ts";
-import { requireAuth, requirePerm, AuthRequest } from "../middleware/auth.ts";
+import { requireAuth, requirePerm, requireAnyPerm, AuthRequest } from "../middleware/auth.ts";
+import { validarEmpaque } from "../lib/empaquePesaje.ts";
 
 // Básculas de empaque (ver scripts/createBalanzas.ts).
 //
@@ -134,9 +135,16 @@ router.get("/", requireAuth, requirePerm("basculas", "ver"), async (_req: AuthRe
              DATE_FORMAT(b.UltimoContacto, '%Y-%m-%d %H:%i:%s') AS UltimoContacto,
              TIMESTAMPDIFF(SECOND, b.UltimoContacto, NOW()) AS SegSinContacto,
              (b.TokenHash IS NOT NULL) AS TieneToken,
-             (SELECT COUNT(*) FROM BalanzaComando c WHERE c.BalanzaCodigo = b.Codigo AND c.Estado IN ('PENDIENTE','ENTREGADO')) AS ComandosEnCurso
+             (SELECT COUNT(*) FROM BalanzaComando c WHERE c.BalanzaCodigo = b.Codigo AND c.Estado IN ('PENDIENTE','ENTREGADO')) AS ComandosEnCurso,
+             s.SesionId, s.Modo AS SesionModo, sbv.Nombre AS SesionBodega, sa.Nombre AS SesionArea,
+             CONCAT_WS(' ', se.PrimerNombre, se.PrimerApellido) AS SesionOperadora
         FROM Balanza b
         LEFT JOIN BodegaVirtual bv ON bv.Codigo = b.BodegaVirtualCodigo
+        -- "Dónde está ahora": la sesión abierta de la pesadora (la bodega y el modo son suyos).
+        LEFT JOIN SesionBascula s ON s.BalanzaCodigo = b.Codigo AND s.Fin IS NULL
+        LEFT JOIN BodegaVirtual sbv ON sbv.Codigo = s.BodegaVirtualCodigo
+        LEFT JOIN Areas sa ON sa.Codigo = s.AreaCodigo
+        LEFT JOIN Empleados se ON se.Codigo = s.OperadoraCodigo
        ORDER BY b.Codigo`);
     res.json({
       segEnLinea: SEG_EN_LINEA,
@@ -273,6 +281,70 @@ router.put("/areas/:codigo", requireAuth, requirePerm("basculas", "configurar"),
     res.json({ ok: true });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── Tipos de empaque ────────────────────────────────────────────────────────────────────────
+// Lectura: también la usa la pantalla de pesaje (permiso aparte `pesaje_bascula`).
+
+const CODIGO_EMPAQUE = /^[A-Z0-9_-]{1,20}$/;
+
+router.get("/empaques", requireAuth, requireAnyPerm([["basculas", "ver"], ["pesaje_bascula", "usar"]]),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const soloActivos = String(req.query.activos ?? "") === "1";
+      const rows: any[] = await prisma.$queryRawUnsafe(`
+        SELECT Codigo, Nombre, Unidad, PesoNetoG, TaraG, DeshidratacionPct, DeshidratacionG, PesoBrutoG,
+               MargenPosG, MargenNegG, MinG, MaxG, Activo, ModificadoPor,
+               DATE_FORMAT(COALESCE(ModificadoEn, CreadoEn), '%Y-%m-%d %H:%i') AS Modificado
+          FROM EmpaquePesaje ${soloActivos ? "WHERE Activo = 1" : ""} ORDER BY Activo DESC, Nombre`);
+      res.json(rows.map(r => ({ ...r, Activo: Number(r.Activo) === 1, DeshidratacionPct: Number(r.DeshidratacionPct) })));
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+// POST /api/balanzas/empaques/calcular — vista previa del rango mientras se escribe (no guarda).
+router.post("/empaques/calcular", requireAuth, requirePerm("basculas", "ver"), (req: AuthRequest, res: Response) => {
+  try { res.json(validarEmpaque({ Nombre: "x", ...req.body })); } catch (err: any) { res.status(400).json({ error: err.message }); }
+});
+
+router.post("/empaques", requireAuth, requirePerm("basculas", "configurar"), async (req: AuthRequest, res: Response) => {
+  try {
+    const codigo = String(req.body?.Codigo ?? "").trim().toUpperCase();
+    if (!CODIGO_EMPAQUE.test(codigo)) { res.status(400).json({ error: "Código: letras, números, - y _ (máx. 20)" }); return; }
+    const e = validarEmpaque(req.body);
+    const [ya]: any[] = await prisma.$queryRaw`SELECT Codigo FROM EmpaquePesaje WHERE Codigo = ${codigo}`;
+    if (ya) { res.status(409).json({ error: `Ya existe el tipo de empaque ${codigo}` }); return; }
+    await prisma.$executeRaw`
+      INSERT INTO EmpaquePesaje (Codigo, Nombre, Unidad, PesoNetoG, TaraG, DeshidratacionPct, DeshidratacionG,
+                                 PesoBrutoG, MargenPosG, MargenNegG, MinG, MaxG, ModificadoPor)
+      VALUES (${codigo}, ${e.Nombre}, ${e.Unidad}, ${e.PesoNetoG}, ${e.TaraG}, ${e.DeshidratacionPct}, ${e.DeshidratacionG},
+              ${e.PesoBrutoG}, ${e.MargenPosG}, ${e.MargenNegG}, ${e.MinG}, ${e.MaxG}, ${req.user!.username})`;
+    res.status(201).json({ ok: true, Codigo: codigo });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// PUT /api/balanzas/empaques/:codigo — cambia el rango para lo que se pese de aquí en adelante; las
+// pesadas ya guardadas conservan el rango con que se pesaron.
+router.put("/empaques/:codigo", requireAuth, requirePerm("basculas", "configurar"), async (req: AuthRequest, res: Response) => {
+  try {
+    const codigo = String(req.params.codigo).toUpperCase();
+    const e = validarEmpaque(req.body);
+    const activo = req.body?.Activo === false ? 0 : 1;
+    const n = await prisma.$executeRaw`
+      UPDATE EmpaquePesaje
+         SET Nombre = ${e.Nombre}, Unidad = ${e.Unidad}, PesoNetoG = ${e.PesoNetoG}, TaraG = ${e.TaraG},
+             DeshidratacionPct = ${e.DeshidratacionPct}, DeshidratacionG = ${e.DeshidratacionG}, PesoBrutoG = ${e.PesoBrutoG},
+             MargenPosG = ${e.MargenPosG}, MargenNegG = ${e.MargenNegG}, MinG = ${e.MinG}, MaxG = ${e.MaxG},
+             Activo = ${activo}, ModificadoEn = NOW(), ModificadoPor = ${req.user!.username}
+       WHERE Codigo = ${codigo}`;
+    if (!n) { res.status(404).json({ error: "No existe" }); return; }
+    res.json({ ok: true });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
   }
 });
 

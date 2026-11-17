@@ -27,6 +27,7 @@ import LiberarMateriaPrimaPage from "./pages/LiberarMateriaPrimaPage.jsx";
 import ReportesPage from "./pages/ReportesPage.jsx";
 import BasculaPruebaPage from "./pages/BasculaPruebaPage.jsx";
 import BasculasPage from "./pages/BasculasPage.jsx";
+import PesajeBasculaPage from "./pages/PesajeBasculaPage.jsx";
 import EmpleadosTable from "./components/EmpleadosTable.jsx";
 import { exportarEmpleados } from "./utils/exportExcel.js";
 import EmpleadoModal from "./components/EmpleadoModal.jsx";
@@ -371,6 +372,15 @@ function Dashboard({ inicio }) {
                 Ranking Producción
               </a>
             )}
+            {perm("pesaje_bascula", "usar") && (
+              <a href="#/pesaje" onClick={() => { window.location.hash = "#/pesaje"; }}
+                className="hidden sm:flex items-center gap-1.5 text-blue-200 hover:text-white text-xs border border-blue-200 px-2.5 py-1.5 rounded-lg transition">
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3v17.25M5.25 4.97c2.2-.31 4.47-.47 6.75-.47s4.55.16 6.75.47M5.25 4.97L2.6 15.7c.75.5 1.8.8 2.65.8s1.9-.3 2.65-.8L5.25 4.97zm13.5 0L16.1 15.7c.75.5 1.8.8 2.65.8s1.9-.3 2.65-.8L18.75 4.97zM8 20.25h8" />
+                </svg>
+                Pesaje en báscula
+              </a>
+            )}
 
             <div className="hidden sm:block text-right">
               <p className="text-sm font-medium leading-none">{user?.nombre}</p>
@@ -505,6 +515,19 @@ export default function App() {
     return <MesaMovilPage codigo={decodeURIComponent(hash.slice("#/mesa/".length)).toUpperCase()} />;
   }
 
+  // Pesaje en báscula: pantalla del cabezal, con permiso propio (aparte de la configuración de básculas).
+  if (hash === "#/pesaje") {
+    if (!user) return <LoginPage />;
+    if (!hasPerm(user, "pesaje_bascula", "usar")) return (
+      <div className="min-h-screen flex flex-col items-center justify-center gap-3 bg-gray-100 px-6 text-center">
+        <p className="text-lg font-semibold text-gray-800">Sin permiso para pesar en báscula</p>
+        <p className="text-sm text-gray-600">Pide que te asignen "Báscula · Pesaje" en Usuarios.</p>
+        <a href="#/" className="text-sm text-blue-700">Abrir el sistema</a>
+      </div>
+    );
+    return <PesajeBasculaPage />;
+  }
+
   const kioscoRoute = KIOSCO_ROUTES[hash];
   if (kioscoRoute) {
     if (!user || !hasPerm(user, kioscoRoute.mod, "ver")) return <LoginPage />;
@@ -522,6 +545,7 @@ export default function App() {
     if (hasPerm(user, "kiosco_areas", "ver")) return <TransferenciasPage />;
     if (hasPerm(user, "kiosco_destajo", "ver")) return <MiProduccionPage />;
     if (hasPerm(user, "equipo", "ver"))       return <EquipoUniformesPage />;
+    if (hasPerm(user, "pesaje_bascula", "usar")) return <PesajeBasculaPage />;
   }
 
   // "Abrir el sistema" desde el QR de una mesa: entra a Destajo → Por Mesa en vez de la primera
