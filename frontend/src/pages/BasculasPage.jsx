@@ -360,13 +360,14 @@ function Equipos({ puedeConfigurar, puedeComandos }) {
             <p className="p-6 text-sm text-slate-500">Todavía no hay básculas registradas.</p>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full text-sm table-fixed min-w-[760px]">
+              <table className="w-full text-sm table-fixed min-w-[880px]">
                 <thead className="bg-slate-50 text-slate-500 text-xs uppercase">
                   <tr>
                     <th className="text-left px-4 py-2 w-24">Código</th>
                     <th className="text-left px-2 w-56">Dónde está ahora</th>
                     <th className="text-left px-2 w-48">Estado</th>
                     <th className="text-left px-2 w-24">Aviso</th>
+                    <th className="text-left px-2 w-32" title="La reporta el cabezal en cada aviso: si el DHCP la cambia, aquí se ve la nueva">IP</th>
                     <th className="text-right px-2 w-20">Peso</th>
                     <th className="text-left px-4 w-20">Versión</th>
                   </tr>
@@ -382,6 +383,7 @@ function Equipos({ puedeConfigurar, puedeComandos }) {
                         <td className={`px-2 truncate ${b.SesionId ? "text-slate-800" : "text-slate-400"}`} title={b.Nombre}>{dondeEsta(b)}</td>
                         <td className="px-2 truncate"><span className={`inline-flex items-center gap-1.5 ${est.c}`}><span className={`w-2 h-2 rounded-full shrink-0 ${est.punto}`} />{est.t}</span></td>
                         <td className={`px-2 truncate ${b.Activa && !b.EnLinea ? "text-red-600" : "text-slate-500"}`}>{hace(b.SegSinContacto)}</td>
+                        <td className="px-2 font-mono text-slate-600 truncate" title={b.EnLinea ? "IP actual" : "Última IP conocida"}>{b.IpLocal ?? "—"}{b.IpLocal && !b.EnLinea ? " ?" : ""}</td>
                         <td className="px-2 text-right font-mono">{b.EnLinea && b.UltimoPesoG !== null ? `${b.UltimoPesoG.toLocaleString("es")} g` : "—"}</td>
                         <td className="px-4 text-slate-500 truncate">{b.VersionApp ?? "—"}</td>
                       </tr>
