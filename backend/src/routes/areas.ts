@@ -17,6 +17,17 @@ function normalizarGrupo(valor: unknown): string | null {
 // pool— vive en las tablas de tarifas, con vigencia (backend/scripts/createTarifas.ts).
 const generaPaga = (v: any) => (v === false || v === 0 || v === "0" ? 0 : 1);
 
+// Básculas (scripts/alterAreasPesaje.ts): quién puede iniciar sesión en una báscula y con qué modo.
+// `undefined` = no vino en el cuerpo → el PUT conserva lo que había (COALESCE), para que una pantalla
+// vieja que no conoce estos campos no los borre.
+const MODOS_PESAJE = ["PERSONA", "PRODUCTO"];
+const esPesadora = (v: any) => (v === undefined ? null : v === true || v === 1 || v === "1" ? 1 : 0);
+function modoPesaje(v: any): string | null | undefined {
+  if (v === undefined) return undefined;
+  const m = String(v ?? "").toUpperCase();
+  return MODOS_PESAJE.includes(m) ? m : null;
+}
+
 // GET /api/areas  (público — kiosco lo necesita sin auth)
 //
 // Viaja también la bodega a la que pertenece el área. Sin eso, el selector de destino de una
@@ -26,7 +37,7 @@ const generaPaga = (v: any) => (v === false || v === 0 || v === "0" ? 0 : 1);
 router.get("/", async (_req: Request, res: Response) => {
   try {
     const rows: any[] = await prisma.$queryRaw`
-      SELECT a.Codigo, a.Nombre, a.Grupo, a.GeneraPaga, a.Activa,
+      SELECT a.Codigo, a.Nombre, a.Grupo, a.GeneraPaga, a.Activa, a.EsPesadora, a.ModoPesaje,
              a.BodegaVirtualCodigo, b.Nombre AS NombreBodega, b.Orden AS OrdenBodega, b.LlevaPiso
       FROM Areas a
       LEFT JOIN BodegaVirtual b ON b.Codigo = a.BodegaVirtualCodigo
@@ -34,6 +45,7 @@ router.get("/", async (_req: Request, res: Response) => {
     `;
     res.json(rows.map(r => ({
       ...r, Activa: Number(r.Activa) === 1, GeneraPaga: Number(r.GeneraPaga) === 1,
+      EsPesadora: Number(r.EsPesadora) === 1,
       LlevaPiso: r.LlevaPiso == null ? null : Number(r.LlevaPiso) === 1,
       OrdenBodega: r.OrdenBodega == null ? null : Number(r.OrdenBodega),
     })));
@@ -45,13 +57,13 @@ router.get("/", async (_req: Request, res: Response) => {
 // POST /api/areas
 router.post("/", requireAuth, requirePerm("areas", "crear"), async (req: Request, res: Response) => {
   try {
-    const { Codigo, Nombre, Grupo, GeneraPaga, BodegaVirtualCodigo } = req.body;
+    const { Codigo, Nombre, Grupo, GeneraPaga, BodegaVirtualCodigo, EsPesadora, ModoPesaje } = req.body;
     const codigo = String(Codigo ?? "").trim().toUpperCase();
     if (!codigo || !Nombre) { res.status(400).json({ error: "Código y Nombre son requeridos" }); return; }
     await prisma.$executeRaw`
-      INSERT INTO Areas (Codigo, Nombre, Grupo, GeneraPaga, BodegaVirtualCodigo)
+      INSERT INTO Areas (Codigo, Nombre, Grupo, GeneraPaga, BodegaVirtualCodigo, EsPesadora, ModoPesaje)
       VALUES (${codigo}, ${Nombre}, ${normalizarGrupo(Grupo)}, ${generaPaga(GeneraPaga)},
-              ${BodegaVirtualCodigo || null})
+              ${BodegaVirtualCodigo || null}, ${esPesadora(EsPesadora) ?? 0}, ${modoPesaje(ModoPesaje) ?? null})
     `;
     res.status(201).json({ ok: true });
   } catch (err: any) {
@@ -64,12 +76,15 @@ router.post("/", requireAuth, requirePerm("areas", "crear"), async (req: Request
 router.put("/:codigo", requireAuth, requirePerm("areas", "editar"), async (req: Request, res: Response) => {
   try {
     const codigo = req.params.codigo;
-    const { Nombre, Grupo, GeneraPaga, Activa, BodegaVirtualCodigo } = req.body;
+    const { Nombre, Grupo, GeneraPaga, Activa, BodegaVirtualCodigo, EsPesadora, ModoPesaje } = req.body;
     const activa = Activa === false || Activa === 0 ? 0 : 1;
+    const modo = modoPesaje(ModoPesaje);
     await prisma.$executeRaw`
       UPDATE Areas SET Nombre = ${Nombre}, Grupo = ${normalizarGrupo(Grupo)},
                        GeneraPaga = ${generaPaga(GeneraPaga)}, Activa = ${activa},
-                       BodegaVirtualCodigo = ${BodegaVirtualCodigo || null}
+                       BodegaVirtualCodigo = ${BodegaVirtualCodigo || null},
+                       EsPesadora = COALESCE(${esPesadora(EsPesadora)}, EsPesadora),
+                       ModoPesaje = IF(${modo === undefined ? 1 : 0} = 1, ModoPesaje, ${modo ?? null})
       WHERE Codigo = ${codigo}
     `;
     res.json({ ok: true });

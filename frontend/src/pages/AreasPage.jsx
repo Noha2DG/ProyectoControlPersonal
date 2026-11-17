@@ -9,12 +9,13 @@ const COLS = Object.keys(COL_DEFAULTS);
 // "Forma de pago" se quitó el 8 oct 2026: cómo se paga cada área vive en Catálogos → Tarifas. Lo único
 // que queda aquí es GeneraPaga: desmarcado = baño, cafetería, permisos… ese tiempo es PAUSA y se resta
 // del Lb/hr del destajo.
-const EMPTY = { Codigo: "", Nombre: "", Grupo: "", GeneraPaga: true, BodegaVirtualCodigo: "" };
+const EMPTY = { Codigo: "", Nombre: "", Grupo: "", GeneraPaga: true, BodegaVirtualCodigo: "", EsPesadora: false, ModoPesaje: "" };
 
 function AreaModal({ area, areas, grupos, bodegas, onSave, onClose }) {
   const isEdit = !!area;
   const [form, setForm] = useState(isEdit
-    ? { ...area, Grupo: area.Grupo || "", GeneraPaga: area.GeneraPaga !== false, BodegaVirtualCodigo: area.BodegaVirtualCodigo || "" }
+    ? { ...area, Grupo: area.Grupo || "", GeneraPaga: area.GeneraPaga !== false, BodegaVirtualCodigo: area.BodegaVirtualCodigo || "",
+        EsPesadora: area.EsPesadora === true, ModoPesaje: area.ModoPesaje || "" }
     : EMPTY);
   const set = f => e => setForm(p => ({ ...p, [f]: e.target.value }));
 
@@ -101,6 +102,30 @@ function AreaModal({ area, areas, grupos, bodegas, onSave, onClose }) {
             </label>
             <p className="text-xs text-gray-400 mt-1">
               Desmárcalo en baño, cafetería, permisos…: ese tiempo es pausa y se resta del Lb/hr del destajo.
+            </p>
+          </div>
+          {/* Básculas: la bodega y el modo no son de la báscula (se mueven por la planta) sino del área
+              en que entró la pesadora hoy. Al pasar su carnet en una báscula, de aquí sale todo. */}
+          <div className="rounded-lg border border-gray-200 p-3 space-y-2">
+            <label className="flex items-center gap-2 text-sm text-gray-700">
+              <input type="checkbox" checked={form.EsPesadora} onChange={e => setForm(p => ({ ...p, EsPesadora: e.target.checked }))} />
+              Usa básculas (pesadora)
+            </label>
+            {form.EsPesadora && (
+              <>
+                <select value={form.ModoPesaje} onChange={set("ModoPesaje")}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400">
+                  <option value="">Lo elige la pesadora al entrar</option>
+                  <option value="PERSONA">Por persona (carnet por cada caja)</option>
+                  <option value="PRODUCTO">Por producto (sin carnet por caja)</option>
+                </select>
+                {!form.BodegaVirtualCodigo && (
+                  <p className="text-xs text-amber-600">Sin bodega, la pesadora tendrá que elegirla al entrar.</p>
+                )}
+              </>
+            )}
+            <p className="text-xs text-gray-400">
+              Quien entra hoy a esta área puede iniciar sesión en cualquier báscula; las pesadas van a la bodega del área.
             </p>
           </div>
           <div className="flex justify-end gap-3 pt-1">
@@ -226,6 +251,12 @@ export default function AreasPage() {
                   <td className="px-4 py-3 text-gray-900 truncate" title={area.Nombre}>
                     {area.Nombre}
                     {area.GeneraPaga === false && <span className="ml-2 px-1.5 py-0.5 rounded-full text-[11px] font-semibold bg-gray-100 text-gray-500">No genera paga</span>}
+                    {area.EsPesadora && (
+                      <span className="ml-2 px-1.5 py-0.5 rounded-full text-[11px] font-semibold bg-violet-100 text-violet-700"
+                        title={area.ModoPesaje ? `Báscula: ${area.ModoPesaje === "PERSONA" ? "por persona" : "por producto"}` : "Báscula: modo lo elige la pesadora"}>
+                        Báscula{area.ModoPesaje === "PERSONA" ? " · persona" : area.ModoPesaje === "PRODUCTO" ? " · producto" : ""}
+                      </span>
+                    )}
                   </td>
                   <td className="px-4 py-3 truncate" title={area.Grupo || ""}>
                     {area.Grupo
