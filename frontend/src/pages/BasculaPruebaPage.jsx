@@ -48,6 +48,8 @@ export default function BasculaPruebaPage() {
   let aviso = null;
   if (!b.conectado) {
     aviso = "No hay conexión con la app Báscula Puente. Revisa que esté instalada y abierta en este equipo.";
+  } else if (!b.configurada) {
+    aviso = "Esta báscula no tiene código de balanza configurado. Avisa al técnico antes de pesar.";
   } else if (b.estadoPuerto && b.estadoPuerto !== "LEYENDO") {
     aviso = b.detalle || "La app está abierta, pero la báscula no está mandando datos.";
   }

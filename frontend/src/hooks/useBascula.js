@@ -23,7 +23,8 @@ const LECTURA_VIGENTE_MS = 1500;
 
 const ESTADO_INICIAL = {
   conectado: false,        // hay WebSocket abierto con la APK
-  balanza: null,           // código configurado en la APK (ej. BAL-01)
+  balanza: null,           // código configurado en la APK (ej. BAL-01); null = sin configurar
+  configurada: true,       // false si en la APK nadie puso el código de balanza
   version: null,
   estadoPuerto: null,      // LEYENDO | SIN_DATOS | ABRIENDO | ERROR | DETENIDO
   detalle: "",
@@ -70,7 +71,7 @@ export function useBascula({ url = URL_PUENTE, activo = true } = {}) {
           setEstado(e => ({
             ...e,
             conectado: true,
-            balanza: m.balanza ?? e.balanza,
+            balanza: "balanza" in m ? m.balanza : e.balanza,
             gramos: m.gramos,
             estable: !!m.estable,
             trama: m.trama,
@@ -82,8 +83,9 @@ export function useBascula({ url = URL_PUENTE, activo = true } = {}) {
           setEstado(e => ({
             ...e,
             conectado: true,
-            balanza: m.balanza ?? e.balanza,
+            balanza: "balanza" in m ? m.balanza : e.balanza,
             version: m.version ?? e.version,
+            configurada: m.configurada ?? e.configurada,
             estadoPuerto: m.estadoPuerto ?? e.estadoPuerto,
             detalle: m.detalle ?? "",
           }));
