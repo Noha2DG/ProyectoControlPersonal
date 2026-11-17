@@ -34,10 +34,15 @@ const ESTADO_INICIAL = {
   recibidaEn: 0,           // Date.now() del navegador al recibir la última lectura
 };
 
-export function useBascula({ url = URL_PUENTE, activo = true } = {}) {
+// Comandos remotos (pantalla Básculas → servidor → app del cabezal → aquí):
+//   recargar      → recarga la página (p. ej. tras desplegar una versión nueva)
+//   cerrar_sesion → llama a `alCerrarSesion`, que la pantalla de pesaje usa para sacar a la operadora
+export function useBascula({ url = URL_PUENTE, activo = true, alCerrarSesion } = {}) {
   const [estado, setEstado] = useState(ESTADO_INICIAL);
   const [ahora, setAhora] = useState(() => Date.now());
   const wsRef = useRef(null);
+  const alCerrarSesionRef = useRef(alCerrarSesion);
+  alCerrarSesionRef.current = alCerrarSesion;
 
   useEffect(() => {
     if (!activo) return undefined;
@@ -89,6 +94,9 @@ export function useBascula({ url = URL_PUENTE, activo = true } = {}) {
             estadoPuerto: m.estadoPuerto ?? e.estadoPuerto,
             detalle: m.detalle ?? "",
           }));
+        } else if (m.tipo === "comando") {
+          if (m.accion === "recargar") window.location.reload();
+          else if (m.accion === "cerrar_sesion") alCerrarSesionRef.current?.();
         }
       };
 
