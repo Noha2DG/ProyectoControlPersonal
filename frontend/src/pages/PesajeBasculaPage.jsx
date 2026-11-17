@@ -430,7 +430,7 @@ function Pesaje({ sesion, b, onCerrar }) {
               ) : (
                 <form onSubmit={e => { e.preventDefault(); if (carnetCaja.trim()) leerCarnet(carnetCaja.trim().toUpperCase()); }}>
                   <input ref={carnetRef} value={carnetCaja} onChange={e => setCarnetCaja(e.target.value.toUpperCase())} autoComplete="off"
-                    placeholder="escanee el carnet" className="mt-1 w-full rounded-lg bg-white/10 border border-violet-200/60 px-3 py-2 font-mono text-lg tracking-widest" />
+                    placeholder="ESCANEE EL CARNET" className="mt-1 w-full rounded-lg bg-amber-300 text-amber-950 placeholder:text-amber-900 placeholder:font-bold border-2 border-amber-100 px-3 py-2.5 font-mono text-lg font-bold tracking-widest text-center focus:outline-none focus:ring-4 focus:ring-amber-200" />
                   {errorCarnet && <p className="text-xs text-red-200 mt-1">{errorCarnet}</p>}
                 </form>
               )}
