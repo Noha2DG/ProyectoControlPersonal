@@ -33,7 +33,7 @@ async function empleadoActivo(tx: any, codigo: string) {
 /** Área donde está hoy la persona: su transferencia abierta (kiosco de áreas). */
 async function areaActual(tx: any, codigo: string) {
   const [a]: any[] = await tx.$queryRaw`
-    SELECT t.CodigoArea, a.Nombre AS NombreArea, a.EsPesadora, a.ModoPesaje, a.BodegaVirtualCodigo, bv.Nombre AS BodegaNombre
+    SELECT t.CodigoArea, a.Nombre AS NombreArea, a.EsPesadora, a.ModoPesaje, a.PideCarrito, a.BodegaVirtualCodigo, bv.Nombre AS BodegaNombre
       FROM Transferencias t
       JOIN Areas a ON a.Codigo = t.CodigoArea
       LEFT JOIN BodegaVirtual bv ON bv.Codigo = a.BodegaVirtualCodigo
@@ -45,7 +45,7 @@ async function areaActual(tx: any, codigo: string) {
 async function datosSesion(tx: any, id: number) {
   const [s]: any[] = await tx.$queryRaw`
     SELECT s.SesionId, s.BalanzaCodigo, s.OperadoraCodigo, s.AreaCodigo, a.Nombre AS NombreArea,
-           s.BodegaVirtualCodigo, bv.Nombre AS BodegaNombre, s.Modo,
+           s.BodegaVirtualCodigo, bv.Nombre AS BodegaNombre, s.Modo, s.PideCarrito,
            DATE_FORMAT(s.FechaProduccion, '%Y-%m-%d') AS FechaProduccion,
            DATE_FORMAT(s.Inicio, '%H:%i') AS Inicio, s.Fin, s.MotivoFin,
            TIMESTAMPDIFF(MINUTE, s.UltimaActividad, NOW()) AS MinSinActividad,
@@ -131,8 +131,8 @@ router.post("/sesion", requirePerm("pesaje_bascula", "usar"), async (req: AuthRe
         UPDATE SesionBascula SET Fin = NOW(), MotivoFin = 'entró otra persona'
          WHERE BalanzaCodigo = ${balanza} AND Fin IS NULL`;
       await tx.$executeRaw`
-        INSERT INTO SesionBascula (BalanzaCodigo, OperadoraCodigo, AreaCodigo, BodegaVirtualCodigo, Modo, FechaProduccion, Usuario)
-        VALUES (${balanza}, ${carnet}, ${a.CodigoArea}, ${bodega}, ${modo}, ${hoyGT()}, ${req.user!.username})`;
+        INSERT INTO SesionBascula (BalanzaCodigo, OperadoraCodigo, AreaCodigo, BodegaVirtualCodigo, Modo, PideCarrito, FechaProduccion, Usuario)
+        VALUES (${balanza}, ${carnet}, ${a.CodigoArea}, ${bodega}, ${modo}, ${Number(a.PideCarrito) === 1 ? 1 : 0}, ${hoyGT()}, ${req.user!.username})`;
       const [{ id }]: any[] = await tx.$queryRaw`SELECT LAST_INSERT_ID() AS id`;
       return { sesion: await datosSesion(tx, Number(id)) };
     });
@@ -161,9 +161,9 @@ router.get("/sesion/:id/catalogos", requirePerm("pesaje_bascula", "usar"), async
   try {
     const s = await datosSesion(prisma, Number(req.params.id));
     if (!s) throw new ErrorNegocio(404, "La sesión no existe");
-    const [empaques, tallas, lotes] = await Promise.all([
+    const [empaques, tallas, lotes, clases, pedidos] = await Promise.all([
       prisma.$queryRawUnsafe(`
-        SELECT Codigo, Nombre, Unidad, PesoNetoG, TaraG, DeshidratacionG, PesoBrutoG, MinG, MaxG
+        SELECT Codigo, Nombre, Unidad, PesoNetoG, TaraG, DeshidratacionG, PesoBrutoG, MinG, MaxG, ConRango
           FROM EmpaquePesaje WHERE Activo = 1 ORDER BY Nombre`),
       prisma.$queryRawUnsafe(`SELECT Codigo, Descripcion FROM Tallas WHERE Activo = 1 ORDER BY Codigo`),
       // Inventario al piso de la bodega: lo que entró menos lo que salió, por Lote/Clase/Talla.
@@ -177,8 +177,20 @@ router.get("/sesion/:id/catalogos", requirePerm("pesaje_bascula", "usar"), async
          GROUP BY t.Lote, t.Clase, c.Descripcion, t.Talla, ta.Descripcion
         HAVING SUM(t.Kg) > 0.01
          ORDER BY t.Lote, t.Clase`, s.BodegaVirtualCodigo, s.BodegaVirtualCodigo),
+      // Producto que sale (producto terminado): el lote se conserva, el producto cambia (BF T-ON → coco).
+      prisma.$queryRawUnsafe(`SELECT Clase, Descripcion FROM Clase WHERE Activo = 1 ORDER BY Clase`),
+      // Exportación: los pedidos en Proceso de clientes de exportación (venta local no lleva pedido).
+      prisma.$queryRawUnsafe(`
+        SELECT p.CodigoPedido, p.Descripcion, c.RazonSocial AS Cliente
+          FROM Pedidos p JOIN Clientes c ON c.Codigo = p.CodigoCliente
+         WHERE p.Estatus = 'Proceso' AND c.Tipo = 'Exportacion'
+         ORDER BY c.RazonSocial, p.CodigoPedido`),
     ]);
-    res.json({ empaques, tallas, lotes: (lotes as any[]).map(l => ({ ...l, Kg: Number(l.Kg) })) });
+    res.json({
+      empaques: (empaques as any[]).map(e => ({ ...e, ConRango: Number(e.ConRango) === 1 })),
+      tallas, clases, pedidos,
+      lotes: (lotes as any[]).map(l => ({ ...l, Kg: Number(l.Kg) })),
+    });
   } catch (err: any) { responder(res, err); }
 });
 
@@ -195,8 +207,9 @@ router.get("/lotes", requirePerm("pesaje_bascula", "usar"), async (req: AuthRequ
   } catch (err: any) { responder(res, err); }
 });
 
-// POST /api/pesaje-bascula/pesadas — { Uuid, SesionId, EmpaqueCodigo, Lote, Clase, Talla, PersonaCodigo?, PesoBrutoG }
-// Solo dentro del rango del tipo de empaque: fuera de rango NO se guarda (lo exige el servidor, no
+// POST /api/pesaje-bascula/pesadas — { Uuid, SesionId, EmpaqueCodigo?, Lote, Clase, Talla, PersonaCodigo?, PesoBrutoG,
+//                                       Carrito?, ClaseSalida?, Destino?, CodigoPedido? }
+// Si el tipo de empaque tiene rango, solo dentro del rango: fuera NO se guarda (lo exige el servidor, no
 // solo la pantalla). Mismo Uuid = misma pesada: un reintento no la duplica.
 router.post("/pesadas", requirePerm("pesaje_bascula", "usar"), async (req: AuthRequest, res: Response) => {
   try {
@@ -208,13 +221,47 @@ router.post("/pesadas", requirePerm("pesaje_bascula", "usar"), async (req: AuthR
       if (ya) return { PesadaId: Number(ya.PesadaId), repetida: true };
 
       const s = await exigirSesionAbierta(tx, Number(b.SesionId));
-      const [emp]: any[] = await tx.$queryRaw`
-        SELECT Codigo, PesoBrutoG, TaraG, MinG, MaxG FROM EmpaquePesaje WHERE Codigo = ${String(b.EmpaqueCodigo ?? "")} AND Activo = 1`;
-      if (!emp) throw new ErrorNegocio(400, "Elija un tipo de empaque activo");
+      const pt = s.Modo === "PERSONA"; // producto terminado: carnet por bandeja, producto que sale y destino
       const peso = Number(b.PesoBrutoG);
-      if (!Number.isInteger(peso)) throw new ErrorNegocio(400, "Peso inválido");
-      if (peso < Number(emp.MinG) || peso > Number(emp.MaxG)) {
+      if (!Number.isInteger(peso) || peso <= 0) throw new ErrorNegocio(400, "Peso inválido");
+
+      // Tipo de empaque: obligatorio en "por producto"; opcional en producto terminado (peso libre).
+      // Con rango, solo se guarda dentro; "sin rango", cualquier peso estable.
+      const empCodigo = String(b.EmpaqueCodigo ?? "").trim();
+      let emp: any = null;
+      if (empCodigo) {
+        [emp] = await tx.$queryRaw`
+          SELECT Codigo, PesoBrutoG, TaraG, MinG, MaxG, ConRango FROM EmpaquePesaje WHERE Codigo = ${empCodigo} AND Activo = 1`;
+        if (!emp) throw new ErrorNegocio(400, "Ese tipo de empaque ya no está activo");
+      } else if (!pt) {
+        throw new ErrorNegocio(400, "Elija el tipo de empaque");
+      }
+      const conRango = emp && Number(emp.ConRango) === 1;
+      if (conRango && (peso < Number(emp.MinG) || peso > Number(emp.MaxG))) {
         throw new ErrorNegocio(400, `${peso} g está fuera del rango ${emp.MinG}–${emp.MaxG} g: no se guarda`);
+      }
+
+      // Carrito: obligatorio donde el área lo pide (Empanizado), como el termo en Pelado.
+      const carrito = String(b.Carrito ?? "").trim().toUpperCase().slice(0, 20) || null;
+      if (Number(s.PideCarrito) === 1 && !carrito) throw new ErrorNegocio(400, "Escriba el número de carrito");
+
+      // Producto terminado: producto que sale y destino (exportación con pedido en Proceso, o venta local).
+      let claseSalida: string | null = null, destino: string | null = null, pedido: string | null = null;
+      if (pt) {
+        claseSalida = String(b.ClaseSalida ?? "").trim() || null;
+        if (!claseSalida) throw new ErrorNegocio(400, "Elija el producto que sale");
+        const [cs]: any[] = await tx.$queryRaw`SELECT Clase FROM Clase WHERE Clase = ${claseSalida}`;
+        if (!cs) throw new ErrorNegocio(400, `No existe el producto ${claseSalida}`);
+        destino = String(b.Destino ?? "").toUpperCase();
+        if (destino !== "EXPORTACION" && destino !== "LOCAL") throw new ErrorNegocio(400, "Elija el destino: exportación o venta local");
+        if (destino === "EXPORTACION") {
+          pedido = String(b.CodigoPedido ?? "").trim() || null;
+          if (!pedido) throw new ErrorNegocio(400, "Elija el pedido de exportación");
+          const [pe]: any[] = await tx.$queryRaw`
+            SELECT p.CodigoPedido FROM Pedidos p JOIN Clientes c ON c.Codigo = p.CodigoCliente
+             WHERE p.CodigoPedido = ${pedido} AND p.Estatus = 'Proceso' AND c.Tipo = 'Exportacion'`;
+          if (!pe) throw new ErrorNegocio(400, `El pedido ${pedido} no está en proceso o no es de exportación`);
+        }
       }
       // El lote del piso trae la clase del producto ya procesado (E53, E92…), mientras que en Lotes está
       // con la de materia prima (D30, D31): exigir el par (Lote, Clase) en Lotes rechazaba todo lo del
@@ -232,20 +279,21 @@ router.post("/pesadas", requirePerm("pesaje_bascula", "usar"), async (req: AuthR
       const [talla]: any[] = await tx.$queryRaw`SELECT Codigo FROM Tallas WHERE Codigo = ${Number(b.Talla)}`;
       if (!talla) throw new ErrorNegocio(400, "Elija la talla");
       let persona: string | null = null;
-      if (s.Modo === "PERSONA") {
+      if (pt) {
         persona = String(b.PersonaCodigo ?? "").trim().toUpperCase();
-        if (!persona) throw new ErrorNegocio(400, "Escanee el carnet de quien armó esta caja");
+        if (!persona) throw new ErrorNegocio(400, "Escanee el carnet de quien armó esta bandeja");
         if (!(await empleadoActivo(tx, persona))) throw new ErrorNegocio(400, `${persona}: carnet no encontrado o de baja`);
       }
 
       await tx.$executeRaw`
         INSERT INTO Pesada (Uuid, SesionId, BalanzaCodigo, OperadoraCodigo, AreaCodigo, BodegaVirtualCodigo, Modo,
                             EmpaqueCodigo, Lote, Clase, Talla, PersonaCodigo, PesoBrutoG, PesoNetoG,
-                            ObjetivoG, MinG, MaxG, FechaProduccion)
+                            ObjetivoG, MinG, MaxG, FechaProduccion, ClaseSalida, Destino, CodigoPedido, Carrito)
         VALUES (${uuid}, ${s.SesionId}, ${s.BalanzaCodigo}, ${s.OperadoraCodigo}, ${s.AreaCodigo}, ${s.BodegaVirtualCodigo},
-                ${s.Modo}, ${emp.Codigo}, ${loteTxt}, ${claseTxt}, ${Number(b.Talla)}, ${persona},
-                ${peso}, ${peso - Number(emp.TaraG)}, ${Number(emp.PesoBrutoG)}, ${Number(emp.MinG)}, ${Number(emp.MaxG)},
-                ${s.FechaProduccion})`;
+                ${s.Modo}, ${emp ? emp.Codigo : null}, ${loteTxt}, ${claseTxt}, ${Number(b.Talla)}, ${persona},
+                ${peso}, ${peso - (emp ? Number(emp.TaraG) : 0)},
+                ${conRango ? Number(emp.PesoBrutoG) : null}, ${conRango ? Number(emp.MinG) : null}, ${conRango ? Number(emp.MaxG) : null},
+                ${s.FechaProduccion}, ${claseSalida}, ${destino}, ${pedido}, ${carrito})`;
       const [{ id }]: any[] = await tx.$queryRaw`SELECT LAST_INSERT_ID() AS id`;
       await tx.$executeRaw`UPDATE SesionBascula SET UltimaActividad = NOW() WHERE SesionId = ${s.SesionId}`;
       const [{ n }]: any[] = await tx.$queryRaw`

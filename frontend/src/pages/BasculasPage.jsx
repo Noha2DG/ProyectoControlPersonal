@@ -63,10 +63,10 @@ function estadoDe(b) {
   return { t: "En línea, sin datos de báscula", punto: "bg-amber-500", c: "text-amber-600" };
 }
 
-/** "Empinchado · por persona · Ana Pérez", o "sin sesión". */
+/** "Empanizado · producto terminado · Ana Pérez", o "sin sesión". */
 function dondeEsta(b) {
   if (!b.SesionId) return "sin sesión";
-  return [b.SesionBodega ?? b.SesionArea, b.SesionModo === "PERSONA" ? "por persona" : "por producto", b.SesionOperadora]
+  return [b.SesionBodega ?? b.SesionArea, b.SesionModo === "PERSONA" ? "producto terminado" : "por producto", b.SesionOperadora]
     .filter(Boolean).join(" · ");
 }
 
@@ -432,7 +432,7 @@ function AreasPesaje({ puedeConfigurar }) {
     setAreas(l => l.map(x => (x.Codigo === a.Codigo ? nuevo : x)));
     try {
       await api(`/api/balanzas/areas/${encodeURIComponent(a.Codigo)}`, {
-        method: "PUT", body: JSON.stringify({ EsPesadora: nuevo.EsPesadora, ModoPesaje: nuevo.ModoPesaje || null }),
+        method: "PUT", body: JSON.stringify({ EsPesadora: nuevo.EsPesadora, ModoPesaje: nuevo.ModoPesaje || null, PideCarrito: nuevo.PideCarrito }),
       });
     } catch (e) { setError(`${a.Codigo}: ${e.message}`); cargar(); }
     finally { setGuardando(null); }
@@ -465,6 +465,7 @@ function AreasPesaje({ puedeConfigurar }) {
               <th className="text-left px-2 w-48">Bodega (de las pesadas)</th>
               <th className="text-center px-2 w-32">Usa básculas</th>
               <th className="text-left px-4 w-64">Modo de pesaje</th>
+              <th className="text-center px-2 w-32" title="Obligatorio escribir el número de carrito en cada pesada (como el termo en Pelado)">Pide carrito</th>
             </tr>
           </thead>
           <tbody className="divide-y">
@@ -477,22 +478,27 @@ function AreasPesaje({ puedeConfigurar }) {
                 </td>
                 <td className="px-2 text-center">
                   <input type="checkbox" disabled={!puedeConfigurar} checked={a.EsPesadora}
-                    onChange={e => guardar(a, { EsPesadora: e.target.checked, ModoPesaje: e.target.checked ? a.ModoPesaje : null })} />
+                    onChange={e => guardar(a, { EsPesadora: e.target.checked, ModoPesaje: e.target.checked ? a.ModoPesaje : null, PideCarrito: e.target.checked ? a.PideCarrito : false })} />
                 </td>
                 <td className="px-4">
                   {a.EsPesadora ? (
                     <select disabled={!puedeConfigurar} value={a.ModoPesaje ?? ""} onChange={e => guardar(a, { ModoPesaje: e.target.value || null })}
                       className="w-full border border-slate-300 rounded-lg px-2 py-1.5 text-sm">
                       <option value="">Lo elige la pesadora al entrar</option>
-                      <option value="PERSONA">Por persona (carnet por caja)</option>
+                      <option value="PERSONA">Producto terminado (carnet por bandeja)</option>
                       <option value="PRODUCTO">Por producto</option>
                     </select>
+                  ) : <span className="text-slate-300">—</span>}
+                </td>
+                <td className="px-2 text-center">
+                  {a.EsPesadora ? (
+                    <input type="checkbox" disabled={!puedeConfigurar} checked={a.PideCarrito} onChange={e => guardar(a, { PideCarrito: e.target.checked })} />
                   ) : <span className="text-slate-300">—</span>}
                 </td>
               </tr>
             ))}
             {lista.length === 0 && (
-              <tr><td colSpan={5} className="px-4 py-6 text-sm text-slate-500">
+              <tr><td colSpan={6} className="px-4 py-6 text-sm text-slate-500">
                 {soloPesadoras ? "Ninguna área usa básculas todavía. Quita el filtro para marcarlas." : "Sin resultados."}
               </td></tr>
             )}
@@ -507,7 +513,7 @@ function AreasPesaje({ puedeConfigurar }) {
 // Bruto = neto + tara + deshidratación (neto × %); rango = [bruto − margen−, bruto + margen+]. El
 // cálculo lo hace el servidor (lib/empaquePesaje.ts) y aquí solo se muestra: un solo lugar con la
 // fórmula. Cambiar un tipo no altera lo ya pesado: cada pesada guarda su rango.
-const EMPAQUE_VACIO = { Codigo: "", Nombre: "", Unidad: "g", PesoNetoG: "", TaraG: "0", DeshidratacionPct: "0", MargenPosG: "0", MargenNegG: "0", Activo: true };
+const EMPAQUE_VACIO = { Codigo: "", Nombre: "", Unidad: "g", PesoNetoG: "", TaraG: "0", DeshidratacionPct: "0", MargenPosG: "0", MargenNegG: "0", ConRango: true, Activo: true };
 
 function FormEmpaque({ inicial, nuevo, puedeConfigurar, onGuardado, onCancelar }) {
   const [f, setF] = useState(inicial);
@@ -578,9 +584,13 @@ function FormEmpaque({ inicial, nuevo, puedeConfigurar, onGuardado, onCancelar }
         {num("PesoNetoG", "Peso neto", "g")}
         {num("TaraG", "Tara material", "g")}
         {num("DeshidratacionPct", "Deshidratación", "%")}
-        {num("MargenPosG", "Margen +", "g")}
-        {num("MargenNegG", "Margen −", "g")}
+        {f.ConRango && num("MargenPosG", "Margen +", "g")}
+        {f.ConRango && num("MargenNegG", "Margen −", "g")}
       </div>
+      <label className="flex items-center gap-2 text-sm text-slate-700">
+        <input type="checkbox" disabled={!puedeConfigurar} checked={f.ConRango} onChange={e => setF(p => ({ ...p, ConRango: e.target.checked }))} />
+        Con rango (si se desmarca, el peso es libre: se guarda cualquier peso estable)
+      </label>
 
       <div className="rounded-xl bg-slate-50 border p-4">
         {calc ? (
@@ -589,13 +599,15 @@ function FormEmpaque({ inicial, nuevo, puedeConfigurar, onGuardado, onCancelar }
               <div><p className="text-xs text-slate-500">Deshidratación</p><p className="text-2xl font-bold">{calc.DeshidratacionG} g</p></div>
               <div><p className="text-xs text-slate-500">Peso bruto (objetivo)</p><p className="text-3xl font-bold">{calc.PesoBrutoG.toLocaleString("es")} g</p>
                 <p className="text-xs text-slate-500">{calc.PesoNetoG} neto + {calc.TaraG} tara + {calc.DeshidratacionG} deshidratación</p></div>
-              <div><p className="text-xs text-slate-500">Rango que se guarda</p><p className="text-3xl font-bold text-emerald-600">{calc.MinG.toLocaleString("es")} – {calc.MaxG.toLocaleString("es")} g</p></div>
+              <div><p className="text-xs text-slate-500">Rango que se guarda</p>{calc.ConRango
+                ? <p className="text-3xl font-bold text-emerald-600">{calc.MinG.toLocaleString("es")} – {calc.MaxG.toLocaleString("es")} g</p>
+                : <p className="text-3xl font-bold text-slate-600">Peso libre</p>}</div>
             </div>
-            <div className="mt-4 h-9 rounded-lg overflow-hidden flex text-xs font-semibold text-white">
+            {calc.ConRango && <div className="mt-4 h-9 rounded-lg overflow-hidden flex text-xs font-semibold text-white">
               <div style={{ width: `${barra.bajo}%` }} className="bg-amber-400 text-amber-950 flex items-center justify-center">BAJO</div>
               <div style={{ width: `${barra.ok}%` }} className="bg-emerald-500 flex items-center justify-center min-w-[80px]">GUARDA</div>
               <div className="flex-1 bg-red-500 flex items-center justify-center">SOBREPESO</div>
-            </div>
+            </div>}
           </>
         ) : <p className="text-sm text-slate-500">Escriba el peso neto para ver el rango.</p>}
       </div>
@@ -654,7 +666,7 @@ function TiposEmpaque({ puedeConfigurar }) {
                   <td className="px-4 py-2.5 font-mono truncate">{e.Codigo}</td>
                   <td className="px-2 truncate" title={e.Nombre}>{e.Nombre}</td>
                   <td className="px-2 text-right">{e.PesoNetoG.toLocaleString("es")} g</td>
-                  <td className="px-4 text-right font-mono">{e.MinG}–{e.MaxG}</td>
+                  <td className="px-4 text-right font-mono">{e.ConRango ? `${e.MinG}–${e.MaxG}` : "libre"}</td>
                 </tr>
               ))}
             </tbody>

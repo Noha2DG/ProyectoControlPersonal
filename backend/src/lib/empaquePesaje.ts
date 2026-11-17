@@ -32,7 +32,10 @@ export function validarEmpaque(b: any) {
     MargenPosG: entero(b?.MargenPosG ?? 0, "Margen + (g)", 0, 20000),
     MargenNegG: entero(b?.MargenNegG ?? 0, "Margen − (g)", 0, 20000),
   };
+  // Sin rango = peso libre (producto terminado por bandeja, 17 nov 2026): se guarda cualquier peso
+  // estable; bruto y rango quedan calculados solo como referencia.
+  const conRango = !(b?.ConRango === false || b?.ConRango === 0 || b?.ConRango === "0");
   const c = calcularEmpaque(d);
-  if (c.MinG <= 0) throw new Error("El mínimo queda en 0 o menos: revise el margen −");
-  return { Nombre: nombre, Unidad: unidad, ...d, ...c };
+  if (conRango && c.MinG <= 0) throw new Error("El mínimo queda en 0 o menos: revise el margen −");
+  return { Nombre: nombre, Unidad: unidad, ConRango: conRango ? 1 : 0, ...d, ...c };
 }
