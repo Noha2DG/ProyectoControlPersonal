@@ -168,12 +168,13 @@ router.get("/sesion/:id/catalogos", requirePerm("pesaje_bascula", "usar"), async
       prisma.$queryRawUnsafe(`SELECT Codigo, Descripcion FROM Tallas WHERE Activo = 1 ORDER BY Codigo`),
       // Inventario al piso de la bodega: lo que entró menos lo que salió, por Lote/Clase/Talla.
       prisma.$queryRawUnsafe(`
-        SELECT t.Lote, t.Clase, t.Talla, ta.Descripcion AS TallaDesc, ROUND(SUM(t.Kg), 2) AS Kg
+        SELECT t.Lote, t.Clase, c.Descripcion AS ClaseDesc, t.Talla, ta.Descripcion AS TallaDesc, ROUND(SUM(t.Kg), 2) AS Kg
           FROM (SELECT Lote, Clase, Talla, PesoKg AS Kg FROM MovimientoPiso WHERE BodegaDestino = ?
                 UNION ALL
                 SELECT Lote, Clase, Talla, -PesoKg FROM MovimientoPiso WHERE BodegaOrigen = ?) t
           LEFT JOIN Tallas ta ON ta.Codigo = t.Talla
-         GROUP BY t.Lote, t.Clase, t.Talla, ta.Descripcion
+          LEFT JOIN Clase c ON c.Clase = t.Clase
+         GROUP BY t.Lote, t.Clase, c.Descripcion, t.Talla, ta.Descripcion
         HAVING SUM(t.Kg) > 0.01
          ORDER BY t.Lote, t.Clase`, s.BodegaVirtualCodigo, s.BodegaVirtualCodigo),
     ]);
@@ -187,7 +188,9 @@ router.get("/lotes", requirePerm("pesaje_bascula", "usar"), async (req: AuthRequ
     const q = String(req.query.q ?? "").trim();
     if (q.length < 2) { res.json([]); return; }
     const rows: any[] = await prisma.$queryRaw`
-      SELECT Lote, Clase FROM Lotes WHERE Activo = 1 AND Lote LIKE ${"%" + q + "%"} ORDER BY Fecha DESC LIMIT 20`;
+      SELECT l.Lote, l.Clase, c.Descripcion AS ClaseDesc
+        FROM Lotes l LEFT JOIN Clase c ON c.Clase = l.Clase
+       WHERE l.Activo = 1 AND l.Lote LIKE ${"%" + q + "%"} ORDER BY l.Fecha DESC LIMIT 20`;
     res.json(rows);
   } catch (err: any) { responder(res, err); }
 });
@@ -213,9 +216,19 @@ router.post("/pesadas", requirePerm("pesaje_bascula", "usar"), async (req: AuthR
       if (peso < Number(emp.MinG) || peso > Number(emp.MaxG)) {
         throw new ErrorNegocio(400, `${peso} g está fuera del rango ${emp.MinG}–${emp.MaxG} g: no se guarda`);
       }
+      // El lote del piso trae la clase del producto ya procesado (E53, E92…), mientras que en Lotes está
+      // con la de materia prima (D30, D31): exigir el par (Lote, Clase) en Lotes rechazaba todo lo del
+      // piso (17 nov 2026, "Elija el lote" en BAL-01). Basta con que el lote exista —en Lotes o al piso—
+      // y la clase exista en el catálogo.
+      const loteTxt = String(b.Lote ?? "").trim(), claseTxt = String(b.Clase ?? "").trim();
+      if (!loteTxt) throw new ErrorNegocio(400, "Elija el lote");
+      if (!claseTxt) throw new ErrorNegocio(400, "Elija el tipo de producto");
       const [lote]: any[] = await tx.$queryRaw`
-        SELECT Lote FROM Lotes WHERE Lote = ${String(b.Lote ?? "")} AND Clase = ${String(b.Clase ?? "")}`;
-      if (!lote) throw new ErrorNegocio(400, "Elija el lote");
+        SELECT 1 AS ok FROM Lotes WHERE Lote = ${loteTxt}
+        UNION ALL SELECT 1 FROM MovimientoPiso WHERE Lote = ${loteTxt} LIMIT 1`;
+      if (!lote) throw new ErrorNegocio(400, `No existe el lote ${loteTxt}`);
+      const [clase]: any[] = await tx.$queryRaw`SELECT Clase FROM Clase WHERE Clase = ${claseTxt}`;
+      if (!clase) throw new ErrorNegocio(400, `No existe el tipo de producto ${claseTxt}`);
       const [talla]: any[] = await tx.$queryRaw`SELECT Codigo FROM Tallas WHERE Codigo = ${Number(b.Talla)}`;
       if (!talla) throw new ErrorNegocio(400, "Elija la talla");
       let persona: string | null = null;
@@ -230,7 +243,7 @@ router.post("/pesadas", requirePerm("pesaje_bascula", "usar"), async (req: AuthR
                             EmpaqueCodigo, Lote, Clase, Talla, PersonaCodigo, PesoBrutoG, PesoNetoG,
                             ObjetivoG, MinG, MaxG, FechaProduccion)
         VALUES (${uuid}, ${s.SesionId}, ${s.BalanzaCodigo}, ${s.OperadoraCodigo}, ${s.AreaCodigo}, ${s.BodegaVirtualCodigo},
-                ${s.Modo}, ${emp.Codigo}, ${String(b.Lote)}, ${String(b.Clase)}, ${Number(b.Talla)}, ${persona},
+                ${s.Modo}, ${emp.Codigo}, ${loteTxt}, ${claseTxt}, ${Number(b.Talla)}, ${persona},
                 ${peso}, ${peso - Number(emp.TaraG)}, ${Number(emp.PesoBrutoG)}, ${Number(emp.MinG)}, ${Number(emp.MaxG)},
                 ${s.FechaProduccion})`;
       const [{ id }]: any[] = await tx.$queryRaw`SELECT LAST_INSERT_ID() AS id`;

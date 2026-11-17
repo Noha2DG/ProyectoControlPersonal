@@ -119,7 +119,12 @@ function Pesaje({ sesion, b, onCerrar }) {
   const puedeAnular = usePuede("pesaje_bascula", "anular_caja");
   const porPersona = sesion.Modo === "PERSONA";
   const [cat, setCat] = useState({ empaques: [], tallas: [], lotes: [] });
-  const [trabajo, setTrabajo] = useState(() => leerLS(claveTrabajo(sesion.BalanzaCodigo)) ?? { talla: "", lote: "", empaque: "" });
+  const [trabajo, setTrabajo] = useState(() => {
+    const t = leerLS(claveTrabajo(sesion.BalanzaCodigo)) ?? {};
+    // Versión anterior guardaba "LOTE|CLASE" en un solo campo.
+    const [lote, clase] = String(t.lote ?? "").includes("|") ? t.lote.split("|") : [t.lote ?? "", t.clase ?? ""];
+    return { talla: t.talla ?? "", lote, clase, empaque: t.empaque ?? "" };
+  });
   const [persona, setPersona] = useState(null); // { Codigo, NombreCompleto }
   const [carnetCaja, setCarnetCaja] = useState("");
   const [errorCarnet, setErrorCarnet] = useState("");
@@ -134,8 +139,22 @@ function Pesaje({ sesion, b, onCerrar }) {
   const actividadRef = useRef(Date.now());
 
   const empaque = cat.empaques.find(e => e.Codigo === trabajo.empaque) ?? null;
-  const loteSel = (() => { const [Lote, Clase] = (trabajo.lote || "").split("|"); return Lote ? { Lote, Clase } : null; })();
+  // Lote, tipo de producto (Clase) y talla se eligen por separado (usuario, 17 nov 2026). Las opciones
+  // salen del piso de la bodega y de lo buscado; la talla, del catálogo completo.
+  const loteSel = trabajo.lote && trabajo.clase ? { Lote: trabajo.lote, Clase: trabajo.clase } : null;
   const listo = Boolean(empaque && loteSel && trabajo.talla);
+  const lotesUnicos = [...new Map(cat.lotes.map(l => [l.Lote, l])).keys()];
+  const kgLote = (lote) => cat.lotes.filter(l => l.Lote === lote).reduce((s, l) => s + l.Kg, 0);
+  const clasesDelLote = (() => {
+    const m = new Map();
+    for (const l of [...cat.lotes, ...lotesBuscados]) if (l.Lote === trabajo.lote) m.set(l.Clase, l.ClaseDesc ?? "");
+    if (trabajo.clase && trabajo.lote && !m.has(trabajo.clase)) m.set(trabajo.clase, "");
+    return [...m.entries()];
+  })();
+  const elegirLote = (lote) => setTrabajo(t => {
+    const clases = [...new Set([...cat.lotes, ...lotesBuscados].filter(l => l.Lote === lote).map(l => l.Clase))];
+    return { ...t, lote, clase: clases.length === 1 ? clases[0] : (clases.includes(t.clase) ? t.clase : "") };
+  });
 
   useEffect(() => { escribirLS(claveTrabajo(sesion.BalanzaCodigo), trabajo); }, [trabajo, sesion.BalanzaCodigo]);
 
@@ -291,21 +310,11 @@ function Pesaje({ sesion, b, onCerrar }) {
 
       <div className="flex-1 flex gap-4 p-4 min-h-0">
         <div className="w-[330px] shrink-0 flex flex-col gap-3 min-h-0">
-          <label className="text-xs text-slate-400 uppercase">Talla
-            <select value={trabajo.talla} onChange={e => setTrabajo(t => ({ ...t, talla: e.target.value }))} className={sel + " mt-1"}>
-              <option value="">— elija —</option>
-              {cat.tallas.map(t => <option key={t.Codigo} value={t.Codigo}>{t.Descripcion} ({t.Codigo})</option>)}
-            </select>
-          </label>
           <label className="text-xs text-slate-400 uppercase">Lote (al piso de {sesion.BodegaNombre ?? "la bodega"})
-            <select value={trabajo.lote} onChange={e => setTrabajo(t => ({ ...t, lote: e.target.value }))} className={sel + " mt-1 font-mono"}>
+            <select value={trabajo.lote} onChange={e => elegirLote(e.target.value)} className={sel + " mt-1 font-mono"}>
               <option value="">— elija —</option>
-              {cat.lotes.map(l => (
-                <option key={`${l.Lote}|${l.Clase}|${l.Talla}`} value={`${l.Lote}|${l.Clase}`}>{l.Lote} · {l.Clase} · {l.TallaDesc ?? l.Talla} · {l.Kg} kg</option>
-              ))}
-              {loteSel && !cat.lotes.some(l => l.Lote === loteSel.Lote && l.Clase === loteSel.Clase) && (
-                <option value={trabajo.lote}>{loteSel.Lote} · {loteSel.Clase} (buscado)</option>
-              )}
+              {lotesUnicos.map(l => <option key={l} value={l}>{l} · {kgLote(l).toLocaleString("es", { maximumFractionDigits: 0 })} kg</option>)}
+              {trabajo.lote && !lotesUnicos.includes(trabajo.lote) && <option value={trabajo.lote}>{trabajo.lote} (buscado)</option>}
             </select>
           </label>
           <div>
@@ -314,12 +323,24 @@ function Pesaje({ sesion, b, onCerrar }) {
             {lotesBuscados.length > 0 && (
               <div className="mt-1 max-h-32 overflow-auto rounded-lg border border-slate-700 bg-slate-800">
                 {lotesBuscados.map(l => (
-                  <button key={`${l.Lote}|${l.Clase}`} onClick={() => { setTrabajo(t => ({ ...t, lote: `${l.Lote}|${l.Clase}` })); setBuscarLote(""); }}
-                    className="block w-full text-left px-3 py-1.5 text-sm font-mono hover:bg-slate-700">{l.Lote} · {l.Clase}</button>
+                  <button key={`${l.Lote}|${l.Clase}`} onClick={() => { setTrabajo(t => ({ ...t, lote: l.Lote, clase: l.Clase })); setBuscarLote(""); }}
+                    className="block w-full text-left px-3 py-1.5 text-sm font-mono hover:bg-slate-700">{l.Lote} · {l.Clase}{l.ClaseDesc ? ` · ${l.ClaseDesc}` : ""}</button>
                 ))}
               </div>
             )}
           </div>
+          <label className="text-xs text-slate-400 uppercase">Tipo de producto
+            <select value={trabajo.clase} disabled={!trabajo.lote} onChange={e => setTrabajo(t => ({ ...t, clase: e.target.value }))} className={sel + " mt-1 disabled:opacity-50"}>
+              <option value="">{trabajo.lote ? "— elija —" : "elija primero el lote"}</option>
+              {clasesDelLote.map(([c, d]) => <option key={c} value={c}>{c}{d ? ` · ${d}` : ""}</option>)}
+            </select>
+          </label>
+          <label className="text-xs text-slate-400 uppercase">Talla
+            <select value={trabajo.talla} onChange={e => setTrabajo(t => ({ ...t, talla: e.target.value }))} className={sel + " mt-1"}>
+              <option value="">— elija —</option>
+              {cat.tallas.map(t => <option key={t.Codigo} value={t.Codigo}>{t.Descripcion} ({t.Codigo})</option>)}
+            </select>
+          </label>
           <label className="text-xs text-slate-400 uppercase">Tipo de empaque
             <select value={trabajo.empaque} onChange={e => setTrabajo(t => ({ ...t, empaque: e.target.value }))} className={sel + " mt-1"}>
               <option value="">— elija —</option>
