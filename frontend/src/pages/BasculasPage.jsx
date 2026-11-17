@@ -90,14 +90,14 @@ function ModalToken({ datos, onCerrar }) {
 }
 
 function ModalRegistrar({ bodegas, onCerrar, onRegistrada }) {
-  const [f, setF] = useState({ Codigo: "", Nombre: "", BodegaVirtualCodigo: "", Modo: "PRODUCTO" });
+  const [f, setF] = useState({ Codigo: "", Nombre: "" });
   const [error, setError] = useState("");
   const [enviando, setEnviando] = useState(false);
   const guardar = async (e) => {
     e.preventDefault();
     setEnviando(true); setError("");
     try {
-      const r = await api("/api/balanzas", { method: "POST", body: JSON.stringify({ ...f, BodegaVirtualCodigo: f.BodegaVirtualCodigo || null }) });
+      const r = await api("/api/balanzas", { method: "POST", body: JSON.stringify(f) });
       onRegistrada(r);
     } catch (err) { setError(err.message); setEnviando(false); }
   };
@@ -112,18 +112,10 @@ function ModalRegistrar({ bodegas, onCerrar, onRegistrada }) {
         <label className="block text-sm text-slate-600">Nombre (opcional)
           <input value={f.Nombre} onChange={e => setF({ ...f, Nombre: e.target.value })} placeholder="Línea 1, junto a la banda" className={inputCls + " mt-1"} />
         </label>
-        <label className="block text-sm text-slate-600">Bodega
-          <select value={f.BodegaVirtualCodigo} onChange={e => setF({ ...f, BodegaVirtualCodigo: e.target.value })} className={inputCls + " mt-1"}>
-            <option value="">— sin asignar —</option>
-            {bodegas.map(b => <option key={b.Codigo} value={b.Codigo}>{b.Nombre}</option>)}
-          </select>
-        </label>
-        <label className="block text-sm text-slate-600">Modo
-          <select value={f.Modo} onChange={e => setF({ ...f, Modo: e.target.value })} className={inputCls + " mt-1"}>
-            <option value="PRODUCTO">Por producto</option>
-            <option value="PERSONA">Por persona (carnet por caja)</option>
-          </select>
-        </label>
+        <p className="text-xs text-slate-500">
+          La bodega y el modo no se fijan aquí: las básculas se mueven por la planta. Salen del área en que
+          entró hoy la pesadora que inicia sesión (Catálogos → Áreas → "Usa básculas").
+        </p>
         {error && <p className="text-sm text-red-600">{error}</p>}
         <div className="flex justify-end gap-2 pt-2">
           <button type="button" onClick={onCerrar} className="px-4 py-2 rounded-lg text-sm text-slate-600 hover:bg-slate-100">Cancelar</button>
@@ -165,7 +157,7 @@ function Panel({ b, bodegas, puedeConfigurar, puedeComandos, onCambio, onToken }
   const [error, setError] = useState("");
 
   useEffect(() => {
-    setF({ Nombre: b.Nombre, BodegaVirtualCodigo: b.BodegaVirtualCodigo ?? "", Modo: b.Modo, Activa: b.Activa });
+    setF({ Nombre: b.Nombre, Activa: b.Activa });
     setParam({ muestras: String(b.Parametros?.muestras ?? 4), tolerancia: String(b.Parametros?.tolerancia ?? 2) });
     setMsg(""); setError("");
     // Solo al cambiar de báscula: no se pisa lo que el usuario está escribiendo en cada refresco.
@@ -193,7 +185,7 @@ function Panel({ b, bodegas, puedeConfigurar, puedeComandos, onCambio, onToken }
   const guardar = async () => {
     setMsg(""); setError("");
     try {
-      await api(`/api/balanzas/${encodeURIComponent(b.Codigo)}`, { method: "PUT", body: JSON.stringify({ ...f, BodegaVirtualCodigo: f.BodegaVirtualCodigo || null }) });
+      await api(`/api/balanzas/${encodeURIComponent(b.Codigo)}`, { method: "PUT", body: JSON.stringify(f) });
       setMsg("Guardado."); onCambio();
     } catch (e) { setError(e.message); }
   };
@@ -225,24 +217,14 @@ function Panel({ b, bodegas, puedeConfigurar, puedeComandos, onCambio, onToken }
       </div>
 
       <div className="px-5 py-4 border-b space-y-3 text-sm">
-        <h3 className="font-semibold">Asignación</h3>
+        <h3 className="font-semibold">Equipo</h3>
         <label className="block text-slate-500 text-xs">Nombre
           <input disabled={!puedeConfigurar} value={f.Nombre} onChange={e => setF({ ...f, Nombre: e.target.value })} className={inputCls + " mt-1"} />
         </label>
-        <div className="grid grid-cols-2 gap-2">
-          <label className="text-slate-500 text-xs">Bodega
-            <select disabled={!puedeConfigurar} value={f.BodegaVirtualCodigo} onChange={e => setF({ ...f, BodegaVirtualCodigo: e.target.value })} className={inputCls + " mt-1"}>
-              <option value="">— sin asignar —</option>
-              {bodegas.map(x => <option key={x.Codigo} value={x.Codigo}>{x.Nombre}</option>)}
-            </select>
-          </label>
-          <label className="text-slate-500 text-xs">Modo
-            <select disabled={!puedeConfigurar} value={f.Modo} onChange={e => setF({ ...f, Modo: e.target.value })} className={inputCls + " mt-1"}>
-              <option value="PRODUCTO">Por producto</option>
-              <option value="PERSONA">Por persona</option>
-            </select>
-          </label>
-        </div>
+        <p className="text-xs text-slate-500">
+          Dónde está ahora: <b>sin sesión</b>. La bodega y el modo los trae la pesadora al pasar su carnet
+          (según el área en que entró hoy).
+        </p>
         <label className="flex items-center gap-2 text-xs text-slate-600">
           <input type="checkbox" disabled={!puedeConfigurar} checked={f.Activa} onChange={e => setF({ ...f, Activa: e.target.checked })} />
           Activa (desactivada, el cabezal deja de ser aceptado)
@@ -375,8 +357,7 @@ export default function BasculasPage({ puedeConfigurar, puedeComandos }) {
                 <thead className="bg-slate-50 text-slate-500 text-xs uppercase">
                   <tr>
                     <th className="text-left px-4 py-2 w-24">Código</th>
-                    <th className="text-left px-2 w-40">Bodega</th>
-                    <th className="text-left px-2 w-24">Modo</th>
+                    <th className="text-left px-2 w-56">Dónde está ahora</th>
                     <th className="text-left px-2 w-48">Estado</th>
                     <th className="text-left px-2 w-24">Aviso</th>
                     <th className="text-right px-2 w-20">Peso</th>
@@ -390,8 +371,8 @@ export default function BasculasPage({ puedeConfigurar, puedeComandos }) {
                       <tr key={b.Codigo} onClick={() => setSel(b.Codigo)}
                         className={`cursor-pointer hover:bg-slate-50 ${sel === b.Codigo ? "bg-blue-50" : ""} ${b.Activa ? "" : "opacity-60"}`}>
                         <td className="px-4 py-2.5 font-mono font-semibold truncate">{b.Codigo}</td>
-                        <td className="px-2 truncate" title={b.Nombre}>{b.BodegaNombre ?? "—"}</td>
-                        <td className="px-2"><span className={`text-xs rounded px-2 py-0.5 ${b.Modo === "PERSONA" ? "bg-violet-100 text-violet-700" : "bg-slate-100"}`}>{b.Modo === "PERSONA" ? "Por persona" : "Producto"}</span></td>
+                        {/* Se llenará con la sesión de la pesadora (bodega · modo · nombre). */}
+                        <td className="px-2 truncate text-slate-400" title={b.Nombre}>sin sesión{b.Nombre ? ` · ${b.Nombre}` : ""}</td>
                         <td className="px-2 truncate"><span className={`inline-flex items-center gap-1.5 ${est.c}`}><span className={`w-2 h-2 rounded-full shrink-0 ${est.punto}`} />{est.t}</span></td>
                         <td className={`px-2 truncate ${b.Activa && !b.EnLinea ? "text-red-600" : "text-slate-500"}`}>{hace(b.SegSinContacto)}</td>
                         <td className="px-2 text-right font-mono">{b.EnLinea && b.UltimoPesoG !== null ? `${b.UltimoPesoG.toLocaleString("es")} g` : "—"}</td>
