@@ -360,10 +360,34 @@ function Pesaje({ sesion, b, onCerrar }) {
                 </div>
               </div>
             )}
+            {/* El rango que debe pesar, siempre a la vista (usuario, 17 nov 2026). */}
+            {empaque && (
+              <p className="text-2xl font-bold mb-2 opacity-90">
+                Debe pesar {g(empaque.MinG)} – {g(empaque.MaxG)} g
+              </p>
+            )}
             <p className="text-[150px] leading-none font-bold font-mono tracking-tight">{b.vigente ? g(b.gramos) : "—"}<span className="text-5xl ml-3 font-semibold">g</span></p>
             <p className="text-3xl font-bold mt-3 tracking-wide">{estado}</p>
             {sub && <p className="text-lg mt-1 opacity-80">{sub}</p>}
           </div>
+          {empaque && (() => {
+            // Barra: de (mín − 15 %) a (máx + 15 %), con una marca donde está el peso.
+            const lo = empaque.MinG * 0.85, hi = empaque.MaxG * 1.15, w = hi - lo;
+            const pct = v => Math.min(100, Math.max(0, ((v - lo) / w) * 100));
+            const marca = b.vigente ? pct(b.gramos) : null;
+            return (
+              <div className="shrink-0">
+                <div className="relative h-12 rounded-xl overflow-hidden flex text-base font-bold">
+                  <div style={{ width: `${pct(empaque.MinG)}%` }} className="bg-amber-400 text-amber-950 flex items-center justify-center">BAJO</div>
+                  <div style={{ width: `${pct(empaque.MaxG) - pct(empaque.MinG)}%` }} className="bg-emerald-500 flex items-center justify-center whitespace-nowrap min-w-[140px]">
+                    {g(empaque.MinG)} – {g(empaque.MaxG)} g
+                  </div>
+                  <div className="flex-1 bg-red-500 flex items-center justify-center">SOBREPESO</div>
+                  {marca !== null && <div style={{ left: `calc(${marca}% - 3px)` }} className="absolute top-0 bottom-0 w-1.5 bg-white shadow-[0_0_6px_rgba(0,0,0,0.6)]" />}
+                </div>
+              </div>
+            );
+          })()}
         </div>
 
         <div className="w-[250px] shrink-0 flex flex-col gap-3 min-h-0">
