@@ -432,28 +432,15 @@ function Pesaje({ sesion, b, onCerrar }) {
                 </div>
               </div>
             )}
-            <p className="text-xl font-bold mb-1 opacity-90">
-              {conRango ? `Debe pesar ${g(empaque.MinG)} – ${g(empaque.MaxG)} g` : "Peso libre"}
+            {/* El rango en grande (usuario, 17 nov 2026): la barra de abajo se quitó, el color ya dice bajo/sobre. */}
+            {conRango && <p className="text-sm font-bold uppercase tracking-[0.25em] opacity-80">Debe pesar</p>}
+            <p className="text-5xl font-extrabold mb-2 tracking-tight">
+              {conRango ? `${g(empaque.MinG)} – ${g(empaque.MaxG)} g` : "Peso libre"}
             </p>
             <p className="text-[110px] leading-none font-bold font-mono tracking-tight">{b.vigente ? g(b.gramos) : "—"}<span className="text-4xl ml-2 font-semibold">g</span></p>
             <p className="text-2xl font-bold mt-2 tracking-wide text-center">{estado}</p>
             {sub && <p className="text-base mt-0.5 opacity-80 text-center">{sub}</p>}
           </div>
-          {conRango && (() => {
-            const lo = empaque.MinG * 0.85, hi = empaque.MaxG * 1.15, w = hi - lo;
-            const pct = v => Math.min(100, Math.max(0, ((v - lo) / w) * 100));
-            const marca = b.vigente ? pct(b.gramos) : null;
-            return (
-              <div className="shrink-0 relative h-10 rounded-xl overflow-hidden flex text-sm font-bold">
-                <div style={{ width: `${pct(empaque.MinG)}%` }} className="bg-amber-400 text-amber-950 flex items-center justify-center">BAJO</div>
-                <div style={{ width: `${pct(empaque.MaxG) - pct(empaque.MinG)}%` }} className="bg-emerald-500 flex items-center justify-center whitespace-nowrap min-w-[120px]">
-                  {g(empaque.MinG)} – {g(empaque.MaxG)} g
-                </div>
-                <div className="flex-1 bg-red-500 flex items-center justify-center">SOBREPESO</div>
-                {marca !== null && <div style={{ left: `calc(${marca}% - 3px)` }} className="absolute top-0 bottom-0 w-1.5 bg-white shadow-[0_0_6px_rgba(0,0,0,0.6)]" />}
-              </div>
-            );
-          })()}
         </div>
 
         {/* Lo que sale (producto, destino, pedido, empaque) y contadores */}
