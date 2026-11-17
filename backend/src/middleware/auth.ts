@@ -57,6 +57,9 @@ export interface Permisos {
   // `comandos` reinicia o cambia parámetros de un cabezal en marcha. Separados porque mandar un
   // comando a una báscula que está pesando es operación de turno; dar de alta equipos, no.
   basculas?:       { ver?: boolean; configurar?: boolean; comandos?: boolean };
+  // Pantalla de pesaje (#/pesaje): aparte de `basculas` para dársela a quien pesa sin la
+  // configuración. `anular_caja` es de supervisor: quita una caja ya guardada.
+  pesaje_bascula?: { usar?: boolean; anular_caja?: boolean };
 }
 
 export interface AuthPayload {

@@ -18,6 +18,9 @@ const MODULOS = [
   { key: "kiosco_destajo", label: "Kiosco · Mi Producción (Destajo)", acciones: ["ver"],                           grupo: "Kioscos"  },
   { key: "kiosco_ranking", label: "Kiosco · Ranking de Producción",  acciones: ["ver"],                            grupo: "Kioscos"  },
   { key: "equipo",         label: "Kiosco · Entrega de Uniformes",  acciones: ["ver"],                             grupo: "Kioscos"  },
+  // Pantalla de pesaje del cabezal (#/pesaje). Aparte de "Básculas" (configuración) para dársela a
+  // quien pesa. "anular_caja" quita una caja ya guardada: es de supervisor.
+  { key: "pesaje_bascula", label: "Báscula · Pesaje",               acciones: ["usar","anular_caja"],              grupo: "Kioscos"  },
   // ── Módulo de Entradas/Salidas (corrección admin)
   { key: "movimientos",    label: "Entradas / Salidas — Corrección", acciones: ["ver","editar","eliminar"],         grupo: "Admin"    },
   // ── Módulo de Transferencias (corrección + futuras páginas)
@@ -86,6 +89,8 @@ const ACCION_LABELS = {
   liberar: "Liberar / rechazar",
   configurar: "Registrar y configurar",
   comandos: "Enviar comandos",
+  usar: "Usar",
+  anular_caja: "Anular caja",
 };
 
 // Deriva la matriz de permisos de MODULOS en vez de enumerarla a mano por rol:
