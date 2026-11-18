@@ -5,6 +5,7 @@ import { authHeader, usePuede, useAuth } from "../context/AuthContext.jsx";
 import { useColWidths, useOrden, ordenarFilas, Th, Colgroup } from "../components/ResizableTh.jsx";
 import AvisoModal from "../components/AvisoModal.jsx";
 import HojaRemisionModal from "../components/HojaRemisionModal.jsx";
+import CertificadoCalidadModal, { CLIENTE_CERTIFICADO } from "../components/CertificadoCalidadModal.jsx";
 import ModalEscaneo from "../components/ModalEscaneo.jsx";
 import PisoDeRemision from "../components/PisoDeRemision.jsx";
 import ResumenCarga, { textoDeLinea } from "../components/ResumenCarga.jsx";
@@ -465,6 +466,7 @@ function PanelRemision({ remisionId, onClose, onCambio }) {
   const [modalAnular, setModalAnular] = useState(false);
   const [mostrarHoja, setMostrarHoja] = useState(false);
   const [verEstiba, setVerEstiba] = useState(false);
+  const [mostrarCertificado, setMostrarCertificado] = useState(false);
   const [avance, setAvance] = useState({}); // DetalleId -> avance de esa línea de la proforma
   const [widths, startResize] = useColWidths("remision_lineas", LINEAS_COL_DEFAULTS);
 
@@ -873,6 +875,14 @@ Antes de confirmar, quita de la remisión las cajas que regresaron, por el corre
                 Imprimir
               </button>
             )}
+            {/* Certificado de calidad: solo cuando la salida ya se confirmó (lo que va en él es lo que
+                salió) y solo para SUMINISTROS, que es quien lo pide (decisión del usuario, 18 nov 2026). */}
+            {remision?.Estatus === "Confirmada" && Number(remision.CodigoCliente) === CLIENTE_CERTIFICADO && puedeImprimir && (
+              <button onClick={() => setMostrarCertificado(true)}
+                className="px-4 py-2 rounded-lg text-sm font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 transition">
+                Certificado de calidad
+              </button>
+            )}
             {/* Pasado el plazo, anular queda solo para el administrador: el documento ya circuló y
                 devolver producto al inventario deja de ser una corrección de captura. El backend lo
                 valida igual — esto solo evita ofrecer un botón que va a rebotar. */}
@@ -919,6 +929,7 @@ Antes de confirmar, quita de la remisión las cajas que regresaron, por el corre
       )}
       {mostrarHoja && <HojaRemisionModal remisionId={remisionId} onCerrar={() => setMostrarHoja(false)} />}
       {verEstiba && <EstibaContenedor remisionId={remisionId} onCerrar={() => setVerEstiba(false)} />}
+      {mostrarCertificado && <CertificadoCalidadModal remisionId={remisionId} onCerrar={() => setMostrarCertificado(false)} />}
       {aviso && <AvisoModal {...aviso} onCerrar={() => cerrar(true)} onCancelar={() => cerrar(false)} />}
     </>
   );

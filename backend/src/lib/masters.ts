@@ -13,7 +13,7 @@ export const MASTER_SELECT = `
          oe.OrdenId, oe.Lote, oe.FechaProduccion, oe.AreaCodigo, ar.Nombre AS NombreArea,
          dp.DetalleId, dp.CodigoPedido, dp.Clase, pc.Descripcion AS DescripcionProceso,
          dp.Talla, ta.Descripcion AS DescripcionTalla,
-         dp.Presentacion, pr.Descripcion AS DescripcionPresentacion,
+         dp.Presentacion, pr.Descripcion AS DescripcionPresentacion, pr.PesoLb AS PesoLbCaja,
          pr.PesoKG * pr.CajasXMaster AS PesoMasterKG, pr.PesoLb * pr.CajasXMaster AS PesoMasterLb,
          ped.CodigoCliente, ped.CodigoSubcliente,
          cli.RazonSocial AS NombreCliente, sub.RazonSocial AS NombreSubcliente
@@ -42,6 +42,8 @@ export function formatearMaster(r: any) {
     OrdenId: Number(r.OrdenId), DetalleId: Number(r.DetalleId), Talla: Number(r.Talla),
     CodigoCliente: Number(r.CodigoCliente),
     PesoMasterKG: Number(r.PesoMasterKG), PesoMasterLb: Number(r.PesoMasterLb),
+    // Libras de UNA caja de la presentación (el "3 Libras" del certificado de calidad).
+    PesoLbCaja: r.PesoLbCaja == null ? null : Number(r.PesoLbCaja),
     Correlativo: String(r.Correlativo),
     FechaProduccion: r.FechaProduccion ? new Date(r.FechaProduccion).toISOString().slice(0, 10) : null,
   };

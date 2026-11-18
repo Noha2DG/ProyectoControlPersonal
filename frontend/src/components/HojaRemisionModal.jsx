@@ -98,12 +98,6 @@ function ContenidoHoja({ remision }) {
         )}
       </div>
 
-      <div className="flex gap-10 mb-5 text-base">
-        <span><span className="text-gray-400">Total Masters:</span> <span className="font-bold text-2xl">{remision.CantidadMasters}</span></span>
-        <span><span className="text-gray-400">Total Kg:</span> <span className="font-bold text-2xl">{remision.PesoKg.toFixed(2)}</span></span>
-        <span><span className="text-gray-400">Total Lb:</span> <span className="font-bold text-2xl">{remision.PesoLb.toFixed(2)}</span></span>
-      </div>
-
       <table className="w-full text-base">
         <thead>
           <tr className="text-left text-gray-600 uppercase border-b-2 border-gray-800 text-sm">
@@ -142,6 +136,16 @@ function ContenidoHoja({ remision }) {
             <tr><td colSpan={conLinea ? 8 : 7} className="py-6 text-center text-gray-400">Sin producto</td></tr>
           )}
         </tbody>
+        {/* Totales al pie, debajo de su columna (18 nov 2026, pedido del usuario): arriba de la tabla
+            se leían antes que el detalle y no quedaban alineados con lo que suman. */}
+        <tfoot>
+          <tr className="border-t-2 border-gray-800 font-bold">
+            <td colSpan={conLinea ? 5 : 4} className="pt-2 pr-3 text-right uppercase text-sm text-gray-600">Total</td>
+            <td className="pt-2 pr-3 text-right font-mono text-lg">{remision.CantidadMasters}</td>
+            <td className="pt-2 pr-3 text-right text-lg">{remision.PesoKg.toFixed(2)}</td>
+            <td className="pt-2 text-right text-lg">{remision.PesoLb.toFixed(2)}</td>
+          </tr>
+        </tfoot>
       </table>
 
       {remision.Lineas.some(l => l.CalzaConDestino === false) && (
