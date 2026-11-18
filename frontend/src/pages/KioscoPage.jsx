@@ -21,6 +21,9 @@ export default function KioscoPage() {
   const [input, setInput] = useState("");
   const [resultado, setResultado] = useState(null);
   const [error, setError] = useState("");
+  // Aviso de "ya se escaneó, espere n minutos" (respuesta 429 del backend): no es un error, se pinta
+  // en ámbar y se queda más tiempo en pantalla para que alcance a leerlo.
+  const [espera, setEspera] = useState(null);
   const [procesando, setProcesando] = useState(false);
   const inputRef = useRef(null);
   const timerRef = useRef(null);
@@ -36,21 +39,24 @@ export default function KioscoPage() {
     return () => clearInterval(id);
   }, []);
 
-  const limpiar = useCallback(() => {
+  const limpiar = useCallback((ms = 2000) => {
     if (timerRef.current) clearTimeout(timerRef.current);
     timerRef.current = setTimeout(() => {
       setResultado(null);
       setError("");
+      setEspera(null);
       setInput("");
       inputRef.current?.focus();
-    }, 2000);
+    }, ms);
   }, []);
 
   const registrar = async (codigo) => {
     if (!codigo.trim() || procesando) return;
     setProcesando(true);
     setError("");
+    setEspera(null);
     setResultado(null);
+    let ms = 2000;
     try {
       const token = localStorage.getItem("cp_token");
       const headers = { "Content-Type": "application/json" };
@@ -62,7 +68,10 @@ export default function KioscoPage() {
         body: JSON.stringify({ Codigo: codigo.trim().toUpperCase() }),
       });
       const data = await res.json();
-      if (!res.ok) {
+      if (data.espera) {
+        setEspera(data);
+        ms = 4000;
+      } else if (!res.ok) {
         setError(data.error || "Error al registrar");
       } else {
         // data.hora ya viene en hora local Guatemala "YYYY-MM-DD HH:MM:SS"
@@ -82,7 +91,7 @@ export default function KioscoPage() {
       setError("No se pudo conectar con el servidor");
     } finally {
       setProcesando(false);
-      limpiar();
+      limpiar(ms);
     }
   };
 
@@ -135,6 +144,12 @@ export default function KioscoPage() {
               <p className="text-gray-900 font-bold text-lg leading-tight">{resultado.empleado.NombreCompleto}</p>
               <p className="text-3xl font-mono font-bold text-gray-800 mt-1">{resultado.horaLocal}</p>
               <p className="text-gray-400 text-sm">{resultado.diaSemana}</p>
+            </div>
+          ) : espera ? (
+            <div className="w-full rounded-xl border-2 border-amber-300 bg-amber-50 px-4 py-4 text-center">
+              <p className="text-amber-800 font-bold text-lg leading-tight">Ya se escaneó</p>
+              <p className="text-amber-900 mt-1">{espera.error}</p>
+              <p className="text-amber-700 text-xs mt-2">No se registró nada nuevo.</p>
             </div>
           ) : error ? (
             <div className="w-full text-center">
