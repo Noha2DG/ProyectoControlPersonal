@@ -123,6 +123,8 @@ function Login({ balanza, conectado, onSesion, onSalirSistema }) {
 //   - POR PRODUCTO: lote, tipo de producto, talla y tipo de empaque (obligatorio), sin carnet.
 // En las dos, si el área lo pide (Empanizado), el número de carrito es obligatorio, como el termo en Pelado.
 const UMBRAL_LIBRE_G = 30;
+// Un peso fuera de rango cuenta solo si se mantuvo al menos esto antes de retirar la bandeja.
+const FUERA_CUENTA_MS = 2000;
 
 function Pesaje({ sesion, b, onCerrar }) {
   const puedeAnular = usePuede("pesaje_bascula", "anular_caja");
@@ -149,7 +151,8 @@ function Pesaje({ sesion, b, onCerrar }) {
   const [lotesBuscados, setLotesBuscados] = useState([]);
   const carnetRef = useRef(null);
   const candidatoRef = useRef(null);   // último peso estable que SÍ se guarda, con bandeja en la pesa
-  const fueraRef = useRef(null);       // último peso estable FUERA del rango
+  const fueraRef = useRef(null);       // { gramos, desde }: racha de peso estable FUERA del rango
+  const huboBandejaRef = useRef(false); // hubo peso en la pesa desde que quedó vacía
   const actividadRef = useRef(Date.now());
   const set = (k) => (e) => setTrabajo(t => ({ ...t, [k]: e.target.value }));
 
@@ -259,27 +262,37 @@ function Pesaje({ sesion, b, onCerrar }) {
   // "Bandeja retirada" = el peso baja de la mitad del mínimo (con rango) o de 30 g (peso libre).
   const vacioBajo = conRango ? Math.max(UMBRAL_VACIO_G, Math.round(empaque.MinG / 2)) : UMBRAL_LIBRE_G;
 
-  // Regla de guardado: el último peso ESTABLE con la bandeja en la pesa decide; al retirarla se guarda
-  // si todo está completo (y dentro del rango, si lo hay). Si no, SIN GUARDAR con el motivo.
+  // Regla de guardado: al retirar la bandeja se guarda el último peso ESTABLE dentro del rango, si
+  // todo está completo. Un "estable" fuera de rango que apareció en los últimos 2 s antes de vaciarse
+  // la pesa es la bandeja subiendo (mano, inclinación): se ignora. Antes ese instante reemplazaba al
+  // peso correcto y salía "SIN GUARDAR · bajo peso" (BAL-01, 18 nov 2026). Si la bandeja se quedó
+  // más de 2 s fuera de rango (le quitaron o agregaron producto), sí cuenta y no se guarda.
   useEffect(() => {
     if (!b.vigente) return;
     if (b.gramos >= vacioBajo) {
+      huboBandejaRef.current = true;
       if (b.estable) {
         actividadRef.current = Date.now();
         const dentro = !conRango || (b.gramos >= empaque.MinG && b.gramos <= empaque.MaxG);
         if (dentro) { candidatoRef.current = b.gramos; fueraRef.current = null; }
-        else { fueraRef.current = b.gramos; candidatoRef.current = null; }
+        else fueraRef.current = { gramos: b.gramos, desde: fueraRef.current?.desde ?? Date.now() };
         if (aviso?.tipo === "guardado" || aviso?.tipo === "sin_guardar") setAviso(null);
       }
       return;
     }
-    const gramos = candidatoRef.current, fuera = fueraRef.current;
-    candidatoRef.current = null; fueraRef.current = null;
-    if (fuera !== null && conRango) {
-      setAviso({ tipo: "sin_guardar", texto: "SIN GUARDAR", detalle: `${g(fuera)} g ${fuera < empaque.MinG ? "bajo peso" : "sobrepeso"} (rango ${g(empaque.MinG)}–${g(empaque.MaxG)} g)` });
+    // La pesa quedó vacía: se retiró la bandeja.
+    const gramos = candidatoRef.current, fuera = fueraRef.current, hubo = huboBandejaRef.current;
+    candidatoRef.current = null; fueraRef.current = null; huboBandejaRef.current = false;
+    if (!hubo) return;
+    const fueraDeVerdad = conRango && fuera && (gramos === null || Date.now() - fuera.desde >= FUERA_CUENTA_MS);
+    if (fueraDeVerdad) {
+      setAviso({ tipo: "sin_guardar", texto: "SIN GUARDAR", detalle: `${g(fuera.gramos)} g ${fuera.gramos < empaque.MinG ? "bajo peso" : "sobrepeso"} (rango ${g(empaque.MinG)}–${g(empaque.MaxG)} g)` });
       return;
     }
-    if (gramos === null) return;
+    if (gramos === null) {
+      setAviso({ tipo: "sin_guardar", texto: "SIN GUARDAR", detalle: "se retiró antes de que el peso quedara estable" });
+      return;
+    }
     if (faltan.length) { setAviso({ tipo: "sin_guardar", texto: "SIN GUARDAR", detalle: `falta: ${faltan.join(", ")}` }); return; }
     if (faltaCarnet) { setAviso({ tipo: "sin_guardar", texto: "SIN GUARDAR", detalle: "falta el carnet de esta bandeja" }); return; }
     const p = {
