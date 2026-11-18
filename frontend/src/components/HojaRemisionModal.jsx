@@ -13,6 +13,34 @@ function fmtDia(iso) {
   return `${d}/${m}/${a}`;
 }
 
+// El detalle impreso se agrupa por producto, no una fila por master: al cliente y a la aduana les
+// importa "cuántos masters de tal talla van", no el correlativo de cada caja. La trazabilidad
+// master a master ya vive en el sistema y en el kardex.
+// En exportación la LÍNEA DEL CONTENEDOR entra en la clave de agrupación y ordena el listado: el
+// papel se usa para estibar y para auditar la carga, así que "qué va en la línea 3" tiene que
+// leerse directo, sin recomponerlo mentalmente.
+// Exportada: el certificado de calidad (CertificadoCalidadModal) usa ESTA misma agrupación, para que
+// sus renglones y cantidades sean idénticos a los de la remisión impresa (pedido del usuario, 18 nov).
+export function agruparLineasRemision(remision) {
+  const conLinea = remision.PideLinea === true;
+  return Object.values(remision.Lineas.reduce((acc, l) => {
+    const clave = `${conLinea ? l.LineaContenedor : ""}|${l.CodigoPedido}|${l.DescripcionProceso}|${l.DescripcionTalla}|${l.DescripcionPresentacion}|${l.Lote}`;
+    acc[clave] ??= {
+      clave, CodigoPedido: l.CodigoPedido, Lote: l.Lote, Linea: l.LineaContenedor,
+      Producto: `${l.DescripcionProceso} ${l.DescripcionTalla} ${l.DescripcionPresentacion}`,
+      DescripcionProceso: l.DescripcionProceso, DescripcionTalla: l.DescripcionTalla,
+      PesoLbCaja: l.PesoLbCaja, FechaProduccion: l.FechaProduccion,
+      Cliente: l.NombreCliente + (l.NombreSubcliente ? `-${l.NombreSubcliente}` : ""),
+      CalzaConDestino: l.CalzaConDestino,
+      Masters: 0, Kg: 0, Lb: 0,
+    };
+    acc[clave].Masters += 1;
+    acc[clave].Kg += l.PesoMasterKG;
+    acc[clave].Lb += l.PesoMasterLb;
+    return acc;
+  }, {})).sort((a, b) => (a.Linea ?? 0) - (b.Linea ?? 0));
+}
+
 // El documento en sí — vive DUPLICADO a propósito (vista previa en pantalla dentro del modal y una
 // copia portada a #print-root solo para imprimir), mismo patrón que HojaPalletModal.
 function ContenidoHoja({ remision }) {
@@ -23,27 +51,8 @@ function ContenidoHoja({ remision }) {
   const muestra = remision.Destino === "Muestra";
   const exportacion = remision.PideEmbarque === true;
 
-  // El detalle impreso se agrupa por producto, no una fila por master: al cliente y a la aduana les
-  // importa "cuántos masters de tal talla van", no el correlativo de cada caja. La trazabilidad
-  // master a master ya vive en el sistema y en el kardex.
-  // En exportación la LÍNEA DEL CONTENEDOR entra en la clave de agrupación y ordena el listado: el
-  // papel se usa para estibar y para auditar la carga, así que "qué va en la línea 3" tiene que
-  // leerse directo, sin recomponerlo mentalmente.
   const conLinea = remision.PideLinea === true;
-  const agrupado = Object.values(remision.Lineas.reduce((acc, l) => {
-    const clave = `${conLinea ? l.LineaContenedor : ""}|${l.CodigoPedido}|${l.DescripcionProceso}|${l.DescripcionTalla}|${l.DescripcionPresentacion}|${l.Lote}`;
-    acc[clave] ??= {
-      clave, CodigoPedido: l.CodigoPedido, Lote: l.Lote, Linea: l.LineaContenedor,
-      Producto: `${l.DescripcionProceso} ${l.DescripcionTalla} ${l.DescripcionPresentacion}`,
-      Cliente: l.NombreCliente + (l.NombreSubcliente ? `-${l.NombreSubcliente}` : ""),
-      CalzaConDestino: l.CalzaConDestino,
-      Masters: 0, Kg: 0, Lb: 0,
-    };
-    acc[clave].Masters += 1;
-    acc[clave].Kg += l.PesoMasterKG;
-    acc[clave].Lb += l.PesoMasterLb;
-    return acc;
-  }, {})).sort((a, b) => (a.Linea ?? 0) - (b.Linea ?? 0));
+  const agrupado = agruparLineasRemision(remision);
 
   const destino = muestra ? "Muestra para análisis" : interno
     ? (remision.NombreBodegaDestino || remision.NombreAreaDestino || remision.BodegaDestino || remision.AreaDestino)
