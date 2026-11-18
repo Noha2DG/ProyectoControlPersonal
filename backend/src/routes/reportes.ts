@@ -2,7 +2,6 @@ import { Router, Request, Response } from "express";
 import prisma from "../lib/prisma.ts";
 import { requireAuth, requirePerm, tienePermiso, AuthRequest } from "../middleware/auth.ts";
 import { sqlAjustesLote, rendimientoLote, rendimientosEntero, esEntero } from "../lib/destajoPiso.ts";
-
 const router = Router();
 
 function hoyGT(): string {
@@ -279,6 +278,34 @@ router.get("/produccion", requireAuth, requirePerm("destajo", "ver"), async (req
        GROUP BY Fecha, tr.CodigoArea
     `, desde, hasta);
 
+    // Horario del lote, para la Hoja de Lote: de la gente que pesó en el lote, la marca de ENTRADA al
+    // área más temprana y la de SALIDA del área más tarde. La marca es la Transferencia que contiene
+    // cada pesada (la misma regla que EntradaArea en pPersona). Abiertas cuenta las que aún no tienen
+    // salida en un lote DE HOY; quien no marcó salida NO frena la hora final: se da la última salida
+    // que sí se marcó, y en pantalla se avisa cuántos faltan. En un lote viejo una abierta es un
+    // marcaje olvidado y ni se cuenta.
+    // La salida final solo cuenta si cae el MISMO día del lote: quien no marcó salida queda cerrado a
+    // la mañana siguiente (visto 06:43–08:12 del otro día) y eso no es la hora en que terminó el lote.
+    // DATE_FORMAT y no la fecha cruda: la Z que pone el driver miente (ver utils/fecha.js).
+    const pHorarioLote = () => prisma.$queryRawUnsafe(`
+      SELECT x.Lote, x.Clase,
+             DATE_FORMAT(MIN(tr.FechaHora), '%Y-%m-%d %H:%i') AS Inicio,
+             DATE_FORMAT(MAX(CASE WHEN tr.FechaSalida < x.Fecha + INTERVAL 1 DAY THEN tr.FechaSalida END), '%Y-%m-%d %H:%i') AS Fin,
+             SUM(tr.FechaSalida IS NULL AND x.Fecha >= CURDATE()) AS Abiertas
+        FROM (SELECT DISTINCT tp.Lote, tp.ClaseOrigen AS Clase, l.Fecha,
+                     (SELECT tr2.id FROM Transferencias tr2
+                       WHERE tr2.Codigo = pd.Codigo
+                         AND tr2.FechaHora <= pd.FechaHora
+                         AND (tr2.FechaSalida IS NULL OR tr2.FechaSalida >= pd.FechaHora)
+                       ORDER BY tr2.FechaHora DESC LIMIT 1) AS TrId
+                FROM PesajeDetalle pd
+                JOIN TransaccionesProduccion tp ON pd.TransaccionId = tp.TransaccionId
+                JOIN Lotes l ON tp.Lote = l.Lote AND tp.ClaseOrigen = l.Clase
+               WHERE l.Fecha BETWEEN ? AND ?) x
+        JOIN Transferencias tr ON tr.id = x.TrId
+       GROUP BY x.Lote, x.Clase, x.Fecha
+    `, desde, hasta);
+
     // pPersona es la más pesada: va primero para que las livianas corran en el otro carril mientras tanto.
     // Lo bajado al piso y lo descartado de cada lote, renglón por renglón: es lo que antes se anotaba
     // a mano en Lotes.Notas ("se bajó 22 kg de 51/60…") y ahora sale del control de Materia Prima.
@@ -296,8 +323,12 @@ router.get("/produccion", requireAuth, requirePerm("destajo", "ver"), async (req
        ORDER BY m.MovimientoId
     `, desde, hasta);
 
-    const [porPersona, porLote, porTermo, porLoteTalla, porTalla, pausasNoPaga, fincasConLotes, ajustes, termosCola, termosBajado, personalDia, recibidoLote] =
-      await conLimite([pPersona, pLote, pTermo, pLoteTalla, pTalla, pPausas, pFincas, pAjustes, pTermoCola, pTermoBajado, pPersonalDia, pRecibidoLote], MAX_CONSULTAS_REPORTE) as any[][];
+    const [porPersona, porLote, porTermo, porLoteTalla, porTalla, pausasNoPaga, fincasConLotes, ajustes, termosCola, termosBajado, personalDia, recibidoLote, horarioLote] =
+      await conLimite([pPersona, pLote, pTermo, pLoteTalla, pTalla, pPausas, pFincas, pAjustes, pTermoCola, pTermoBajado, pPersonalDia, pRecibidoLote, pHorarioLote], MAX_CONSULTAS_REPORTE) as any[][];
+    const horarioDe = new Map<string, { Inicio: string | null; Fin: string | null; SinSalida: number }>();
+    for (const h of horarioLote) {
+      horarioDe.set(`${h.Lote}|${h.Clase}`, { Inicio: h.Inicio ?? null, Fin: h.Fin ?? null, SinSalida: Number(h.Abiertas) });
+    }
     const recibidoDe = new Map<string, any[]>();
     for (const r of recibidoLote) {
       const k = `${r.Lote}|${r.ClaseLote}`;
@@ -332,6 +363,7 @@ router.get("/produccion", requireAuth, requirePerm("destajo", "ver"), async (req
         const base = { ...l,
           Ajustes: ajustesDe.get(`${l.Lote}|${l.Clase}`) ?? [],
           Recibido: recibidoDe.get(`${l.Lote}|${l.Clase}`) ?? [],
+          Horario: horarioDe.get(`${l.Lote}|${l.Clase}`) ?? null,
           Pendiente: l.PesoIngreso - l.Bajado - l.Descarte - l.Procesado,
           EsEntero: entero, SinCola: sinCola,
           Salida: sinCola ? 0 : entero ? l.Cola : l.Procesado,
