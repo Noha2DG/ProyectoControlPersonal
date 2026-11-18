@@ -9,11 +9,9 @@ import { agruparLineasRemision } from "./HojaRemisionModal.jsx";
 // otra es la tabla, que sale de los masters que salieron en ella.
 //   · Número = folio de la remisión (decisión del usuario): reimprimir da siempre el mismo y no hace
 //     falta llevar otro correlativo.
-//   · Los MISMOS renglones, en el mismo orden y con las mismas libras que la remisión impresa
-//     (agruparLineasRemision, compartida con HojaRemisionModal): el cliente coteja los dos papeles y
-//     tienen que cuadrar renglón por renglón (pedido del usuario, 18 nov 2026). Por eso un mismo
-//     producto y lote en dos pedidos sale en dos renglones, igual que en la remisión. El total de
-//     libras al pie es el Total Lb de la remisión.
+//   · Sale de los renglones de la remisión impresa (agruparLineasRemision, compartida con
+//     HojaRemisionModal), en su orden, para que las cantidades cuadren con ese papel; lo que la
+//     remisión separa solo por pedido aquí se suma (ver filasCertificado). Total = Total Lb.
 //   · Fecha de producción = la del lote en su orden de etiquetado; vencimiento = 2 años después.
 // Mismo patrón de impresión que HojaRemisionModal: vista previa en el modal y copia en #print-root.
 
@@ -38,10 +36,22 @@ function nombreProducto(proceso) {
   return p.replace(/P&D/g, "Pelado y Desvenado");
 }
 
-const filasCertificado = remision => agruparLineasRemision(remision).map(g => ({
-  k: g.clave, Producto: nombreProducto(g.DescripcionProceso), Talla: g.DescripcionTalla,
-  Caja: g.PesoLbCaja, Lote: g.Lote, Produccion: g.FechaProduccion, Libras: g.Lb,
-}));
+// Parte de los renglones de la remisión impresa (mismo orden) y junta los que solo se distinguen
+// por el pedido: mismo producto, talla, presentación, lote y fecha de producción van en UN renglón
+// con sus libras sumadas (corrección del usuario, 18 nov 2026: en VL-0120 el 61/70 del G546Q009
+// sale 580 + 220 = 800). El total sigue siendo el Total Lb de la remisión.
+function filasCertificado(remision) {
+  const filas = new Map();
+  for (const g of agruparLineasRemision(remision)) {
+    const k = `${g.DescripcionProceso}|${g.DescripcionTalla}|${g.PesoLbCaja}|${g.Lote}|${g.FechaProduccion ?? ""}`;
+    if (!filas.has(k)) filas.set(k, {
+      k, Producto: nombreProducto(g.DescripcionProceso), Talla: g.DescripcionTalla,
+      Caja: g.PesoLbCaja, Lote: g.Lote, Produccion: g.FechaProduccion, Libras: 0,
+    });
+    filas.get(k).Libras += g.Lb;
+  }
+  return [...filas.values()];
+}
 
 export function Certificado({ remision }) {
   const filas = filasCertificado(remision);
