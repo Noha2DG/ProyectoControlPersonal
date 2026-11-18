@@ -104,7 +104,12 @@ function permisosPara(valor) {
 
 const EMPTY_PERMISOS = permisosPara(false);
 
-const KIOSCO_KEYS = ["kiosco", "kiosco_areas", "kiosco_destajo", "kiosco_ranking", "equipo"];
+// Pantallas fijas de planta: una cuenta que solo tiene estas queda con rol kiosco, y el rol kiosco
+// es el que recibe sesión SIN vencimiento (ver firmarToken en backend/src/routes/auth.ts). La báscula
+// entra aquí aunque su acción sea "usar" y no "ver": con rol "Solo lectura" la sesión vencía a las
+// 8 h a mitad del turno y la tablet dejaba de guardar pesadas ("Token inválido o expirado").
+const KIOSCO_KEYS = ["kiosco", "kiosco_areas", "kiosco_destajo", "kiosco_ranking", "equipo", "pesaje_bascula"];
+const pantallaActiva = (p, k) => Boolean(p?.[k]?.ver || p?.[k]?.usar);
 
 const PRESETS = {
   admin:        permisosPara(true),
@@ -114,6 +119,7 @@ const PRESETS = {
   kiosco_destajo: { ...EMPTY_PERMISOS, kiosco_destajo: { ver: true } },
   kiosco_ranking: { ...EMPTY_PERMISOS, kiosco_ranking: { ver: true } },
   equipo:       { ...EMPTY_PERMISOS, equipo: { ver: true } },
+  pesaje_bascula: { ...EMPTY_PERMISOS, pesaje_bascula: { usar: true, anular_caja: false } },
 };
 
 function mergePermisos(stored) {
@@ -126,7 +132,7 @@ function mergePermisos(stored) {
 function derivarRol(p) {
   if (JSON.stringify(mergePermisos(p)) === JSON.stringify(PRESETS.admin)) return "admin";
   const soloPantallas = MODULOS.every(m => KIOSCO_KEYS.includes(m.key) || !p?.[m.key]?.ver);
-  if (soloPantallas && KIOSCO_KEYS.some(k => p?.[k]?.ver)) return "kiosco";
+  if (soloPantallas && KIOSCO_KEYS.some(k => pantallaActiva(p, k))) return "kiosco";
   return "readonly";
 }
 
@@ -234,6 +240,7 @@ function UsuarioModal({ usuario, onSave, onClose }) {
                 { key: "kiosco_destajo", label: "Kiosco Mi Producción" },
                 { key: "kiosco_ranking", label: "Kiosco Ranking" },
                 { key: "equipo",      label: "Kiosco Uniformes"},
+                { key: "pesaje_bascula", label: "Kiosco Báscula" },
               ].map(p => (
                 <button key={p.key} type="button" onClick={() => applyPreset(p.key)}
                   className={`text-xs px-3 py-1.5 rounded-lg border font-medium transition ${
