@@ -2,14 +2,18 @@ import { useState, useEffect } from "react";
 import { createPortal } from "react-dom";
 import { authHeader } from "../context/AuthContext.jsx";
 import logo from "../assets/pacific-gold-logo.png";
+import { agruparLineasRemision } from "./HojaRemisionModal.jsx";
 
 // Certificado de calidad de una remisión confirmada (18 nov 2026, pedido del usuario): SUMINISTROS lo
 // pide en cada despacho. Es la plantilla que ya usaban en Word; lo único que cambia de una remisión a
 // otra es la tabla, que sale de los masters que salieron en ella.
 //   · Número = folio de la remisión (decisión del usuario): reimprimir da siempre el mismo y no hace
 //     falta llevar otro correlativo.
-//   · Un renglón por producto + lote: masters del mismo producto y lote en pedidos distintos se suman
-//     (en VL-0120, 29 + 11 masters de 61/70 del G546Q009 = 800 lb en un solo renglón).
+//   · Los MISMOS renglones, en el mismo orden y con las mismas libras que la remisión impresa
+//     (agruparLineasRemision, compartida con HojaRemisionModal): el cliente coteja los dos papeles y
+//     tienen que cuadrar renglón por renglón (pedido del usuario, 18 nov 2026). Por eso un mismo
+//     producto y lote en dos pedidos sale en dos renglones, igual que en la remisión. El total de
+//     libras al pie es el Total Lb de la remisión.
 //   · Fecha de producción = la del lote en su orden de etiquetado; vencimiento = 2 años después.
 // Mismo patrón de impresión que HojaRemisionModal: vista previa en el modal y copia en #print-root.
 
@@ -34,22 +38,14 @@ function nombreProducto(proceso) {
   return p.replace(/P&D/g, "Pelado y Desvenado");
 }
 
-function filasCertificado(lineas) {
-  const grupos = {};
-  for (const l of lineas) {
-    const k = `${l.DescripcionProceso}|${l.Talla}|${l.Presentacion}|${l.Lote}|${l.FechaProduccion ?? ""}`;
-    grupos[k] ??= {
-      k, Producto: nombreProducto(l.DescripcionProceso), Talla: l.DescripcionTalla,
-      Caja: l.PesoLbCaja, Lote: l.Lote, Produccion: l.FechaProduccion, Libras: 0,
-    };
-    grupos[k].Libras += l.PesoMasterLb;
-  }
-  return Object.values(grupos).sort((a, b) =>
-    String(a.Produccion).localeCompare(String(b.Produccion)) || a.Producto.localeCompare(b.Producto) || String(a.Talla).localeCompare(String(b.Talla)));
-}
+const filasCertificado = remision => agruparLineasRemision(remision).map(g => ({
+  k: g.clave, Producto: nombreProducto(g.DescripcionProceso), Talla: g.DescripcionTalla,
+  Caja: g.PesoLbCaja, Lote: g.Lote, Produccion: g.FechaProduccion, Libras: g.Lb,
+}));
 
 export function Certificado({ remision }) {
-  const filas = filasCertificado(remision.Lineas);
+  const filas = filasCertificado(remision);
+  const total = filas.reduce((t, f) => t + f.Libras, 0);
   const td = { border: "1px solid #111", padding: "4px 8px", textAlign: "center", verticalAlign: "middle" };
   return (
     <div style={{ fontFamily: "Arial, Helvetica, sans-serif", color: "#111", fontSize: "14px", lineHeight: 1.35 }}>
@@ -94,6 +90,12 @@ export function Certificado({ remision }) {
             </tr>
           ))}
         </tbody>
+        <tfoot>
+          <tr>
+            <td colSpan={4} style={{ ...td, textAlign: "right", fontWeight: 700 }}>Total</td>
+            <td style={{ ...td, fontWeight: 700 }}>{libras(total)}</td>
+          </tr>
+        </tfoot>
       </table>
 
       <p style={{ marginTop: "40px", fontWeight: 700 }}>
