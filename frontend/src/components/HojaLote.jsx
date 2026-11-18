@@ -1,5 +1,4 @@
 import { fmtNum } from "../utils/numero.js";
-
 // Hoja de Lote (Destajo → Reporte → Reporte x Lote), igual en pantalla y en el PDF (`compacto`).
 //
 // Colores con significado, los mismos en toda la hoja:
@@ -49,7 +48,20 @@ function Dato({ titulo, children, c, ancho = false }) {
   );
 }
 
+// "2026-11-18 06:42" → "06:42"; si la hora cae en otro día que el del lote, lleva la fecha corta
+// delante ("19/11 00:15") para que no se lea como del mismo día.
+function hora(fh, fechaLote) {
+  if (!fh) return null;
+  const [f, h] = fh.split(" ");
+  return f === fechaLote ? h : `${f.slice(8, 10)}/${f.slice(5, 7)} ${h}`;
+}
+
 function Encabezado({ l, d, c }) {
+  const fechaLote = l.Fecha?.slice(0, 10);
+  const inicio = hora(l.Horario?.Inicio, fechaLote);
+  // Quien no marcó salida no frena la hora final: va la última salida que sí se marcó.
+  const fin = hora(l.Horario?.Fin, fechaLote);
+  const sinSalida = l.Horario?.SinSalida ?? 0;
   return (
     <div className={`rounded-md overflow-hidden border ${c ? "mb-3" : "mb-5"}`} style={{ borderColor: C.marea }}>
       <div className={`flex items-center justify-between ${c ? "px-3 py-1.5" : "px-4 py-2.5"}`} style={{ background: C.marea }}>
@@ -62,6 +74,18 @@ function Encabezado({ l, d, c }) {
       <div className="grid grid-cols-2 divide-x divide-y divide-white" style={{ background: C.hielo }}>
         <Dato c={c} titulo="Encargado de turno">{d.Encargado || "—"}</Dato>
         <Dato c={c} titulo="Registró el pesaje">{l.RegistradoPor || "—"}</Dato>
+        <Dato c={c} titulo="Hora de inicio">
+          <span className="tabular-nums">{inicio ?? "—"}</span>
+          {inicio && <span className="font-normal text-slate-500"> · primera entrada al área</span>}
+        </Dato>
+        <Dato c={c} titulo="Hora final">
+          <span className="tabular-nums">{fin ?? "—"}</span>
+          {fin && <span className="font-normal text-slate-500"> · última salida del área</span>}
+          {/* Solo en pantalla: la hoja impresa lleva la hora sin el aviso. */}
+          {!c && sinSalida > 0 && (
+            <span className="font-normal" style={{ color: C.ambar }}> · {sinSalida} sin marcar salida</span>
+          )}
+        </Dato>
         <Dato c={c} ancho titulo="Personal del turno">
           {d.Personas} {d.EsEntero ? "descabezando" : "peladoras"} en el lote
           <span className="font-normal text-slate-500"> · {d.Soportes} soportes · {d.Chequeadores} chequeadores · {d.QC} QC</span>
