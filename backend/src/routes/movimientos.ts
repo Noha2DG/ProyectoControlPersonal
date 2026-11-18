@@ -10,6 +10,10 @@ const router = Router();
 
 const TIPOS_VALIDOS = ["Entrada", "Salida"];
 const OPERADOR_SISTEMA = "Sistema";
+// Minutos tras un marcaje del kiosco en que la misma tarjeta no vuelve a marcar (18 nov 2026): había
+// gente que pasaba el gafete dos veces seguidas y la segunda pasada le daba Salida al instante.
+// No cuenta la Entrada que pone el corte de medianoche (Operador Sistema), que nadie escaneó.
+export const MINUTOS_ENTRE_MARCAJES = 5;
 
 function esDuplicado(err: any): boolean {
   return err?.code === "P2010" || /Duplicate entry/i.test(err?.message ?? "");
@@ -70,48 +74,71 @@ router.post("/registrar", async (req: Request, res: Response) => {
     await aplicarCorteMedianoche(Codigo);
 
     const hoyInicio = hoyInicioGT();
+    const ahora     = nowGT();
+    const diaSemana = diaSemanaDe(ahora);
+    const operador  = getOperador(req);
 
-    const movimientosHoy: any[] = await prisma.$queryRaw`
-      SELECT Tipo, Operador FROM Movimientos
-      WHERE Codigo = ${Codigo} AND FechaHora >= ${hoyInicio}
-      ORDER BY FechaHora ASC
-    `;
+    // Todo en una transacción con el renglón del empleado bloqueado (FOR UPDATE): dos pasadas casi
+    // al mismo tiempo se atienden una detrás de otra, y la segunda ya ve el marcaje de la primera.
+    // Sin el candado las dos leían "sin marcaje reciente" y entraban Entrada y Salida juntas.
+    const r = await prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT Codigo FROM Empleados WHERE Codigo = ${Codigo} FOR UPDATE`;
+
+      const recientes: any[] = await tx.$queryRaw`
+        SELECT Tipo, DATE_FORMAT(FechaHora, '%H:%i') AS Hora, TIMESTAMPDIFF(SECOND, FechaHora, ${ahora}) AS Segundos
+        FROM Movimientos
+        WHERE Codigo = ${Codigo} AND Operador <> ${OPERADOR_SISTEMA}
+          AND FechaHora > ${ahora} - INTERVAL ${MINUTOS_ENTRE_MARCAJES} MINUTE
+        ORDER BY FechaHora DESC LIMIT 1
+      `;
+      if (recientes.length) {
+        const faltan = Math.max(1, Math.ceil((MINUTOS_ENTRE_MARCAJES * 60 - Number(recientes[0].Segundos)) / 60));
+        return { espera: {
+          error: `Ya se escaneó a las ${recientes[0].Hora} (${recientes[0].Tipo}). Espere ${faltan} minuto${faltan === 1 ? "" : "s"} para volver a escanear.`,
+          espera: true, tipoAnterior: recientes[0].Tipo, minutos: faltan,
+        } };
+      }
+
+      const movimientosHoy: any[] = await tx.$queryRaw`
+        SELECT Tipo, Operador FROM Movimientos
+        WHERE Codigo = ${Codigo} AND FechaHora >= ${hoyInicio}
+        ORDER BY FechaHora ASC
+      `;
 
     // Si el turno venía de ayer (corte de medianoche), el primer movimiento de
     // hoy es la Entrada sintética del corte y el siguiente es la Salida real
     // que la cierra: ese par cierra el turno de ayer, no cuenta como
     // asistencia del día de hoy para el límite de 2 marcajes.
-    const marcajesDeHoy =
-      movimientosHoy[0]?.Operador === OPERADOR_SISTEMA && movimientosHoy[0]?.Tipo === "Entrada"
-        ? movimientosHoy.slice(2)
-        : movimientosHoy;
+      const marcajesDeHoy =
+        movimientosHoy[0]?.Operador === OPERADOR_SISTEMA && movimientosHoy[0]?.Tipo === "Entrada"
+          ? movimientosHoy.slice(2)
+          : movimientosHoy;
 
-    if (marcajesDeHoy.length >= 2) {
-      res.status(400).json({ error: "Ya tiene 2 marcajes registrados hoy" });
-      return;
-    }
+      if (marcajesDeHoy.length >= 2) return { error: "Ya tiene 2 marcajes registrados hoy" };
 
-    const tipo: "Entrada" | "Salida" =
-      movimientosHoy.length === 0 || movimientosHoy[movimientosHoy.length - 1].Tipo === "Salida"
-        ? "Entrada"
-        : "Salida";
+      const tipo: "Entrada" | "Salida" =
+        movimientosHoy.length === 0 || movimientosHoy[movimientosHoy.length - 1].Tipo === "Salida"
+          ? "Entrada"
+          : "Salida";
 
-    const ahora     = nowGT();
-    const diaSemana = diaSemanaDe(ahora);
-    const operador  = getOperador(req);
-
-    await prisma.$executeRaw`
-      INSERT INTO Movimientos (Codigo, NombreEmpleado, Tipo, FechaHora, DiaSemana, Operador)
-      VALUES (${Codigo}, ${emp.NombreCompleto}, ${tipo}, ${ahora}, ${diaSemana}, ${operador})
-    `;
-
-    // Al marcar Salida del día, cerrar la última área abierta en Transferencias
-    if (tipo === "Salida") {
-      await prisma.$executeRaw`
-        UPDATE Transferencias SET FechaSalida = ${ahora}
-        WHERE Codigo = ${Codigo} AND FechaSalida IS NULL
+      await tx.$executeRaw`
+        INSERT INTO Movimientos (Codigo, NombreEmpleado, Tipo, FechaHora, DiaSemana, Operador)
+        VALUES (${Codigo}, ${emp.NombreCompleto}, ${tipo}, ${ahora}, ${diaSemana}, ${operador})
       `;
-    }
+
+      // Al marcar Salida del día, cerrar la última área abierta en Transferencias
+      if (tipo === "Salida") {
+        await tx.$executeRaw`
+          UPDATE Transferencias SET FechaSalida = ${ahora}
+          WHERE Codigo = ${Codigo} AND FechaSalida IS NULL
+        `;
+      }
+      return { tipo };
+    });
+
+    if (r.espera) { res.status(429).json(r.espera); return; }
+    if (r.error) { res.status(400).json({ error: r.error }); return; }
+    const tipo = r.tipo;
 
     res.json({
       empleado: { Codigo: emp.Codigo, NombreCompleto: emp.NombreCompleto },
