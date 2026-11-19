@@ -347,7 +347,7 @@ router.get("/sesion/:id/resumen", requirePerm("pesaje_bascula", "usar"), async (
           FROM PesadaPrueba
          WHERE BalanzaCodigo = ${s.BalanzaCodigo} AND FechaProduccion = ${s.FechaProduccion} AND Anulada = 0`;
       const ult: any[] = await prisma.$queryRaw`
-        SELECT PesadaId, PesoBrutoG, Lote, DATE_FORMAT(CreadoEn, '%H:%i:%s') AS Hora
+        SELECT PesadaId, PesoBrutoG, Lote, Carrito, DATE_FORMAT(CreadoEn, '%H:%i:%s') AS Hora
           FROM PesadaPrueba
          WHERE SesionId = ${s.SesionId} AND Resultado = 'OK' AND Anulada = 0 ORDER BY PesadaId DESC LIMIT 8`;
       res.json({
@@ -381,7 +381,7 @@ router.post("/pesadas/:id/anular", requirePerm("pesaje_bascula", "anular_caja"),
   } catch (err: any) { responder(res, err); }
 });
 
-// POST /api/pesaje-bascula/pruebas — { Uuid, SesionId, EmpaqueCodigo, Lote, Talla, CodigoPedido, PesoBrutoG }
+// POST /api/pesaje-bascula/pruebas — { Uuid, SesionId, EmpaqueCodigo, Lote, Talla, CodigoPedido, Carrito, PesoBrutoG }
 // Pesada de la prueba PPV. Dentro del rango queda Resultado OK (es la caja); fuera queda como intento
 // BAJO/SOBRE —para saber cuántas veces se pasaron del límite— y la pantalla dice "SIN GUARDAR".
 // El pedido es solo referencia: no suma al avance ni al cuadre. Mismo Uuid = misma pesada.
@@ -411,14 +411,16 @@ router.post("/pruebas", requirePerm("pesaje_bascula", "usar"), async (req: AuthR
       if (!pedido) throw new ErrorNegocio(400, "Elija el pedido");
       const [pe]: any[] = await tx.$queryRaw`SELECT CodigoPedido FROM Pedidos WHERE CodigoPedido = ${pedido} AND Estatus = 'Proceso'`;
       if (!pe) throw new ErrorNegocio(400, `El pedido ${pedido} no está en proceso`);
+      const carrito = String(b.Carrito ?? "").trim().toUpperCase().slice(0, 20);
+      if (!carrito) throw new ErrorNegocio(400, "Escriba el número de carrito");
 
       const resultado = peso < Number(emp.MinG) ? "BAJO" : peso > Number(emp.MaxG) ? "SOBRE" : "OK";
       await tx.$executeRaw`
         INSERT INTO PesadaPrueba (Uuid, SesionId, BalanzaCodigo, OperadoraCodigo, AreaCodigo, Tipo, Resultado,
-                                  EmpaqueCodigo, Lote, Talla, CodigoPedido, PesoBrutoG, PesoNetoG,
+                                  EmpaqueCodigo, Lote, Talla, CodigoPedido, Carrito, PesoBrutoG, PesoNetoG,
                                   ObjetivoG, MinG, MaxG, FechaProduccion)
         VALUES (${uuid}, ${s.SesionId}, ${s.BalanzaCodigo}, ${s.OperadoraCodigo}, ${s.AreaCodigo}, 'PPV', ${resultado},
-                ${emp.Codigo}, ${lote}, ${Number(b.Talla)}, ${pedido}, ${peso}, ${peso - Number(emp.TaraG)},
+                ${emp.Codigo}, ${lote}, ${Number(b.Talla)}, ${pedido}, ${carrito}, ${peso}, ${peso - Number(emp.TaraG)},
                 ${Number(emp.PesoBrutoG)}, ${Number(emp.MinG)}, ${Number(emp.MaxG)}, ${s.FechaProduccion})`;
       const [{ id }]: any[] = await tx.$queryRaw`SELECT LAST_INSERT_ID() AS id`;
       await tx.$executeRaw`UPDATE SesionBascula SET UltimaActividad = NOW() WHERE SesionId = ${s.SesionId}`;

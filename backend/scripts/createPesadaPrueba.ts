@@ -33,6 +33,7 @@ async function main() {
       Lote                VARCHAR(30)   NOT NULL,
       Talla               INT           NOT NULL,
       CodigoPedido        VARCHAR(20)   NULL,
+      Carrito             VARCHAR(20)   NULL,
       PesoBrutoG          INT           NOT NULL,
       PesoNetoG           INT           NOT NULL,
       ObjetivoG           INT           NOT NULL,
@@ -51,7 +52,9 @@ async function main() {
       CONSTRAINT fk_pesadaprueba_empaque FOREIGN KEY (EmpaqueCodigo) REFERENCES EmpaquePesaje(Codigo)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci
   `);
-  console.log("Tabla PesadaPrueba verificada.");
+  // 19 nov 2026: número de carrito obligatorio en PPV (la tabla ya existía sin la columna).
+  await prisma.$executeRawUnsafe(`ALTER TABLE PesadaPrueba ADD COLUMN IF NOT EXISTS Carrito VARCHAR(20) NULL AFTER CodigoPedido`);
+  console.log("Tabla PesadaPrueba verificada (con Carrito).");
   await prisma.$disconnect();
 }
 
