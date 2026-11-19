@@ -205,7 +205,8 @@ function Pesaje({ sesion, b, onCerrar, onMenu }) {
 
   // Lo que falta para poder guardar una bandeja, en el orden en que se llena la pantalla.
   const faltan = ppv ? [
-    !trabajo.lote.trim() && "lote", !trabajo.talla && "talla", !empaque && "tipo de empaque", !trabajo.pedido && "pedido",
+    !trabajo.lote.trim() && "lote", !trabajo.talla && "talla", !trabajo.carrito.trim() && "número de carrito",
+    !empaque && "tipo de empaque", !trabajo.pedido && "pedido",
   ].filter(Boolean) : [
     !trabajo.lote && "lote", trabajo.lote && !trabajo.clase && "tipo de producto", !trabajo.talla && "talla",
     !pt && !empaque && "tipo de empaque",
@@ -348,7 +349,8 @@ function Pesaje({ sesion, b, onCerrar, onMenu }) {
   function datosPrueba(gramos) {
     return {
       prueba: true, Uuid: uuid(), SesionId: sesion.SesionId, EmpaqueCodigo: empaque.Codigo,
-      Lote: trabajo.lote.trim().toUpperCase(), Talla: Number(trabajo.talla), CodigoPedido: trabajo.pedido, PesoBrutoG: gramos,
+      Lote: trabajo.lote.trim().toUpperCase(), Talla: Number(trabajo.talla), CodigoPedido: trabajo.pedido,
+      Carrito: trabajo.carrito.trim().toUpperCase(), PesoBrutoG: gramos,
     };
   }
   const pedidoSel = cat.pedidos.find(x => x.CodigoPedido === trabajo.pedido) ?? null;
@@ -419,6 +421,11 @@ function Pesaje({ sesion, b, onCerrar, onMenu }) {
                   <option value="">— elija —</option>
                   {cat.tallas.map(t => <option key={t.Codigo} value={t.Codigo}>{t.Descripcion} ({t.Codigo})</option>)}
                 </select>
+              </label>
+              <label className={etq}>N.º de carrito *
+                <input value={trabajo.carrito} onChange={e => setTrabajo(t => ({ ...t, carrito: e.target.value.toUpperCase() }))} autoComplete="off" maxLength={20}
+                  placeholder="OBLIGATORIO"
+                  className={`${sel} mt-0.5 font-mono text-lg tracking-widest ${trabajo.carrito.trim() ? "" : "!bg-amber-300 !text-amber-950 placeholder:text-amber-900 placeholder:font-bold !border-amber-100"}`} />
               </label>
             </>
           ) : (<>
@@ -580,7 +587,7 @@ function Pesaje({ sesion, b, onCerrar, onMenu }) {
             <p className="text-xs text-slate-300 mb-2">Últimas guardadas</p>
             <ul className="space-y-1.5 text-sm font-mono">
               {resumen.ultimas.map(u => (
-                <li key={u.PesadaId} className="flex justify-between gap-2"><span>{g(u.PesoBrutoG)} g</span><span className="text-emerald-300 truncate">✓ {u.PersonaCodigo ?? u.Hora}</span></li>
+                <li key={u.PesadaId} className="flex justify-between gap-2"><span>{g(u.PesoBrutoG)} g</span><span className="text-emerald-300 truncate">✓ {u.PersonaCodigo ?? (u.Carrito ? `carrito ${u.Carrito}` : u.Hora)}</span></li>
               ))}
             </ul>
             <p className="text-[11px] text-slate-400 mt-3">Lo que sale "sin guardar" no aparece aquí.</p>
