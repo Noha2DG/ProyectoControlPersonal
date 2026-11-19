@@ -17,7 +17,11 @@ const router = Router();
 router.use(requireAuth);
 
 const MIN_INACTIVIDAD = 15;
-const MODOS = ["PERSONA", "PRODUCTO"];
+// PPV (19 nov 2026, prueba): solo control de peso. Lote escrito a mano (no está amarrado al piso),
+// talla, tipo de empaque CON rango y pedido de referencia (no toca el avance del pedido). Una sola
+// persona pesa todo: sin carnet por caja. Va a su propia tabla, PesadaPrueba, para no mezclarse con
+// Pesada mientras sea prueba; ahí también quedan los intentos fuera de rango (Resultado BAJO/SOBRE).
+const MODOS = ["PERSONA", "PRODUCTO", "PPV"];
 
 class ErrorNegocio extends Error { constructor(public status: number, msg: string, public extra?: any) { super(msg); } }
 const responder = (res: Response, err: any) =>
@@ -94,8 +98,10 @@ router.get("/persona/:codigo", requirePerm("pesaje_bascula", "usar"), async (req
   } catch (err: any) { responder(res, err); }
 });
 
-// POST /api/pesaje-bascula/sesion — { balanza, carnet, bodega?, modo? }
-// Si el área no define bodega o modo, responde { necesita } con las opciones y la pantalla pregunta.
+// POST /api/pesaje-bascula/sesion — { balanza, carnet, modo?, bodega? }
+// Sin modo responde { menu, opciones }: la pantalla muestra el menú de pesadas en botones grandes.
+// Opciones: el modo del área (o los dos de inventario si el área no lo define) más "Pesar PPV".
+// Con modo de inventario y sin bodega (ni en el área), responde { necesita } y la pantalla pregunta.
 router.post("/sesion", requirePerm("pesaje_bascula", "usar"), async (req: AuthRequest, res: Response) => {
   try {
     const balanza = String(req.body?.balanza ?? "").trim().toUpperCase();
@@ -112,18 +118,20 @@ router.post("/sesion", requirePerm("pesaje_bascula", "usar"), async (req: AuthRe
       if (!a) throw new ErrorNegocio(400, `${e.NombreCompleto}: hoy no tiene entrada en un área. Pase primero por el kiosco de áreas.`);
       if (Number(a.EsPesadora) !== 1) throw new ErrorNegocio(400, `${e.NombreCompleto} está en ${a.NombreArea}, que no usa básculas.`);
 
-      let bodega: string | null = a.BodegaVirtualCodigo ?? null;
-      let modo: string | null = a.ModoPesaje ?? null;
-      if (!bodega && req.body?.bodega) {
+      const modoArea = MODOS.includes(a.ModoPesaje) && a.ModoPesaje !== "PPV" ? a.ModoPesaje : null;
+      const opciones = [...(modoArea ? [modoArea] : ["PERSONA", "PRODUCTO"]), "PPV"];
+      const modo = String(req.body?.modo ?? "").toUpperCase();
+      if (!opciones.includes(modo)) return { menu: true, opciones, operadora: e.NombreCompleto, area: a.NombreArea };
+
+      // PPV no toca el inventario al piso: no necesita bodega.
+      let bodega: string | null = modo === "PPV" ? null : (a.BodegaVirtualCodigo ?? null);
+      if (modo !== "PPV" && !bodega && req.body?.bodega) {
         const [bv]: any[] = await tx.$queryRaw`SELECT Codigo FROM BodegaVirtual WHERE Codigo = ${String(req.body.bodega)} AND Activo = 1`;
         if (bv) bodega = bv.Codigo;
       }
-      if (!modo && MODOS.includes(String(req.body?.modo ?? "").toUpperCase())) modo = String(req.body.modo).toUpperCase();
-      if (!bodega || !modo) {
-        const bodegas: any[] = !bodega
-          ? await tx.$queryRawUnsafe(`SELECT Codigo, Nombre FROM BodegaVirtual WHERE Activo = 1 ORDER BY Orden, Nombre`)
-          : [];
-        return { necesita: { bodega: !bodega, modo: !modo }, bodegas, operadora: e.NombreCompleto, area: a.NombreArea };
+      if (modo !== "PPV" && !bodega) {
+        const bodegas: any[] = await tx.$queryRawUnsafe(`SELECT Codigo, Nombre FROM BodegaVirtual WHERE Activo = 1 ORDER BY Orden, Nombre`);
+        return { necesita: { bodega: true }, modo, bodegas, operadora: e.NombreCompleto, area: a.NombreArea };
       }
 
       // Una báscula, una sesión: la que estuviera abierta se cierra.
@@ -132,7 +140,7 @@ router.post("/sesion", requirePerm("pesaje_bascula", "usar"), async (req: AuthRe
          WHERE BalanzaCodigo = ${balanza} AND Fin IS NULL`;
       await tx.$executeRaw`
         INSERT INTO SesionBascula (BalanzaCodigo, OperadoraCodigo, AreaCodigo, BodegaVirtualCodigo, Modo, PideCarrito, FechaProduccion, Usuario)
-        VALUES (${balanza}, ${carnet}, ${a.CodigoArea}, ${bodega}, ${modo}, ${Number(a.PideCarrito) === 1 ? 1 : 0}, ${hoyGT()}, ${req.user!.username})`;
+        VALUES (${balanza}, ${carnet}, ${a.CodigoArea}, ${bodega}, ${modo}, ${modo === "PERSONA" && Number(a.PideCarrito) === 1 ? 1 : 0}, ${hoyGT()}, ${req.user!.username})`;
       const [{ id }]: any[] = await tx.$queryRaw`SELECT LAST_INSERT_ID() AS id`;
       return { sesion: await datosSesion(tx, Number(id)) };
     });
@@ -161,6 +169,26 @@ router.get("/sesion/:id/catalogos", requirePerm("pesaje_bascula", "usar"), async
   try {
     const s = await datosSesion(prisma, Number(req.params.id));
     if (!s) throw new ErrorNegocio(404, "La sesión no existe");
+    if (s.Modo === "PPV") {
+      // Solo empaques con rango (es control de peso) y todos los pedidos en proceso, de cualquier
+      // cliente, con su descripción: el pedido es solo referencia.
+      const [empaques, tallas, pedidos] = await Promise.all([
+        prisma.$queryRawUnsafe(`
+          SELECT Codigo, Nombre, Unidad, PesoNetoG, TaraG, PesoBrutoG, MinG, MaxG, ConRango
+            FROM EmpaquePesaje WHERE Activo = 1 AND ConRango = 1 ORDER BY Nombre`),
+        prisma.$queryRawUnsafe(`SELECT Codigo, Descripcion FROM Tallas WHERE Activo = 1 ORDER BY Codigo`),
+        prisma.$queryRawUnsafe(`
+          SELECT p.CodigoPedido, p.Descripcion, c.RazonSocial AS Cliente
+            FROM Pedidos p JOIN Clientes c ON c.Codigo = p.CodigoCliente
+           WHERE p.Estatus = 'Proceso'
+           ORDER BY c.RazonSocial, p.CodigoPedido`),
+      ]);
+      res.json({
+        empaques: (empaques as any[]).map(e => ({ ...e, ConRango: true })),
+        tallas, pedidos, lotes: [], clases: [],
+      });
+      return;
+    }
     const [empaques, tallas, lotes, clases, pedidos] = await Promise.all([
       prisma.$queryRawUnsafe(`
         SELECT Codigo, Nombre, Unidad, PesoNetoG, TaraG, DeshidratacionG, PesoBrutoG, MinG, MaxG, ConRango
@@ -221,6 +249,7 @@ router.post("/pesadas", requirePerm("pesaje_bascula", "usar"), async (req: AuthR
       if (ya) return { PesadaId: Number(ya.PesadaId), repetida: true };
 
       const s = await exigirSesionAbierta(tx, Number(b.SesionId));
+      if (s.Modo === "PPV") throw new ErrorNegocio(400, "Esta sesión es de prueba PPV: sus pesadas van a /pruebas");
       const pt = s.Modo === "PERSONA"; // producto terminado: carnet por bandeja, producto que sale y destino
       const peso = Number(b.PesoBrutoG);
       if (!Number.isInteger(peso) || peso <= 0) throw new ErrorNegocio(400, "Peso inválido");
@@ -310,6 +339,23 @@ router.get("/sesion/:id/resumen", requirePerm("pesaje_bascula", "usar"), async (
   try {
     const s = await datosSesion(prisma, Number(req.params.id));
     if (!s) throw new ErrorNegocio(404, "La sesión no existe");
+    if (s.Modo === "PPV") {
+      const [t]: any[] = await prisma.$queryRaw`
+        SELECT COALESCE(SUM(Resultado = 'OK'), 0) AS Cajas,
+               COALESCE(SUM(CASE WHEN Resultado = 'OK' THEN PesoNetoG END), 0) AS NetoG,
+               COALESCE(SUM(Resultado <> 'OK'), 0) AS Fuera
+          FROM PesadaPrueba
+         WHERE BalanzaCodigo = ${s.BalanzaCodigo} AND FechaProduccion = ${s.FechaProduccion} AND Anulada = 0`;
+      const ult: any[] = await prisma.$queryRaw`
+        SELECT PesadaId, PesoBrutoG, Lote, DATE_FORMAT(CreadoEn, '%H:%i:%s') AS Hora
+          FROM PesadaPrueba
+         WHERE SesionId = ${s.SesionId} AND Resultado = 'OK' AND Anulada = 0 ORDER BY PesadaId DESC LIMIT 8`;
+      res.json({
+        Cajas: Number(t.Cajas), NetoG: Number(t.NetoG), Fuera: Number(t.Fuera),
+        ultimas: ult.map(u => ({ ...u, PesadaId: Number(u.PesadaId), PersonaCodigo: null })),
+      });
+      return;
+    }
     const [tot]: any[] = await prisma.$queryRaw`
       SELECT COUNT(*) AS Cajas, COALESCE(SUM(PesoNetoG), 0) AS NetoG FROM Pesada
        WHERE BalanzaCodigo = ${s.BalanzaCodigo} AND FechaProduccion = ${s.FechaProduccion} AND Anulada = 0`;
@@ -329,6 +375,69 @@ router.post("/pesadas/:id/anular", requirePerm("pesaje_bascula", "anular_caja"),
     if (!motivo) throw new ErrorNegocio(400, "Escriba por qué se anula");
     const n = await prisma.$executeRaw`
       UPDATE Pesada SET Anulada = 1, AnuladaPor = ${req.user!.username}, AnuladaEn = NOW(), MotivoAnulacion = ${motivo}
+       WHERE PesadaId = ${Number(req.params.id)} AND Anulada = 0`;
+    if (!n) throw new ErrorNegocio(404, "No existe o ya estaba anulada");
+    res.json({ ok: true });
+  } catch (err: any) { responder(res, err); }
+});
+
+// POST /api/pesaje-bascula/pruebas — { Uuid, SesionId, EmpaqueCodigo, Lote, Talla, CodigoPedido, PesoBrutoG }
+// Pesada de la prueba PPV. Dentro del rango queda Resultado OK (es la caja); fuera queda como intento
+// BAJO/SOBRE —para saber cuántas veces se pasaron del límite— y la pantalla dice "SIN GUARDAR".
+// El pedido es solo referencia: no suma al avance ni al cuadre. Mismo Uuid = misma pesada.
+router.post("/pruebas", requirePerm("pesaje_bascula", "usar"), async (req: AuthRequest, res: Response) => {
+  try {
+    const b = req.body ?? {};
+    const uuid = String(b.Uuid ?? "");
+    if (!/^[0-9a-f-]{36}$/i.test(uuid)) throw new ErrorNegocio(400, "Identificador de pesada inválido");
+    const r = await prisma.$transaction(async (tx: any) => {
+      const [ya]: any[] = await tx.$queryRaw`SELECT PesadaId, Resultado FROM PesadaPrueba WHERE Uuid = ${uuid}`;
+      if (ya) return { PesadaId: Number(ya.PesadaId), repetida: true, guardada: ya.Resultado === "OK", Resultado: ya.Resultado };
+
+      const s = await exigirSesionAbierta(tx, Number(b.SesionId));
+      if (s.Modo !== "PPV") throw new ErrorNegocio(400, "Esta sesión no es de prueba PPV");
+      const peso = Number(b.PesoBrutoG);
+      if (!Number.isInteger(peso) || peso <= 0) throw new ErrorNegocio(400, "Peso inválido");
+      const [emp]: any[] = await tx.$queryRaw`
+        SELECT Codigo, PesoBrutoG, TaraG, MinG, MaxG FROM EmpaquePesaje
+         WHERE Codigo = ${String(b.EmpaqueCodigo ?? "").trim()} AND Activo = 1 AND ConRango = 1`;
+      if (!emp) throw new ErrorNegocio(400, "Elija un tipo de empaque con rango");
+      const lote = String(b.Lote ?? "").trim().toUpperCase();
+      if (!lote) throw new ErrorNegocio(400, "Escriba el lote");
+      if (lote.length > 30) throw new ErrorNegocio(400, "El lote no puede pasar de 30 caracteres");
+      const [talla]: any[] = await tx.$queryRaw`SELECT Codigo FROM Tallas WHERE Codigo = ${Number(b.Talla)}`;
+      if (!talla) throw new ErrorNegocio(400, "Elija la talla");
+      const pedido = String(b.CodigoPedido ?? "").trim();
+      if (!pedido) throw new ErrorNegocio(400, "Elija el pedido");
+      const [pe]: any[] = await tx.$queryRaw`SELECT CodigoPedido FROM Pedidos WHERE CodigoPedido = ${pedido} AND Estatus = 'Proceso'`;
+      if (!pe) throw new ErrorNegocio(400, `El pedido ${pedido} no está en proceso`);
+
+      const resultado = peso < Number(emp.MinG) ? "BAJO" : peso > Number(emp.MaxG) ? "SOBRE" : "OK";
+      await tx.$executeRaw`
+        INSERT INTO PesadaPrueba (Uuid, SesionId, BalanzaCodigo, OperadoraCodigo, AreaCodigo, Tipo, Resultado,
+                                  EmpaqueCodigo, Lote, Talla, CodigoPedido, PesoBrutoG, PesoNetoG,
+                                  ObjetivoG, MinG, MaxG, FechaProduccion)
+        VALUES (${uuid}, ${s.SesionId}, ${s.BalanzaCodigo}, ${s.OperadoraCodigo}, ${s.AreaCodigo}, 'PPV', ${resultado},
+                ${emp.Codigo}, ${lote}, ${Number(b.Talla)}, ${pedido}, ${peso}, ${peso - Number(emp.TaraG)},
+                ${Number(emp.PesoBrutoG)}, ${Number(emp.MinG)}, ${Number(emp.MaxG)}, ${s.FechaProduccion})`;
+      const [{ id }]: any[] = await tx.$queryRaw`SELECT LAST_INSERT_ID() AS id`;
+      await tx.$executeRaw`UPDATE SesionBascula SET UltimaActividad = NOW() WHERE SesionId = ${s.SesionId}`;
+      const [{ n }]: any[] = await tx.$queryRaw`
+        SELECT COUNT(*) AS n FROM PesadaPrueba
+         WHERE BalanzaCodigo = ${s.BalanzaCodigo} AND FechaProduccion = ${s.FechaProduccion} AND Resultado = 'OK' AND Anulada = 0`;
+      return { PesadaId: Number(id), Numero: Number(n), guardada: resultado === "OK", Resultado: resultado };
+    });
+    res.status(201).json(r);
+  } catch (err: any) { responder(res, err); }
+});
+
+// POST /api/pesaje-bascula/pruebas/:id/anular — { motivo } · mismo permiso de supervisor.
+router.post("/pruebas/:id/anular", requirePerm("pesaje_bascula", "anular_caja"), async (req: AuthRequest, res: Response) => {
+  try {
+    const motivo = String(req.body?.motivo ?? "").trim().slice(0, 200);
+    if (!motivo) throw new ErrorNegocio(400, "Escriba por qué se anula");
+    const n = await prisma.$executeRaw`
+      UPDATE PesadaPrueba SET Anulada = 1, AnuladaPor = ${req.user!.username}, AnuladaEn = NOW(), MotivoAnulacion = ${motivo}
        WHERE PesadaId = ${Number(req.params.id)} AND Anulada = 0`;
     if (!n) throw new ErrorNegocio(404, "No existe o ya estaba anulada");
     res.json({ ok: true });

@@ -4,8 +4,8 @@ import { useBascula } from "../hooks/useBascula.js";
 
 // Pesaje en báscula (#/pesaje) — corre en el Chrome del cabezal, junto a la app Báscula Puente.
 //
-//  1. Inicio de sesión: solo "pase su carnet". De su área de hoy salen la bodega y el modo; si el
-//     área no los define, se le pregunta.
+//  1. Inicio de sesión: solo "pase su carnet", luego el menú de pesadas en botones grandes. La
+//     bodega sale de su área de hoy; si el área no la define, se le pregunta.
 //  2. Pesaje: elige talla, lote (del inventario al piso de su bodega) y tipo de empaque. Pone la
 //     caja; si el peso queda estable DENTRO del rango, al retirarla se guarda (GUARDADO #n). Bajo o
 //     sobrepeso NO se guarda (SIN GUARDAR). En "producto terminado" se escanea un carnet por bandeja.
@@ -37,40 +37,56 @@ const claveTrabajo = (bal) => `pesaje_trabajo_${bal}`;
 const leerLS = (k) => { try { return JSON.parse(localStorage.getItem(k) || "null"); } catch { return null; } };
 const escribirLS = (k, v) => { try { v === null ? localStorage.removeItem(k) : localStorage.setItem(k, JSON.stringify(v)); } catch { /* sin almacenamiento */ } };
 
-// ─── Inicio de sesión ─────────────────────────────────────────────────────────────────────────
-function Login({ balanza, conectado, onSesion, onSalirSistema }) {
+// ─── Inicio de sesión y menú de pesadas ──────────────────────────────────────────────────────
+// Carnet → menú de pesadas en botones grandes (usuario, 19 nov 2026) → si es de inventario y el área
+// no tiene bodega, se elige la bodega. "← Menú" desde el pesaje vuelve aquí sin pedir otra vez el
+// carnet (carnetInicial).
+const TIPOS_PESADA = {
+  PPV:      { titulo: "Pesar PPV",          detalle: "control de peso · lote escrito",  cls: "bg-teal-600 hover:bg-teal-500 border-teal-300" },
+  PERSONA:  { titulo: "Producto terminado", detalle: "carnet por cada bandeja",          cls: "bg-indigo-600 hover:bg-indigo-500 border-indigo-300" },
+  PRODUCTO: { titulo: "Por producto",       detalle: "lote del inventario al piso",      cls: "bg-slate-600 hover:bg-slate-500 border-slate-300" },
+};
+
+function Login({ balanza, conectado, carnetInicial, onSesion, onSalirSistema }) {
   const [carnet, setCarnet] = useState("");
   const [error, setError] = useState("");
   const [enviando, setEnviando] = useState(false);
-  const [pregunta, setPregunta] = useState(null); // { necesita, bodegas, operadora, area, carnet }
-  const [eleccion, setEleccion] = useState({ bodega: "", modo: "" });
+  const [menu, setMenu] = useState(null);         // { opciones, operadora, area, carnet }
+  const [pregunta, setPregunta] = useState(null); // { modo, bodegas, operadora, area, carnet }
   const ref = useRef(null);
+  const enCarnet = !menu && !pregunta;
 
-  useEffect(() => { if (!pregunta) ref.current?.focus(); }, [pregunta, error]);
+  useEffect(() => { if (enCarnet) ref.current?.focus(); }, [enCarnet, error]);
 
   const entrar = async (codigo, extra = {}) => {
     if (!codigo || enviando) return;
     setEnviando(true); setError("");
     try {
       const r = await api("/api/pesaje-bascula/sesion", { method: "POST", body: JSON.stringify({ balanza, carnet: codigo, ...extra }) });
-      if (r.necesita) { setPregunta({ ...r, carnet: codigo }); setEleccion({ bodega: "", modo: "" }); }
-      else onSesion(r.sesion);
-    } catch (e) { setError(e.message); setPregunta(null); }
+      if (r.menu) { setMenu({ ...r, carnet: codigo }); setPregunta(null); }
+      else if (r.necesita) { setPregunta({ ...r, carnet: codigo }); }
+      else onSesion(r.sesion, codigo);
+    } catch (e) { setError(e.message); setMenu(null); setPregunta(null); }
     finally { setEnviando(false); setCarnet(""); }
   };
 
+  // Viene de "← Menú": misma operadora, directo al menú.
+  useEffect(() => { if (carnetInicial && balanza) entrar(carnetInicial); }, [carnetInicial, balanza]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const volverAlCarnet = () => { setMenu(null); setPregunta(null); setError(""); };
+
   return (
-    <div className="min-h-screen bg-slate-900 text-white flex flex-col" onClick={() => !pregunta && ref.current?.focus()}>
+    <div className="min-h-screen bg-slate-900 text-white flex flex-col" onClick={() => enCarnet && ref.current?.focus()}>
       <div className="px-6 py-4 flex items-center gap-3 border-b border-white/10">
         <span className="font-mono font-bold text-lg">{balanza || "—"}</span>
         <span className={`text-sm ${conectado ? "text-emerald-400" : "text-amber-400"}`}>{conectado ? "báscula conectada" : "sin conexión con la app de la báscula"}</span>
         <button onClick={onSalirSistema} className="ml-auto text-xs text-slate-500 hover:text-slate-300">salir del sistema</button>
       </div>
       <div className="flex-1 flex flex-col items-center justify-center gap-6 px-8 text-center">
-        {!pregunta ? (
+        {enCarnet && (
           <>
             <p className="text-slate-400 text-base uppercase tracking-[0.3em]">Inicio de sesión</p>
-            <p className="text-6xl font-bold">Pase su carnet</p>
+            <p className="text-6xl font-bold">{enviando && carnetInicial ? "Volviendo al menú…" : "Pase su carnet"}</p>
             <form onSubmit={e => { e.preventDefault(); entrar(carnet.trim().toUpperCase()); }}>
               <input ref={ref} value={carnet} onChange={e => setCarnet(e.target.value.toUpperCase())} autoFocus autoComplete="off"
                 className="w-[420px] h-16 rounded-xl border-2 border-blue-400 bg-white/5 text-center font-mono text-2xl tracking-widest text-blue-100 focus:outline-none" />
@@ -79,34 +95,42 @@ function Login({ balanza, conectado, onSesion, onSalirSistema }) {
             {!balanza && <p className="text-amber-300 max-w-xl">Esta pantalla aún no sabe en qué báscula está. Revise que la app Báscula Puente esté abierta y configurada.</p>}
             {error && <div className="w-[560px] rounded-xl bg-red-500/15 border border-red-400/40 px-4 py-3 text-base text-red-200">{error}</div>}
           </>
-        ) : (
+        )}
+
+        {menu && !pregunta && (
+          <div className="w-full max-w-5xl space-y-6">
+            <div>
+              <p className="text-3xl font-bold">{menu.operadora}</p>
+              <p className="text-slate-400 text-lg">{menu.area} · ¿Qué va a pesar?</p>
+            </div>
+            <div className={`grid gap-5 ${menu.opciones.length >= 3 ? "grid-cols-3" : "grid-cols-2"}`}>
+              {menu.opciones.map(m => {
+                const t = TIPOS_PESADA[m] ?? { titulo: m, detalle: "", cls: "bg-slate-600 border-slate-300" };
+                return (
+                  <button key={m} disabled={enviando} onClick={() => entrar(menu.carnet, { modo: m })}
+                    className={`h-56 rounded-3xl border-2 shadow-lg flex flex-col items-center justify-center gap-3 px-4 active:scale-[0.98] transition disabled:opacity-50 ${t.cls}`}>
+                    <span className="text-4xl font-extrabold leading-tight">{t.titulo}</span>
+                    <span className="text-lg text-white/80">{t.detalle}</span>
+                  </button>
+                );
+              })}
+            </div>
+            {enviando && <p className="text-slate-400">Entrando…</p>}
+            <button onClick={volverAlCarnet} className="px-8 py-4 rounded-2xl border border-white/20 text-lg">Salir</button>
+          </div>
+        )}
+
+        {pregunta && (
           <div className="w-[640px] space-y-5">
             <p className="text-2xl font-bold">{pregunta.operadora}</p>
-            <p className="text-slate-400">Su área ({pregunta.area}) no define {[pregunta.necesita.bodega && "la bodega", pregunta.necesita.modo && "el modo"].filter(Boolean).join(" ni ")}: elija.</p>
-            {pregunta.necesita.bodega && (
-              <div className="grid grid-cols-3 gap-2 max-h-64 overflow-auto">
-                {pregunta.bodegas.map(b => (
-                  <button key={b.Codigo} onClick={() => setEleccion(x => ({ ...x, bodega: b.Codigo }))}
-                    className={`py-3 rounded-xl border text-base ${eleccion.bodega === b.Codigo ? "bg-blue-600 border-blue-400" : "border-white/20 hover:bg-white/10"}`}>{b.Nombre}</button>
-                ))}
-              </div>
-            )}
-            {pregunta.necesita.modo && (
-              <div className="grid grid-cols-2 gap-3">
-                {[["PERSONA", "Producto terminado", "carnet por cada bandeja"], ["PRODUCTO", "Por producto", "sin carnet por caja"]].map(([v, t, d]) => (
-                  <button key={v} onClick={() => setEleccion(x => ({ ...x, modo: v }))}
-                    className={`py-4 rounded-xl border ${eleccion.modo === v ? "bg-blue-600 border-blue-400" : "border-white/20 hover:bg-white/10"}`}>
-                    <span className="block text-xl font-bold">{t}</span><span className="text-sm text-slate-300">{d}</span>
-                  </button>
-                ))}
-              </div>
-            )}
-            <div className="flex justify-center gap-3">
-              <button onClick={() => setPregunta(null)} className="px-6 py-3 rounded-xl border border-white/20">Cancelar</button>
-              <button disabled={(pregunta.necesita.bodega && !eleccion.bodega) || (pregunta.necesita.modo && !eleccion.modo) || enviando}
-                onClick={() => entrar(pregunta.carnet, { bodega: eleccion.bodega || undefined, modo: eleccion.modo || undefined })}
-                className="px-8 py-3 rounded-xl bg-blue-600 font-bold disabled:opacity-40">Entrar</button>
+            <p className="text-slate-400">Su área ({pregunta.area}) no define la bodega: elija.</p>
+            <div className="grid grid-cols-3 gap-2 max-h-72 overflow-auto">
+              {pregunta.bodegas.map(bo => (
+                <button key={bo.Codigo} disabled={enviando} onClick={() => entrar(pregunta.carnet, { modo: pregunta.modo, bodega: bo.Codigo })}
+                  className="py-4 rounded-xl border border-white/20 hover:bg-white/10 text-lg">{bo.Nombre}</button>
+              ))}
             </div>
+            <button onClick={() => setPregunta(null)} className="px-6 py-3 rounded-xl border border-white/20">← Menú</button>
           </div>
         )}
       </div>
@@ -121,19 +145,26 @@ function Login({ balanza, conectado, onSesion, onSalirSistema }) {
 //     se elige el producto que sale y el destino (exportación con pedido / venta local). Carnet de UNA
 //     persona antes de cada bandeja. Peso libre salvo que el tipo de empaque elegido tenga rango.
 //   - POR PRODUCTO: lote, tipo de producto, talla y tipo de empaque (obligatorio), sin carnet.
+//   - PESAR PPV (prueba, 19 nov 2026): solo control de peso. Lote ESCRITO (no está amarrado al piso),
+//     talla, tipo de empaque con rango y pedido de referencia (no toca el pedido). Una sola persona
+//     pesa todo. Va a PesadaPrueba; los intentos fuera de rango también quedan registrados.
 // En las dos, si el área lo pide (Empanizado), el número de carrito es obligatorio, como el termo en Pelado.
 const UMBRAL_LIBRE_G = 30;
 // Un peso fuera de rango cuenta solo si se mantuvo al menos esto antes de retirar la bandeja.
 const FUERA_CUENTA_MS = 2000;
 
-function Pesaje({ sesion, b, onCerrar }) {
+function Pesaje({ sesion, b, onCerrar, onMenu }) {
   const puedeAnular = usePuede("pesaje_bascula", "anular_caja");
   const pt = sesion.Modo === "PERSONA";
+  const ppv = sesion.Modo === "PPV";
+  // Lo que se está trabajando se recuerda por báscula y por tipo: el lote escrito de PPV no debe
+  // aparecer como lote del piso al volver a "por producto", ni al revés.
+  const claveT = claveTrabajo(sesion.BalanzaCodigo) + (ppv ? "_ppv" : "");
   // Carrito: solo en producto terminado y donde el área lo pide (usuario, 17 nov 2026: "por producto" no lleva).
   const pideCarrito = pt && Number(sesion.PideCarrito) === 1;
   const [cat, setCat] = useState({ empaques: [], tallas: [], lotes: [], clases: [], pedidos: [] });
   const [trabajo, setTrabajo] = useState(() => {
-    const t = leerLS(claveTrabajo(sesion.BalanzaCodigo)) ?? {};
+    const t = leerLS(claveT) ?? {};
     // Versión anterior guardaba "LOTE|CLASE" en un solo campo.
     const [lote, clase] = String(t.lote ?? "").includes("|") ? t.lote.split("|") : [t.lote ?? "", t.clase ?? ""];
     return {
@@ -173,7 +204,9 @@ function Pesaje({ sesion, b, onCerrar }) {
   });
 
   // Lo que falta para poder guardar una bandeja, en el orden en que se llena la pantalla.
-  const faltan = [
+  const faltan = ppv ? [
+    !trabajo.lote.trim() && "lote", !trabajo.talla && "talla", !empaque && "tipo de empaque", !trabajo.pedido && "pedido",
+  ].filter(Boolean) : [
     !trabajo.lote && "lote", trabajo.lote && !trabajo.clase && "tipo de producto", !trabajo.talla && "talla",
     !pt && !empaque && "tipo de empaque",
     pt && !trabajo.claseSalida && "producto que sale",
@@ -183,7 +216,7 @@ function Pesaje({ sesion, b, onCerrar }) {
   ].filter(Boolean);
   const faltaCarnet = pt && !persona;
 
-  useEffect(() => { escribirLS(claveTrabajo(sesion.BalanzaCodigo), trabajo); }, [trabajo, sesion.BalanzaCodigo]);
+  useEffect(() => { escribirLS(claveT, trabajo); }, [trabajo, claveT]);
 
   // Empaque: con uno solo activo queda puesto (solo en "por producto", donde es obligatorio); uno
   // guardado que ya no está activo se limpia. Pedido que ya no está en proceso, también.
@@ -237,8 +270,10 @@ function Pesaje({ sesion, b, onCerrar }) {
 
   const enviar = useCallback(async (p) => {
     try {
-      const r = await api("/api/pesaje-bascula/pesadas", { method: "POST", body: JSON.stringify(p) });
+      const r = await api(`/api/pesaje-bascula/${p.prueba ? "pruebas" : "pesadas"}`, { method: "POST", body: JSON.stringify(p) });
       setCola(c => c.filter(x => x.Uuid !== p.Uuid));
+      // PPV: un intento fuera de rango queda registrado, pero la pantalla ya dijo "SIN GUARDAR".
+      if (r.guardada === false) { cargarResumen(); return; }
       setAviso({ tipo: "guardado", texto: `GUARDADO #${r.Numero ?? ""}`, detalle: `${g(p.PesoBrutoG)} g${p.nombrePersona ? " · " + p.nombrePersona : ""}` });
       cargarResumen();
     } catch (e) {
@@ -287,6 +322,8 @@ function Pesaje({ sesion, b, onCerrar }) {
     const fueraDeVerdad = conRango && fuera && (gramos === null || Date.now() - fuera.desde >= FUERA_CUENTA_MS);
     if (fueraDeVerdad) {
       setAviso({ tipo: "sin_guardar", texto: "SIN GUARDAR", detalle: `${g(fuera.gramos)} g ${fuera.gramos < empaque.MinG ? "bajo peso" : "sobrepeso"} (rango ${g(empaque.MinG)}–${g(empaque.MaxG)} g)` });
+      // PPV: el intento se registra (cuántas veces se pasaron del límite), si ya está todo elegido.
+      if (ppv && !faltan.length) enviar(datosPrueba(fuera.gramos));
       return;
     }
     if (gramos === null) {
@@ -295,6 +332,7 @@ function Pesaje({ sesion, b, onCerrar }) {
     }
     if (faltan.length) { setAviso({ tipo: "sin_guardar", texto: "SIN GUARDAR", detalle: `falta: ${faltan.join(", ")}` }); return; }
     if (faltaCarnet) { setAviso({ tipo: "sin_guardar", texto: "SIN GUARDAR", detalle: "falta el carnet de esta bandeja" }); return; }
+    if (ppv) { enviar(datosPrueba(gramos)); return; }
     const p = {
       Uuid: uuid(), SesionId: sesion.SesionId, EmpaqueCodigo: empaque?.Codigo ?? null, Lote: loteSel.Lote, Clase: loteSel.Clase,
       Talla: Number(trabajo.talla), PersonaCodigo: pt ? persona.Codigo : null, PesoBrutoG: gramos,
@@ -307,12 +345,20 @@ function Pesaje({ sesion, b, onCerrar }) {
     enviar(p);
   }, [b.vigente, b.gramos, b.estable]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  function datosPrueba(gramos) {
+    return {
+      prueba: true, Uuid: uuid(), SesionId: sesion.SesionId, EmpaqueCodigo: empaque.Codigo,
+      Lote: trabajo.lote.trim().toUpperCase(), Talla: Number(trabajo.talla), CodigoPedido: trabajo.pedido, PesoBrutoG: gramos,
+    };
+  }
+  const pedidoSel = cat.pedidos.find(x => x.CodigoPedido === trabajo.pedido) ?? null;
+
   const anularUltima = async () => {
     const u = resumen.ultimas[0];
     if (!u) return;
     const motivo = window.prompt(`Anular la bandeja de ${g(u.PesoBrutoG)} g (${u.Hora}). ¿Por qué?`);
     if (!motivo?.trim()) return;
-    try { await api(`/api/pesaje-bascula/pesadas/${u.PesadaId}/anular`, { method: "POST", body: JSON.stringify({ motivo }) }); cargarResumen(); }
+    try { await api(`/api/pesaje-bascula/${ppv ? "pruebas" : "pesadas"}/${u.PesadaId}/anular`, { method: "POST", body: JSON.stringify({ motivo }) }); cargarResumen(); }
     catch (e) { setAviso({ tipo: "error", texto: "NO SE ANULÓ", detalle: e.message }); }
   };
 
@@ -337,7 +383,9 @@ function Pesaje({ sesion, b, onCerrar }) {
   const icono = aviso && { guardado: "✓", sin_guardar: "✗", pendiente: "…", error: "!" }[aviso.tipo];
 
   // Producto terminado se distingue por el fondo índigo (usuario, 17 nov 2026).
-  const tema = pt
+  const tema = ppv
+    ? { pagina: "bg-teal-950", barra: "bg-teal-800", campo: "bg-teal-900 border-teal-600", panel: "bg-teal-900/70", etiqueta: "PESAR PPV · PRUEBA", chip: "bg-amber-400 text-amber-950" }
+    : pt
     ? { pagina: "bg-indigo-950", barra: "bg-indigo-800", campo: "bg-indigo-900 border-indigo-600", panel: "bg-indigo-900/70", etiqueta: "PRODUCTO TERMINADO", chip: "bg-amber-400 text-amber-950" }
     : { pagina: "bg-slate-900", barra: "bg-slate-800", campo: "bg-slate-800 border-slate-600", panel: "bg-slate-800", etiqueta: "POR PRODUCTO", chip: "bg-violet-500/30 text-violet-200" };
   const sel = `w-full rounded-lg border px-3 py-2 text-base text-white focus:outline-none focus:border-blue-400 ${tema.campo}`;
@@ -348,8 +396,9 @@ function Pesaje({ sesion, b, onCerrar }) {
     // barra del rango quedaba cortada abajo.
     <div className={`${tema.pagina} text-white flex flex-col`} style={{ height: "100dvh" }}>
       <header className={`h-12 shrink-0 flex items-center px-4 gap-3 ${tema.barra}`}>
+        <button onClick={onMenu} className="px-4 py-1.5 rounded-lg bg-white/15 font-bold">← Menú</button>
         <span className="font-mono font-bold">{sesion.BalanzaCodigo}</span>
-        <span className="text-slate-200 font-semibold">{sesion.BodegaNombre ?? "—"}</span>
+        {!ppv && <span className="text-slate-200 font-semibold">{sesion.BodegaNombre ?? "—"}</span>}
         <span className={`text-xs font-bold rounded px-2 py-0.5 ${tema.chip}`}>{tema.etiqueta}</span>
         {cola.length > 0 && <span className="text-xs bg-amber-500/30 text-amber-200 rounded px-2 py-0.5">{cola.length} por enviar</span>}
         <span className="ml-auto text-sm">Operadora: <b>{sesion.Operadora}</b> <span className="text-slate-400 font-mono">{sesion.OperadoraCodigo}</span></span>
@@ -359,6 +408,20 @@ function Pesaje({ sesion, b, onCerrar }) {
       <div className="flex-1 flex gap-3 p-3 min-h-0">
         {/* Lo que se está trabajando */}
         <div className="w-[320px] shrink-0 flex flex-col gap-2 min-h-0 overflow-y-auto pr-1">
+          {ppv ? (
+            <>
+              <label className={etq}>Lote (escríbalo)
+                <input value={trabajo.lote} onChange={e => setTrabajo(t => ({ ...t, lote: e.target.value.toUpperCase() }))} autoComplete="off" maxLength={30}
+                  placeholder="ESCRIBA EL LOTE" className={sel + " mt-0.5 font-mono text-lg tracking-wider"} />
+              </label>
+              <label className={etq}>Talla
+                <select value={trabajo.talla} onChange={set("talla")} className={sel + " mt-0.5"}>
+                  <option value="">— elija —</option>
+                  {cat.tallas.map(t => <option key={t.Codigo} value={t.Codigo}>{t.Descripcion} ({t.Codigo})</option>)}
+                </select>
+              </label>
+            </>
+          ) : (<>
           <label className={etq}>Lote (piso de {sesion.BodegaNombre ?? "la bodega"})
             <select value={trabajo.lote} onChange={e => elegirLote(e.target.value)} className={sel + " mt-0.5 font-mono"}>
               <option value="">— elija —</option>
@@ -398,6 +461,8 @@ function Pesaje({ sesion, b, onCerrar }) {
                 placeholder="obligatorio" className={sel + " mt-0.5 font-mono tracking-widest"} />
             </label>
           )}
+
+          </>)}
 
           {pt && (
             <div className={`rounded-xl p-3 border ${persona ? "bg-violet-600/30 border-violet-300/60" : "bg-violet-600/50 border-violet-200 animate-pulse"}`}>
@@ -460,6 +525,20 @@ function Pesaje({ sesion, b, onCerrar }) {
         {/* Lo que sale (producto, destino, pedido, empaque) y contadores */}
         <div className="w-[300px] shrink-0 flex flex-col gap-2 min-h-0 overflow-y-auto pl-1">
           <div className="flex flex-col gap-2">
+            {ppv && (
+              <label className={etq}>Pedido / cliente (referencia)
+                <select value={trabajo.pedido} onChange={set("pedido")} className={sel + " mt-0.5"}>
+                  <option value="">— elija —</option>
+                  {cat.pedidos.map(x => <option key={x.CodigoPedido} value={x.CodigoPedido}>{x.CodigoPedido} · {x.Cliente}</option>)}
+                </select>
+                {pedidoSel && (
+                  <span className="block mt-1 rounded-lg bg-black/25 px-2 py-1.5 text-sm text-slate-100 normal-case tracking-normal">
+                    <b>{pedidoSel.Cliente}</b>{pedidoSel.Descripcion ? <> · {pedidoSel.Descripcion}</> : null}
+                  </span>
+                )}
+                {cat.pedidos.length === 0 && <span className="block mt-1 text-amber-300 normal-case">No hay pedidos en proceso.</span>}
+              </label>
+            )}
             {pt && (
               <>
                 <label className={etq}>Producto que sale
@@ -495,7 +574,8 @@ function Pesaje({ sesion, b, onCerrar }) {
               </select>
             </label>
           </div>
-          <div className={`${tema.panel} rounded-xl px-3 py-2 flex items-baseline gap-2 mt-1`}><span className="text-xs text-slate-300">Bandejas hoy</span><span className="text-2xl font-bold">{g(resumen.Cajas)}</span><span className="text-xs text-slate-300 ml-auto">{(resumen.NetoG / 1000).toLocaleString("es", { maximumFractionDigits: 1 })} kg</span></div>
+          <div className={`${tema.panel} rounded-xl px-3 py-2 flex items-baseline gap-2 mt-1`}><span className="text-xs text-slate-300">{ppv ? "Cajas hoy" : "Bandejas hoy"}</span><span className="text-2xl font-bold">{g(resumen.Cajas)}</span><span className="text-xs text-slate-300 ml-auto">{(resumen.NetoG / 1000).toLocaleString("es", { maximumFractionDigits: 1 })} kg</span></div>
+          {ppv && <div className={`${tema.panel} rounded-xl px-3 py-1.5 flex items-baseline gap-2`}><span className="text-xs text-slate-300">Fuera de rango hoy</span><span className="text-xl font-bold text-amber-300">{g(resumen.Fuera ?? 0)}</span><span className="text-[11px] text-slate-400 ml-auto">no cuentan como caja</span></div>}
           <div className={`${tema.panel} rounded-xl p-3 flex-1 min-h-[90px] overflow-auto`}>
             <p className="text-xs text-slate-300 mb-2">Últimas guardadas</p>
             <ul className="space-y-1.5 text-sm font-mono">
@@ -519,6 +599,7 @@ export default function PesajeBasculaPage() {
   const { logout } = useAuth();
   const [sesion, setSesion] = useState(null);
   const [mensaje, setMensaje] = useState("");
+  const [carnetMenu, setCarnetMenu] = useState(null); // "← Menú": vuelve al menú sin pedir el carnet
   const cerrarRef = useRef(null);
   const b = useBascula({ alCerrarSesion: () => cerrarRef.current?.("cerrada desde Básculas") });
   const balanza = b.balanza;
@@ -543,15 +624,24 @@ export default function PesajeBasculaPage() {
   }, [sesion]);
   cerrarRef.current = cerrar;
 
+  const alMenu = useCallback(() => {
+    const carnet = sesion?.OperadoraCodigo ?? null;
+    cerrar("cambió de pesada");
+    setMensaje("");
+    setCarnetMenu(carnet);
+  }, [sesion, cerrar]);
+  // Estable: el pesaje lo usa en el temporizador de inactividad, que se reiniciaría con cada lectura.
+  const cerrarDesdePesaje = useCallback((m) => { setCarnetMenu(null); cerrar(m); }, [cerrar]);
+
   if (!sesion) {
     return (
       <>
         {mensaje && <div className="fixed top-16 left-1/2 -translate-x-1/2 z-10 rounded-xl bg-amber-500/20 border border-amber-400/50 px-4 py-2 text-amber-100">{mensaje}</div>}
-        <Login balanza={balanza} conectado={b.conectado}
-          onSesion={(s) => { escribirLS(claveSesion(s.BalanzaCodigo), s.SesionId); setMensaje(""); setSesion(s); }}
+        <Login balanza={balanza} conectado={b.conectado} carnetInicial={carnetMenu}
+          onSesion={(s) => { escribirLS(claveSesion(s.BalanzaCodigo), s.SesionId); setMensaje(""); setCarnetMenu(null); setSesion(s); }}
           onSalirSistema={() => { logout(); window.location.hash = ""; }} />
       </>
     );
   }
-  return <Pesaje sesion={sesion} b={b} onCerrar={cerrar} />;
+  return <Pesaje key={sesion.SesionId} sesion={sesion} b={b} onCerrar={cerrarDesdePesaje} onMenu={alMenu} />;
 }
