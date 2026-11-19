@@ -349,6 +349,80 @@ router.put("/empaques/:codigo", requireAuth, requirePerm("basculas", "configurar
   }
 });
 
+// GET /api/balanzas/reporte?desde=&hasta=&balanza=&tipo= — todo lo pesado en las básculas, con todos
+// sus datos, para ir viendo lo que se ingresa (usuario, 19 nov 2026). Junta las dos tablas:
+//   - Pesada       → Producto terminado (PERSONA) y Por producto (PRODUCTO); siempre dentro del rango.
+//   - PesadaPrueba → Pesar PPV; trae también los intentos fuera de rango (Resultado BAJO / SOBRE).
+// Incluye las anuladas (marcadas) para que el reporte cuadre con lo que vio la pesa. Máx. 62 días.
+router.get("/reporte", requireAuth, requirePerm("basculas", "ver"), async (req: AuthRequest, res: Response) => {
+  try {
+    const fecha = (v: any) => (/^\d{4}-\d{2}-\d{2}$/.test(String(v ?? "")) ? String(v) : null);
+    const desde = fecha(req.query.desde), hasta = fecha(req.query.hasta);
+    if (!desde || !hasta) { res.status(400).json({ error: "Indique desde y hasta (AAAA-MM-DD)" }); return; }
+    if (desde > hasta) { res.status(400).json({ error: "La fecha inicial es mayor que la final" }); return; }
+    const dias = (Date.parse(hasta) - Date.parse(desde)) / 86_400_000;
+    if (dias > 62) { res.status(400).json({ error: "Máximo 62 días por consulta" }); return; }
+    const balanza = String(req.query.balanza ?? "").trim().toUpperCase();
+    const tipo = String(req.query.tipo ?? "").trim().toUpperCase();
+
+    const filtroBal = balanza ? "AND x.BalanzaCodigo = ?" : "";
+    const params: any[] = [];
+    const parte = (incluir: boolean, sql: string) => (incluir ? sql : null);
+    const verPesada = !tipo || tipo === "PERSONA" || tipo === "PRODUCTO";
+    const verPrueba = !tipo || tipo === "PPV";
+    const partes = [
+      parte(verPesada, `
+        SELECT 'PESADA' AS Origen, x.PesadaId AS Id, x.Modo AS Tipo, 'OK' AS Resultado,
+               x.FechaProduccion, x.CreadoEn, x.BalanzaCodigo, x.AreaCodigo, x.OperadoraCodigo,
+               x.Lote, x.Clase, x.ClaseSalida, x.Talla, x.EmpaqueCodigo, x.CodigoPedido, x.Destino, x.Carrito,
+               x.PersonaCodigo, x.BodegaVirtualCodigo, x.PesoBrutoG, x.PesoNetoG, x.ObjetivoG, x.MinG, x.MaxG,
+               x.Anulada, x.AnuladaPor, x.AnuladaEn, x.MotivoAnulacion
+          FROM Pesada x
+         WHERE x.FechaProduccion BETWEEN ? AND ? ${filtroBal} ${tipo && tipo !== "PPV" ? "AND x.Modo = ?" : ""}`),
+      parte(verPrueba, `
+        SELECT 'PRUEBA' AS Origen, x.PesadaId AS Id, x.Tipo, x.Resultado,
+               x.FechaProduccion, x.CreadoEn, x.BalanzaCodigo, x.AreaCodigo, x.OperadoraCodigo,
+               x.Lote, NULL AS Clase, NULL AS ClaseSalida, x.Talla, x.EmpaqueCodigo, x.CodigoPedido, NULL AS Destino, x.Carrito,
+               NULL AS PersonaCodigo, NULL AS BodegaVirtualCodigo, x.PesoBrutoG, x.PesoNetoG, x.ObjetivoG, x.MinG, x.MaxG,
+               x.Anulada, x.AnuladaPor, x.AnuladaEn, x.MotivoAnulacion
+          FROM PesadaPrueba x
+         WHERE x.FechaProduccion BETWEEN ? AND ? ${filtroBal}`),
+    ];
+    if (verPesada) { params.push(desde, hasta); if (balanza) params.push(balanza); if (tipo && tipo !== "PPV") params.push(tipo); }
+    if (verPrueba) { params.push(desde, hasta); if (balanza) params.push(balanza); }
+    const union = partes.filter(Boolean).join(" UNION ALL ");
+    if (!union) { res.json([]); return; }
+
+    const rows: any[] = await prisma.$queryRawUnsafe(`
+      SELECT u.Origen, u.Id, u.Tipo, u.Resultado,
+             DATE_FORMAT(u.FechaProduccion, '%Y-%m-%d') AS Fecha, DATE_FORMAT(u.CreadoEn, '%H:%i:%s') AS Hora,
+             u.BalanzaCodigo, u.AreaCodigo, a.Nombre AS NombreArea,
+             u.OperadoraCodigo, CONCAT_WS(' ', op.PrimerNombre, op.PrimerApellido) AS Operadora,
+             u.Lote, u.Clase, u.ClaseSalida, cs.Descripcion AS ClaseSalidaDesc,
+             u.Talla, ta.Descripcion AS TallaDesc,
+             u.EmpaqueCodigo, ep.Nombre AS EmpaqueNombre, ep.DeshidratacionPct,
+             u.CodigoPedido, cl.RazonSocial AS Cliente, pe.Descripcion AS PedidoDesc, u.Destino, u.Carrito,
+             u.PersonaCodigo, CONCAT_WS(' ', pr.PrimerNombre, pr.PrimerApellido) AS Persona, u.BodegaVirtualCodigo,
+             u.PesoBrutoG, u.PesoNetoG, u.ObjetivoG, u.MinG, u.MaxG,
+             u.Anulada, u.AnuladaPor, DATE_FORMAT(u.AnuladaEn, '%Y-%m-%d %H:%i') AS AnuladaEn, u.MotivoAnulacion
+        FROM (${union}) u
+        LEFT JOIN Areas a        ON a.Codigo = u.AreaCodigo
+        LEFT JOIN Empleados op   ON op.Codigo = u.OperadoraCodigo
+        LEFT JOIN Empleados pr   ON pr.Codigo = u.PersonaCodigo
+        LEFT JOIN Tallas ta      ON ta.Codigo = u.Talla
+        LEFT JOIN Clase cs       ON cs.Clase = u.ClaseSalida
+        LEFT JOIN EmpaquePesaje ep ON ep.Codigo = u.EmpaqueCodigo
+        LEFT JOIN Pedidos pe     ON pe.CodigoPedido = u.CodigoPedido
+        LEFT JOIN Clientes cl    ON cl.Codigo = pe.CodigoCliente
+       ORDER BY u.CreadoEn DESC, u.Id DESC
+       LIMIT 20000`, ...params);
+    res.json(rows.map(r => Object.fromEntries(Object.entries(r).map(([k, v]) => [k,
+      typeof v === "bigint" ? Number(v) : (v !== null && typeof v === "object" && "toNumber" in (v as any)) ? Number(v) : v]))));
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/balanzas/:codigo/comandos — los últimos 30, con su resultado.
 router.get("/:codigo/comandos", requireAuth, requirePerm("basculas", "ver"), async (req: AuthRequest, res: Response) => {
   try {

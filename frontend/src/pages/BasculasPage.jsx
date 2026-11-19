@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { authHeader } from "../context/AuthContext.jsx";
+import { exportarPesadasBascula, TIPO_PESADA_TXT, RESULTADO_PESADA_TXT } from "../utils/exportExcel.js";
 
 // Básculas de empaque: qué cabezales están en línea y comandos remotos.
 //
@@ -682,7 +683,198 @@ function TiposEmpaque({ puedeConfigurar }) {
   );
 }
 
-const PESTANAS = [["equipos", "Equipos"], ["empaques", "Tipos de empaque"], ["areas", "Áreas que pesan"]];
+// ─── Reporte de pesadas ──────────────────────────────────────────────────────────────────────
+// Todo lo que entra por las básculas, con todos sus datos, para ir viéndolo mientras se pesa (usuario,
+// 19 nov 2026). Se actualiza solo cada 30 s. Junta Pesada (Producto terminado / Por producto) y
+// PesadaPrueba (Pesar PPV, que también trae los intentos fuera de rango). El Excel lleva TODAS las
+// filas; en pantalla se muestran las primeras 500.
+const hoyGT = () => new Date().toLocaleDateString("sv-SE", { timeZone: "America/Guatemala" });
+const kg = (g) => (Number(g || 0) / 1000).toLocaleString("es", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const MAX_FILAS_PANTALLA = 500;
+
+function ReportePesadas() {
+  const [filtro, setFiltro] = useState(() => ({ desde: hoyGT(), hasta: hoyGT(), balanza: "", tipo: "", ver: "todas", q: "" }));
+  const [balanzas, setBalanzas] = useState([]);
+  const [filas, setFilas] = useState([]);
+  const [cargando, setCargando] = useState(false);
+  const [error, setError] = useState("");
+  const [auto, setAuto] = useState(true);
+  const [actualizado, setActualizado] = useState("");
+  const set = k => e => setFiltro(f => ({ ...f, [k]: e.target.value }));
+
+  useEffect(() => { api("/api/balanzas").then(l => setBalanzas(l.map(b => b.Codigo))).catch(() => {}); }, []);
+
+  const { desde, hasta, balanza, tipo } = filtro;
+  const cargar = useCallback(async () => {
+    setCargando(true);
+    try {
+      const qs = new URLSearchParams({ desde, hasta, ...(balanza && { balanza }), ...(tipo && { tipo }) });
+      setFilas(await api(`/api/balanzas/reporte?${qs}`));
+      setError("");
+      setActualizado(new Date().toLocaleTimeString("es", { timeZone: "America/Guatemala", hour: "2-digit", minute: "2-digit", second: "2-digit" }));
+    } catch (e) { setError(e.message); }
+    finally { setCargando(false); }
+  }, [desde, hasta, balanza, tipo]);
+  useEffect(() => { cargar(); }, [cargar]);
+  useEffect(() => {
+    if (!auto) return undefined;
+    const id = setInterval(cargar, 30_000);
+    return () => clearInterval(id);
+  }, [auto, cargar]);
+
+  const anulada = r => Number(r.Anulada) === 1;
+  const q = filtro.q.trim().toLowerCase();
+  const vistas = filas.filter(r => {
+    if (filtro.ver === "guardadas" && (anulada(r) || r.Resultado !== "OK")) return false;
+    if (filtro.ver === "fuera" && (anulada(r) || r.Resultado === "OK")) return false;
+    if (filtro.ver === "anuladas" && !anulada(r)) return false;
+    if (!q) return true;
+    return [r.Lote, r.Carrito, r.CodigoPedido, r.Cliente, r.Operadora, r.OperadoraCodigo, r.Persona, r.EmpaqueNombre, r.TallaDesc]
+      .some(v => String(v ?? "").toLowerCase().includes(q));
+  });
+
+  const validas = vistas.filter(r => !anulada(r));
+  const guardadas = validas.filter(r => r.Resultado === "OK");
+  const netoG = guardadas.reduce((s, r) => s + (Number(r.PesoNetoG) || 0), 0);
+  const fuera = validas.filter(r => r.Resultado !== "OK").length;
+  const intentos = guardadas.length + fuera;
+
+  // Resumen por lote / talla / empaque / pedido / carrito.
+  const resumen = [...validas.reduce((m, r) => {
+    const k = [r.Fecha, r.Tipo, r.Lote, r.Talla, r.EmpaqueCodigo, r.CodigoPedido, r.Carrito].join("|");
+    const g = m.get(k) ?? { r, cajas: 0, netoG: 0, fuera: 0, ultima: r.Hora };
+    if (r.Resultado === "OK") { g.cajas += 1; g.netoG += Number(r.PesoNetoG) || 0; } else g.fuera += 1;
+    return m.set(k, g);
+  }, new Map()).values()];
+
+  const tarjeta = (titulo, valor, sub, cls = "") => (
+    <div className="bg-white rounded-xl border p-4">
+      <p className="text-xs text-slate-500">{titulo}</p>
+      <p className={`text-3xl font-bold font-mono ${cls}`}>{valor}</p>
+      {sub && <p className="text-xs text-slate-500 mt-0.5">{sub}</p>}
+    </div>
+  );
+  const campo = "mt-1 w-full border border-slate-300 rounded-lg px-2 py-1.5 text-sm";
+  const th = "px-2 py-2 text-left font-semibold whitespace-nowrap";
+  const td = "px-2 py-1.5 whitespace-nowrap";
+  const insignia = (r) => anulada(r)
+    ? <span className="rounded px-1.5 py-0.5 bg-slate-200 text-slate-600">Anulada</span>
+    : r.Resultado === "OK" ? <span className="rounded px-1.5 py-0.5 bg-emerald-100 text-emerald-700">Guardada</span>
+    : <span className="rounded px-1.5 py-0.5 bg-amber-100 text-amber-800">{RESULTADO_PESADA_TXT[r.Resultado] ?? r.Resultado}</span>;
+
+  return (
+    <div className="space-y-4">
+      <div className="bg-white rounded-xl border p-4 grid grid-cols-2 md:grid-cols-7 gap-3 items-end">
+        <label className="text-xs text-slate-500">Desde<input type="date" value={filtro.desde} onChange={set("desde")} className={campo} /></label>
+        <label className="text-xs text-slate-500">Hasta<input type="date" value={filtro.hasta} onChange={set("hasta")} className={campo} /></label>
+        <label className="text-xs text-slate-500">Báscula
+          <select value={filtro.balanza} onChange={set("balanza")} className={campo}>
+            <option value="">Todas</option>{balanzas.map(b => <option key={b}>{b}</option>)}
+          </select>
+        </label>
+        <label className="text-xs text-slate-500">Tipo de pesada
+          <select value={filtro.tipo} onChange={set("tipo")} className={campo}>
+            <option value="">Todos</option>{Object.entries(TIPO_PESADA_TXT).map(([k, t]) => <option key={k} value={k}>{t}</option>)}
+          </select>
+        </label>
+        <label className="text-xs text-slate-500">Mostrar
+          <select value={filtro.ver} onChange={set("ver")} className={campo}>
+            <option value="todas">Todo</option><option value="guardadas">Solo guardadas</option>
+            <option value="fuera">Solo fuera de rango</option><option value="anuladas">Solo anuladas</option>
+          </select>
+        </label>
+        <label className="text-xs text-slate-500 md:col-span-2">Buscar
+          <input value={filtro.q} onChange={set("q")} placeholder="lote, carrito, pedido, cliente, operadora…" className={campo} />
+        </label>
+        <div className="col-span-2 md:col-span-7 flex flex-wrap items-center gap-3 text-sm">
+          <button onClick={cargar} disabled={cargando} className="px-4 py-1.5 rounded-lg border border-slate-300 hover:bg-slate-50 disabled:opacity-50">{cargando ? "Cargando…" : "Actualizar"}</button>
+          <label className="flex items-center gap-2 text-slate-600"><input type="checkbox" checked={auto} onChange={e => setAuto(e.target.checked)} /> Actualizar solo cada 30 s</label>
+          {actualizado && <span className="text-xs text-slate-400">Última actualización {actualizado}</span>}
+          <button onClick={() => exportarPesadasBascula(vistas, filtro.desde, filtro.hasta)} disabled={!vistas.length}
+            className="ml-auto px-4 py-1.5 rounded-lg bg-emerald-600 text-white font-medium disabled:opacity-40">Exportar a Excel</button>
+        </div>
+      </div>
+      {error && <p className="text-sm text-red-600">{error}</p>}
+
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+        {tarjeta("Cajas guardadas", guardadas.length.toLocaleString("es"))}
+        {tarjeta("Kilos pesados", kg(netoG), "solo cajas dentro del rango")}
+        {tarjeta("Promedio por caja", guardadas.length ? `${Math.round(netoG / guardadas.length).toLocaleString("es")} g` : "—")}
+        {tarjeta("Fuera de rango", fuera.toLocaleString("es"), intentos ? `${((fuera / intentos) * 100).toFixed(1)} % de los intentos` : "", fuera ? "text-amber-600" : "")}
+        {tarjeta("Anuladas", vistas.filter(anulada).length.toLocaleString("es"))}
+      </div>
+
+      <div className="bg-white rounded-xl border overflow-hidden">
+        <p className="px-4 py-2 border-b text-sm font-semibold">Resumen por lote, talla, empaque, pedido y carrito</p>
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead className="bg-slate-50 text-slate-500 uppercase"><tr>
+              <th className={th}>Fecha</th><th className={th}>Tipo</th><th className={th}>Lote</th><th className={th}>Talla</th>
+              <th className={th}>Empaque</th><th className={th}>Pedido · cliente</th><th className={th}>Carrito</th>
+              <th className={`${th} text-right`}>Cajas</th><th className={`${th} text-right`}>Kilos</th>
+              <th className={`${th} text-right`}>Prom. g</th><th className={`${th} text-right`}>Fuera</th><th className={th}>Última</th>
+            </tr></thead>
+            <tbody className="divide-y">
+              {resumen.length === 0 && <tr><td colSpan={12} className="px-4 py-4 text-slate-500">Sin pesadas con estos filtros.</td></tr>}
+              {resumen.map(({ r, cajas, netoG: n, fuera: f, ultima }) => (
+                <tr key={[r.Fecha, r.Tipo, r.Lote, r.Talla, r.EmpaqueCodigo, r.CodigoPedido, r.Carrito].join("|")}>
+                  <td className={td}>{r.Fecha}</td><td className={td}>{TIPO_PESADA_TXT[r.Tipo] ?? r.Tipo}</td>
+                  <td className={`${td} font-mono`}>{r.Lote}</td><td className={td}>{r.TallaDesc ?? r.Talla}</td>
+                  <td className={td}>{r.EmpaqueNombre ?? r.EmpaqueCodigo ?? "—"}</td>
+                  <td className={td}>{r.CodigoPedido ? `${r.CodigoPedido} · ${r.Cliente ?? ""}` : "—"}</td>
+                  <td className={`${td} font-mono`}>{r.Carrito ?? "—"}</td>
+                  <td className={`${td} text-right font-semibold`}>{cajas}</td><td className={`${td} text-right font-semibold`}>{kg(n)}</td>
+                  <td className={`${td} text-right`}>{cajas ? Math.round(n / cajas).toLocaleString("es") : "—"}</td>
+                  <td className={`${td} text-right ${f ? "text-amber-600 font-semibold" : ""}`}>{f}</td><td className={td}>{ultima}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="bg-white rounded-xl border overflow-hidden">
+        <p className="px-4 py-2 border-b text-sm font-semibold">
+          Detalle: {vistas.length.toLocaleString("es")} pesadas
+          {vistas.length > MAX_FILAS_PANTALLA && <span className="font-normal text-slate-500"> · se muestran las últimas {MAX_FILAS_PANTALLA}; el Excel lleva todas</span>}
+        </p>
+        <div className="overflow-x-auto max-h-[60vh]">
+          <table className="w-full text-xs">
+            <thead className="bg-slate-50 text-slate-500 uppercase sticky top-0"><tr>
+              <th className={th}>Fecha</th><th className={th}>Hora</th><th className={th}>Báscula</th><th className={th}>Tipo</th>
+              <th className={th}>Resultado</th><th className={`${th} text-right`}>Peso g</th><th className={th}>Rango</th>
+              <th className={th}>Lote</th><th className={th}>Producto</th><th className={th}>Talla</th><th className={th}>Empaque</th>
+              <th className={th}>Pedido · cliente</th><th className={th}>Destino</th><th className={th}>Carrito</th>
+              <th className={th}>Operadora</th><th className={th}>Persona</th><th className={th}>Área</th><th className={th}>Anulación</th>
+            </tr></thead>
+            <tbody className="divide-y">
+              {vistas.slice(0, MAX_FILAS_PANTALLA).map(r => (
+                <tr key={`${r.Origen}-${r.Id}`} className={anulada(r) ? "opacity-50" : ""}>
+                  <td className={td}>{r.Fecha}</td><td className={`${td} font-mono`}>{r.Hora}</td>
+                  <td className={`${td} font-mono`}>{r.BalanzaCodigo}</td><td className={td}>{TIPO_PESADA_TXT[r.Tipo] ?? r.Tipo}</td>
+                  <td className={td}>{insignia(r)}</td>
+                  <td className={`${td} text-right font-mono font-semibold`}>{Number(r.PesoBrutoG).toLocaleString("es")}</td>
+                  <td className={`${td} font-mono text-slate-500`}>{r.MinG != null ? `${r.MinG}–${r.MaxG}` : "libre"}</td>
+                  <td className={`${td} font-mono`}>{r.Lote}</td>
+                  <td className={td}>{[r.Clase, r.ClaseSalida && `→ ${r.ClaseSalida}`].filter(Boolean).join(" ") || "—"}</td>
+                  <td className={td}>{r.TallaDesc ?? r.Talla}</td><td className={td}>{r.EmpaqueNombre ?? r.EmpaqueCodigo ?? "—"}</td>
+                  <td className={td} title={r.PedidoDesc ?? ""}>{r.CodigoPedido ? `${r.CodigoPedido} · ${r.Cliente ?? ""}` : "—"}</td>
+                  <td className={td}>{r.Destino === "EXPORTACION" ? "Exportación" : r.Destino === "LOCAL" ? "Venta local" : "—"}</td>
+                  <td className={`${td} font-mono`}>{r.Carrito ?? "—"}</td>
+                  <td className={td}>{r.Operadora ?? r.OperadoraCodigo}</td><td className={td}>{r.Persona ?? "—"}</td>
+                  <td className={td}>{r.NombreArea ?? r.AreaCodigo}</td>
+                  <td className={td}>{anulada(r) ? `${r.AnuladaPor ?? ""}: ${r.MotivoAnulacion ?? ""}` : ""}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const PESTANAS = [["equipos", "Equipos"], ["empaques", "Tipos de empaque"], ["areas", "Áreas que pesan"], ["reporte", "Reporte de pesadas"]];
 
 export default function BasculasPage({ puedeConfigurar, puedeComandos }) {
   const [pestana, setPestana] = useState("equipos");
@@ -699,6 +891,7 @@ export default function BasculasPage({ puedeConfigurar, puedeComandos }) {
       {pestana === "equipos" && <Equipos puedeConfigurar={puedeConfigurar} puedeComandos={puedeComandos} />}
       {pestana === "empaques" && <TiposEmpaque puedeConfigurar={puedeConfigurar} />}
       {pestana === "areas" && <AreasPesaje puedeConfigurar={puedeConfigurar} />}
+      {pestana === "reporte" && <ReportePesadas />}
     </div>
   );
 }
