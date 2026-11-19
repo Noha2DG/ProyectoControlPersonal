@@ -9,6 +9,55 @@
   <body>
     <div id="root"></div>
     <div id="print-root"></div>
+    <!--
+      Guardia contra la pantalla en blanco. El ErrorBoundary de React solo atrapa errores cuando la
+      app ya arrancó; si el JavaScript ni siquiera llega a ejecutarse (el archivo /assets/index-*.js
+      da 404 porque index.html y dist/ quedaron desfasados tras un despliegue, la descarga se corta
+      en una red móvil lenta, un proxy sirve un index.html viejo…) el navegador se queda en blanco
+      sin decir nada. Este script, sin dependencias y en línea, corre antes que la app: anota el
+      primer fallo y, si a los 15 s #root sigue vacío, muestra qué pasó y un botón para recargar.
+    -->
+    <script>
+      (function () {
+        var motivo = "";
+        function anotar(m, ya) { if (!motivo) motivo = m; if (ya) mostrar(); }
+        window.addEventListener("error", function (e) {
+          var t = e && e.target;
+          // Un <script> que no baja es fatal: se avisa ya. Otros recursos (una imagen) solo se anotan.
+          if (t && t.tagName === "SCRIPT") anotar("No se pudo descargar " + t.src, true);
+          else if (t && t !== window && (t.src || t.href)) anotar("No se pudo descargar " + (t.src || t.href));
+          else if (e && e.message) anotar(e.message);
+        }, true);
+        window.addEventListener("unhandledrejection", function (e) {
+          var r = e && e.reason;
+          if (r && /import|module|fetch/i.test(String(r.message || r))) anotar(String(r.message || r));
+        });
+        function mostrar() {
+          var root = document.getElementById("root");
+          if (!root || root.childNodes.length || document.getElementById("arranque-fallido")) return;
+          var d = document.createElement("div");
+          d.id = "arranque-fallido";
+          d.style.cssText = "min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:24px;text-align:center;font-family:system-ui,sans-serif;background:#0b1830;color:#fff";
+          d.innerHTML = '<p style="font-size:20px;font-weight:600;margin:0">La aplicación no pudo cargar</p>' +
+            '<p style="font-size:14px;color:#cbd5e1;margin:0;max-width:420px;word-break:break-all" id="arranque-motivo"></p>' +
+            '<button style="margin-top:8px;padding:12px 24px;border:0;border-radius:10px;background:#c9a227;color:#0b1830;font-weight:600;font-size:16px">Recargar</button>';
+          d.querySelector("#arranque-motivo").textContent = motivo || "La página no respondió a tiempo (conexión lenta o servidor sin responder).";
+          d.querySelector("button").onclick = function () {
+            // Agrega un parámetro para saltarse cualquier copia en caché de index.html.
+            location.replace(location.pathname + "?r=" + Date.now() + location.hash);
+          };
+          document.body.appendChild(d);
+        }
+        // Solo se muestra si la app NO arrancó: si React ya pintó algo, mostrar() no hace nada. Y si
+        // la app termina arrancando después del aviso (red lenta), el aviso se quita solo.
+        setTimeout(mostrar, 15000);
+        new MutationObserver(function () {
+          var r = document.getElementById("root"), a = document.getElementById("arranque-fallido");
+          if (a && r && r.childNodes.length) a.remove();
+        }).observe(document.getElementById("root"), { childList: true });
+        window.addEventListener("load", function () { setTimeout(function () { if (motivo) mostrar(); }, 500); });
+      })();
+    </script>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>
