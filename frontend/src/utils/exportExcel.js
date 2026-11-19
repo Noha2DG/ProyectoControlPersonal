@@ -445,3 +445,55 @@ function autoWidth(ws, data) {
   }));
   ws["!cols"] = cols;
 }
+
+// Básculas → reporte de pesadas (GET /api/balanzas/reporte): una hoja con TODAS las pesadas y todos
+// sus datos, y otra resumida por lote / talla / empaque / pedido / carrito. Solo cuentan en el resumen
+// las cajas guardadas (dentro del rango) y no anuladas; los intentos fuera de rango van en su columna.
+export const TIPO_PESADA_TXT = { PPV: "Pesar PPV", PERSONA: "Producto terminado", PRODUCTO: "Por producto" };
+export const RESULTADO_PESADA_TXT = { OK: "Guardada", BAJO: "Bajo peso (no guardada)", SOBRE: "Sobrepeso (no guardada)" };
+
+export function exportarPesadasBascula(filas, desde, hasta) {
+  const fecha = (iso) => {
+    const [a, m, d] = String(iso ?? "").slice(0, 10).split("-").map(Number);
+    return a ? new Date(a, m - 1, d) : null;
+  };
+  const detalle = filas.map(r => ({
+    "Fecha": fecha(r.Fecha), "Hora": r.Hora, "Báscula": r.BalanzaCodigo,
+    "Tipo de pesada": TIPO_PESADA_TXT[r.Tipo] ?? r.Tipo,
+    "Resultado": Number(r.Anulada) === 1 ? "Anulada" : (RESULTADO_PESADA_TXT[r.Resultado] ?? r.Resultado),
+    "Área": r.NombreArea ?? r.AreaCodigo, "Operadora": r.Operadora, "Carnet operadora": r.OperadoraCodigo,
+    "Lote": r.Lote, "Tipo de producto": r.Clase ?? "", "Producto que sale": r.ClaseSalida ? `${r.ClaseSalida} ${r.ClaseSalidaDesc ?? ""}`.trim() : "",
+    "Talla": r.TallaDesc ?? "", "Código talla": r.Talla,
+    "Tipo de empaque": r.EmpaqueNombre ?? r.EmpaqueCodigo ?? "", "Deshidratación %": r.DeshidratacionPct ?? "",
+    "Pedido": r.CodigoPedido ?? "", "Cliente": r.Cliente ?? "", "Descripción pedido": r.PedidoDesc ?? "",
+    "Destino": r.Destino ?? "", "Carrito": r.Carrito ?? "", "Persona (bandeja)": r.Persona ?? "",
+    "Peso (g)": r.PesoBrutoG, "Neto (g)": r.PesoNetoG, "Kilos": r.PesoNetoG != null ? +(r.PesoNetoG / 1000).toFixed(3) : null,
+    "Mínimo (g)": r.MinG, "Máximo (g)": r.MaxG,
+    "Anulada por": r.AnuladaPor ?? "", "Anulada en": r.AnuladaEn ?? "", "Motivo anulación": r.MotivoAnulacion ?? "",
+  }));
+
+  const grupos = new Map();
+  for (const r of filas) {
+    if (Number(r.Anulada) === 1) continue;
+    const k = [r.Fecha, r.Tipo, r.Lote, r.Talla, r.EmpaqueCodigo, r.CodigoPedido, r.Carrito].join("|");
+    const g = grupos.get(k) ?? { r, cajas: 0, netoG: 0, fuera: 0 };
+    if (r.Resultado === "OK") { g.cajas += 1; g.netoG += Number(r.PesoNetoG) || 0; } else g.fuera += 1;
+    grupos.set(k, g);
+  }
+  const resumen = [...grupos.values()].map(({ r, cajas, netoG, fuera }) => ({
+    "Fecha": fecha(r.Fecha), "Tipo de pesada": TIPO_PESADA_TXT[r.Tipo] ?? r.Tipo, "Lote": r.Lote,
+    "Talla": r.TallaDesc ?? r.Talla, "Tipo de empaque": r.EmpaqueNombre ?? r.EmpaqueCodigo ?? "",
+    "Pedido": r.CodigoPedido ?? "", "Cliente": r.Cliente ?? "", "Carrito": r.Carrito ?? "",
+    "Cajas": cajas, "Kilos": +(netoG / 1000).toFixed(3), "Promedio por caja (g)": cajas ? Math.round(netoG / cajas) : null,
+    "Fuera de rango": fuera,
+  }));
+
+  const wb = XLSX.utils.book_new();
+  const ws1 = XLSX.utils.json_to_sheet(detalle, { cellDates: true });
+  autoWidth(ws1, detalle);
+  XLSX.utils.book_append_sheet(wb, ws1, "Pesadas");
+  const ws2 = XLSX.utils.json_to_sheet(resumen, { cellDates: true });
+  autoWidth(ws2, resumen);
+  XLSX.utils.book_append_sheet(wb, ws2, "Resumen por lote");
+  XLSX.writeFile(wb, `Pesadas_basculas_${desde}_a_${hasta}.xlsx`);
+}
