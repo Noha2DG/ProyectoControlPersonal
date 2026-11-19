@@ -256,7 +256,7 @@ function Dashboard({ inicio }) {
   if (perm("remisiones",    "ver")) nav.push({ key: "remisiones", label: "Bodega — Remisiones",   icon: "remisiones" });
   if (perm("liberar_mp",    "ver")) nav.push({ key: "liberarMP",  label: "Liberar materia prima", icon: "liberar" });
   if (perm("gerencia",      "ver")) nav.push({ key: "reportes",   label: "Reportes",              icon: "gerencia" });
-  if (perm("basculas",      "ver")) nav.push({ key: "basculas",   label: "Básculas",              icon: "basculas" });
+  if (perm("basculas", "ver") || perm("basculas", "reporte")) nav.push({ key: "basculas",   label: "Básculas",              icon: "basculas" });
   if (perm("permisos",       "ver")) nav.push({ key: "permisos",  label: "Permisos",            icon: "permisos" });
   if (perm("usuarios",       "ver")) nav.push({ key: "usuarios",  label: "Usuarios",            icon: "usuarios" });
   // Mesas de Pelado, Tarifas, Áreas y Tipos de Permiso viven dentro de Catálogos, cada una con su
@@ -456,8 +456,8 @@ function Dashboard({ inicio }) {
             {seccion === "remisiones" && perm("remisiones", "ver") && <RemisionesPage />}
             {seccion === "liberarMP" && perm("liberar_mp", "ver") && <LiberarMateriaPrimaPage />}
             {seccion === "reportes" && perm("gerencia", "ver") && <ReportesPage />}
-            {seccion === "basculas" && perm("basculas", "ver") && (
-              <BasculasPage puedeConfigurar={perm("basculas", "configurar")} puedeComandos={perm("basculas", "comandos")} />
+            {seccion === "basculas" && (perm("basculas", "ver") || perm("basculas", "reporte")) && (
+              <BasculasPage puedeVer={perm("basculas", "ver")} puedeConfigurar={perm("basculas", "configurar")} puedeComandos={perm("basculas", "comandos")} />
             )}
             {seccion === "permisos" && perm("permisos",       "ver") && <PermisosPage />}
             {seccion === "usuarios" && perm("usuarios",       "ver") && <UsuariosPage />}

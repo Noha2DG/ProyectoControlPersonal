@@ -51,7 +51,8 @@ const MODULOS = [
   { key: "gerencia",      label: "Reportes — Panorama de planta",    acciones: ["ver"], grupo: "Operación" },
   // Básculas de empaque: "configurar" registra equipos y emite tokens; "comandos" reinicia o cambia
   // parámetros de un cabezal en marcha (operación de turno, no de alta de equipos).
-  { key: "basculas",      label: "Básculas — Equipos en línea",      acciones: ["ver","configurar","comandos"], grupo: "Operación" },
+  // "reporte" (19 nov 2026): solo la pestaña Reporte de pesadas, sin ver equipos, empaques ni áreas.
+  { key: "basculas",      label: "Básculas — Equipos en línea",      acciones: ["ver","configurar","comandos","reporte"], grupo: "Operación" },
   // ── Pedidos
   // Separado de `catalogos` porque es trabajo diario: capturar y corregir proformas, y dar de alta
   // clientes. Con `catalogos` venía de regalo Presentaciones, donde CajasXMaster define el objetivo
@@ -86,6 +87,7 @@ const ACCION_LABELS = {
   liberar: "Liberar / rechazar",
   configurar: "Registrar y configurar",
   comandos: "Enviar comandos",
+  reporte: "Ver reporte de pesadas",
   usar: "Usar",
   anular_caja: "Anular caja",
   muestra: "Muestra para análisis",

@@ -702,7 +702,9 @@ function ReportePesadas() {
   const [actualizado, setActualizado] = useState("");
   const set = k => e => setFiltro(f => ({ ...f, [k]: e.target.value }));
 
+  // Quien solo tiene `reporte` no puede listar los equipos: la lista sale de lo ya pesado.
   useEffect(() => { api("/api/balanzas").then(l => setBalanzas(l.map(b => b.Codigo))).catch(() => {}); }, []);
+  const opcionesBalanza = [...new Set([...balanzas, ...filas.map(r => r.BalanzaCodigo), ...(filtro.balanza ? [filtro.balanza] : [])])].sort();
 
   const { desde, hasta, balanza, tipo } = filtro;
   const cargar = useCallback(async () => {
@@ -769,7 +771,7 @@ function ReportePesadas() {
         <label className="text-xs text-slate-500">Hasta<input type="date" value={filtro.hasta} onChange={set("hasta")} className={campo} /></label>
         <label className="text-xs text-slate-500">Báscula
           <select value={filtro.balanza} onChange={set("balanza")} className={campo}>
-            <option value="">Todas</option>{balanzas.map(b => <option key={b}>{b}</option>)}
+            <option value="">Todas</option>{opcionesBalanza.map(b => <option key={b}>{b}</option>)}
           </select>
         </label>
         <label className="text-xs text-slate-500">Tipo de pesada
@@ -876,21 +878,23 @@ function ReportePesadas() {
 
 const PESTANAS = [["equipos", "Equipos"], ["empaques", "Tipos de empaque"], ["areas", "Áreas que pesan"], ["reporte", "Reporte de pesadas"]];
 
-export default function BasculasPage({ puedeConfigurar, puedeComandos }) {
-  const [pestana, setPestana] = useState("equipos");
+// Con solo `basculas.reporte` (sin `ver`) se ve únicamente la pestaña del reporte.
+export default function BasculasPage({ puedeVer = true, puedeConfigurar, puedeComandos }) {
+  const pestanas = puedeVer ? PESTANAS : PESTANAS.filter(([k]) => k === "reporte");
+  const [pestana, setPestana] = useState(puedeVer ? "equipos" : "reporte");
   return (
     <div className="space-y-4">
       <div className="flex gap-1 border-b border-slate-200">
-        {PESTANAS.map(([k, t]) => (
+        {pestanas.map(([k, t]) => (
           <button key={k} onClick={() => setPestana(k)}
             className={`px-4 py-2 text-sm font-medium -mb-px border-b-2 ${pestana === k ? "border-blue-700 text-blue-700" : "border-transparent text-slate-500 hover:text-slate-700"}`}>
             {t}
           </button>
         ))}
       </div>
-      {pestana === "equipos" && <Equipos puedeConfigurar={puedeConfigurar} puedeComandos={puedeComandos} />}
-      {pestana === "empaques" && <TiposEmpaque puedeConfigurar={puedeConfigurar} />}
-      {pestana === "areas" && <AreasPesaje puedeConfigurar={puedeConfigurar} />}
+      {puedeVer && pestana === "equipos" && <Equipos puedeConfigurar={puedeConfigurar} puedeComandos={puedeComandos} />}
+      {puedeVer && pestana === "empaques" && <TiposEmpaque puedeConfigurar={puedeConfigurar} />}
+      {puedeVer && pestana === "areas" && <AreasPesaje puedeConfigurar={puedeConfigurar} />}
       {pestana === "reporte" && <ReportePesadas />}
     </div>
   );
