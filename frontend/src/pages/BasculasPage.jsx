@@ -685,12 +685,19 @@ function TiposEmpaque({ puedeConfigurar }) {
 
 // ─── Reporte de pesadas ──────────────────────────────────────────────────────────────────────
 // Todo lo que entra por las básculas, con todos sus datos, para ir viéndolo mientras se pesa (usuario,
-// 19 nov 2026). Se actualiza solo cada 30 s. Junta Pesada (Producto terminado / Por producto) y
-// PesadaPrueba (Pesar PPV, que también trae los intentos fuera de rango). El Excel lleva TODAS las
-// filas; en pantalla se muestran las primeras 500.
+// 19 nov 2026). Junta Pesada (Producto terminado / Por producto) y PesadaPrueba (Pesar PPV, que también
+// trae los intentos fuera de rango). El Excel lleva TODAS las filas; en pantalla se muestran 500.
+//
+// Actualización automática con freno (cada consulta trae el rango COMPLETO, ~750 bytes por pesada:
+// un día de producción real son ~2 MB y un mes ~15 MB). Solo se actualiza sola si:
+//   - el rango incluye hoy y es de AUTO_MAX_DIAS días como máximo (lo pasado ya no cambia), y
+//   - la pestaña está visible (en segundo plano se pausa; al volver se actualiza una vez).
+// Cada 60 s, no 30: alcanza para ir viendo la producción y es la mitad de carga por persona.
 const hoyGT = () => new Date().toLocaleDateString("sv-SE", { timeZone: "America/Guatemala" });
 const kg = (g) => (Number(g || 0) / 1000).toLocaleString("es", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const MAX_FILAS_PANTALLA = 500;
+const REFRESCO_REPORTE_MS = 60_000;
+const AUTO_MAX_DIAS = 2;
 
 function ReportePesadas() {
   const [filtro, setFiltro] = useState(() => ({ desde: hoyGT(), hasta: hoyGT(), balanza: "", tipo: "", ver: "todas", q: "" }));
@@ -718,11 +725,18 @@ function ReportePesadas() {
     finally { setCargando(false); }
   }, [desde, hasta, balanza, tipo]);
   useEffect(() => { cargar(); }, [cargar]);
+
+  const hoy = hoyGT();
+  const diasRango = Math.round((Date.parse(hasta) - Date.parse(desde)) / 86_400_000) + 1;
+  const autoPosible = desde <= hoy && hasta >= hoy && diasRango <= AUTO_MAX_DIAS;
+  const autoActivo = auto && autoPosible;
   useEffect(() => {
-    if (!auto) return undefined;
-    const id = setInterval(cargar, 30_000);
-    return () => clearInterval(id);
-  }, [auto, cargar]);
+    if (!autoActivo) return undefined;
+    const id = setInterval(() => { if (!document.hidden) cargar(); }, REFRESCO_REPORTE_MS);
+    const alVolver = () => { if (!document.hidden) cargar(); };
+    document.addEventListener("visibilitychange", alVolver);
+    return () => { clearInterval(id); document.removeEventListener("visibilitychange", alVolver); };
+  }, [autoActivo, cargar]);
 
   const anulada = r => Number(r.Anulada) === 1;
   const q = filtro.q.trim().toLowerCase();
@@ -790,7 +804,11 @@ function ReportePesadas() {
         </label>
         <div className="col-span-2 md:col-span-7 flex flex-wrap items-center gap-3 text-sm">
           <button onClick={cargar} disabled={cargando} className="px-4 py-1.5 rounded-lg border border-slate-300 hover:bg-slate-50 disabled:opacity-50">{cargando ? "Cargando…" : "Actualizar"}</button>
-          <label className="flex items-center gap-2 text-slate-600"><input type="checkbox" checked={auto} onChange={e => setAuto(e.target.checked)} /> Actualizar solo cada 30 s</label>
+          <label className={`flex items-center gap-2 ${autoPosible ? "text-slate-600" : "text-slate-400"}`}
+            title={autoPosible ? "" : `Solo se actualiza sola si el rango incluye hoy y es de ${AUTO_MAX_DIAS} días o menos`}>
+            <input type="checkbox" disabled={!autoPosible} checked={autoActivo} onChange={e => setAuto(e.target.checked)} />
+            {autoPosible ? "Actualizar sola cada minuto" : `Actualización automática solo con hoy (máx. ${AUTO_MAX_DIAS} días)`}
+          </label>
           {actualizado && <span className="text-xs text-slate-400">Última actualización {actualizado}</span>}
           <button onClick={() => exportarPesadasBascula(vistas, filtro.desde, filtro.hasta)} disabled={!vistas.length}
             className="ml-auto px-4 py-1.5 rounded-lg bg-emerald-600 text-white font-medium disabled:opacity-40">Exportar a Excel</button>
