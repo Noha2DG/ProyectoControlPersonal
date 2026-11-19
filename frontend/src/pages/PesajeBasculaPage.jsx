@@ -582,7 +582,17 @@ function Pesaje({ sesion, b, onCerrar, onMenu }) {
               </select>
             </label>
           </div>
-          <div className={`${tema.panel} rounded-xl px-3 py-2 flex items-baseline gap-2 mt-1`}><span className="text-xs text-slate-300">{ppv ? "Cajas hoy" : "Bandejas hoy"}</span><span className="text-2xl font-bold">{g(resumen.Cajas)}</span><span className="text-xs text-slate-300 ml-auto">{(resumen.NetoG / 1000).toLocaleString("es", { maximumFractionDigits: 1 })} kg</span></div>
+          {/* PPV: lo pesado en kilos, en grande (usuario, 19 nov 2026). Solo cajas dentro del rango. */}
+          {ppv && (
+            <div className="rounded-xl bg-white/10 border-2 border-teal-300/60 px-3 py-2 mt-1">
+              <p className="text-xs text-teal-100 uppercase tracking-wide">Pesado hoy</p>
+              <p className="text-5xl font-extrabold font-mono leading-tight">
+                {(resumen.NetoG / 1000).toLocaleString("es", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}<span className="text-2xl ml-1">kg</span>
+              </p>
+              <p className="text-sm text-teal-100">{g(resumen.Cajas)} cajas</p>
+            </div>
+          )}
+          <div className={`${tema.panel} rounded-xl px-3 py-2 flex items-baseline gap-2 mt-1 ${ppv ? "hidden" : ""}`}><span className="text-xs text-slate-300">{ppv ? "Cajas hoy" : "Bandejas hoy"}</span><span className="text-2xl font-bold">{g(resumen.Cajas)}</span><span className="text-xs text-slate-300 ml-auto">{(resumen.NetoG / 1000).toLocaleString("es", { maximumFractionDigits: 1 })} kg</span></div>
           {ppv && <div className={`${tema.panel} rounded-xl px-3 py-1.5 flex items-baseline gap-2`}><span className="text-xs text-slate-300">Fuera de rango hoy</span><span className="text-xl font-bold text-amber-300">{g(resumen.Fuera ?? 0)}</span><span className="text-[11px] text-slate-400 ml-auto">no cuentan como caja</span></div>}
           <div className={`${tema.panel} rounded-xl p-3 flex-1 min-h-[90px] overflow-auto`}>
             <p className="text-xs text-slate-300 mb-2">Últimas guardadas</p>
