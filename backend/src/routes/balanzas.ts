@@ -354,7 +354,7 @@ router.put("/empaques/:codigo", requireAuth, requirePerm("basculas", "configurar
 //   - Pesada       → Producto terminado (PERSONA) y Por producto (PRODUCTO); siempre dentro del rango.
 //   - PesadaPrueba → Pesar PPV; trae también los intentos fuera de rango (Resultado BAJO / SOBRE).
 // Incluye las anuladas (marcadas) para que el reporte cuadre con lo que vio la pesa. Máx. 62 días.
-router.get("/reporte", requireAuth, requirePerm("basculas", "ver"), async (req: AuthRequest, res: Response) => {
+router.get("/reporte", requireAuth, requireAnyPerm([["basculas", "ver"], ["basculas", "reporte"]]), async (req: AuthRequest, res: Response) => {
   try {
     const fecha = (v: any) => (/^\d{4}-\d{2}-\d{2}$/.test(String(v ?? "")) ? String(v) : null);
     const desde = fecha(req.query.desde), hasta = fecha(req.query.hasta);
