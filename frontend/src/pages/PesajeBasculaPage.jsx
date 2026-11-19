@@ -116,7 +116,7 @@ function Login({ balanza, conectado, carnetInicial, onSesion, onSalirSistema }) 
               })}
             </div>
             {enviando && <p className="text-slate-400">Entrando…</p>}
-            <button onClick={volverAlCarnet} className="px-8 py-4 rounded-2xl border border-white/20 text-lg">Salir</button>
+            <button onClick={volverAlCarnet} className="h-16 px-12 rounded-2xl bg-red-600 border-2 border-red-300 text-2xl font-extrabold active:scale-95 transition">SALIR</button>
           </div>
         )}
 
@@ -397,14 +397,15 @@ function Pesaje({ sesion, b, onCerrar, onMenu }) {
     // 100dvh y no h-screen (100vh): en Chrome de Android 100vh incluye la barra de direcciones y la
     // barra del rango quedaba cortada abajo.
     <div className={`${tema.pagina} text-white flex flex-col`} style={{ height: "100dvh" }}>
-      <header className={`h-12 shrink-0 flex items-center px-4 gap-3 ${tema.barra}`}>
-        <button onClick={onMenu} className="px-4 py-1.5 rounded-lg bg-white/15 font-bold">← Menú</button>
+      {/* Botones grandes para el dedo con guante (usuario, 19 nov 2026). */}
+      <header className={`h-[68px] shrink-0 flex items-center px-3 gap-3 ${tema.barra}`}>
+        <button onClick={onMenu} className="h-14 px-7 rounded-xl bg-white/20 border-2 border-white/40 text-2xl font-extrabold active:scale-95 transition">← MENÚ</button>
         <span className="font-mono font-bold">{sesion.BalanzaCodigo}</span>
         {!ppv && <span className="text-slate-200 font-semibold">{sesion.BodegaNombre ?? "—"}</span>}
         <span className={`text-xs font-bold rounded px-2 py-0.5 ${tema.chip}`}>{tema.etiqueta}</span>
         {cola.length > 0 && <span className="text-xs bg-amber-500/30 text-amber-200 rounded px-2 py-0.5">{cola.length} por enviar</span>}
         <span className="ml-auto text-sm">Operadora: <b>{sesion.Operadora}</b> <span className="text-slate-400 font-mono">{sesion.OperadoraCodigo}</span></span>
-        <button onClick={() => onCerrar("salió")} className="ml-2 px-3 py-1.5 rounded-lg bg-white/10 text-sm">Salir</button>
+        <button onClick={() => onCerrar("salió")} className="ml-2 h-14 px-7 rounded-xl bg-red-600 border-2 border-red-300 text-2xl font-extrabold active:scale-95 transition">SALIR</button>
       </header>
 
       <div className="flex-1 flex gap-3 p-3 min-h-0">
