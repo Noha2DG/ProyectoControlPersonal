@@ -349,6 +349,25 @@ export async function pisoDeRemision(client: any, remisionId: number, destino: D
  * En ese caso la salida correcta es un AJUSTE con motivo, no deshacer la historia.
  */
 export async function revertirIngresoDeRemision(tx: any, remisionId: number): Promise<number> {
+  // Primero, lo trabajado CONTRA ESTA remisión (19 nov 2026, caso RS-0133): el área pesa del lote y
+  // el consumo se carga a la remisión más vieja con saldo. La revisión de abajo es por lote y suma
+  // TODAS las remisiones, así que con otra remisión del mismo lote en el piso pasaba aunque esta ya
+  // tuviera consumos: se borraba su INGRESO, sus consumos quedaban colgados y la remisión salía en
+  // negativo (y la otra, con producto "por descongelar" que ya se había pesado). Cualquier
+  // movimiento que no sea su propio INGRESO quiere decir que el área ya la trabajó.
+  const trabajado: any[] = await tx.$queryRawUnsafe(`
+    SELECT COUNT(*) AS n, ROUND(SUM(CASE WHEN Tipo = 'CONSUMO' THEN PesoKg ELSE 0 END), 2) AS Kg,
+           GROUP_CONCAT(DISTINCT Lote ORDER BY Lote SEPARATOR ', ') AS Lotes
+      FROM MovimientoPiso WHERE RemisionId = ? AND Tipo <> 'INGRESO'`, remisionId);
+  if (Number(trabajado[0]?.n) > 0) {
+    const t = trabajado[0];
+    throw new Error(
+      `El área ya trabajó producto de esta remisión (lote ${t.Lotes}${Number(t.Kg) > 0 ? `, ${t.Kg} kg pesados` : ""}). ` +
+      `Anularla dejaría esos movimientos sin remisión y el piso en negativo. Si el área no se llevó todo, ` +
+      `regrese a bodega solo las cajas que no usó con "Devolver master"; si hay que corregir lo pesado, ` +
+      `hágalo con un ajuste en Descongelado.`);
+  }
+
   const conflictos: any[] = await tx.$queryRawUnsafe(`
     SELECT i.Lote, i.Clase, i.Talla, ROUND(i.Kg, 2) AS Ingreso, ROUND(COALESCE(s.Kg, 0), 2) AS Saldo
     FROM (
