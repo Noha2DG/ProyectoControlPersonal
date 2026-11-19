@@ -510,10 +510,11 @@ function AreasPesaje({ puedeConfigurar }) {
 }
 
 // ─── Tipos de empaque ────────────────────────────────────────────────────────────────────────
-// Bruto = neto + tara + deshidratación (neto × %); rango = [bruto − margen−, bruto + margen+]. El
-// cálculo lo hace el servidor (lib/empaquePesaje.ts) y aquí solo se muestra: un solo lugar con la
-// fórmula. Cambiar un tipo no altera lo ya pesado: cada pesada guarda su rango.
-const EMPAQUE_VACIO = { Codigo: "", Nombre: "", Unidad: "g", PesoNetoG: "", TaraG: "0", DeshidratacionPct: "0", MargenPosG: "0", MargenNegG: "0", ConRango: true, Activo: true };
+// La tara se hace en la báscula (la pesa marca neto). Rango = [neto, neto + deshidratación (neto × %)]:
+// el % lo decide cada cliente y es lo máximo que puede pasarse (usuario, 19 nov 2026). El cálculo lo
+// hace el servidor (lib/empaquePesaje.ts) y aquí solo se muestra: un solo lugar con la fórmula.
+// Cambiar un tipo no altera lo ya pesado: cada pesada guarda su rango.
+const EMPAQUE_VACIO = { Codigo: "", Nombre: "", Unidad: "g", PesoNetoG: "", DeshidratacionPct: "0", ConRango: true, Activo: true };
 
 function FormEmpaque({ inicial, nuevo, puedeConfigurar, onGuardado, onCancelar }) {
   const [f, setF] = useState(inicial);
@@ -580,13 +581,11 @@ function FormEmpaque({ inicial, nuevo, puedeConfigurar, onGuardado, onCancelar }
           </select>
         </label>
       </div>
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-        {num("PesoNetoG", "Peso neto", "g")}
-        {num("TaraG", "Tara material", "g")}
-        {num("DeshidratacionPct", "Deshidratación", "%")}
-        {f.ConRango && num("MargenPosG", "Margen +", "g")}
-        {f.ConRango && num("MargenNegG", "Margen −", "g")}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        {num("PesoNetoG", "Peso neto (mínimo)", "g")}
+        {num("DeshidratacionPct", "Deshidratación (máximo que se pasa)", "%")}
       </div>
+      <p className="text-xs text-slate-500 -mt-2">La tara del material se hace en la báscula: la pesa ya marca el peso neto.</p>
       <label className="flex items-center gap-2 text-sm text-slate-700">
         <input type="checkbox" disabled={!puedeConfigurar} checked={f.ConRango} onChange={e => setF(p => ({ ...p, ConRango: e.target.checked }))} />
         Con rango (si se desmarca, el peso es libre: se guarda cualquier peso estable)
@@ -597,8 +596,8 @@ function FormEmpaque({ inicial, nuevo, puedeConfigurar, onGuardado, onCancelar }
           <>
             <div className="flex flex-wrap items-end gap-8">
               <div><p className="text-xs text-slate-500">Deshidratación</p><p className="text-2xl font-bold">{calc.DeshidratacionG} g</p></div>
-              <div><p className="text-xs text-slate-500">Peso bruto (objetivo)</p><p className="text-3xl font-bold">{calc.PesoBrutoG.toLocaleString("es")} g</p>
-                <p className="text-xs text-slate-500">{calc.PesoNetoG} neto + {calc.TaraG} tara + {calc.DeshidratacionG} deshidratación</p></div>
+              <div><p className="text-xs text-slate-500">Máximo con deshidratación</p><p className="text-3xl font-bold">{calc.MaxG.toLocaleString("es")} g</p>
+                <p className="text-xs text-slate-500">{calc.PesoNetoG} neto + {calc.DeshidratacionG} deshidratación</p></div>
               <div><p className="text-xs text-slate-500">Rango que se guarda</p>{calc.ConRango
                 ? <p className="text-3xl font-bold text-emerald-600">{calc.MinG.toLocaleString("es")} – {calc.MaxG.toLocaleString("es")} g</p>
                 : <p className="text-3xl font-bold text-slate-600">Peso libre</p>}</div>
@@ -644,8 +643,7 @@ function TiposEmpaque({ puedeConfigurar }) {
   const filtrada = lista.filter(e => !q || e.Codigo.toLowerCase().includes(q) || e.Nombre.toLowerCase().includes(q));
   const elegido = lista.find(e => e.Codigo === sel);
   const inicial = sel === "__nuevo" ? EMPAQUE_VACIO
-    : elegido ? { ...elegido, PesoNetoG: String(elegido.PesoNetoG), TaraG: String(elegido.TaraG), DeshidratacionPct: String(elegido.DeshidratacionPct),
-                  MargenPosG: String(elegido.MargenPosG), MargenNegG: String(elegido.MargenNegG) } : null;
+    : elegido ? { ...elegido, PesoNetoG: String(elegido.PesoNetoG), DeshidratacionPct: String(elegido.DeshidratacionPct) } : null;
 
   return (
     <div className="flex flex-col lg:flex-row gap-4 items-start">
@@ -658,7 +656,7 @@ function TiposEmpaque({ puedeConfigurar }) {
         {lista.length === 0 ? <p className="p-5 text-sm text-slate-500">Todavía no hay tipos de empaque.</p> : (
           <table className="w-full text-sm table-fixed">
             <thead className="bg-slate-50 text-slate-500 text-xs uppercase">
-              <tr><th className="text-left px-4 py-2 w-24">Código</th><th className="text-left px-2">Nombre</th><th className="text-right px-2 w-20">Neto</th><th className="text-right px-4 w-28">Rango</th></tr>
+              <tr><th className="text-left px-4 py-2 w-24">Código</th><th className="text-left px-2">Nombre</th><th className="text-right px-2 w-20">Neto</th><th className="text-right px-2 w-14">Desh.</th><th className="text-right px-4 w-28">Rango</th></tr>
             </thead>
             <tbody className="divide-y">
               {filtrada.map(e => (
@@ -666,6 +664,7 @@ function TiposEmpaque({ puedeConfigurar }) {
                   <td className="px-4 py-2.5 font-mono truncate">{e.Codigo}</td>
                   <td className="px-2 truncate" title={e.Nombre}>{e.Nombre}</td>
                   <td className="px-2 text-right">{e.PesoNetoG.toLocaleString("es")} g</td>
+                  <td className="px-2 text-right">{e.DeshidratacionPct}%</td>
                   <td className="px-4 text-right font-mono">{e.ConRango ? `${e.MinG}–${e.MaxG}` : "libre"}</td>
                 </tr>
               ))}

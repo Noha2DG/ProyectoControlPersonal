@@ -174,7 +174,7 @@ router.get("/sesion/:id/catalogos", requirePerm("pesaje_bascula", "usar"), async
       // cliente, con su descripción: el pedido es solo referencia.
       const [empaques, tallas, pedidos] = await Promise.all([
         prisma.$queryRawUnsafe(`
-          SELECT Codigo, Nombre, Unidad, PesoNetoG, TaraG, PesoBrutoG, MinG, MaxG, ConRango
+          SELECT Codigo, Nombre, Unidad, PesoNetoG, DeshidratacionPct, PesoBrutoG, MinG, MaxG, ConRango
             FROM EmpaquePesaje WHERE Activo = 1 AND ConRango = 1 ORDER BY Nombre`),
         prisma.$queryRawUnsafe(`SELECT Codigo, Descripcion FROM Tallas WHERE Activo = 1 ORDER BY Codigo`),
         prisma.$queryRawUnsafe(`
@@ -191,7 +191,7 @@ router.get("/sesion/:id/catalogos", requirePerm("pesaje_bascula", "usar"), async
     }
     const [empaques, tallas, lotes, clases, pedidos] = await Promise.all([
       prisma.$queryRawUnsafe(`
-        SELECT Codigo, Nombre, Unidad, PesoNetoG, TaraG, DeshidratacionG, PesoBrutoG, MinG, MaxG, ConRango
+        SELECT Codigo, Nombre, Unidad, PesoNetoG, DeshidratacionPct, DeshidratacionG, PesoBrutoG, MinG, MaxG, ConRango
           FROM EmpaquePesaje WHERE Activo = 1 ORDER BY Nombre`),
       prisma.$queryRawUnsafe(`SELECT Codigo, Descripcion FROM Tallas WHERE Activo = 1 ORDER BY Codigo`),
       // Inventario al piso de la bodega: lo que entró menos lo que salió, por Lote/Clase/Talla.
@@ -260,7 +260,7 @@ router.post("/pesadas", requirePerm("pesaje_bascula", "usar"), async (req: AuthR
       let emp: any = null;
       if (empCodigo) {
         [emp] = await tx.$queryRaw`
-          SELECT Codigo, PesoBrutoG, TaraG, MinG, MaxG, ConRango FROM EmpaquePesaje WHERE Codigo = ${empCodigo} AND Activo = 1`;
+          SELECT Codigo, PesoNetoG, MinG, MaxG, ConRango FROM EmpaquePesaje WHERE Codigo = ${empCodigo} AND Activo = 1`;
         if (!emp) throw new ErrorNegocio(400, "Ese tipo de empaque ya no está activo");
       } else if (!pt) {
         throw new ErrorNegocio(400, "Elija el tipo de empaque");
@@ -321,8 +321,8 @@ router.post("/pesadas", requirePerm("pesaje_bascula", "usar"), async (req: AuthR
                             ObjetivoG, MinG, MaxG, FechaProduccion, ClaseSalida, Destino, CodigoPedido, Carrito)
         VALUES (${uuid}, ${s.SesionId}, ${s.BalanzaCodigo}, ${s.OperadoraCodigo}, ${s.AreaCodigo}, ${s.BodegaVirtualCodigo},
                 ${s.Modo}, ${emp ? emp.Codigo : null}, ${loteTxt}, ${claseTxt}, ${Number(b.Talla)}, ${persona},
-                ${peso}, ${peso - (emp ? Number(emp.TaraG) : 0)},
-                ${conRango ? Number(emp.PesoBrutoG) : null}, ${conRango ? Number(emp.MinG) : null}, ${conRango ? Number(emp.MaxG) : null},
+                ${peso}, ${peso},
+                ${conRango ? Number(emp.PesoNetoG) : null}, ${conRango ? Number(emp.MinG) : null}, ${conRango ? Number(emp.MaxG) : null},
                 ${s.FechaProduccion}, ${claseSalida}, ${destino}, ${pedido}, ${carrito})`;
       const [{ id }]: any[] = await tx.$queryRaw`SELECT LAST_INSERT_ID() AS id`;
       await tx.$executeRaw`UPDATE SesionBascula SET UltimaActividad = NOW() WHERE SesionId = ${s.SesionId}`;
@@ -399,7 +399,7 @@ router.post("/pruebas", requirePerm("pesaje_bascula", "usar"), async (req: AuthR
       const peso = Number(b.PesoBrutoG);
       if (!Number.isInteger(peso) || peso <= 0) throw new ErrorNegocio(400, "Peso inválido");
       const [emp]: any[] = await tx.$queryRaw`
-        SELECT Codigo, PesoBrutoG, TaraG, MinG, MaxG FROM EmpaquePesaje
+        SELECT Codigo, PesoNetoG, MinG, MaxG FROM EmpaquePesaje
          WHERE Codigo = ${String(b.EmpaqueCodigo ?? "").trim()} AND Activo = 1 AND ConRango = 1`;
       if (!emp) throw new ErrorNegocio(400, "Elija un tipo de empaque con rango");
       const lote = String(b.Lote ?? "").trim().toUpperCase();
@@ -420,8 +420,8 @@ router.post("/pruebas", requirePerm("pesaje_bascula", "usar"), async (req: AuthR
                                   EmpaqueCodigo, Lote, Talla, CodigoPedido, Carrito, PesoBrutoG, PesoNetoG,
                                   ObjetivoG, MinG, MaxG, FechaProduccion)
         VALUES (${uuid}, ${s.SesionId}, ${s.BalanzaCodigo}, ${s.OperadoraCodigo}, ${s.AreaCodigo}, 'PPV', ${resultado},
-                ${emp.Codigo}, ${lote}, ${Number(b.Talla)}, ${pedido}, ${carrito}, ${peso}, ${peso - Number(emp.TaraG)},
-                ${Number(emp.PesoBrutoG)}, ${Number(emp.MinG)}, ${Number(emp.MaxG)}, ${s.FechaProduccion})`;
+                ${emp.Codigo}, ${lote}, ${Number(b.Talla)}, ${pedido}, ${carrito}, ${peso}, ${peso},
+                ${Number(emp.PesoNetoG)}, ${Number(emp.MinG)}, ${Number(emp.MaxG)}, ${s.FechaProduccion})`;
       const [{ id }]: any[] = await tx.$queryRaw`SELECT LAST_INSERT_ID() AS id`;
       await tx.$executeRaw`UPDATE SesionBascula SET UltimaActividad = NOW() WHERE SesionId = ${s.SesionId}`;
       const [{ n }]: any[] = await tx.$queryRaw`
