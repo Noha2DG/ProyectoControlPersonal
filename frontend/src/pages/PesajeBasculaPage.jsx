@@ -379,8 +379,11 @@ function Pesaje({ sesion, b, onCerrar, onMenu }) {
     else { fondo = "bg-emerald-600"; estado = conRango ? "PESO CORRECTO" : "PESO REGISTRABLE"; sub = b.estable ? "retire la bandeja para guardar" : "esperando que se estabilice"; }
     if (faltaTodo.length && b.gramos >= vacioBajo) sub = "no se guardará: complete lo que falta";
   }
+  // Aviso de guardado: franja grande abajo del recuadro del peso, en color sólido (usuario, 19 nov 2026:
+  // la insignia chica de la esquina "casi no se ve"). Verde = se guardó, rojo = no se guardó.
   const insignia = aviso && {
-    guardado: "bg-white text-emerald-700", sin_guardar: "bg-white text-red-700", pendiente: "bg-white text-amber-700", error: "bg-white text-red-700",
+    guardado: "bg-emerald-500 text-white border-emerald-200", sin_guardar: "bg-red-600 text-white border-red-200",
+    pendiente: "bg-amber-400 text-amber-950 border-amber-100", error: "bg-red-600 text-white border-red-200",
   }[aviso.tipo];
   const icono = aviso && { guardado: "✓", sin_guardar: "✗", pendiente: "…", error: "!" }[aviso.tipo];
 
@@ -504,10 +507,15 @@ function Pesaje({ sesion, b, onCerrar, onMenu }) {
               )}
             </div>
             {aviso && (
-              <div className="absolute top-3 right-3 max-w-[70%]">
-                <div className={`flex items-center gap-2 rounded-2xl px-4 py-1.5 text-lg font-bold shadow ${insignia}`}>
-                  <span>{icono}</span><span>{aviso.texto}</span>
-                  {aviso.detalle && <span className="text-sm font-medium opacity-80 truncate">· {aviso.detalle}</span>}
+              <div key={`${aviso.texto}|${aviso.detalle ?? ""}`} className="absolute bottom-3 left-3 right-3 z-10"
+                style={{ animation: "avisoPesaje .35s ease-out" }}>
+                <style>{"@keyframes avisoPesaje{from{transform:scale(.85);opacity:0}to{transform:scale(1);opacity:1}}"}</style>
+                <div className={`flex items-center gap-4 rounded-2xl border-4 px-5 py-3 shadow-2xl ${insignia}`}>
+                  <span className="text-6xl font-black leading-none">{icono}</span>
+                  <div className="min-w-0">
+                    <p className="text-4xl font-black leading-tight tracking-wide">{aviso.texto}</p>
+                    {aviso.detalle && <p className="text-xl font-semibold opacity-90 truncate">{aviso.detalle}</p>}
+                  </div>
                 </div>
               </div>
             )}
