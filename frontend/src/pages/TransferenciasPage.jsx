@@ -225,6 +225,7 @@ export default function TransferenciasPage() {
   const handleCarnetKey = async (e) => {
     if (e.key !== "Enter" && e.key !== "Tab") return;
     e.preventDefault();
+    if (escaneando) return; // ya hay uno registrándose (el campo sigue con foco, ver readOnly abajo)
     const cod = carnetInput.trim().toUpperCase();
     if (!cod) return;
     if (!areaEntrada) {
@@ -371,8 +372,11 @@ export default function TransferenciasPage() {
                 placeholder="Escanear..."
                 autoComplete="off"
                 autoFocus
-                disabled={escaneando}
-                className="w-24 border border-gray-400 rounded px-2 py-1 text-sm font-mono text-center uppercase focus:outline-none focus:ring-2 focus:ring-blue-400 disabled:opacity-50"
+                // readOnly y NO disabled mientras registra (19 nov 2026): un input disabled pierde el
+                // foco, y el focus() del finally corría antes de que React lo volviera a habilitar, así
+                // que el cursor no regresaba y había que tocar la pantalla para cada carnet.
+                readOnly={escaneando}
+                className={`w-24 border border-gray-400 rounded px-2 py-1 text-sm font-mono text-center uppercase focus:outline-none focus:ring-2 focus:ring-blue-400 ${escaneando ? "opacity-50" : ""}`}
               />
               <div className={`flex-1 border rounded px-3 py-1 text-sm min-h-[32px] flex items-center gap-2 ${
                 empleado ? "border-green-400 bg-green-50 text-green-800 font-semibold" : "border-gray-300 bg-gray-50 text-gray-400"
