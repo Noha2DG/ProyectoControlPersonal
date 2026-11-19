@@ -295,8 +295,8 @@ router.get("/empaques", requireAuth, requireAnyPerm([["basculas", "ver"], ["pesa
     try {
       const soloActivos = String(req.query.activos ?? "") === "1";
       const rows: any[] = await prisma.$queryRawUnsafe(`
-        SELECT Codigo, Nombre, Unidad, PesoNetoG, TaraG, DeshidratacionPct, DeshidratacionG, PesoBrutoG,
-               MargenPosG, MargenNegG, MinG, MaxG, ConRango, Activo, ModificadoPor,
+        SELECT Codigo, Nombre, Unidad, PesoNetoG, DeshidratacionPct, DeshidratacionG, PesoBrutoG,
+               MinG, MaxG, ConRango, Activo, ModificadoPor,
                DATE_FORMAT(COALESCE(ModificadoEn, CreadoEn), '%Y-%m-%d %H:%i') AS Modificado
           FROM EmpaquePesaje ${soloActivos ? "WHERE Activo = 1" : ""} ORDER BY Activo DESC, Nombre`);
       res.json(rows.map(r => ({ ...r, Activo: Number(r.Activo) === 1, ConRango: Number(r.ConRango) === 1, DeshidratacionPct: Number(r.DeshidratacionPct) })));
@@ -318,10 +318,10 @@ router.post("/empaques", requireAuth, requirePerm("basculas", "configurar"), asy
     const [ya]: any[] = await prisma.$queryRaw`SELECT Codigo FROM EmpaquePesaje WHERE Codigo = ${codigo}`;
     if (ya) { res.status(409).json({ error: `Ya existe el tipo de empaque ${codigo}` }); return; }
     await prisma.$executeRaw`
-      INSERT INTO EmpaquePesaje (Codigo, Nombre, Unidad, PesoNetoG, TaraG, DeshidratacionPct, DeshidratacionG,
-                                 PesoBrutoG, MargenPosG, MargenNegG, MinG, MaxG, ConRango, ModificadoPor)
-      VALUES (${codigo}, ${e.Nombre}, ${e.Unidad}, ${e.PesoNetoG}, ${e.TaraG}, ${e.DeshidratacionPct}, ${e.DeshidratacionG},
-              ${e.PesoBrutoG}, ${e.MargenPosG}, ${e.MargenNegG}, ${e.MinG}, ${e.MaxG}, ${e.ConRango}, ${req.user!.username})`;
+      INSERT INTO EmpaquePesaje (Codigo, Nombre, Unidad, PesoNetoG, DeshidratacionPct, DeshidratacionG,
+                                 PesoBrutoG, MinG, MaxG, ConRango, ModificadoPor)
+      VALUES (${codigo}, ${e.Nombre}, ${e.Unidad}, ${e.PesoNetoG}, ${e.DeshidratacionPct}, ${e.DeshidratacionG},
+              ${e.PesoBrutoG}, ${e.MinG}, ${e.MaxG}, ${e.ConRango}, ${req.user!.username})`;
     res.status(201).json({ ok: true, Codigo: codigo });
   } catch (err: any) {
     res.status(400).json({ error: err.message });
@@ -337,9 +337,9 @@ router.put("/empaques/:codigo", requireAuth, requirePerm("basculas", "configurar
     const activo = req.body?.Activo === false ? 0 : 1;
     const n = await prisma.$executeRaw`
       UPDATE EmpaquePesaje
-         SET Nombre = ${e.Nombre}, Unidad = ${e.Unidad}, PesoNetoG = ${e.PesoNetoG}, TaraG = ${e.TaraG},
+         SET Nombre = ${e.Nombre}, Unidad = ${e.Unidad}, PesoNetoG = ${e.PesoNetoG},
              DeshidratacionPct = ${e.DeshidratacionPct}, DeshidratacionG = ${e.DeshidratacionG}, PesoBrutoG = ${e.PesoBrutoG},
-             MargenPosG = ${e.MargenPosG}, MargenNegG = ${e.MargenNegG}, MinG = ${e.MinG}, MaxG = ${e.MaxG}, ConRango = ${e.ConRango},
+             MinG = ${e.MinG}, MaxG = ${e.MaxG}, ConRango = ${e.ConRango},
              Activo = ${activo}, ModificadoEn = NOW(), ModificadoPor = ${req.user!.username}
        WHERE Codigo = ${codigo}`;
     if (!n) { res.status(404).json({ error: "No existe" }); return; }
