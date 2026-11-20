@@ -48,6 +48,7 @@ import pesajeBasculaRouter from "./routes/pesajeBascula.ts";
 import { requireAuth } from "./middleware/auth.ts";
 import { barridoCorteMedianoche } from "./lib/corteMedianoche.ts";
 import { barridoEtiquetasVencidas } from "./lib/etiquetasVencidas.ts";
+import { barridoBajaAutomatica } from "./lib/bajaAutomatica.ts";
 import { reintentar } from "./lib/retry.ts";
 
 // Las rutas de disco se anclan a la ubicacion de este archivo (backend/src), no a process.cwd():
@@ -190,4 +191,13 @@ app.listen(PORT, () => {
     );
   ejecutarVencidas();
   setInterval(ejecutarVencidas, INTERVALO_BARRIDO_MS);
+
+  // Baja automática por 3 días hábiles sin marcar (lib/bajaAutomatica.ts): corre una sola vez al
+  // día, de madrugada, y solo si BAJA_AUTOMATICA=1 (el .env local apunta a producción).
+  const ejecutarBajaAutomatica = () =>
+    reintentar(() => barridoBajaAutomatica(), 3, 2000).catch(err =>
+      console.error("Baja automática falló:", err.message)
+    );
+  ejecutarBajaAutomatica();
+  setInterval(ejecutarBajaAutomatica, INTERVALO_BARRIDO_MS);
 });
