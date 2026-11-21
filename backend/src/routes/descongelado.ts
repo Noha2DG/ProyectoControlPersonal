@@ -1459,7 +1459,11 @@ const r2 = (n: number) => Number(n.toFixed(2));
 // No es CLASES_ENTERO de lib/destajoPiso.ts: esa decide a qué entero le saca cola Descabezado, y no
 // incluye P27 ni P28.
 const GRUPO_ENTERO = ["C20", "C23", "C24", "C25", "C26", "P27", "P28", "L20", "L21", "L22"];
-export const grupoDeProducto = (clase: string) => (GRUPO_ENTERO.includes(clase) ? "ENTERO" : clase);
+// Las colas también (usuario, 21 nov 2026: G445Q010 llegó como D31 "Cola B" y D30 "Cola Cola" en
+// RS-0136 y se descongela junto). Quedan fuera D34 (genérico "*"), D35 (sifón) y D16/D17 (descabezado).
+const GRUPO_COLA = ["D30", "D31", "D32", "D33"];
+export const grupoDeProducto = (clase: string) =>
+  (GRUPO_ENTERO.includes(clase) ? "ENTERO" : GRUPO_COLA.includes(clase) ? "COLA" : clase);
 
 // Las reglas son las de Materia Prima (problemaAlUnificar). Aquí no hay cómo escoger la piscina a
 // mano, así que un código que no se lee no se unifica.
