@@ -3,16 +3,22 @@
 // contra MinG/MaxG guardados, así que no hay dos fórmulas que puedan diferir.
 //
 // 19 nov 2026 (usuario): la tara del material se hace EN LA BÁSCULA, así que la pesa ya marca peso
-// neto. El rango es [neto, neto + deshidratación]: el % de deshidratación —que cambia según el
-// cliente— es lo máximo que puede pasarse. Tara y márgenes + / − se quitaron (no hacían nada útil).
+// neto. Tara y márgenes + / − se quitaron (no hacían nada útil).
+//
+// 23 nov 2026 (usuario): se pesa CRUDO y al congelarse pierde peso (se deshidrata), así que el
+// sobrepeso por deshidratación es lo MÍNIMO que debe llevar, no el máximo. El rango es
+//   mínimo = neto + deshidratación (neto × %)      p. ej. 2000 + 1.25 % = 2025 g
+//   máximo = mínimo + RangoG (gramos de holgura)   p. ej. 2025 + 10 g    = 2035 g
+// El % cambia según el cliente; RangoG es cuánto se deja subir por encima del mínimo.
 
-export type DatosEmpaque = { PesoNetoG: number; DeshidratacionPct: number };
+export type DatosEmpaque = { PesoNetoG: number; DeshidratacionPct: number; RangoG: number };
 
 export function calcularEmpaque(d: DatosEmpaque) {
   const deshidratacionG = Math.round(d.PesoNetoG * d.DeshidratacionPct / 100);
-  const maximo = d.PesoNetoG + deshidratacionG;
-  // PesoBrutoG = el máximo con deshidratación (se conserva la columna por compatibilidad).
-  return { DeshidratacionG: deshidratacionG, PesoBrutoG: maximo, MinG: d.PesoNetoG, MaxG: maximo };
+  const minimo = d.PesoNetoG + deshidratacionG;
+  const maximo = minimo + Math.max(0, Math.round(d.RangoG || 0));
+  // PesoBrutoG = el máximo (se conserva la columna por compatibilidad).
+  return { DeshidratacionG: deshidratacionG, PesoBrutoG: maximo, MinG: minimo, MaxG: maximo };
 }
 
 const entero = (v: any, nombre: string, min: number, max: number) => {
@@ -31,13 +37,14 @@ export function validarEmpaque(b: any) {
   const d: DatosEmpaque = {
     PesoNetoG: entero(b?.PesoNetoG, "Peso neto (g)", 1, 100000),
     DeshidratacionPct: Math.round(pct * 100) / 100,
+    RangoG: entero(b?.RangoG ?? 0, "Rango (g)", 0, 10000),
   };
   // Sin rango = peso libre (producto terminado por bandeja, 17 nov 2026): se guarda cualquier peso
   // estable; el rango queda calculado solo como referencia.
   const conRango = !(b?.ConRango === false || b?.ConRango === 0 || b?.ConRango === "0");
   const c = calcularEmpaque(d);
-  if (conRango && c.DeshidratacionG <= 0) {
-    throw new Error("Con rango, la deshidratación debe ser mayor que 0 %: es lo máximo que puede pasarse del peso neto");
+  if (conRango && d.RangoG <= 0) {
+    throw new Error("Con rango, escriba los gramos del rango: cuánto puede subir por encima del mínimo");
   }
   return { Nombre: nombre, Unidad: unidad, ConRango: conRango ? 1 : 0, ...d, ...c };
 }

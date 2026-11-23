@@ -515,7 +515,9 @@ function AreasPesaje({ puedeConfigurar }) {
 // el % lo decide cada cliente y es lo máximo que puede pasarse (usuario, 19 nov 2026). El cálculo lo
 // hace el servidor (lib/empaquePesaje.ts) y aquí solo se muestra: un solo lugar con la fórmula.
 // Cambiar un tipo no altera lo ya pesado: cada pesada guarda su rango.
-const EMPAQUE_VACIO = { Codigo: "", Nombre: "", Unidad: "g", PesoNetoG: "", DeshidratacionPct: "0", ConRango: true, Activo: true };
+// 23 nov 2026: se pesa crudo y al congelar pierde peso, así que la deshidratación es lo MÍNIMO que se
+// le pone encima del neto; el rango (g) es cuánto puede subir desde ese mínimo.
+const EMPAQUE_VACIO = { Codigo: "", Nombre: "", Unidad: "g", PesoNetoG: "", DeshidratacionPct: "0", RangoG: "10", ConRango: true, Activo: true };
 
 function FormEmpaque({ inicial, nuevo, puedeConfigurar, onGuardado, onCancelar }) {
   const [f, setF] = useState(inicial);
@@ -583,10 +585,11 @@ function FormEmpaque({ inicial, nuevo, puedeConfigurar, onGuardado, onCancelar }
         </label>
       </div>
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        {num("PesoNetoG", "Peso neto (mínimo)", "g")}
-        {num("DeshidratacionPct", "Deshidratación (máximo que se pasa)", "%")}
+        {num("PesoNetoG", "Peso neto", "g")}
+        {num("DeshidratacionPct", "Deshidratación (sobrepeso mínimo)", "%")}
+        {num("RangoG", "Rango (cuánto puede subir)", "g")}
       </div>
-      <p className="text-xs text-slate-500 -mt-2">La tara del material se hace en la báscula: la pesa ya marca el peso neto.</p>
+      <p className="text-xs text-slate-500 -mt-2">Se pesa crudo y al congelar pierde peso: el mínimo es el neto más la deshidratación, y de ahí puede subir los gramos del rango. La tara del material se hace en la báscula.</p>
       <label className="flex items-center gap-2 text-sm text-slate-700">
         <input type="checkbox" disabled={!puedeConfigurar} checked={f.ConRango} onChange={e => setF(p => ({ ...p, ConRango: e.target.checked }))} />
         Con rango (si se desmarca, el peso es libre: se guarda cualquier peso estable)
@@ -597,8 +600,10 @@ function FormEmpaque({ inicial, nuevo, puedeConfigurar, onGuardado, onCancelar }
           <>
             <div className="flex flex-wrap items-end gap-8">
               <div><p className="text-xs text-slate-500">Deshidratación</p><p className="text-2xl font-bold">{calc.DeshidratacionG} g</p></div>
-              <div><p className="text-xs text-slate-500">Máximo con deshidratación</p><p className="text-3xl font-bold">{calc.MaxG.toLocaleString("es")} g</p>
+              <div><p className="text-xs text-slate-500">Mínimo</p><p className="text-3xl font-bold">{calc.MinG.toLocaleString("es")} g</p>
                 <p className="text-xs text-slate-500">{calc.PesoNetoG} neto + {calc.DeshidratacionG} deshidratación</p></div>
+              <div><p className="text-xs text-slate-500">Máximo</p><p className="text-3xl font-bold">{calc.MaxG.toLocaleString("es")} g</p>
+                <p className="text-xs text-slate-500">{calc.MinG} mínimo + {calc.RangoG} de rango</p></div>
               <div><p className="text-xs text-slate-500">Rango que se guarda</p>{calc.ConRango
                 ? <p className="text-3xl font-bold text-emerald-600">{calc.MinG.toLocaleString("es")} – {calc.MaxG.toLocaleString("es")} g</p>
                 : <p className="text-3xl font-bold text-slate-600">Peso libre</p>}</div>
@@ -644,7 +649,7 @@ function TiposEmpaque({ puedeConfigurar }) {
   const filtrada = lista.filter(e => !q || e.Codigo.toLowerCase().includes(q) || e.Nombre.toLowerCase().includes(q));
   const elegido = lista.find(e => e.Codigo === sel);
   const inicial = sel === "__nuevo" ? EMPAQUE_VACIO
-    : elegido ? { ...elegido, PesoNetoG: String(elegido.PesoNetoG), DeshidratacionPct: String(elegido.DeshidratacionPct) } : null;
+    : elegido ? { ...elegido, PesoNetoG: String(elegido.PesoNetoG), DeshidratacionPct: String(elegido.DeshidratacionPct), RangoG: String(elegido.RangoG ?? 0) } : null;
 
   return (
     <div className="flex flex-col lg:flex-row gap-4 items-start">

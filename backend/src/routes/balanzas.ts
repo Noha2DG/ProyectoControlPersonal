@@ -295,7 +295,7 @@ router.get("/empaques", requireAuth, requireAnyPerm([["basculas", "ver"], ["pesa
     try {
       const soloActivos = String(req.query.activos ?? "") === "1";
       const rows: any[] = await prisma.$queryRawUnsafe(`
-        SELECT Codigo, Nombre, Unidad, PesoNetoG, DeshidratacionPct, DeshidratacionG, PesoBrutoG,
+        SELECT Codigo, Nombre, Unidad, PesoNetoG, DeshidratacionPct, DeshidratacionG, RangoG, PesoBrutoG,
                MinG, MaxG, ConRango, Activo, ModificadoPor,
                DATE_FORMAT(COALESCE(ModificadoEn, CreadoEn), '%Y-%m-%d %H:%i') AS Modificado
           FROM EmpaquePesaje ${soloActivos ? "WHERE Activo = 1" : ""} ORDER BY Activo DESC, Nombre`);
@@ -318,9 +318,9 @@ router.post("/empaques", requireAuth, requirePerm("basculas", "configurar"), asy
     const [ya]: any[] = await prisma.$queryRaw`SELECT Codigo FROM EmpaquePesaje WHERE Codigo = ${codigo}`;
     if (ya) { res.status(409).json({ error: `Ya existe el tipo de empaque ${codigo}` }); return; }
     await prisma.$executeRaw`
-      INSERT INTO EmpaquePesaje (Codigo, Nombre, Unidad, PesoNetoG, DeshidratacionPct, DeshidratacionG,
+      INSERT INTO EmpaquePesaje (Codigo, Nombre, Unidad, PesoNetoG, DeshidratacionPct, DeshidratacionG, RangoG,
                                  PesoBrutoG, MinG, MaxG, ConRango, ModificadoPor)
-      VALUES (${codigo}, ${e.Nombre}, ${e.Unidad}, ${e.PesoNetoG}, ${e.DeshidratacionPct}, ${e.DeshidratacionG},
+      VALUES (${codigo}, ${e.Nombre}, ${e.Unidad}, ${e.PesoNetoG}, ${e.DeshidratacionPct}, ${e.DeshidratacionG}, ${e.RangoG},
               ${e.PesoBrutoG}, ${e.MinG}, ${e.MaxG}, ${e.ConRango}, ${req.user!.username})`;
     res.status(201).json({ ok: true, Codigo: codigo });
   } catch (err: any) {
@@ -338,7 +338,7 @@ router.put("/empaques/:codigo", requireAuth, requirePerm("basculas", "configurar
     const n = await prisma.$executeRaw`
       UPDATE EmpaquePesaje
          SET Nombre = ${e.Nombre}, Unidad = ${e.Unidad}, PesoNetoG = ${e.PesoNetoG},
-             DeshidratacionPct = ${e.DeshidratacionPct}, DeshidratacionG = ${e.DeshidratacionG}, PesoBrutoG = ${e.PesoBrutoG},
+             DeshidratacionPct = ${e.DeshidratacionPct}, DeshidratacionG = ${e.DeshidratacionG}, RangoG = ${e.RangoG}, PesoBrutoG = ${e.PesoBrutoG},
              MinG = ${e.MinG}, MaxG = ${e.MaxG}, ConRango = ${e.ConRango},
              Activo = ${activo}, ModificadoEn = NOW(), ModificadoPor = ${req.user!.username}
        WHERE Codigo = ${codigo}`;
