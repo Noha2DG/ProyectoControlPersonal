@@ -2,6 +2,15 @@ import { createContext, useContext, useState, useEffect } from "react";
 
 const AuthContext = createContext(null);
 
+// Las mismas pantallas de kiosco que UsuariosPage (KIOSCO_KEYS): una cuenta que solo tiene estas es
+// una pantalla de equipo (kiosco, báscula), no una persona.
+const PANTALLAS_KIOSCO = ["kiosco", "kiosco_areas", "kiosco_destajo", "kiosco_ranking", "equipo", "pesaje_bascula"];
+function soloPantallasKiosco(permisos) {
+  if (!permisos) return false;
+  const activos = Object.entries(permisos).filter(([, v]) => v && Object.values(v).some(Boolean)).map(([k]) => k);
+  return activos.length > 0 && activos.every(k => PANTALLAS_KIOSCO.includes(k));
+}
+
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -67,13 +76,18 @@ export function AuthProvider({ children }) {
   // Se renueva a los 60 s de arrancar (no de inmediato: si la pantalla se abrió justo al reiniciar
   // el equipo, la red puede no estar lista) y de ahí en adelante cada 12 h. Si falla, se reintenta
   // en la siguiente vuelta: con el token ya sin vencimiento, fallar no rompe nada.
+  // También renueva una cuenta que en su sesión guardada todavía no dice "kiosco" pero solo tiene
+  // pantallas de kiosco (p. ej. balanza01, 23 nov 2026): si inició sesión antes de que la cuenta
+  // quedara como kiosco, cargaba un token de 8 h que nunca se renovaba y la báscula se cerraba sola.
+  // Al renovar, el servidor la firma con el rol de la base (kiosco → sin vencimiento).
+  const esPantalla = user?.rol === "kiosco" || soloPantallasKiosco(user?.permisos);
   useEffect(() => {
-    if (user?.rol !== "kiosco") return;
+    if (!esPantalla) return;
     const renovar = () => { refreshUser(); };
     const inicial = setTimeout(renovar, 60_000);
     const periodico = setInterval(renovar, 12 * 60 * 60 * 1000);
     return () => { clearTimeout(inicial); clearInterval(periodico); };
-  }, [user?.rol]);
+  }, [esPantalla]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <AuthContext.Provider value={{ user, loading, login, logout, refreshUser }}>
