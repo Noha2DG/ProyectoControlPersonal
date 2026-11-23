@@ -257,7 +257,7 @@ router.get("/areas", requireAuth, requirePerm("basculas", "ver"), async (_req: A
   try {
     const rows: any[] = await prisma.$queryRawUnsafe(`
       SELECT a.Codigo, a.Nombre, a.Grupo, a.BodegaVirtualCodigo, bv.Nombre AS BodegaNombre,
-             a.EsPesadora, a.ModoPesaje, a.PideCarrito
+             a.EsPesadora, a.ModoPesaje, a.PideCarrito, a.FueraDeRango
         FROM Areas a
         LEFT JOIN BodegaVirtual bv ON bv.Codigo = a.BodegaVirtualCodigo
        WHERE a.Activa = 1
@@ -268,7 +268,8 @@ router.get("/areas", requireAuth, requirePerm("basculas", "ver"), async (_req: A
   }
 });
 
-// PUT /api/balanzas/areas/:codigo — { EsPesadora, ModoPesaje: PERSONA | PRODUCTO | null, PideCarrito }
+// PUT /api/balanzas/areas/:codigo — { EsPesadora, ModoPesaje: PERSONA | PRODUCTO | null, PideCarrito,
+//                                     FueraDeRango: BLOQUEA | GUARDA }
 router.put("/areas/:codigo", requireAuth, requirePerm("basculas", "configurar"), async (req: AuthRequest, res: Response) => {
   try {
     const codigo = String(req.params.codigo);
@@ -276,13 +277,58 @@ router.put("/areas/:codigo", requireAuth, requirePerm("basculas", "configurar"),
     const m = String(req.body?.ModoPesaje ?? "").toUpperCase();
     const modo = MODOS.includes(m) ? m : null;
     const carrito = es && req.body?.PideCarrito ? 1 : 0;
+    // GUARDA: fuera de rango se guarda y se marca (mandan las unidades). Cualquier otra cosa, BLOQUEA.
+    const fuera = es && String(req.body?.FueraDeRango ?? "").toUpperCase() === "GUARDA" ? "GUARDA" : "BLOQUEA";
     const n = await prisma.$executeRaw`
-      UPDATE Areas SET EsPesadora = ${es}, ModoPesaje = ${es ? modo : null}, PideCarrito = ${carrito} WHERE Codigo = ${codigo}`;
+      UPDATE Areas SET EsPesadora = ${es}, ModoPesaje = ${es ? modo : null}, PideCarrito = ${carrito}, FueraDeRango = ${fuera} WHERE Codigo = ${codigo}`;
     if (!n) { res.status(404).json({ error: "No existe el área" }); return; }
     res.json({ ok: true });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// ─── Unidades por bandeja ────────────────────────────────────────────────────────────────────
+// Referencia de unidades por producto que sale (Clase) y talla (NULL = toda talla), 23 nov 2026. Se
+// muestra en la báscula; no se anota por bandeja. Ver scripts/alterPesajePorUnidades.ts.
+router.get("/unidades", requireAuth, requireAnyPerm([["basculas", "ver"], ["pesaje_bascula", "usar"]]), async (_req: AuthRequest, res: Response) => {
+  try {
+    const rows: any[] = await prisma.$queryRawUnsafe(`
+      SELECT u.UnidadesId, u.Clase, c.Descripcion AS DescripcionClase, u.Talla, t.Descripcion AS DescripcionTalla, u.Unidades,
+             u.ModificadoPor, DATE_FORMAT(u.ModificadoEn, '%Y-%m-%d %H:%i') AS Modificado
+        FROM UnidadesBandeja u JOIN Clase c ON c.Clase = u.Clase LEFT JOIN Tallas t ON t.Codigo = u.Talla
+       ORDER BY u.Clase, u.Talla IS NOT NULL, u.Talla`);
+    res.json(rows.map(r => ({ ...r, UnidadesId: Number(r.UnidadesId), Talla: r.Talla == null ? null : Number(r.Talla), Unidades: Number(r.Unidades) })));
+  } catch (err: any) { res.status(500).json({ error: err.message }); }
+});
+
+// POST /api/balanzas/unidades { Clase, Talla|null, Unidades } — crea o cambia (misma clase y talla = la misma fila).
+router.post("/unidades", requireAuth, requirePerm("basculas", "configurar"), async (req: AuthRequest, res: Response) => {
+  try {
+    const clase = String(req.body?.Clase ?? "").trim();
+    const talla = req.body?.Talla === "" || req.body?.Talla == null ? null : Number(req.body.Talla);
+    const unidades = Number(req.body?.Unidades);
+    if (!Number.isInteger(unidades) || unidades < 1 || unidades > 1000) { res.status(400).json({ error: "Unidades: entero de 1 a 1000" }); return; }
+    const [c]: any[] = await prisma.$queryRawUnsafe(`SELECT Clase FROM Clase WHERE Clase = ?`, clase);
+    if (!c) { res.status(400).json({ error: "Elija el producto" }); return; }
+    if (talla != null) {
+      const [t]: any[] = await prisma.$queryRawUnsafe(`SELECT Codigo FROM Tallas WHERE Codigo = ?`, talla);
+      if (!t) { res.status(400).json({ error: "La talla no existe" }); return; }
+    }
+    await prisma.$executeRawUnsafe(`
+      INSERT INTO UnidadesBandeja (Clase, Talla, Unidades, ModificadoPor) VALUES (?, ?, ?, ?)
+      ON DUPLICATE KEY UPDATE Unidades = VALUES(Unidades), ModificadoPor = VALUES(ModificadoPor)`, clase, talla, unidades, req.user!.username);
+    res.status(201).json({ ok: true });
+  } catch (err: any) { res.status(500).json({ error: err.message }); }
+});
+
+// DELETE /api/balanzas/unidades/:id
+router.delete("/unidades/:id", requireAuth, requirePerm("basculas", "configurar"), async (req: AuthRequest, res: Response) => {
+  try {
+    const n = await prisma.$executeRawUnsafe(`DELETE FROM UnidadesBandeja WHERE UnidadesId = ?`, Number(req.params.id));
+    if (!n) { res.status(404).json({ error: "No existe" }); return; }
+    res.json({ ok: true });
+  } catch (err: any) { res.status(500).json({ error: err.message }); }
 });
 
 // ─── Tipos de empaque ────────────────────────────────────────────────────────────────────────
@@ -351,7 +397,8 @@ router.put("/empaques/:codigo", requireAuth, requirePerm("basculas", "configurar
 
 // GET /api/balanzas/reporte?desde=&hasta=&balanza=&tipo= — todo lo pesado en las básculas, con todos
 // sus datos, para ir viendo lo que se ingresa (usuario, 19 nov 2026). Junta las dos tablas:
-//   - Pesada       → Producto terminado (PERSONA) y Por producto (PRODUCTO); siempre dentro del rango.
+//   - Pesada       → Producto terminado, Por producto y Empanizado. Desde el 23 nov 2026 también se guardan
+//                    fuera de rango donde el área lo permite (Resultado BAJO / SOBRE: SÍ son cajas).
 //   - PesadaPrueba → Pesar PPV; trae también los intentos fuera de rango (Resultado BAJO / SOBRE).
 // Incluye las anuladas (marcadas) para que el reporte cuadre con lo que vio la pesa. Máx. 62 días.
 router.get("/reporte", requireAuth, requireAnyPerm([["basculas", "ver"], ["basculas", "reporte"]]), async (req: AuthRequest, res: Response) => {
@@ -368,11 +415,11 @@ router.get("/reporte", requireAuth, requireAnyPerm([["basculas", "ver"], ["bascu
     const filtroBal = balanza ? "AND x.BalanzaCodigo = ?" : "";
     const params: any[] = [];
     const parte = (incluir: boolean, sql: string) => (incluir ? sql : null);
-    const verPesada = !tipo || tipo === "PERSONA" || tipo === "PRODUCTO";
+    const verPesada = !tipo || tipo !== "PPV";
     const verPrueba = !tipo || tipo === "PPV";
     const partes = [
       parte(verPesada, `
-        SELECT 'PESADA' AS Origen, x.PesadaId AS Id, x.Modo AS Tipo, 'OK' AS Resultado,
+        SELECT 'PESADA' AS Origen, x.PesadaId AS Id, x.Modo AS Tipo, x.Resultado, x.UnidadesRef,
                x.FechaProduccion, x.CreadoEn, x.BalanzaCodigo, x.AreaCodigo, x.OperadoraCodigo,
                x.Lote, x.Clase, x.ClaseSalida, x.Talla, x.EmpaqueCodigo, x.CodigoPedido, x.Destino, x.Carrito,
                x.PersonaCodigo, x.BodegaVirtualCodigo, x.PesoBrutoG, x.PesoNetoG, x.ObjetivoG, x.MinG, x.MaxG,
@@ -380,7 +427,7 @@ router.get("/reporte", requireAuth, requireAnyPerm([["basculas", "ver"], ["bascu
           FROM Pesada x
          WHERE x.FechaProduccion BETWEEN ? AND ? ${filtroBal} ${tipo && tipo !== "PPV" ? "AND x.Modo = ?" : ""}`),
       parte(verPrueba, `
-        SELECT 'PRUEBA' AS Origen, x.PesadaId AS Id, x.Tipo, x.Resultado,
+        SELECT 'PRUEBA' AS Origen, x.PesadaId AS Id, x.Tipo, x.Resultado, NULL AS UnidadesRef,
                x.FechaProduccion, x.CreadoEn, x.BalanzaCodigo, x.AreaCodigo, x.OperadoraCodigo,
                x.Lote, NULL AS Clase, NULL AS ClaseSalida, x.Talla, x.EmpaqueCodigo, x.CodigoPedido, NULL AS Destino, x.Carrito,
                NULL AS PersonaCodigo, NULL AS BodegaVirtualCodigo, x.PesoBrutoG, x.PesoNetoG, x.ObjetivoG, x.MinG, x.MaxG,
@@ -394,7 +441,7 @@ router.get("/reporte", requireAuth, requireAnyPerm([["basculas", "ver"], ["bascu
     if (!union) { res.json([]); return; }
 
     const rows: any[] = await prisma.$queryRawUnsafe(`
-      SELECT u.Origen, u.Id, u.Tipo, u.Resultado,
+      SELECT u.Origen, u.Id, u.Tipo, u.Resultado, u.UnidadesRef,
              DATE_FORMAT(u.FechaProduccion, '%Y-%m-%d') AS Fecha, DATE_FORMAT(u.CreadoEn, '%H:%i:%s') AS Hora,
              u.BalanzaCodigo, u.AreaCodigo, a.Nombre AS NombreArea,
              u.OperadoraCodigo, CONCAT_WS(' ', op.PrimerNombre, op.PrimerApellido) AS Operadora,

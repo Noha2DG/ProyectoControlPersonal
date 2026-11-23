@@ -18,6 +18,8 @@
 // GANANCIA del lote = Kg pesados ÷ (Tomado − Bajado − Descarte) − 1. Es la harina: se MIDE, no hay
 // meta (usuario, 20 nov 2026). Sale positiva casi siempre.
 
+import { saldoLineas } from "./destajoPiso.ts";
+
 export const BODEGA_EMPANIZADO = "EMPANIZADO";
 export const DESTINO_CIERRE = "TUNEL";
 export const DESTINOS_PESADA: Record<string, string> = { EXPORTACION: "Exportación", LOCAL: "Venta local" };
@@ -35,37 +37,21 @@ const claveLinea = (x: any) =>
   `${x.RemisionId == null || x.RemisionId === "" ? "" : Number(x.RemisionId)}|${x.Lote}|${x.Clase}|${Number(x.Talla)}|${x.FechaLote ?? ""}`;
 
 // ── Lo que hay al piso ──────────────────────────────────────────────────────────────────────────
-// Misma llave que el resto del piso (remisión, lote, clase, talla, fecha del lote): la toma tiene que
-// caer sobre la fila de la que sale para que el saldo quede en cero y no en +x / −x.
-export async function saldoPiso(client: any, bodega = BODEGA_EMPANIZADO, lotes?: string[]) {
-  const filtro = lotes?.length ? `AND Lote IN (${enLista(lotes)})` : "";
-  const args = lotes?.length ? [bodega, ...lotes, bodega, ...lotes] : [bodega, bodega];
-  const rows: any[] = await client.$queryRawUnsafe(`
-    SELECT t.RemisionId, rm.Folio AS FolioRemision, t.Lote, t.Clase, cl.Descripcion AS DescripcionClase,
-           t.Talla, ta.Descripcion AS DescripcionTalla, DATE_FORMAT(t.FechaLote, '%Y-%m-%d') AS FechaLote,
-           DATE_FORMAT(MIN(CASE WHEN t.Delta > 0 THEN t.FechaProduccion END), '%Y-%m-%d') AS FechaIngreso,
-           ROUND(SUM(t.Delta), 2) AS Kg, MAX(t.EsBajado) AS EsBajado
-      FROM (
-        SELECT RemisionId, Lote, Clase, Talla, FechaLote, FechaProduccion, PesoKg AS Delta, Tipo = 'BAJADO' AS EsBajado
-          FROM MovimientoPiso WHERE BodegaDestino = ? ${filtro}
-        UNION ALL
-        SELECT RemisionId, Lote, Clase, Talla, FechaLote, FechaProduccion, -PesoKg, 0
-          FROM MovimientoPiso WHERE BodegaOrigen = ? ${filtro}
-      ) t
-      LEFT JOIN Clase cl ON cl.Clase = t.Clase
-      LEFT JOIN Tallas ta ON ta.Codigo = t.Talla
-      LEFT JOIN Remisiones rm ON rm.RemisionId = t.RemisionId
-     GROUP BY t.RemisionId, rm.Folio, t.Lote, t.Clase, cl.Descripcion, t.Talla, ta.Descripcion, t.FechaLote
-    HAVING Kg > 0.001
-     ORDER BY t.FechaLote IS NULL, t.FechaLote, t.Lote, t.Clase, t.Talla`, ...args);
-  return rows.map(r => ({
-    ...r, RemisionId: r.RemisionId == null ? null : Number(r.RemisionId), Talla: Number(r.Talla),
-    Kg: Number(r.Kg), EsBajado: Number(r.EsBajado) === 1, Clave: claveLinea(r),
+// El MISMO saldo que Destajo (destajoPiso.saldoLineas): una línea por lote (remisión, lote, clase,
+// talla, fecha del lote) con sus TERMOS adentro. Lo que Tratamiento traslada llega termo por termo
+// (MovimientoPiso.NumeroTermo) y lo bajado también lleva termo, así que se toma por lote y termo,
+// igual que en Pelado (usuario, 23 nov 2026).
+export async function saldoPiso(client: any, bodega = BODEGA_EMPANIZADO, lotes?: string[], fecha?: string) {
+  const rows = await saldoLineas(client, bodega, lotes);
+  return rows.map((r: any) => ({
+    ...r, Clave: claveLinea(r),
+    DiasAlPiso: fecha && r.FechaIngreso ? Math.max(0, Math.round((Date.parse(fecha) - Date.parse(r.FechaIngreso)) / 86400000)) : 0,
   }));
 }
 
 // ── Tomar del piso ──────────────────────────────────────────────────────────────────────────────
-type LineaToma = { RemisionId: number | null; Lote: string; Clase: string; Talla: number; FechaLote: string | null; Kg: number };
+// Una línea por termo escogido (sin termo = se toma de la línea, para lo que llegó sin termo).
+type LineaToma = { RemisionId: number | null; Lote: string; Clase: string; Talla: number; FechaLote: string | null; Kg: number; Termo?: string | null };
 
 /**
  * Saca del piso lo que escogió el encargado y lo pone en su LoteEmpanizado (uno por Lote + Clase +
@@ -79,21 +65,34 @@ export async function tomarDelPiso(tx: any, p: { lineas: LineaToma[]; fecha: str
   const lineas = p.lineas.map(l => {
     const kg = r2(Number(l.Kg));
     if (!(kg > 0)) throw new ErrorEmpanizado(400, `${l.Lote} ${l.Clase}: los kilos deben ser mayores que cero`);
+    const termo = l.Termo == null ? "" : String(l.Termo).trim();
     return { ...l, Kg: kg, Talla: Number(l.Talla), Lote: String(l.Lote), Clase: String(l.Clase),
              RemisionId: l.RemisionId == null || (l.RemisionId as any) === "" ? null : Number(l.RemisionId),
-             FechaLote: l.FechaLote || null };
+             FechaLote: l.FechaLote || null, Termo: termo || null };
   });
 
+  // Contra un saldo que va bajando: la línea y, si se escogió, el termo (igual que Pelado).
   const saldo = await saldoPiso(tx, BODEGA_EMPANIZADO, [...new Set(lineas.map(l => l.Lote))]);
-  const hay = new Map(saldo.map(s => [s.Clave, s.Kg]));
+  const hay = new Map(saldo.map((s: any) => [s.Clave, s]));
   const usado = new Map<string, number>();
   for (const l of lineas) {
     const k = claveLinea(l);
-    const queda = (hay.get(k) ?? 0) - (usado.get(k) ?? 0);
+    const s: any = hay.get(k);
+    const queda = (s?.Kg ?? 0) - (usado.get(k) ?? 0);
     if (l.Kg > queda + 0.001) {
       throw new ErrorEmpanizado(400, `De ${l.Lote} ${l.Clase} solo quedan ${Math.max(queda, 0).toFixed(2)} kg al piso; está tomando ${l.Kg.toFixed(2)} kg.`);
     }
     usado.set(k, (usado.get(k) ?? 0) + l.Kg);
+    if (l.Termo) {
+      const kt = `${k}#${l.Termo}`;
+      const t = (s?.TermosDetalle ?? []).find((x: any) => x.Termo === l.Termo);
+      if (!t) throw new ErrorEmpanizado(400, `${l.Lote} ${l.Clase}: el termo ${l.Termo} ya no está al piso`);
+      const quedaTermo = t.Kg - (usado.get(kt) ?? 0);
+      if (l.Kg > quedaTermo + 0.001) {
+        throw new ErrorEmpanizado(400, `Del termo ${l.Termo} (${l.Lote}) solo quedan ${Math.max(quedaTermo, 0).toFixed(2)} kg; está tomando ${l.Kg.toFixed(2)} kg.`);
+      }
+      usado.set(kt, (usado.get(kt) ?? 0) + l.Kg);
+    }
   }
 
   const grupos = new Map<string, typeof lineas>();
@@ -121,12 +120,12 @@ export async function tomarDelPiso(tx: any, p: { lineas: LineaToma[]; fecha: str
     }
     const filas: string[] = [], args: any[] = [];
     for (const l of g) {
-      filas.push("('TOMA_EMPANIZADO', ?, ?, ?, ?, ?, ?, ?, 'KG', ?, ?, ?, ?)");
-      args.push(p.fecha, BODEGA_EMPANIZADO, l.Lote, l.Clase, l.Talla, l.FechaLote, l.Kg, l.Kg, l.RemisionId, id, p.operador);
+      filas.push("('TOMA_EMPANIZADO', ?, ?, ?, ?, ?, ?, ?, 'KG', ?, ?, ?, ?, ?)");
+      args.push(p.fecha, BODEGA_EMPANIZADO, l.Lote, l.Clase, l.Talla, l.FechaLote, l.Kg, l.Kg, l.RemisionId, l.Termo, id, p.operador);
     }
     await tx.$executeRawUnsafe(`
       INSERT INTO MovimientoPiso (Tipo, FechaProduccion, BodegaOrigen, Lote, Clase, Talla, FechaLote,
-                                  Peso, UM, PesoKg, RemisionId, LoteEmpanizadoId, RegistradoPor)
+                                  Peso, UM, PesoKg, RemisionId, NumeroTermo, LoteEmpanizadoId, RegistradoPor)
       VALUES ${filas.join(",")}`, ...args);
     lotes.push({ LoteEmpanizadoId: id, Lote, Clase, Talla, Kg: r2(g.reduce((s, x) => s + x.Kg, 0)), Nuevo: nuevo });
   }
@@ -223,13 +222,14 @@ export async function detalleLote(client: any, id: number) {
   const salidas = (await salidasDe(client, [id])).get(id) ?? [];
   const movimientos: any[] = await client.$queryRawUnsafe(`
     SELECT m.MovimientoId, m.Tipo, DATE_FORMAT(m.FechaHora, '%Y-%m-%d %H:%i') AS FechaHora, m.Lote, m.Clase, m.Talla,
-           DATE_FORMAT(m.FechaLote, '%Y-%m-%d') AS FechaLote, m.PesoKg, m.Motivo, m.RegistradoPor, rm.Folio AS FolioRemision,
+           DATE_FORMAT(m.FechaLote, '%Y-%m-%d') AS FechaLote, m.PesoKg, m.Motivo, m.NumeroTermo, m.RegistradoPor, rm.Folio AS FolioRemision,
            COALESCE(m.BodegaOrigen, m.BodegaDestino) AS Bodega
       FROM MovimientoPiso m LEFT JOIN Remisiones rm ON rm.RemisionId = m.RemisionId
      WHERE m.LoteEmpanizadoId = ? ORDER BY m.MovimientoId`, id);
   const personas: any[] = await client.$queryRawUnsafe(`
     SELECT p.PersonaCodigo AS Codigo, CONCAT_WS(' ', e.PrimerNombre, e.SegundoNombre, e.PrimerApellido, e.SegundoApellido) AS Nombre,
-           MAX(p.MesaCodigo) AS MesaCodigo, MAX(p.Posicion) AS Posicion, COUNT(*) AS Bandejas, SUM(p.PesoNetoG) AS PesoG
+           MAX(p.MesaCodigo) AS MesaCodigo, MAX(p.Posicion) AS Posicion, COUNT(*) AS Bandejas, SUM(p.PesoNetoG) AS PesoG,
+           SUM(p.Resultado = 'BAJO') AS BajoPeso, SUM(p.Resultado = 'SOBRE') AS SobrePeso
       FROM Pesada p LEFT JOIN Empleados e ON e.Codigo = p.PersonaCodigo
      WHERE p.LoteEmpanizadoId = ? AND p.Anulada = 0
      GROUP BY p.PersonaCodigo, e.PrimerNombre, e.SegundoNombre, e.PrimerApellido, e.SegundoApellido
@@ -237,7 +237,7 @@ export async function detalleLote(client: any, id: number) {
   return {
     ...lote, Salidas: salidas,
     Movimientos: movimientos.map(m => ({ ...m, MovimientoId: Number(m.MovimientoId), Talla: Number(m.Talla), PesoKg: Number(m.PesoKg) })),
-    PorPersona: personas.map(p => ({ ...p, Posicion: p.Posicion == null ? null : Number(p.Posicion), Bandejas: Number(p.Bandejas), Kg: kgDeG(p.PesoG), PesoG: undefined })),
+    PorPersona: personas.map(p => ({ ...p, Posicion: p.Posicion == null ? null : Number(p.Posicion), Bandejas: Number(p.Bandejas), Kg: kgDeG(p.PesoG), PesoG: undefined, BajoPeso: Number(p.BajoPeso ?? 0), SobrePeso: Number(p.SobrePeso ?? 0) })),
   };
 }
 
@@ -254,17 +254,30 @@ function validarAjuste(l: any, kg: number, que: string) {
   if (kg > queda + 0.001) throw new ErrorEmpanizado(400, `Del lote ${l.Lote} solo quedan ${Math.max(queda, 0).toFixed(2)} kg tomados; no se pueden ${que} ${kg.toFixed(2)} kg.`);
 }
 
-export async function bajarAlPiso(tx: any, id: number, a: { kg: number; motivo?: string | null; fecha: string; operador: string }) {
+/**
+ * Lo que no se trabajó regresa al piso de EMPANIZADO con sus kilos, su talla y el termo en que queda
+ * (usuario, 23 nov 2026, como en Pelado). Sale en "Al piso" como bajado, con su termo, y se vuelve a
+ * tomar otro día.
+ */
+export async function bajarAlPiso(tx: any, id: number, a: {
+  kg: number; talla?: number | null; termo?: string | null; motivo?: string | null; fecha: string; operador: string;
+}) {
   const l = await cargarLote(tx, id, true);
   exigirAbierto(l);
   const kg = r2(Number(a.kg));
   validarAjuste(l, kg, "bajar");
+  const termo = String(a.termo ?? "").trim();
+  if (!termo) throw new ErrorEmpanizado(400, "Falta el número de termo en que queda al piso");
+  if (termo.length > 20) throw new ErrorEmpanizado(400, "El número de termo es demasiado largo");
+  const talla = Number(a.talla) || l.Talla;
+  const [t]: any[] = await tx.$queryRawUnsafe(`SELECT Codigo FROM Tallas WHERE Codigo = ?`, talla);
+  if (!t) throw new ErrorEmpanizado(400, "Elija la talla");
   await tx.$executeRawUnsafe(`
     INSERT INTO MovimientoPiso (Tipo, FechaProduccion, BodegaDestino, Lote, Clase, Talla, FechaLote,
-                                Peso, UM, PesoKg, Motivo, LoteEmpanizadoId, RegistradoPor)
-    VALUES ('BAJADO', ?, ?, ?, ?, ?, ?, ?, 'KG', ?, ?, ?, ?)`,
-    a.fecha, BODEGA_EMPANIZADO, l.Lote, l.Clase, l.Talla, l.FechaLote, kg, kg,
-    String(a.motivo ?? "").trim().slice(0, 200) || "Sobrante", id, a.operador);
+                                Peso, UM, PesoKg, Motivo, NumeroTermo, LoteEmpanizadoId, RegistradoPor)
+    VALUES ('BAJADO', ?, ?, ?, ?, ?, ?, ?, 'KG', ?, ?, ?, ?, ?)`,
+    a.fecha, BODEGA_EMPANIZADO, l.Lote, l.Clase, talla, l.FechaLote, kg, kg,
+    String(a.motivo ?? "").trim().slice(0, 200) || "Sobrante", termo, id, a.operador);
   return { ok: true };
 }
 
@@ -427,6 +440,7 @@ export async function reporteProduccion(client: any, desde: string, hasta: strin
            p.MesaCodigo, me.Nombre AS MesaNombre, p.Posicion, p.LoteEmpanizadoId, p.Lote, p.Talla, ta.Descripcion AS DescripcionTalla,
            p.ClaseSalida, cl.Descripcion AS DescripcionClaseSalida, p.Destino, p.CodigoPedido,
            COUNT(*) AS Bandejas, SUM(p.PesoNetoG) AS PesoG,
+           SUM(p.Resultado = 'BAJO') AS BajoPeso, SUM(p.Resultado = 'SOBRE') AS SobrePeso, MAX(p.UnidadesRef) AS UnidadesRef,
            DATE_FORMAT(MIN(p.CreadoEn), '%H:%i') AS Primera, DATE_FORMAT(MAX(p.CreadoEn), '%H:%i') AS Ultima
       FROM Pesada p
       LEFT JOIN Empleados e ON e.Codigo = p.PersonaCodigo
@@ -442,5 +456,6 @@ export async function reporteProduccion(client: any, desde: string, hasta: strin
     ...r, Posicion: r.Posicion == null ? null : Number(r.Posicion), Talla: Number(r.Talla),
     LoteEmpanizadoId: r.LoteEmpanizadoId == null ? null : Number(r.LoteEmpanizadoId),
     Bandejas: Number(r.Bandejas), Kg: kgDeG(r.PesoG), PesoG: undefined,
+    BajoPeso: Number(r.BajoPeso ?? 0), SobrePeso: Number(r.SobrePeso ?? 0), UnidadesRef: r.UnidadesRef == null ? null : Number(r.UnidadesRef),
   }));
 }

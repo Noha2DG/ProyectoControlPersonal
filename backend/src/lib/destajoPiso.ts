@@ -145,7 +145,8 @@ const aKg = (peso: number, um: string) => r2(um === "LB" ? peso / LB_POR_KG : pe
 const claveLinea = (x: any) =>
   `${x.RemisionId == null || x.RemisionId === "" ? "" : Number(x.RemisionId)}|${x.Lote}|${x.Clase}|${Number(x.Talla)}|${x.FechaLote ?? ""}`;
 
-async function saldoLineas(client: any, bodega: string, lotes?: string[]) {
+// Exportada: Empanizado (lib/empanizado.ts) usa este mismo saldo con sus termos (23 nov 2026).
+export async function saldoLineas(client: any, bodega: string, lotes?: string[]) {
   const filtro = lotes?.length ? `AND Lote IN (${enLista(lotes)})` : "";
   const args = lotes?.length ? [bodega, ...lotes, bodega, ...lotes] : [bodega, bodega];
   const rows: any[] = await client.$queryRawUnsafe(`

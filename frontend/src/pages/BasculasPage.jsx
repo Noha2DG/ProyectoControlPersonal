@@ -433,7 +433,7 @@ function AreasPesaje({ puedeConfigurar }) {
     setAreas(l => l.map(x => (x.Codigo === a.Codigo ? nuevo : x)));
     try {
       await api(`/api/balanzas/areas/${encodeURIComponent(a.Codigo)}`, {
-        method: "PUT", body: JSON.stringify({ EsPesadora: nuevo.EsPesadora, ModoPesaje: nuevo.ModoPesaje || null, PideCarrito: nuevo.PideCarrito }),
+        method: "PUT", body: JSON.stringify({ EsPesadora: nuevo.EsPesadora, ModoPesaje: nuevo.ModoPesaje || null, PideCarrito: nuevo.PideCarrito, FueraDeRango: nuevo.FueraDeRango }),
       });
     } catch (e) { setError(`${a.Codigo}: ${e.message}`); cargar(); }
     finally { setGuardando(null); }
@@ -458,7 +458,7 @@ function AreasPesaje({ puedeConfigurar }) {
       </div>
       {error && <p className="px-4 py-2 text-sm text-red-600">{error}</p>}
       <div className="overflow-x-auto">
-        <table className="w-full text-sm table-fixed min-w-[760px]">
+        <table className="w-full text-sm table-fixed min-w-[960px]">
           <thead className="bg-slate-50 text-slate-500 text-xs uppercase">
             <tr>
               <th className="text-left px-4 py-2 w-20">Código</th>
@@ -467,6 +467,7 @@ function AreasPesaje({ puedeConfigurar }) {
               <th className="text-center px-2 w-32">Usa básculas</th>
               <th className="text-left px-4 w-64">Modo de pesaje</th>
               <th className="text-center px-2 w-32" title="Obligatorio escribir el número de carrito en cada pesada (como el termo en Pelado)">Pide carrito</th>
+              <th className="text-left px-4 w-56" title="Pesar PPV nunca guarda fuera de rango, sin importar el área">Fuera de rango</th>
             </tr>
           </thead>
           <tbody className="divide-y">
@@ -496,13 +497,98 @@ function AreasPesaje({ puedeConfigurar }) {
                     <input type="checkbox" disabled={!puedeConfigurar} checked={a.PideCarrito} onChange={e => guardar(a, { PideCarrito: e.target.checked })} />
                   ) : <span className="text-slate-300">—</span>}
                 </td>
+                <td className="px-4">
+                  {a.EsPesadora ? (
+                    <select disabled={!puedeConfigurar} value={a.FueraDeRango ?? "BLOQUEA"} onChange={e => guardar(a, { FueraDeRango: e.target.value })}
+                      className={`w-full border rounded-lg px-2 py-1.5 text-sm ${a.FueraDeRango === "GUARDA" ? "border-amber-400 bg-amber-50" : "border-slate-300"}`}>
+                      <option value="BLOQUEA">No se guarda (manda el peso)</option>
+                      <option value="GUARDA">Se guarda y se marca (mandan las unidades)</option>
+                    </select>
+                  ) : <span className="text-slate-300">—</span>}
+                </td>
               </tr>
             ))}
             {lista.length === 0 && (
-              <tr><td colSpan={6} className="px-4 py-6 text-sm text-slate-500">
+              <tr><td colSpan={7} className="px-4 py-6 text-sm text-slate-500">
                 {soloPesadoras ? "Ninguna área usa básculas todavía. Quita el filtro para marcarlas." : "Sin resultados."}
               </td></tr>
             )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ─── Unidades por bandeja ─────────────────────────────────────────────────────────────────────
+// Referencia (23 nov 2026, usuario): en Empanizado mandan las unidades, no el peso. Coco 14, flat 32,
+// y puede cambiar con la talla. La báscula la muestra en grande al elegir el producto que sale; no se
+// anota por bandeja. Una fila con talla manda sobre la de "toda talla".
+function UnidadesBandeja({ puedeConfigurar }) {
+  const [lista, setLista] = useState([]);
+  const [clases, setClases] = useState([]);
+  const [tallas, setTallas] = useState([]);
+  const [form, setForm] = useState({ Clase: "", Talla: "", Unidades: "" });
+  const [error, setError] = useState("");
+  const cargar = useCallback(async () => {
+    try { setLista(await api("/api/balanzas/unidades")); setError(""); } catch (e) { setError(e.message); }
+  }, []);
+  useEffect(() => {
+    cargar();
+    api("/api/clase").then(d => Array.isArray(d) && setClases(d.filter(c => c.Activo !== false && c.Activo !== 0))).catch(() => {});
+    api("/api/tallas").then(d => Array.isArray(d) && setTallas(d.filter(t => t.Activo !== false && t.Activo !== 0))).catch(() => {});
+  }, [cargar]);
+  const guardar = async (e) => {
+    e.preventDefault(); setError("");
+    try { await api("/api/balanzas/unidades", { method: "POST", body: JSON.stringify(form) }); setForm({ Clase: "", Talla: "", Unidades: "" }); cargar(); }
+    catch (err) { setError(err.message); }
+  };
+  const quitar = async (u) => {
+    if (!confirm(`¿Quitar ${u.Clase}${u.Talla ? ` talla ${u.DescripcionTalla}` : ""}?`)) return;
+    try { await api(`/api/balanzas/unidades/${u.UnidadesId}`, { method: "DELETE" }); cargar(); } catch (err) { setError(err.message); }
+  };
+  const campo = "mt-1 w-full border border-slate-300 rounded-lg px-3 py-2 text-sm";
+  return (
+    <div className="space-y-4">
+      {puedeConfigurar && (
+        <form onSubmit={guardar} className="bg-white rounded-xl border p-4 grid grid-cols-1 md:grid-cols-5 gap-3 items-end">
+          <label className="text-xs text-slate-500 md:col-span-2">Producto que sale
+            <select required value={form.Clase} onChange={e => setForm(f => ({ ...f, Clase: e.target.value }))} className={campo}>
+              <option value="">— elija —</option>
+              {clases.map(c => <option key={c.Clase} value={c.Clase}>{c.Clase} · {c.Descripcion}</option>)}
+            </select>
+          </label>
+          <label className="text-xs text-slate-500">Talla
+            <select value={form.Talla} onChange={e => setForm(f => ({ ...f, Talla: e.target.value }))} className={campo}>
+              <option value="">Toda talla</option>
+              {tallas.map(t => <option key={t.Codigo} value={t.Codigo}>{t.Descripcion} ({t.Codigo})</option>)}
+            </select>
+          </label>
+          <label className="text-xs text-slate-500">Unidades por bandeja
+            <input required type="number" min="1" max="1000" value={form.Unidades} onChange={e => setForm(f => ({ ...f, Unidades: e.target.value }))} className={campo} />
+          </label>
+          <button className="px-5 py-2 rounded-lg bg-blue-700 text-white font-medium">Guardar</button>
+          <p className="text-xs text-slate-500 md:col-span-5">Si el producto y la talla ya están, se cambian las unidades. Se muestran en la báscula; no se anotan por bandeja.</p>
+        </form>
+      )}
+      {error && <p className="text-sm text-red-600">{error}</p>}
+      <div className="bg-white rounded-xl border overflow-hidden">
+        <table className="w-full text-sm">
+          <thead className="bg-slate-50 text-slate-500 text-xs uppercase"><tr>
+            <th className="text-left px-4 py-2">Producto que sale</th><th className="text-left px-2">Talla</th>
+            <th className="text-right px-2">Unidades</th><th className="text-left px-2">Modificado</th><th className="px-4 w-20" />
+          </tr></thead>
+          <tbody className="divide-y">
+            {lista.map(u => (
+              <tr key={u.UnidadesId}>
+                <td className="px-4 py-2.5"><span className="font-mono font-semibold">{u.Clase}</span> <span className="text-slate-500">{u.DescripcionClase}</span></td>
+                <td className="px-2">{u.Talla == null ? <span className="text-slate-400">toda talla</span> : u.DescripcionTalla}</td>
+                <td className="px-2 text-right text-lg font-bold">{u.Unidades}</td>
+                <td className="px-2 text-xs text-slate-500">{u.Modificado} · {u.ModificadoPor}</td>
+                <td className="px-4 text-right">{puedeConfigurar && <button onClick={() => quitar(u)} className="text-xs text-red-600 hover:underline">Quitar</button>}</td>
+              </tr>
+            ))}
+            {lista.length === 0 && <tr><td colSpan={5} className="px-4 py-6 text-slate-500">Sin referencias todavía.</td></tr>}
           </tbody>
         </table>
       </div>
@@ -744,9 +830,12 @@ function ReportePesadas() {
   }, [autoActivo, cargar]);
 
   const anulada = r => Number(r.Anulada) === 1;
+  // Guardada = toda Pesada real (también BAJO / SOBRE donde el área lo permite) y la PRUEBA dentro del
+  // rango. Un intento PPV fuera de rango NO es caja.
+  const guardada = r => r.Origen === "PESADA" || r.Resultado === "OK";
   const q = filtro.q.trim().toLowerCase();
   const vistas = filas.filter(r => {
-    if (filtro.ver === "guardadas" && (anulada(r) || r.Resultado !== "OK")) return false;
+    if (filtro.ver === "guardadas" && (anulada(r) || !guardada(r))) return false;
     if (filtro.ver === "fuera" && (anulada(r) || r.Resultado === "OK")) return false;
     if (filtro.ver === "anuladas" && !anulada(r)) return false;
     if (!q) return true;
@@ -755,16 +844,18 @@ function ReportePesadas() {
   });
 
   const validas = vistas.filter(r => !anulada(r));
-  const guardadas = validas.filter(r => r.Resultado === "OK");
+  const guardadas = validas.filter(guardada);
   const netoG = guardadas.reduce((s, r) => s + (Number(r.PesoNetoG) || 0), 0);
   const fuera = validas.filter(r => r.Resultado !== "OK").length;
-  const intentos = guardadas.length + fuera;
+  const intentos = validas.length;
+  const fueraGuardadas = validas.filter(r => r.Resultado !== "OK" && guardada(r)).length;
 
   // Resumen por lote / talla / empaque / pedido / carrito.
   const resumen = [...validas.reduce((m, r) => {
     const k = [r.Fecha, r.Tipo, r.Lote, r.Talla, r.EmpaqueCodigo, r.CodigoPedido, r.Carrito].join("|");
     const g = m.get(k) ?? { r, cajas: 0, netoG: 0, fuera: 0, ultima: r.Hora };
-    if (r.Resultado === "OK") { g.cajas += 1; g.netoG += Number(r.PesoNetoG) || 0; } else g.fuera += 1;
+    if (guardada(r)) { g.cajas += 1; g.netoG += Number(r.PesoNetoG) || 0; }
+    if (r.Resultado !== "OK") g.fuera += 1;
     return m.set(k, g);
   }, new Map()).values()];
 
@@ -781,6 +872,7 @@ function ReportePesadas() {
   const insignia = (r) => anulada(r)
     ? <span className="rounded px-1.5 py-0.5 bg-slate-200 text-slate-600">Anulada</span>
     : r.Resultado === "OK" ? <span className="rounded px-1.5 py-0.5 bg-emerald-100 text-emerald-700">Guardada</span>
+    : guardada(r) ? <span className="rounded px-1.5 py-0.5 bg-amber-100 text-amber-800">Guardada · {r.Resultado === "BAJO" ? "bajo peso" : "sobrepeso"}</span>
     : <span className="rounded px-1.5 py-0.5 bg-amber-100 text-amber-800">{RESULTADO_PESADA_TXT[r.Resultado] ?? r.Resultado}</span>;
 
   return (
@@ -823,7 +915,7 @@ function ReportePesadas() {
 
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
         {tarjeta("Cajas guardadas", guardadas.length.toLocaleString("es"))}
-        {tarjeta("Kilos pesados", kg(netoG), "solo cajas dentro del rango")}
+        {tarjeta("Kilos pesados", kg(netoG), fueraGuardadas ? `incluye ${fueraGuardadas} guardadas fuera de rango` : "cajas guardadas")}
         {tarjeta("Promedio por caja", guardadas.length ? `${Math.round(netoG / guardadas.length).toLocaleString("es")} g` : "—")}
         {tarjeta("Fuera de rango", fuera.toLocaleString("es"), intentos ? `${((fuera / intentos) * 100).toFixed(1)} % de los intentos` : "", fuera ? "text-amber-600" : "")}
         {tarjeta("Anuladas", vistas.filter(anulada).length.toLocaleString("es"))}
@@ -868,7 +960,7 @@ function ReportePesadas() {
             <thead className="bg-slate-50 text-slate-500 uppercase sticky top-0"><tr>
               <th className={th}>Fecha</th><th className={th}>Hora</th><th className={th}>Báscula</th><th className={th}>Tipo</th>
               <th className={th}>Resultado</th><th className={`${th} text-right`}>Peso g</th><th className={th}>Rango</th>
-              <th className={th}>Lote</th><th className={th}>Producto</th><th className={th}>Talla</th><th className={th}>Empaque</th>
+              <th className={th}>Lote</th><th className={th}>Producto</th><th className={th}>Talla</th><th className={`${th} text-right`}>Unid.</th><th className={th}>Empaque</th>
               <th className={th}>Pedido · cliente</th><th className={th}>Destino</th><th className={th}>Carrito</th>
               <th className={th}>Operadora</th><th className={th}>Persona</th><th className={th}>Área</th><th className={th}>Anulación</th>
             </tr></thead>
@@ -882,7 +974,7 @@ function ReportePesadas() {
                   <td className={`${td} font-mono text-slate-500`}>{r.MinG != null ? `${r.MinG}–${r.MaxG}` : "libre"}</td>
                   <td className={`${td} font-mono`}>{r.Lote}</td>
                   <td className={td}>{[r.Clase, r.ClaseSalida && `→ ${r.ClaseSalida}`].filter(Boolean).join(" ") || "—"}</td>
-                  <td className={td}>{r.TallaDesc ?? r.Talla}</td><td className={td}>{r.EmpaqueNombre ?? r.EmpaqueCodigo ?? "—"}</td>
+                  <td className={td}>{r.TallaDesc ?? r.Talla}</td><td className={`${td} text-right`}>{r.UnidadesRef ?? "—"}</td><td className={td}>{r.EmpaqueNombre ?? r.EmpaqueCodigo ?? "—"}</td>
                   <td className={td} title={r.PedidoDesc ?? ""}>{r.CodigoPedido ? `${r.CodigoPedido} · ${r.Cliente ?? ""}` : "—"}</td>
                   <td className={td}>{r.Destino === "EXPORTACION" ? "Exportación" : r.Destino === "LOCAL" ? "Venta local" : "—"}</td>
                   <td className={`${td} font-mono`}>{r.Carrito ?? "—"}</td>
@@ -899,7 +991,7 @@ function ReportePesadas() {
   );
 }
 
-const PESTANAS = [["equipos", "Equipos"], ["empaques", "Tipos de empaque"], ["areas", "Áreas que pesan"], ["reporte", "Reporte de pesadas"]];
+const PESTANAS = [["equipos", "Equipos"], ["empaques", "Tipos de empaque"], ["unidades", "Unidades por bandeja"], ["areas", "Áreas que pesan"], ["reporte", "Reporte de pesadas"]];
 
 // Con solo `basculas.reporte` (sin `ver`) se ve únicamente la pestaña del reporte.
 export default function BasculasPage({ puedeVer = true, puedeConfigurar, puedeComandos }) {
@@ -917,6 +1009,7 @@ export default function BasculasPage({ puedeVer = true, puedeConfigurar, puedeCo
       </div>
       {puedeVer && pestana === "equipos" && <Equipos puedeConfigurar={puedeConfigurar} puedeComandos={puedeComandos} />}
       {puedeVer && pestana === "empaques" && <TiposEmpaque puedeConfigurar={puedeConfigurar} />}
+      {puedeVer && pestana === "unidades" && <UnidadesBandeja puedeConfigurar={puedeConfigurar} />}
       {puedeVer && pestana === "areas" && <AreasPesaje puedeConfigurar={puedeConfigurar} />}
       {pestana === "reporte" && <ReportePesadas />}
     </div>

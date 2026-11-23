@@ -172,7 +172,7 @@ function Pesaje({ sesion, b, onCerrar, onMenu }) {
   const claveT = claveTrabajo(sesion.BalanzaCodigo) + (ppv ? "_ppv" : empz ? "_emp" : "");
   // Carrito: solo en producto terminado y donde el área lo pide (usuario, 17 nov 2026: "por producto" no lleva).
   const pideCarrito = pt && Number(sesion.PideCarrito) === 1;
-  const [cat, setCat] = useState({ empaques: [], tallas: [], lotes: [], clases: [], pedidos: [], lotesEmpanizado: [] });
+  const [cat, setCat] = useState({ empaques: [], tallas: [], lotes: [], clases: [], pedidos: [], lotesEmpanizado: [], unidades: [] });
   const [trabajo, setTrabajo] = useState(() => {
     const t = leerLS(claveT) ?? {};
     // Versión anterior guardaba "LOTE|CLASE" en un solo campo.
@@ -200,6 +200,21 @@ function Pesaje({ sesion, b, onCerrar, onMenu }) {
 
   const empaque = cat.empaques.find(e => e.Codigo === trabajo.empaque) ?? null;
   const conRango = Boolean(empaque?.ConRango);
+  // Fuera de rango (23 nov 2026): donde el área lo permite (Empanizado) mandan las unidades, así que la
+  // bandeja fuera del rango se guarda y queda marcada BAJO / SOBRE. Límite de cordura: a más de 10 %
+  // del rango no parece una bandeja (mano apoyada, algo encima) y no se guarda. El servidor lo repite.
+  // Venta local de Empanizado: bolsa de 1 lb y manda el PESO (usuario, 23 nov 2026): empaque con rango
+  // obligatorio, fuera de rango no se guarda y no aplican las unidades por bandeja.
+  const porPeso = empz && trabajo.destino === "LOCAL";
+  const guardaFuera = !ppv && sesion.FueraDeRango === "GUARDA" && !porPeso;
+  const creible = (gr) => conRango && gr >= Math.floor(empaque.MinG * 0.9) && gr <= Math.ceil(empaque.MaxG * 1.1);
+  // Unidades de referencia de la bandeja (Básculas → Unidades por bandeja): por producto y talla; la de
+  // la talla manda sobre la general. Solo se muestran: no se anotan.
+  const claseRef = pt ? trabajo.claseSalida : trabajo.clase;
+  const tallaRef = Number(empz ? trabajo.tallaSalida : trabajo.talla);
+  const refUnidades = porPeso ? null : (cat.unidades ?? [])
+    .filter(u => u.Clase === claseRef && (u.Talla == null || Number(u.Talla) === tallaRef))
+    .sort((a, c) => (a.Talla == null) - (c.Talla == null))[0]?.Unidades ?? null;
   const loteSel = trabajo.lote && trabajo.clase ? { Lote: trabajo.lote, Clase: trabajo.clase } : null;
   const loteEmpSel = empz ? (cat.lotesEmpanizado ?? []).find(l => l.LoteEmpanizadoId === trabajo.loteEmp) ?? null : null;
   const lotesUnicos = [...new Map(cat.lotes.map(l => [l.Lote, l])).keys()];
@@ -222,6 +237,7 @@ function Pesaje({ sesion, b, onCerrar, onMenu }) {
   ].filter(Boolean) : empz ? [
     !loteEmpSel && "lote", !trabajo.claseSalida && "producto que sale", !trabajo.tallaSalida && "talla que sale", !trabajo.destino && "destino",
     trabajo.destino === "EXPORTACION" && !trabajo.pedido && "pedido",
+    porPeso && !conRango && "tipo de empaque (venta local va por peso)",
     pideCarrito && !trabajo.carrito.trim() && "número de carrito",
   ].filter(Boolean) : [
     !trabajo.lote && "lote", trabajo.lote && !trabajo.clase && "tipo de producto", !trabajo.talla && "talla",
@@ -304,7 +320,8 @@ function Pesaje({ sesion, b, onCerrar, onMenu }) {
       // PPV: un intento fuera de rango queda registrado, pero la pantalla ya dijo "SIN GUARDAR".
       if (r.guardada === false) { cargarResumen(); return; }
       const pos = r.Posicion ? ` · ${r.Posicion.MesaNombre} #${r.Posicion.Posicion}` : "";
-      setAviso({ tipo: "guardado", texto: `GUARDADO #${r.Numero ?? ""}`, detalle: `${g(p.PesoBrutoG)} g${p.nombrePersona ? " · " + p.nombrePersona : ""}${pos}` });
+      const marca = r.Resultado === "BAJO" ? " · BAJO PESO" : r.Resultado === "SOBRE" ? " · SOBREPESO" : "";
+      setAviso({ tipo: marca ? "guardado_fuera" : "guardado", texto: `GUARDADO #${r.Numero ?? ""}${marca}`, detalle: `${g(p.PesoBrutoG)} g${p.nombrePersona ? " · " + p.nombrePersona : ""}${pos}` });
       cargarResumen();
       if (p.LoteEmpanizadoId) cargarCatalogos(); // kilos del lote al día
     } catch (e) {
@@ -342,7 +359,7 @@ function Pesaje({ sesion, b, onCerrar, onMenu }) {
         const dentro = !conRango || (b.gramos >= empaque.MinG && b.gramos <= empaque.MaxG);
         if (dentro) { candidatoRef.current = b.gramos; fueraRef.current = null; }
         else fueraRef.current = { gramos: b.gramos, desde: fueraRef.current?.desde ?? Date.now() };
-        if (aviso?.tipo === "guardado" || aviso?.tipo === "sin_guardar") setAviso(null);
+        if (aviso?.tipo === "guardado" || aviso?.tipo === "guardado_fuera" || aviso?.tipo === "sin_guardar") setAviso(null);
       }
       return;
     }
@@ -351,8 +368,17 @@ function Pesaje({ sesion, b, onCerrar, onMenu }) {
     candidatoRef.current = null; fueraRef.current = null; huboBandejaRef.current = false;
     if (!hubo) return;
     const fueraDeVerdad = conRango && fuera && (gramos === null || Date.now() - fuera.desde >= FUERA_CUENTA_MS);
+    if (fueraDeVerdad && guardaFuera && creible(fuera.gramos)) {
+      // Mandan las unidades: se guarda con su peso y queda marcada bajo / sobre peso.
+      if (faltan.length) { setAviso({ tipo: "sin_guardar", texto: "SIN GUARDAR", detalle: `falta: ${faltan.join(", ")}` }); return; }
+      if (faltaCarnet) { setAviso({ tipo: "sin_guardar", texto: "SIN GUARDAR", detalle: "falta el carnet de esta bandeja" }); return; }
+      enviarPesada(fuera.gramos);
+      return;
+    }
     if (fueraDeVerdad) {
-      setAviso({ tipo: "sin_guardar", texto: "SIN GUARDAR", detalle: `${g(fuera.gramos)} g ${fuera.gramos < empaque.MinG ? "bajo peso" : "sobrepeso"} (rango ${g(empaque.MinG)}–${g(empaque.MaxG)} g)` });
+      setAviso({ tipo: "sin_guardar", texto: "SIN GUARDAR", detalle: guardaFuera
+        ? `${g(fuera.gramos)} g: muy lejos del rango ${g(empaque.MinG)}–${g(empaque.MaxG)} g, no parece una bandeja`
+        : `${g(fuera.gramos)} g ${fuera.gramos < empaque.MinG ? "bajo peso" : "sobrepeso"} (rango ${g(empaque.MinG)}–${g(empaque.MaxG)} g)` });
       // PPV: el intento se registra (cuántas veces se pasaron del límite), si ya está todo elegido.
       if (ppv && !faltan.length) enviar(datosPrueba(fuera.gramos));
       return;
@@ -364,6 +390,10 @@ function Pesaje({ sesion, b, onCerrar, onMenu }) {
     if (faltan.length) { setAviso({ tipo: "sin_guardar", texto: "SIN GUARDAR", detalle: `falta: ${faltan.join(", ")}` }); return; }
     if (faltaCarnet) { setAviso({ tipo: "sin_guardar", texto: "SIN GUARDAR", detalle: "falta el carnet de esta bandeja" }); return; }
     if (ppv) { enviar(datosPrueba(gramos)); return; }
+    enviarPesada(gramos);
+  }, [b.vigente, b.gramos, b.estable]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  function enviarPesada(gramos) {
     const p = {
       Uuid: uuid(), SesionId: sesion.SesionId, EmpaqueCodigo: empaque?.Codigo ?? null,
       // Empanizado: lote, clase y talla los pone el servidor a partir del lote abierto.
@@ -376,7 +406,7 @@ function Pesaje({ sesion, b, onCerrar, onMenu }) {
     };
     if (pt) setPersona(null); // un carnet por cada bandeja
     enviar(p);
-  }, [b.vigente, b.gramos, b.estable]); // eslint-disable-line react-hooks/exhaustive-deps
+  }
 
   function datosPrueba(gramos) {
     return {
@@ -399,6 +429,7 @@ function Pesaje({ sesion, b, onCerrar, onMenu }) {
   // Color y textos del recuadro: SIEMPRE según el peso. Lo que falta para poder guardar va en un aviso
   // aparte arriba; antes reemplazaba el color y en rango se veía gris (usuario, 17 nov 2026).
   const faltaTodo = [...faltan, faltaCarnet && "carnet de la bandeja"].filter(Boolean);
+  const textoFuera = (gr) => (!guardaFuera ? "no se guarda" : creible(gr) ? "se guarda marcada" : "no parece una bandeja");
   let fondo = "bg-slate-700", estado = "SIN LECTURA", sub = "revise la báscula o la app Báscula Puente";
   if (b.vigente) {
     if (b.gramos < vacioBajo) {
@@ -406,8 +437,8 @@ function Pesaje({ sesion, b, onCerrar, onMenu }) {
       sub = conRango ? `debe pesar ${g(empaque.MinG)} – ${g(empaque.MaxG)} g` : "ponga la bandeja";
       if (b.gramos >= UMBRAL_VACIO_G) sub += ` · marca ${g(b.gramos)} g: ¿tarar la báscula?`;
     }
-    else if (conRango && b.gramos < empaque.MinG) { fondo = "bg-amber-400 text-amber-950"; estado = "BAJO PESO"; sub = `faltan ${g(empaque.MinG - b.gramos)} g · no se guarda`; }
-    else if (conRango && b.gramos > empaque.MaxG) { fondo = "bg-red-600"; estado = "SOBREPESO"; sub = `sobran ${g(b.gramos - empaque.MaxG)} g · no se guarda`; }
+    else if (conRango && b.gramos < empaque.MinG) { fondo = "bg-amber-400 text-amber-950"; estado = "BAJO PESO"; sub = `faltan ${g(empaque.MinG - b.gramos)} g · ${textoFuera(b.gramos)}`; }
+    else if (conRango && b.gramos > empaque.MaxG) { fondo = "bg-red-600"; estado = "SOBREPESO"; sub = `sobran ${g(b.gramos - empaque.MaxG)} g · ${textoFuera(b.gramos)}`; }
     else { fondo = "bg-emerald-600"; estado = conRango ? "PESO CORRECTO" : "PESO REGISTRABLE"; sub = b.estable ? "retire la bandeja para guardar" : "esperando que se estabilice"; }
     if (faltaTodo.length && b.gramos >= vacioBajo) sub = "no se guardará: complete lo que falta";
   }
@@ -416,8 +447,9 @@ function Pesaje({ sesion, b, onCerrar, onMenu }) {
   const insignia = aviso && {
     guardado: "bg-emerald-500 text-white border-emerald-200", sin_guardar: "bg-red-600 text-white border-red-200",
     pendiente: "bg-amber-400 text-amber-950 border-amber-100", error: "bg-red-600 text-white border-red-200",
+    guardado_fuera: "bg-amber-400 text-amber-950 border-amber-100",
   }[aviso.tipo];
-  const icono = aviso && { guardado: "✓", sin_guardar: "✗", pendiente: "…", error: "!" }[aviso.tipo];
+  const icono = aviso && { guardado: "✓", guardado_fuera: "✓", sin_guardar: "✗", pendiente: "…", error: "!" }[aviso.tipo];
 
   // Producto terminado se distingue por el fondo índigo (usuario, 17 nov 2026).
   const tema = empz
@@ -593,6 +625,7 @@ function Pesaje({ sesion, b, onCerrar, onMenu }) {
               </div>
             )}
             {/* El rango en grande (usuario, 17 nov 2026): la barra de abajo se quitó, el color ya dice bajo/sobre. */}
+            {refUnidades != null && <p className="text-4xl font-extrabold mb-1 tracking-tight">{refUnidades} UNIDADES POR BANDEJA</p>}
             {conRango && <p className="text-sm font-bold uppercase tracking-[0.25em] opacity-80">Debe pesar</p>}
             <p className="text-5xl font-extrabold mb-2 tracking-tight">
               {conRango ? `${g(empaque.MinG)} – ${g(empaque.MaxG)} g` : "Peso libre"}
@@ -657,9 +690,9 @@ function Pesaje({ sesion, b, onCerrar, onMenu }) {
               </>
             )}
   
-            <label className={etq}>Tipo de empaque{pt ? " (opcional)" : ""}
+            <label className={etq}>Tipo de empaque{porPeso ? " * (venta local: por peso)" : pt ? " (opcional)" : ""}
               <select value={trabajo.empaque} onChange={set("empaque")} className={sel + " mt-0.5"}>
-                <option value="">{pt ? "— peso libre —" : "— elija —"}</option>
+                <option value="">{pt && !porPeso ? "— peso libre —" : "— elija —"}</option>
                 {cat.empaques.map(e => <option key={e.Codigo} value={e.Codigo}>{e.Nombre}{e.ConRango ? ` · ${g(e.MinG)}–${g(e.MaxG)} g` : " · libre"}</option>)}
               </select>
             </label>
@@ -683,7 +716,7 @@ function Pesaje({ sesion, b, onCerrar, onMenu }) {
             </div>
           )}
           <div className={`${tema.panel} rounded-xl px-3 py-2 flex items-baseline gap-2 mt-1 ${ppv ? "hidden" : ""}`}><span className="text-xs text-slate-300">{ppv ? "Cajas hoy" : "Bandejas hoy"}</span><span className="text-2xl font-bold">{g(resumen.Cajas)}</span><span className="text-xs text-slate-300 ml-auto">{(resumen.NetoG / 1000).toLocaleString("es", { maximumFractionDigits: 1 })} kg</span></div>
-          {ppv && <div className={`${tema.panel} rounded-xl px-3 py-1.5 flex items-baseline gap-2`}><span className="text-xs text-slate-300">Fuera de rango hoy</span><span className="text-xl font-bold text-amber-300">{g(resumen.Fuera ?? 0)}</span><span className="text-[11px] text-slate-400 ml-auto">no cuentan como caja</span></div>}
+          {(ppv || guardaFuera) && <div className={`${tema.panel} rounded-xl px-3 py-1.5 flex items-baseline gap-2`}><span className="text-xs text-slate-300">Fuera de rango hoy</span><span className="text-xl font-bold text-amber-300">{g(resumen.Fuera ?? 0)}</span><span className="text-[11px] text-slate-400 ml-auto">{ppv ? "no cuentan como caja" : "guardadas y marcadas"}</span></div>}
           <div className={`${tema.panel} rounded-xl p-3 flex-1 min-h-[90px] overflow-auto`}>
             <p className="text-xs text-slate-300 mb-2">Últimas guardadas</p>
             {/* Solo peso y NOMBRE de quien armó la bandeja (usuario, 21 nov 2026): sin mesa ni posición. */}
@@ -696,6 +729,7 @@ function Pesaje({ sesion, b, onCerrar, onMenu }) {
                   </div>
                   <p className="text-sm text-emerald-300 truncate">
                     ✓ {u.Persona || u.PersonaCodigo || (u.Carrito ? `carrito ${u.Carrito}` : "")}
+                    {u.Resultado && u.Resultado !== "OK" && <span className="ml-1 rounded bg-amber-400 px-1 text-[11px] font-bold text-amber-950">{u.Resultado === "BAJO" ? "BAJO" : "SOBRE"}</span>}
                   </p>
                 </li>
               ))}

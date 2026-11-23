@@ -35,6 +35,27 @@ async function posicionSegura(client: any, codigo: string, fecha: string) {
   catch (err: any) { if (/doesn't exist|1146/.test(String(err.message))) return null; throw err; }
 }
 
+// Fuera de rango (23 nov 2026): en las áreas con Areas.FueraDeRango = 'GUARDA' (Empanizado) mandan
+// las unidades, no el peso: la bandeja se guarda igual y queda marcada BAJO / SOBRE. Límite de
+// cordura: más allá de esta fracción del rango no parece una bandeja (una mano apoyada, algo encima)
+// y no se guarda. El PPV no cambia: fuera de rango nunca se guarda.
+const CORDURA_FUERA = 0.10;
+export function resultadoPeso(peso: number, minG: number, maxG: number) {
+  return peso < minG ? "BAJO" : peso > maxG ? "SOBRE" : "OK";
+}
+export function pesoCreible(peso: number, minG: number, maxG: number) {
+  return peso >= Math.floor(minG * (1 - CORDURA_FUERA)) && peso <= Math.ceil(maxG * (1 + CORDURA_FUERA));
+}
+
+// Unidades de referencia de la bandeja (UnidadesBandeja): la de esa talla manda sobre la general.
+async function unidadesRef(client: any, clase: string | null, talla: number | null) {
+  if (!clase) return null;
+  const [u]: any[] = await client.$queryRawUnsafe(
+    `SELECT Unidades FROM UnidadesBandeja WHERE Clase = ? AND (Talla = ? OR Talla IS NULL) ORDER BY Talla IS NULL LIMIT 1`,
+    clase, talla ?? 0);
+  return u ? Number(u.Unidades) : null;
+}
+
 class ErrorNegocio extends Error { constructor(public status: number, msg: string, public extra?: any) { super(msg); } }
 const responder = (res: Response, err: any) =>
   err instanceof ErrorNegocio ? res.status(err.status).json({ error: err.message, ...(err.extra ?? {}) }) : res.status(500).json({ error: err.message });
@@ -61,7 +82,7 @@ async function areaActual(tx: any, codigo: string) {
 async function datosSesion(tx: any, id: number) {
   const [s]: any[] = await tx.$queryRaw`
     SELECT s.SesionId, s.BalanzaCodigo, s.OperadoraCodigo, s.AreaCodigo, a.Nombre AS NombreArea,
-           s.BodegaVirtualCodigo, bv.Nombre AS BodegaNombre, s.Modo, s.PideCarrito,
+           s.BodegaVirtualCodigo, bv.Nombre AS BodegaNombre, s.Modo, s.PideCarrito, a.FueraDeRango,
            DATE_FORMAT(s.FechaProduccion, '%Y-%m-%d') AS FechaProduccion,
            DATE_FORMAT(s.Inicio, '%H:%i') AS Inicio, s.Fin, s.MotivoFin,
            TIMESTAMPDIFF(MINUTE, s.UltimaActividad, NOW()) AS MinSinActividad,
@@ -226,7 +247,7 @@ router.get("/sesion/:id/catalogos", requirePerm("pesaje_bascula", "usar"), async
       ]);
       res.json({
         empaques: (empaques as any[]).map(e => ({ ...e, ConRango: Number(e.ConRango) === 1 })),
-        clases, pedidos, tallas, lotes: [],
+        clases, pedidos, tallas, lotes: [], unidades: await prisma.$queryRawUnsafe(`SELECT Clase, Talla, Unidades FROM UnidadesBandeja`),
         lotesEmpanizado: (lotesEmp as any[]).map(l => ({ ...l, LoteEmpanizadoId: Number(l.LoteEmpanizadoId), Talla: Number(l.Talla), PesadoG: Number(l.PesadoG) })),
       });
       return;
@@ -258,7 +279,7 @@ router.get("/sesion/:id/catalogos", requirePerm("pesaje_bascula", "usar"), async
     ]);
     res.json({
       empaques: (empaques as any[]).map(e => ({ ...e, ConRango: Number(e.ConRango) === 1 })),
-      tallas, clases, pedidos,
+      tallas, clases, pedidos, unidades: await prisma.$queryRawUnsafe(`SELECT Clase, Talla, Unidades FROM UnidadesBandeja`),
       lotes: (lotes as any[]).map(l => ({ ...l, Kg: Number(l.Kg) })),
     });
   } catch (err: any) { responder(res, err); }
@@ -309,8 +330,22 @@ router.post("/pesadas", requirePerm("pesaje_bascula", "usar"), async (req: AuthR
         throw new ErrorNegocio(400, "Elija el tipo de empaque");
       }
       const conRango = emp && Number(emp.ConRango) === 1;
-      if (conRango && (peso < Number(emp.MinG) || peso > Number(emp.MaxG))) {
-        throw new ErrorNegocio(400, `${peso} g está fuera del rango ${emp.MinG}–${emp.MaxG} g: no se guarda`);
+      // Venta local de Empanizado (23 nov 2026, usuario): bolsa de 1 libra y MANDA EL PESO — empaque con
+      // rango obligatorio y fuera de rango no se guarda, aunque el área guarde fuera de rango (eso es
+      // para exportación, donde mandan las unidades).
+      const ventaLocalPorPeso = emp_ && String(b.Destino ?? "").toUpperCase() === "LOCAL";
+      if (ventaLocalPorPeso && !conRango) {
+        throw new ErrorNegocio(400, "Venta local va por peso: elija el tipo de empaque (bolsa de 1 lb) con su rango");
+      }
+      const guardaFuera = s.FueraDeRango === "GUARDA" && !ventaLocalPorPeso;
+      const resultado = conRango ? resultadoPeso(peso, Number(emp.MinG), Number(emp.MaxG)) : "OK";
+      if (resultado !== "OK") {
+        if (!guardaFuera) {
+          throw new ErrorNegocio(400, `${peso} g está fuera del rango ${emp.MinG}–${emp.MaxG} g: no se guarda`);
+        }
+        if (!pesoCreible(peso, Number(emp.MinG), Number(emp.MaxG))) {
+          throw new ErrorNegocio(400, `${peso} g está muy lejos del rango ${emp.MinG}–${emp.MaxG} g: no parece una bandeja, no se guarda`);
+        }
       }
 
       // Carrito: obligatorio donde el área lo pide (Empanizado), como el termo en Pelado.
@@ -373,16 +408,18 @@ router.post("/pesadas", requirePerm("pesaje_bascula", "usar"), async (req: AuthR
       }
       // La posición que la persona tiene HOY queda en la pesada: si mañana la mueven, esto no cambia.
       const pos = emp_ && persona ? await posicionSegura(tx, persona, s.FechaProduccion) : null;
+      // Unidades de referencia del producto que sale (o del producto, en "por producto") y su talla.
+      const unidades = ventaLocalPorPeso ? null : await unidadesRef(tx, claseSalida ?? claseTxt, Number(b.Talla));
 
       await tx.$executeRaw`
         INSERT INTO Pesada (Uuid, SesionId, BalanzaCodigo, OperadoraCodigo, AreaCodigo, BodegaVirtualCodigo, Modo,
                             EmpaqueCodigo, Lote, Clase, Talla, PersonaCodigo, PesoBrutoG, PesoNetoG,
-                            ObjetivoG, MinG, MaxG, FechaProduccion, ClaseSalida, Destino, CodigoPedido, Carrito)
+                            ObjetivoG, MinG, MaxG, FechaProduccion, ClaseSalida, Destino, CodigoPedido, Carrito, Resultado, UnidadesRef)
         VALUES (${uuid}, ${s.SesionId}, ${s.BalanzaCodigo}, ${s.OperadoraCodigo}, ${s.AreaCodigo}, ${s.BodegaVirtualCodigo},
                 ${s.Modo}, ${emp ? emp.Codigo : null}, ${loteTxt}, ${claseTxt}, ${Number(b.Talla)}, ${persona},
                 ${peso}, ${peso},
                 ${conRango ? Number(emp.PesoNetoG) : null}, ${conRango ? Number(emp.MinG) : null}, ${conRango ? Number(emp.MaxG) : null},
-                ${s.FechaProduccion}, ${claseSalida}, ${destino}, ${pedido}, ${carrito})`;
+                ${s.FechaProduccion}, ${claseSalida}, ${destino}, ${pedido}, ${carrito}, ${resultado}, ${unidades})`;
       const [{ id }]: any[] = await tx.$queryRaw`SELECT LAST_INSERT_ID() AS id`;
       if (emp_) {
         await tx.$executeRaw`
@@ -392,7 +429,7 @@ router.post("/pesadas", requirePerm("pesaje_bascula", "usar"), async (req: AuthR
       await tx.$executeRaw`UPDATE SesionBascula SET UltimaActividad = NOW() WHERE SesionId = ${s.SesionId}`;
       const [{ n }]: any[] = await tx.$queryRaw`
         SELECT COUNT(*) AS n FROM Pesada WHERE BalanzaCodigo = ${s.BalanzaCodigo} AND FechaProduccion = ${s.FechaProduccion} AND Anulada = 0`;
-      return { PesadaId: Number(id), Numero: Number(n), Posicion: pos };
+      return { PesadaId: Number(id), Numero: Number(n), Posicion: pos, Resultado: resultado, UnidadesRef: unidades };
     });
     res.status(201).json(r);
   } catch (err: any) { responder(res, err); }
@@ -421,15 +458,15 @@ router.get("/sesion/:id/resumen", requirePerm("pesaje_bascula", "usar"), async (
       return;
     }
     const [tot]: any[] = await prisma.$queryRaw`
-      SELECT COUNT(*) AS Cajas, COALESCE(SUM(PesoNetoG), 0) AS NetoG FROM Pesada
+      SELECT COUNT(*) AS Cajas, COALESCE(SUM(PesoNetoG), 0) AS NetoG, COALESCE(SUM(Resultado <> 'OK'), 0) AS Fuera FROM Pesada
        WHERE BalanzaCodigo = ${s.BalanzaCodigo} AND FechaProduccion = ${s.FechaProduccion} AND Anulada = 0`;
     const ultimas: any[] = await prisma.$queryRaw`
-      SELECT p.PesadaId, p.PesoBrutoG, p.PersonaCodigo, p.Lote, p.Carrito, DATE_FORMAT(p.CreadoEn, '%H:%i:%s') AS Hora,
+      SELECT p.PesadaId, p.PesoBrutoG, p.PersonaCodigo, p.Lote, p.Carrito, p.Resultado, DATE_FORMAT(p.CreadoEn, '%H:%i:%s') AS Hora,
              CONCAT_WS(' ', e.PrimerNombre, e.PrimerApellido) AS Persona, p.Posicion, me.Nombre AS MesaNombre
         FROM Pesada p LEFT JOIN Empleados e ON e.Codigo = p.PersonaCodigo
         LEFT JOIN MesasEmpanizado me ON me.Codigo = p.MesaCodigo
        WHERE p.SesionId = ${s.SesionId} AND p.Anulada = 0 ORDER BY p.PesadaId DESC LIMIT 8`;
-    res.json({ Cajas: Number(tot.Cajas), NetoG: Number(tot.NetoG), ultimas: ultimas.map(u => ({ ...u, PesadaId: Number(u.PesadaId), Posicion: u.Posicion == null ? null : Number(u.Posicion) })) });
+    res.json({ Cajas: Number(tot.Cajas), NetoG: Number(tot.NetoG), Fuera: Number(tot.Fuera), ultimas: ultimas.map(u => ({ ...u, PesadaId: Number(u.PesadaId), Posicion: u.Posicion == null ? null : Number(u.Posicion) })) });
   } catch (err: any) { responder(res, err); }
 });
 

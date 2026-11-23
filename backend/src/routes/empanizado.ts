@@ -37,7 +37,7 @@ function rango(req: AuthRequest, maxDias: number) {
 
 // GET /api/empanizado/piso — lo que hay al piso de Empanizado (lo que mandó Tratamiento).
 router.get("/piso", requirePerm("empanizado", "ver"), async (_req: AuthRequest, res: Response) => {
-  try { res.json(await saldoPiso(prisma)); } catch (err) { responder(res, err); }
+  try { res.json(await saldoPiso(prisma, undefined, undefined, hoyGT())); } catch (err) { responder(res, err); }
 });
 
 // POST /api/empanizado/tomar { lineas: [{ RemisionId, Lote, Clase, Talla, FechaLote, Kg }] }
@@ -61,11 +61,12 @@ router.get("/lotes/:id", requirePerm("empanizado", "ver"), async (req: AuthReque
   try { res.json(await detalleLote(prisma, Number(req.params.id))); } catch (err) { responder(res, err); }
 });
 
-// POST /api/empanizado/lotes/:id/bajar { Kg, Motivo } — lo que no se trabajó vuelve al piso.
+// POST /api/empanizado/lotes/:id/bajar { Kg, Talla, Termo, Motivo } — lo que no se trabajó vuelve al
+// piso de Empanizado, en el termo indicado.
 router.post("/lotes/:id/bajar", requirePerm("empanizado", "editar"), async (req: AuthRequest, res: Response) => {
   try {
     res.json(await prisma.$transaction(tx => bajarAlPiso(tx, Number(req.params.id),
-      { kg: req.body?.Kg, motivo: req.body?.Motivo, fecha: hoyGT(), operador: usuarioDe(req) }), OPCIONES_TX));
+      { kg: req.body?.Kg, talla: req.body?.Talla, termo: req.body?.Termo, motivo: req.body?.Motivo, fecha: hoyGT(), operador: usuarioDe(req) }), OPCIONES_TX));
   } catch (err) { responder(res, err); }
 });
 

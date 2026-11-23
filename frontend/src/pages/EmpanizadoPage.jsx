@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { Fragment, useState, useEffect, useMemo, useCallback } from "react";
 import { authHeader, usePuede } from "../context/AuthContext.jsx";
 import { exportarProduccionEmpanizado } from "../utils/exportExcel.js";
 
@@ -75,26 +75,76 @@ export default function EmpanizadoPage() {
 }
 
 // ── Al piso ───────────────────────────────────────────────────────────────────────────────────
+// Igual que "Tomar del piso" de Destajo (usuario, 23 nov 2026): una fila por lote, con sus TERMOS
+// adentro. Marcar el lote toma todos sus termos; abriéndolo (▸) se escoge termo por termo y se
+// ajustan los kilos. Lo que llega de Tratamiento trae su termo; lo bajado, el termo en que se dejó.
 function AlPiso({ onTomado }) {
   const puedeEditar = usePuede("empanizado", "editar");
   const [lineas, setLineas] = useState(null);
-  const [marcadas, setMarcadas] = useState({}); // Clave → kg a tomar (texto)
+  const [sel, setSel] = useState({});              // Clave → { kg } o { termos: { termo → kg } }
+  const [abiertas, setAbiertas] = useState(() => new Set());
   const [error, setError] = useState("");
   const [tomando, setTomando] = useState(false);
 
-  const cargar = useCallback(() => pedir(`${API}/piso`).then(l => { setLineas(l); setMarcadas({}); }).catch(e => setError(e.message)), []);
+  const cargar = useCallback(() => pedir(`${API}/piso`)
+    .then(l => { setLineas([...l].sort((a, b) => (b.DiasAlPiso ?? 0) - (a.DiasAlPiso ?? 0))); setSel({}); })
+    .catch(e => setError(e.message)), []);
   useEffect(() => { cargar(); }, [cargar]);
 
-  const total = lineas?.reduce((s, l) => s + l.Kg, 0) ?? 0;
-  const elegidas = (lineas ?? []).filter(l => marcadas[l.Clave] != null);
-  const kgElegido = elegidas.reduce((s, l) => s + (Number(marcadas[l.Clave]) || 0), 0);
-  const alternar = (l) => setMarcadas(m => { const n = { ...m }; if (n[l.Clave] != null) delete n[l.Clave]; else n[l.Clave] = String(l.Kg); return n; });
+  const conTermos = l => (l.TermosDetalle?.length ?? 0) > 0;
+  const llaveTermo = t => t.Termo ?? "";
+  const kgDe = l => conTermos(l)
+    ? Object.values(sel[l.Clave]?.termos ?? {}).reduce((x, v) => x + Number(v || 0), 0)
+    : Number(sel[l.Clave]?.kg ?? 0);
+  const nuevaSel = l => conTermos(l)
+    ? { termos: Object.fromEntries(l.TermosDetalle.map(t => [llaveTermo(t), String(t.Kg)])) }
+    : { kg: String(l.Kg) };
+  const alternar = l => setSel(x => { const n = { ...x }; if (n[l.Clave]) delete n[l.Clave]; else n[l.Clave] = nuevaSel(l); return n; });
+  const alternarTermo = (l, t) => setSel(x => {
+    const n = { ...x };
+    const termos = { ...(n[l.Clave]?.termos ?? {}) };
+    const k = llaveTermo(t);
+    if (k in termos) delete termos[k]; else termos[k] = String(t.Kg);
+    if (Object.keys(termos).length === 0) delete n[l.Clave]; else n[l.Clave] = { termos };
+    return n;
+  });
+  const cambiarTermo = (l, t, v) => setSel(x => ({ ...x, [l.Clave]: { termos: { ...x[l.Clave].termos, [llaveTermo(t)]: v } } }));
+  const abrir = l => setAbiertas(p => { const n = new Set(p); if (n.has(l.Clave)) n.delete(l.Clave); else n.add(l.Clave); return n; });
+
+  const total = lineas?.reduce((a, l) => a + l.Kg, 0) ?? 0;
+  const elegidas = (lineas ?? []).filter(l => sel[l.Clave]);
+  const kgElegido = elegidas.reduce((a, l) => a + kgDe(l), 0);
+  const todas = !!lineas?.length && elegidas.length === lineas.length;
+  const alternarTodas = () => setSel(todas ? {} : Object.fromEntries(lineas.map(l => [l.Clave, nuevaSel(l)])));
+
+  const problema = (() => {
+    for (const l of elegidas) {
+      if (conTermos(l)) {
+        for (const t of l.TermosDetalle) {
+          const v = sel[l.Clave].termos[llaveTermo(t)];
+          if (v === undefined) continue;
+          const nombre = t.Termo ? `termo ${t.Termo}` : "sin termo";
+          if (!(Number(v) > 0)) return `${l.Lote} ${nombre}: los kilos deben ser mayores que cero`;
+          if (Number(v) > t.Kg + 0.001) return `${l.Lote} ${nombre}: al piso solo hay ${kg(t.Kg)} kg`;
+        }
+      }
+      if (!(kgDe(l) > 0)) return `${l.Lote}: los kilos deben ser mayores que cero`;
+      if (kgDe(l) > l.Kg + 0.001) return `${l.Lote}: al piso solo hay ${kg(l.Kg)} kg`;
+    }
+    return "";
+  })();
 
   const tomar = async () => {
+    if (problema) { setError(problema); return; }
     setError(""); setTomando(true);
     try {
       const r = await pedir(`${API}/tomar`, { method: "POST", body: JSON.stringify({
-        lineas: elegidas.map(l => ({ RemisionId: l.RemisionId, Lote: l.Lote, Clase: l.Clase, Talla: l.Talla, FechaLote: l.FechaLote, Kg: Number(marcadas[l.Clave]) })),
+        // Una línea por termo escogido: el servidor guarda de qué termo salió cada toma.
+        lineas: elegidas.flatMap(l => {
+          const base = { RemisionId: l.RemisionId, Lote: l.Lote, Clase: l.Clase, Talla: l.Talla, FechaLote: l.FechaLote };
+          if (!conTermos(l)) return [{ ...base, Kg: kgDe(l) }];
+          return Object.entries(sel[l.Clave].termos).map(([k, v]) => ({ ...base, Termo: k || null, Kg: Number(v) }));
+        }),
       }) });
       alert(r.lotes.map(x => `${x.Lote} ${x.Clase} · ${kg(x.Kg)} kg ${x.Nuevo ? "(lote nuevo)" : "(sumado al lote abierto)"}`).join("\n"));
       onTomado();
@@ -105,8 +155,8 @@ function AlPiso({ onTomado }) {
   return (
     <div>
       <div className="flex flex-wrap items-center gap-3 mb-3">
-        <span className="px-4 py-2 rounded-lg bg-white shadow text-sm">Al piso <b>{kg(total)} kg</b> · {lineas.length} línea{lineas.length !== 1 ? "s" : ""}</span>
-        <span className="text-xs text-gray-500">Lo que mandó Tratamiento: ya es el peso final con el pick-up.</span>
+        <span className="px-4 py-2 rounded-lg bg-white shadow text-sm">Al piso <b>{kg(total)} kg</b> · {lineas.length} lote{lineas.length !== 1 ? "s" : ""}</span>
+        <span className="text-xs text-gray-500">Lo que mandó Tratamiento, por termo: el peso es el de su báscula, ya con el pick-up.</span>
         {puedeEditar && (
           <button disabled={!elegidas.length || tomando} onClick={tomar}
             className="ml-auto bg-emerald-600 text-white text-sm font-semibold px-5 py-2.5 rounded-lg hover:bg-emerald-700 disabled:opacity-40">
@@ -119,35 +169,82 @@ function AlPiso({ onTomado }) {
         <table className="w-full text-sm">
           <thead>
             <tr className="bg-gray-100 text-gray-600 uppercase text-xs tracking-wider">
-              {puedeEditar && <th className="px-3 py-3 w-8" />}
+              {puedeEditar && <th className="px-3 py-3 w-8"><input type="checkbox" checked={todas} onChange={alternarTodas} className="w-4 h-4 accent-amber-500" /></th>}
               <th className="px-3 py-3 text-left">Lote</th><th className="px-3 py-3 text-left">Producto</th><th className="px-3 py-3 text-left">Talla</th>
-              <th className="px-3 py-3 text-left">Fecha lote</th><th className="px-3 py-3 text-left">Llegó</th>
-              <th className="px-3 py-3 text-right">Al piso (kg)</th>{puedeEditar && <th className="px-3 py-3 text-right">Tomar (kg)</th>}
+              <th className="px-3 py-3 text-right">Al piso (kg)</th>
+              {puedeEditar && <th className="px-3 py-3 text-right w-28">Tomar (kg)</th>}
+              <th className="px-3 py-3 text-left w-28">Termos</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
             {lineas.map(l => {
-              const sel = marcadas[l.Clave] != null;
+              const s = sel[l.Clave];
+              const termos = conTermos(l);
+              const abierta = termos && abiertas.has(l.Clave);
+              const nTermos = termos ? Object.keys(s?.termos ?? {}).length : 0;
               return (
-                <tr key={l.Clave} className={sel ? "bg-amber-50" : "hover:bg-gray-50"}>
-                  {puedeEditar && <td className="px-3 py-2"><input type="checkbox" checked={sel} onChange={() => alternar(l)} className="w-4 h-4 accent-amber-500" /></td>}
-                  <td className="px-3 py-2 font-mono font-semibold">{l.Lote}{l.EsBajado && <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 font-sans">bajado</span>}</td>
-                  <td className="px-3 py-2">{l.Clase} <span className="text-gray-500">{l.DescripcionClase}</span></td>
-                  <td className="px-3 py-2">{l.DescripcionTalla}</td>
-                  <td className="px-3 py-2 text-gray-600">{l.FechaLote ?? "—"}</td>
-                  <td className="px-3 py-2 text-gray-600">{l.FechaIngreso ?? "—"}{l.FolioRemision ? ` · ${l.FolioRemision}` : ""}</td>
-                  <td className="px-3 py-2 text-right font-semibold">{kg(l.Kg)}</td>
-                  {puedeEditar && (
-                    <td className="px-3 py-2 text-right">
-                      {sel && <input type="number" step="0.01" min="0.01" max={l.Kg} value={marcadas[l.Clave]}
-                        onChange={e => setMarcadas(m => ({ ...m, [l.Clave]: e.target.value }))}
-                        className="w-28 border border-amber-300 rounded px-2 py-1 text-right" />}
+                <Fragment key={l.Clave}>
+                  <tr className={s ? "bg-amber-50" : l.DiasAlPiso >= 2 ? "bg-red-50 hover:bg-red-100" : "hover:bg-gray-50"}>
+                    {puedeEditar && <td className="px-3 py-2"><input type="checkbox" checked={!!s} onChange={() => alternar(l)} className="w-4 h-4 accent-amber-500" /></td>}
+                    <td className={`px-3 py-2 font-mono font-semibold whitespace-nowrap ${termos ? "cursor-pointer select-none" : ""}`} onClick={termos ? () => abrir(l) : undefined}
+                      title={termos ? (abierta ? "Ocultar los termos" : "Ver los termos y tomar de ahí") : undefined}>
+                      {termos && <span className="inline-block w-4 text-amber-600 font-sans">{abierta ? "▾" : "▸"}</span>}
+                      {l.Lote}
+                      {l.EsBajado && <span className="block text-[11px] font-sans font-normal text-amber-700">Bajado de la mesa</span>}
+                      {l.FolioRemision && <span className="block text-[11px] font-sans font-normal text-gray-400">{l.FolioRemision}</span>}
                     </td>
-                  )}
-                </tr>
+                    <td className="px-3 py-2">{l.Clase} <span className="text-gray-500">{l.DescripcionClase}</span></td>
+                    <td className="px-3 py-2">{l.DescripcionTalla}</td>
+                    <td className="px-3 py-2 text-right whitespace-nowrap">
+                      <span className="font-semibold">{kg(l.Kg)}</span>
+                      <span className={`block text-[11px] ${l.DiasAlPiso >= 2 ? "text-red-600 font-semibold" : l.DiasAlPiso >= 1 ? "text-amber-700" : "text-gray-400"}`}>
+                        {l.DiasAlPiso === 0 ? "entró hoy" : `${l.DiasAlPiso} día${l.DiasAlPiso !== 1 ? "s" : ""} al piso`}
+                      </span>
+                    </td>
+                    {puedeEditar && (
+                      <td className="px-3 py-2 text-right">
+                        {s && termos && <span className="font-semibold text-amber-700">{kg(kgDe(l))}</span>}
+                        {s && !termos && <input type="number" step="0.01" min="0.01" max={l.Kg} value={s.kg}
+                          onChange={e => setSel(x => ({ ...x, [l.Clave]: { kg: e.target.value } }))}
+                          className="w-24 border border-amber-300 rounded px-2 py-1 text-right" />}
+                      </td>
+                    )}
+                    <td className="px-3 py-2 whitespace-nowrap">
+                      {termos ? (
+                        <button type="button" onClick={() => abrir(l)} className="text-xs font-medium text-amber-700 hover:underline">
+                          {s ? `${nTermos} de ${l.TermosDetalle.length}` : l.TermosDetalle.length} termo{l.TermosDetalle.length !== 1 ? "s" : ""}
+                        </button>
+                      ) : <span className="text-gray-300">—</span>}
+                    </td>
+                  </tr>
+                  {abierta && l.TermosDetalle.map(t => {
+                    const k = llaveTermo(t);
+                    const v = s?.termos?.[k];
+                    const marcado = v !== undefined;
+                    return (
+                      <tr key={`${l.Clave}#${k}`} className={marcado ? "bg-amber-50/60" : "bg-slate-50"}>
+                        {puedeEditar && <td />}
+                        <td className="pl-8 pr-3 py-1.5" colSpan={3}>
+                          <label className="flex items-center gap-2 cursor-pointer">
+                            {puedeEditar && <input type="checkbox" checked={marcado} onChange={() => alternarTermo(l, t)} className="w-4 h-4 accent-amber-500" />}
+                            {t.Termo ? <span>Termo <b className="font-mono">{t.Termo}</b></span> : <span className="text-gray-500 italic">Sin termo identificado</span>}
+                          </label>
+                        </td>
+                        <td className="px-3 py-1.5 text-right">{kg(t.Kg)}</td>
+                        {puedeEditar && (
+                          <td className="px-3 py-1.5 text-right">
+                            {marcado && <input type="number" step="0.01" min="0.01" max={t.Kg} value={v} onChange={e => cambiarTermo(l, t, e.target.value)}
+                              className="w-24 border border-amber-300 rounded px-2 py-1 text-right" />}
+                          </td>
+                        )}
+                        <td />
+                      </tr>
+                    );
+                  })}
+                </Fragment>
               );
             })}
-            {lineas.length === 0 && <tr><td colSpan={8} className="px-4 py-10 text-center text-gray-400">No hay nada al piso de Empanizado</td></tr>}
+            {lineas.length === 0 && <tr><td colSpan={7} className="px-4 py-10 text-center text-gray-400">No hay nada al piso de Empanizado</td></tr>}
           </tbody>
         </table>
       </div>
@@ -282,26 +379,56 @@ const Cifra = ({ t, v, fuerte, verde, rojo }) => (
   </div>
 );
 
+// Bajar al piso: kilos, talla y el termo en que queda; regresa al piso de Empanizado (usuario, 23 nov
+// 2026, igual que en Pelado). Descarte: kilos y motivo, no regresa al piso.
 function AjusteModal({ lote, tipo, onClose, onListo }) {
   const bajar = tipo === "bajar";
   const queda = lote.Tomado - lote.Bajado - lote.Descarte;
-  const [form, setForm] = useState({ Kg: "", Motivo: bajar ? "Sobrante" : "" });
+  const [form, setForm] = useState({ Kg: "", Termo: "", Talla: String(lote.Talla ?? ""), Motivo: bajar ? "Sobrante" : "" });
+  const [tallas, setTallas] = useState([]);
   const [error, setError] = useState("");
+  const [guardando, setGuardando] = useState(false);
+  useEffect(() => {
+    if (bajar) fetch("/api/tallas", { headers: authHeader() }).then(r => r.json()).then(d => { if (Array.isArray(d)) setTallas(d.filter(t => t.Activo !== false && t.Activo !== 0)); }).catch(() => {});
+  }, [bajar]);
+  const set = k => e => setForm(f => ({ ...f, [k]: e.target.value }));
   const enviar = async e => {
-    e.preventDefault(); setError("");
-    try { await pedir(`${API}/lotes/${lote.LoteEmpanizadoId}/${bajar ? "bajar" : "descarte"}`, { method: "POST", body: JSON.stringify({ Kg: Number(form.Kg), Motivo: form.Motivo }) }); onListo(); }
-    catch (err) { setError(err.message); }
+    e.preventDefault(); setError(""); setGuardando(true);
+    try {
+      await pedir(`${API}/lotes/${lote.LoteEmpanizadoId}/${bajar ? "bajar" : "descarte"}`, { method: "POST", body: JSON.stringify(
+        bajar ? { Kg: Number(form.Kg), Termo: form.Termo.trim(), Talla: Number(form.Talla), Motivo: form.Motivo } : { Kg: Number(form.Kg), Motivo: form.Motivo }) });
+      onListo();
+    } catch (err) { setError(err.message); } finally { setGuardando(false); }
   };
   return (
     <Modal titulo={`${bajar ? "Bajar al piso" : "Descarte"} · ${lote.Lote}`} onClose={onClose}>
       <form onSubmit={enviar} className="space-y-4">
-        <p className="text-sm text-gray-600">{bajar ? "Lo que no se trabajó regresa al piso de Empanizado y se puede volver a tomar otro día." : "Merma: no regresa al piso."} Quedan {kg(queda)} kg de lo tomado.</p>
-        <label className="block text-xs text-gray-500">Kilos *<input required autoFocus type="number" step="0.01" min="0.01" max={queda} value={form.Kg} onChange={e => setForm(f => ({ ...f, Kg: e.target.value }))} className={inputCls + " mt-1"} /></label>
-        <label className="block text-xs text-gray-500">Motivo {bajar ? "" : "*"}<input required={!bajar} value={form.Motivo} onChange={e => setForm(f => ({ ...f, Motivo: e.target.value }))} maxLength={200} className={inputCls + " mt-1"} /></label>
+        <p className="text-sm text-gray-600">
+          {bajar ? "Lo que no se trabajó regresa al piso de Empanizado, en el termo que indique, y se vuelve a tomar otro día desde Al piso." : "Merma: no regresa al piso."}
+          {" "}Quedan <b>{kg(queda)} kg</b> de lo tomado.
+        </p>
+        {bajar ? (
+          <div className="grid grid-cols-3 gap-3">
+            <label className="text-xs text-gray-500"># Termo *<input required autoFocus maxLength={20} value={form.Termo} onChange={set("Termo")} className={inputCls + " mt-1 font-mono"} /></label>
+            <label className="text-xs text-gray-500">Kilos *<input required type="number" step="0.01" min="0.01" max={queda} value={form.Kg} onChange={set("Kg")} className={inputCls + " mt-1"} /></label>
+            <label className="text-xs text-gray-500">Talla *
+              <select required value={form.Talla} onChange={set("Talla")} className={inputCls + " mt-1"}>
+                <option value="">— elija —</option>
+                {tallas.map(t => <option key={t.Codigo} value={t.Codigo}>{t.Descripcion} ({t.Codigo})</option>)}
+                {form.Talla && !tallas.some(t => String(t.Codigo) === form.Talla) && <option value={form.Talla}>{lote.DescripcionTalla ?? form.Talla}</option>}
+              </select>
+            </label>
+          </div>
+        ) : (
+          <label className="block text-xs text-gray-500">Kilos *<input required autoFocus type="number" step="0.01" min="0.01" max={queda} value={form.Kg} onChange={set("Kg")} className={inputCls + " mt-1"} /></label>
+        )}
+        <label className="block text-xs text-gray-500">{bajar ? "Nota" : "Motivo *"}<input required={!bajar} value={form.Motivo} onChange={set("Motivo")} maxLength={200} className={inputCls + " mt-1"} /></label>
         {error && <p className="text-sm text-red-600">{error}</p>}
         <div className="flex justify-end gap-3">
           <button type="button" onClick={onClose} className="px-4 py-2 text-sm border border-gray-300 rounded-lg">Cancelar</button>
-          <button type="submit" className="px-5 py-2 text-sm bg-amber-500 text-white font-semibold rounded-lg hover:bg-amber-600">Guardar</button>
+          <button type="submit" disabled={guardando} className="px-5 py-2 text-sm bg-amber-500 text-white font-semibold rounded-lg hover:bg-amber-600 disabled:opacity-50">
+            {guardando ? "Guardando…" : bajar ? "Bajar al piso" : "Registrar descarte"}
+          </button>
         </div>
       </form>
     </Modal>
@@ -333,7 +460,7 @@ function DetalleModal({ id, puedeEditar, onClose }) {
                   <tr key={m.MovimientoId} className="border-b border-gray-50">
                     <td className="py-1.5 text-gray-600">{m.FechaHora}</td>
                     <td>{TIPO_MOV[m.Tipo] ?? m.Tipo}</td>
-                    <td className="text-gray-600">{m.Tipo === "PROCESADO" ? `${m.Clase} · ${m.Motivo ?? ""}` : m.Motivo ?? (m.FolioRemision ? m.FolioRemision : "")} <span className="text-xs text-gray-400">{m.RegistradoPor}</span></td>
+                    <td className="text-gray-600">{m.NumeroTermo && <span className="font-mono">Termo {m.NumeroTermo} · </span>}{m.Tipo === "PROCESADO" ? `${m.Clase} · ${m.Motivo ?? ""}` : m.Tipo === "BAJADO" ? `talla ${m.Talla}${m.Motivo ? ` · ${m.Motivo}` : ""}` : m.Motivo ?? (m.FolioRemision ? m.FolioRemision : "")} <span className="text-xs text-gray-400">{m.RegistradoPor}</span></td>
                     <td className="text-right font-semibold">{kg(m.PesoKg)}</td>
                     <td className="text-right">
                       {puedeEditar && d.Estado === "Abierto" && m.Tipo !== "PROCESADO" && (
@@ -381,8 +508,8 @@ function Produccion() {
   const porPersona = useMemo(() => {
     const m = new Map();
     for (const f of datos?.filas ?? []) {
-      const x = m.get(f.Codigo) ?? { Codigo: f.Codigo, Nombre: f.Nombre, MesaCodigo: f.MesaCodigo, MesaNombre: f.MesaNombre, Posicion: f.Posicion, Bandejas: 0, Kg: 0, Dias: new Set(), filas: [] };
-      x.Bandejas += f.Bandejas; x.Kg += f.Kg; x.Dias.add(f.Fecha); x.filas.push(f);
+      const x = m.get(f.Codigo) ?? { Codigo: f.Codigo, Nombre: f.Nombre, MesaCodigo: f.MesaCodigo, MesaNombre: f.MesaNombre, Posicion: f.Posicion, Bandejas: 0, Kg: 0, BajoPeso: 0, SobrePeso: 0, Dias: new Set(), filas: [] };
+      x.Bandejas += f.Bandejas; x.Kg += f.Kg; x.BajoPeso += f.BajoPeso ?? 0; x.SobrePeso += f.SobrePeso ?? 0; x.Dias.add(f.Fecha); x.filas.push(f);
       if (f.MesaCodigo) { x.MesaCodigo = f.MesaCodigo; x.MesaNombre = f.MesaNombre; x.Posicion = f.Posicion; } // la más reciente
       m.set(f.Codigo, x);
     }
@@ -411,18 +538,19 @@ function Produccion() {
           <thead>
             <tr className="bg-gray-100 text-gray-600 uppercase text-xs tracking-wider">
               <th className="px-3 py-3 text-left">Mesa / banda</th><th className="px-3 py-3 text-left">Pos.</th><th className="px-3 py-3 text-left">Persona</th>
-              <th className="px-3 py-3 text-right">Días</th><th className="px-3 py-3 text-right">Bandejas</th><th className="px-3 py-3 text-right">Kg</th>
+              <th className="px-3 py-3 text-right">Días</th><th className="px-3 py-3 text-right">Bandejas</th>
+              <th className="px-3 py-3 text-right" title="Bandejas guardadas bajo / sobre el rango de peso (cuentan igual)">Bajo · Sobre</th><th className="px-3 py-3 text-right">Kg</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
             {porPersona.map(p => (
               <FilaPersona key={p.Codigo} p={p} abierta={abierta === p.Codigo} onClick={() => setAbierta(a => (a === p.Codigo ? null : p.Codigo))} />
             ))}
-            {datos && porPersona.length === 0 && <tr><td colSpan={6} className="px-4 py-10 text-center text-gray-400">Sin bandejas pesadas en esas fechas</td></tr>}
+            {datos && porPersona.length === 0 && <tr><td colSpan={7} className="px-4 py-10 text-center text-gray-400">Sin bandejas pesadas en esas fechas</td></tr>}
           </tbody>
         </table>
       </div>
-      <p className="mt-2 text-xs text-gray-500">Solo bandejas guardadas y no anuladas, pesadas en la báscula en modo Empanizado. La posición es la que la persona tenía el día que pesó.</p>
+      <p className="mt-2 text-xs text-gray-500">Solo bandejas guardadas y no anuladas, pesadas en la báscula en modo Empanizado; las de bajo o sobre peso cuentan igual. La posición es la que la persona tenía el día que pesó.</p>
     </div>
   );
 }
@@ -436,10 +564,11 @@ function FilaPersona({ p, abierta, onClick }) {
         <td className="px-3 py-2">{titulo(p.Nombre)} <span className="text-xs text-gray-400 font-mono">{p.Codigo}</span></td>
         <td className="px-3 py-2 text-right">{p.Dias}</td>
         <td className="px-3 py-2 text-right">{p.Bandejas}</td>
+        <td className={`px-3 py-2 text-right ${p.BajoPeso + p.SobrePeso ? "text-amber-700 font-semibold" : "text-gray-400"}`}>{p.BajoPeso} · {p.SobrePeso}</td>
         <td className="px-3 py-2 text-right font-semibold">{kg(p.Kg)}</td>
       </tr>
       {abierta && (
-        <tr><td colSpan={6} className="bg-slate-50 px-6 py-2">
+        <tr><td colSpan={7} className="bg-slate-50 px-6 py-2">
           <table className="w-full text-xs">
             <thead><tr className="text-gray-500 text-left"><th className="py-1">Fecha</th><th>Lote</th><th>Producto</th><th>Destino</th><th>Horario</th><th className="text-right">Bandejas</th><th className="text-right">Kg</th></tr></thead>
             <tbody>

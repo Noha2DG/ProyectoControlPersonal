@@ -460,7 +460,10 @@ export function exportarPesadasBascula(filas, desde, hasta) {
   const detalle = filas.map(r => ({
     "Fecha": fecha(r.Fecha), "Hora": r.Hora, "Báscula": r.BalanzaCodigo,
     "Tipo de pesada": TIPO_PESADA_TXT[r.Tipo] ?? r.Tipo,
-    "Resultado": Number(r.Anulada) === 1 ? "Anulada" : (RESULTADO_PESADA_TXT[r.Resultado] ?? r.Resultado),
+    "Resultado": Number(r.Anulada) === 1 ? "Anulada"
+      : r.Origen === "PESADA" && r.Resultado !== "OK" ? (r.Resultado === "BAJO" ? "Bajo peso (guardada)" : "Sobrepeso (guardada)")
+      : (RESULTADO_PESADA_TXT[r.Resultado] ?? r.Resultado),
+    "Unidades (referencia)": r.UnidadesRef ?? "",
     "Área": r.NombreArea ?? r.AreaCodigo, "Operadora": r.Operadora, "Carnet operadora": r.OperadoraCodigo,
     "Lote": r.Lote, "Tipo de producto": r.Clase ?? "", "Producto que sale": r.ClaseSalida ? `${r.ClaseSalida} ${r.ClaseSalidaDesc ?? ""}`.trim() : "",
     "Talla": r.TallaDesc ?? "", "Código talla": r.Talla,
@@ -477,7 +480,9 @@ export function exportarPesadasBascula(filas, desde, hasta) {
     if (Number(r.Anulada) === 1) continue;
     const k = [r.Fecha, r.Tipo, r.Lote, r.Talla, r.EmpaqueCodigo, r.CodigoPedido, r.Carrito].join("|");
     const g = grupos.get(k) ?? { r, cajas: 0, netoG: 0, fuera: 0 };
-    if (r.Resultado === "OK") { g.cajas += 1; g.netoG += Number(r.PesoNetoG) || 0; } else g.fuera += 1;
+    // Una Pesada real fuera de rango SÍ es caja (se guardó marcada); un intento PPV fuera de rango no.
+    if (r.Origen === "PESADA" || r.Resultado === "OK") { g.cajas += 1; g.netoG += Number(r.PesoNetoG) || 0; }
+    if (r.Resultado !== "OK") g.fuera += 1;
     grupos.set(k, g);
   }
   const resumen = [...grupos.values()].map(({ r, cajas, netoG, fuera }) => ({
@@ -508,13 +513,14 @@ export function exportarProduccionEmpanizado(porPersona, filas, desde, hasta) {
   const destino = (d) => ({ EXPORTACION: "Exportación", LOCAL: "Venta local" }[d] ?? d ?? "");
   const resumen = porPersona.map(p => ({
     "Mesa / banda": p.MesaNombre ?? "sin posición", "Posición": p.Posicion ?? "", "Código": p.Codigo, "Nombre": p.Nombre,
-    "Días": p.Dias, "Bandejas": p.Bandejas, "Kilos": +Number(p.Kg).toFixed(3),
+    "Días": p.Dias, "Bandejas": p.Bandejas, "Bajo peso": p.BajoPeso ?? 0, "Sobrepeso": p.SobrePeso ?? 0, "Kilos": +Number(p.Kg).toFixed(3),
   }));
   const detalle = filas.map(f => ({
     "Fecha": fecha(f.Fecha), "Mesa / banda": f.MesaNombre ?? "sin posición", "Posición": f.Posicion ?? "",
     "Código": f.Codigo, "Nombre": f.Nombre, "Lote": f.Lote, "Talla": f.DescripcionTalla ?? f.Talla,
     "Producto que sale": `${f.ClaseSalida ?? ""} ${f.DescripcionClaseSalida ?? ""}`.trim(), "Destino": destino(f.Destino),
-    "Pedido": f.CodigoPedido ?? "", "Primera": f.Primera, "Última": f.Ultima, "Bandejas": f.Bandejas, "Kilos": +Number(f.Kg).toFixed(3),
+    "Pedido": f.CodigoPedido ?? "", "Unidades (referencia)": f.UnidadesRef ?? "", "Primera": f.Primera, "Última": f.Ultima,
+    "Bandejas": f.Bandejas, "Bajo peso": f.BajoPeso ?? 0, "Sobrepeso": f.SobrePeso ?? 0, "Kilos": +Number(f.Kg).toFixed(3),
   }));
   const wb = XLSX.utils.book_new();
   const ws1 = XLSX.utils.json_to_sheet(resumen);
