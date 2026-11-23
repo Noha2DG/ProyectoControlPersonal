@@ -19,8 +19,12 @@ const INACTIVIDAD_MS = 15 * 60 * 1000;
 
 async function api(url, opciones = {}) {
   const res = await fetch(url, { ...opciones, headers: { "Content-Type": "application/json", ...authHeader(), ...(opciones.headers || {}) } });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) { const e = new Error(data.error || `Error ${res.status}`); e.status = res.status; e.datos = data; throw e; }
+  const data = await res.json().catch(() => null);
+  if (!res.ok) { const e = new Error(data?.error || `Error ${res.status}`); e.status = res.status; e.datos = data ?? {}; throw e; }
+  // 200 sin JSON (el servidor reiniciando o la conexión cortada): antes seguía con {} y la pantalla
+  // reventaba con "Cannot read properties of undefined (reading 'BalanzaCodigo')" (BAL-01, 23 nov
+  // 2026). Sin status cuenta como falla de red: una pesada queda en cola y se reintenta.
+  if (data === null) throw new Error("El servidor no respondió bien (quizá se estaba actualizando). Intente de nuevo.");
   return data;
 }
 
@@ -66,7 +70,8 @@ function Login({ balanza, conectado, carnetInicial, onSesion, onSalirSistema }) 
       const r = await api("/api/pesaje-bascula/sesion", { method: "POST", body: JSON.stringify({ balanza, carnet: codigo, ...extra }) });
       if (r.menu) { setMenu({ ...r, carnet: codigo }); setPregunta(null); }
       else if (r.necesita) { setPregunta({ ...r, carnet: codigo }); }
-      else onSesion(r.sesion, codigo);
+      else if (r.sesion) onSesion(r.sesion, codigo);
+      else throw new Error("El servidor no devolvió la sesión. Pase su carnet otra vez.");
     } catch (e) { setError(e.message); setMenu(null); setPregunta(null); }
     finally { setEnviando(false); setCarnet(""); }
   };
