@@ -180,7 +180,7 @@ function Lotes({ estado, onCuenta }) {
   }, [abiertos, cargar]);
 
   const cerrar = async (l) => {
-    const resumen = l.Salidas.map(s => `  ${s.ClaseSalida} ${DESTINO[s.Destino]?.txt ?? s.Destino}: ${kg(s.Kg)} kg`).join("\n");
+    const resumen = l.Salidas.map(s => `  ${s.ClaseSalida} ${s.DescripcionTalla ?? s.Talla} ${DESTINO[s.Destino]?.txt ?? s.Destino}: ${kg(s.Kg)} kg`).join("\n");
     if (!confirm(`Cerrar ${l.Lote} y trasladar a TÚNEL ${kg(l.Pesado)} kg:\n${resumen}\n\nDespués la báscula ya no acepta bandejas de este lote.`)) return;
     setError(""); setOk("");
     try { await pedir(`${API}/lotes/${l.LoteEmpanizadoId}/cerrar`, { method: "POST" }); setOk(`${l.Lote} cerrado: ${kg(l.Pesado)} kg pasaron a Túnel.`); cargar(); }
@@ -251,7 +251,7 @@ function TarjetaLote({ l, puedeEditar, onDetalle, onAjuste, onCerrar, onReabrir 
         <tbody>
           {l.Salidas.map((s, i) => (
             <tr key={i} className="border-b border-gray-50">
-              <td className="py-1.5">{s.ClaseSalida} <span className="text-gray-500">{s.DescripcionClaseSalida}</span></td>
+              <td className="py-1.5">{s.ClaseSalida} <span className="text-gray-500">{s.DescripcionClaseSalida}</span> · <b>{s.DescripcionTalla ?? s.Talla}</b></td>
               <td><span className={`px-2 py-0.5 rounded text-xs font-semibold ${DESTINO[s.Destino]?.cls ?? "bg-gray-100"}`}>{DESTINO[s.Destino]?.txt ?? s.Destino ?? "—"}</span></td>
               <td className="text-gray-600">{s.CodigoPedido ? `${s.CodigoPedido}${s.Cliente ? ` · ${s.Cliente}` : ""}` : "—"}</td>
               <td className="text-right">{s.Bandejas}</td><td className="text-right">{s.Personas}</td>
@@ -444,7 +444,7 @@ function FilaPersona({ p, abierta, onClick }) {
             <thead><tr className="text-gray-500 text-left"><th className="py-1">Fecha</th><th>Lote</th><th>Producto</th><th>Destino</th><th>Horario</th><th className="text-right">Bandejas</th><th className="text-right">Kg</th></tr></thead>
             <tbody>
               {p.filas.map((f, i) => (
-                <tr key={i}><td className="py-0.5">{f.Fecha}</td><td className="font-mono">{f.Lote}</td><td>{f.ClaseSalida} {f.DescripcionClaseSalida}</td>
+                <tr key={i}><td className="py-0.5">{f.Fecha}</td><td className="font-mono">{f.Lote}</td><td>{f.ClaseSalida} {f.DescripcionClaseSalida} · {f.DescripcionTalla}</td>
                   <td>{DESTINO[f.Destino]?.txt ?? f.Destino}</td><td>{f.Primera}–{f.Ultima}</td><td className="text-right">{f.Bandejas}</td><td className="text-right">{kg(f.Kg)}</td></tr>
               ))}
             </tbody>

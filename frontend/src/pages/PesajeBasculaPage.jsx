@@ -180,7 +180,7 @@ function Pesaje({ sesion, b, onCerrar, onMenu }) {
     return {
       talla: t.talla ?? "", lote, clase, empaque: t.empaque ?? "",
       claseSalida: t.claseSalida ?? "", destino: t.destino ?? "", pedido: t.pedido ?? "", carrito: t.carrito ?? "",
-      loteEmp: t.loteEmp ?? null,
+      loteEmp: t.loteEmp ?? null, tallaSalida: t.tallaSalida ?? "",
     };
   });
   const [persona, setPersona] = useState(null); // { Codigo, NombreCompleto }
@@ -220,7 +220,7 @@ function Pesaje({ sesion, b, onCerrar, onMenu }) {
     !trabajo.lote.trim() && "lote", !trabajo.talla && "talla", !trabajo.carrito.trim() && "número de carrito",
     !empaque && "tipo de empaque", !trabajo.pedido && "pedido",
   ].filter(Boolean) : empz ? [
-    !loteEmpSel && "lote", !trabajo.claseSalida && "producto que sale", !trabajo.destino && "destino",
+    !loteEmpSel && "lote", !trabajo.claseSalida && "producto que sale", !trabajo.tallaSalida && "talla que sale", !trabajo.destino && "destino",
     trabajo.destino === "EXPORTACION" && !trabajo.pedido && "pedido",
     pideCarrito && !trabajo.carrito.trim() && "número de carrito",
   ].filter(Boolean) : [
@@ -246,7 +246,7 @@ function Pesaje({ sesion, b, onCerrar, onMenu }) {
       if (t.pedido && !cat.pedidos.some(p => p.CodigoPedido === t.pedido)) n = { ...n, pedido: "" };
       if (empz && t.loteEmp && !(cat.lotesEmpanizado ?? []).some(l => l.LoteEmpanizadoId === t.loteEmp)) n = { ...n, loteEmp: null };
       // Un solo lote abierto: queda elegido solo.
-      if (empz && !n.loteEmp && cat.lotesEmpanizado?.length === 1) n = { ...n, loteEmp: cat.lotesEmpanizado[0].LoteEmpanizadoId };
+      if (empz && !n.loteEmp && cat.lotesEmpanizado?.length === 1) n = { ...n, loteEmp: cat.lotesEmpanizado[0].LoteEmpanizadoId, tallaSalida: n.tallaSalida || String(cat.lotesEmpanizado[0].Talla) };
       return n;
     });
   }, [cat.empaques, cat.pedidos, cat.lotesEmpanizado]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -367,7 +367,7 @@ function Pesaje({ sesion, b, onCerrar, onMenu }) {
     const p = {
       Uuid: uuid(), SesionId: sesion.SesionId, EmpaqueCodigo: empaque?.Codigo ?? null,
       // Empanizado: lote, clase y talla los pone el servidor a partir del lote abierto.
-      ...(empz ? { LoteEmpanizadoId: loteEmpSel.LoteEmpanizadoId } : { Lote: loteSel.Lote, Clase: loteSel.Clase, Talla: Number(trabajo.talla) }),
+      ...(empz ? { LoteEmpanizadoId: loteEmpSel.LoteEmpanizadoId, TallaSalida: Number(trabajo.tallaSalida) } : { Lote: loteSel.Lote, Clase: loteSel.Clase, Talla: Number(trabajo.talla) }),
       PersonaCodigo: pt ? persona.Codigo : null, PesoBrutoG: gramos,
       Carrito: pideCarrito ? trabajo.carrito.trim() : null,
       ClaseSalida: pt ? trabajo.claseSalida : null, Destino: pt ? trabajo.destino : null,
@@ -473,7 +473,7 @@ function Pesaje({ sesion, b, onCerrar, onMenu }) {
                 {(cat.lotesEmpanizado ?? []).map(l => {
                   const sel = trabajo.loteEmp === l.LoteEmpanizadoId;
                   return (
-                    <button key={l.LoteEmpanizadoId} onClick={() => setTrabajo(t => ({ ...t, loteEmp: l.LoteEmpanizadoId }))}
+                    <button key={l.LoteEmpanizadoId} onClick={() => setTrabajo(t => ({ ...t, loteEmp: l.LoteEmpanizadoId, tallaSalida: t.tallaSalida || String(l.Talla) }))}
                       className={`rounded-xl border-2 px-3 py-2 text-left active:scale-[0.98] transition ${sel ? "bg-amber-400 text-amber-950 border-white" : `${tema.campo} text-white`}`}>
                       <span className="block font-mono text-xl font-extrabold">{l.Lote}</span>
                       <span className="block text-sm">{l.Clase} · {l.TallaDesc ?? l.Talla} · {(l.PesadoG / 1000).toLocaleString("es", { maximumFractionDigits: 1 })} kg pesados</span>
@@ -628,6 +628,15 @@ function Pesaje({ sesion, b, onCerrar, onMenu }) {
                     {cat.clases.map(c => <option key={c.Clase} value={c.Clase}>{c.Clase} · {c.Descripcion}</option>)}
                   </select>
                 </label>
+                {empz && (
+                  <label className={etq}>Talla que sale{loteEmpSel && String(loteEmpSel.Talla) !== String(trabajo.tallaSalida) && trabajo.tallaSalida ? " (distinta a la del lote)" : ""}
+                    <select value={trabajo.tallaSalida} onChange={set("tallaSalida")} className={sel + " mt-0.5"}>
+                      <option value="">— elija —</option>
+                      {cat.tallas.map(t => <option key={t.Codigo} value={t.Codigo}>{t.Descripcion} ({t.Codigo})</option>)}
+                      {trabajo.tallaSalida && !cat.tallas.some(t => String(t.Codigo) === String(trabajo.tallaSalida)) && <option value={trabajo.tallaSalida}>{trabajo.tallaSalida}</option>}
+                    </select>
+                  </label>
+                )}
                 <div className={etq}>Destino
                   <div className="mt-0.5 grid grid-cols-2 gap-2">
                     {[["EXPORTACION", "Exportación"], ["LOCAL", "Venta local"]].map(([v, t]) => (

@@ -185,26 +185,31 @@ async function cargarLote(client: any, id: number, bloquear = false) {
   return numerosLote(r);
 }
 
-// Salidas = lo pesado agrupado por producto que sale, destino y pedido.
+// Salidas = lo pesado agrupado por producto que sale, su TALLA, destino y pedido. En Empanizado
+// Pesada.Talla es la talla del producto que sale (puede no ser la del lote, que vive en
+// LoteEmpanizado.Talla); usuario, 23 nov 2026.
 async function salidasDe(client: any, ids: number[]) {
   const out = new Map<number, any[]>();
   if (!ids.length) return out;
   const rows: any[] = await client.$queryRawUnsafe(`
-    SELECT p.LoteEmpanizadoId, p.ClaseSalida, cl.Descripcion AS DescripcionClaseSalida, p.Destino, p.CodigoPedido,
+    SELECT p.LoteEmpanizadoId, p.ClaseSalida, cl.Descripcion AS DescripcionClaseSalida, p.Talla, ta.Descripcion AS DescripcionTalla,
+           p.Destino, p.CodigoPedido,
            c.RazonSocial AS Cliente, COUNT(*) AS Bandejas, COUNT(DISTINCT p.PersonaCodigo) AS Personas,
            SUM(p.PesoNetoG) AS PesoG
       FROM Pesada p
       LEFT JOIN Clase cl ON cl.Clase = p.ClaseSalida
+      LEFT JOIN Tallas ta ON ta.Codigo = p.Talla
       LEFT JOIN Pedidos pe ON pe.CodigoPedido = p.CodigoPedido
       LEFT JOIN Clientes c ON c.Codigo = pe.CodigoCliente
      WHERE p.LoteEmpanizadoId IN (${enLista(ids)}) AND p.Anulada = 0
-     GROUP BY p.LoteEmpanizadoId, p.ClaseSalida, cl.Descripcion, p.Destino, p.CodigoPedido, c.RazonSocial
-     ORDER BY p.ClaseSalida, p.Destino, p.CodigoPedido`, ...ids);
+     GROUP BY p.LoteEmpanizadoId, p.ClaseSalida, cl.Descripcion, p.Talla, ta.Descripcion, p.Destino, p.CodigoPedido, c.RazonSocial
+     ORDER BY p.ClaseSalida, p.Talla, p.Destino, p.CodigoPedido`, ...ids);
   for (const r of rows) {
     const id = Number(r.LoteEmpanizadoId);
     if (!out.has(id)) out.set(id, []);
     out.get(id)!.push({
-      ClaseSalida: r.ClaseSalida, DescripcionClaseSalida: r.DescripcionClaseSalida, Destino: r.Destino,
+      ClaseSalida: r.ClaseSalida, DescripcionClaseSalida: r.DescripcionClaseSalida,
+      Talla: Number(r.Talla), DescripcionTalla: r.DescripcionTalla, Destino: r.Destino,
       CodigoPedido: r.CodigoPedido, Cliente: r.Cliente, Bandejas: Number(r.Bandejas), Personas: Number(r.Personas),
       Kg: kgDeG(r.PesoG),
     });
@@ -329,7 +334,7 @@ export async function deshacerMovimiento(tx: any, movimientoId: number) {
 
 // ── Cerrar y reabrir ────────────────────────────────────────────────────────────────────────────
 /**
- * Cierra el lote: lo pesado pasa al piso de Túnel, un renglón por producto que sale y destino
+ * Cierra el lote: lo pesado pasa al piso de Túnel, un renglón por producto que sale, talla y destino
  * (exportación / venta local), con el mismo código de lote y la clase del producto. Desde ese
  * momento la báscula ya no acepta bandejas para este lote.
  */
@@ -344,10 +349,10 @@ export async function cerrarLote(tx: any, id: number, fecha: string, operador: s
   if (!tunel) throw new ErrorEmpanizado(400, "La bodega Túnel no está activa: no hay a dónde trasladar");
 
   const grupos: any[] = await tx.$queryRawUnsafe(`
-    SELECT ClaseSalida, Destino, SUM(PesoNetoG) AS PesoG, COUNT(*) AS Bandejas
+    SELECT ClaseSalida, Talla, Destino, SUM(PesoNetoG) AS PesoG, COUNT(*) AS Bandejas
       FROM Pesada WHERE LoteEmpanizadoId = ? AND Anulada = 0
-     GROUP BY ClaseSalida, Destino ORDER BY ClaseSalida, Destino`, id);
-  const trasladado: { Clase: string; Destino: string; Kg: number; Bandejas: number }[] = [];
+     GROUP BY ClaseSalida, Talla, Destino ORDER BY ClaseSalida, Talla, Destino`, id);
+  const trasladado: { Clase: string; Talla: number; Destino: string; Kg: number; Bandejas: number }[] = [];
   for (const g of grupos) {
     const kg = r2(Number(g.PesoG) / 1000);
     if (!(kg > 0)) continue;
@@ -356,9 +361,9 @@ export async function cerrarLote(tx: any, id: number, fecha: string, operador: s
       INSERT INTO MovimientoPiso (Tipo, FechaProduccion, BodegaDestino, Lote, Clase, Talla, FechaLote,
                                   Peso, UM, PesoKg, Motivo, LoteEmpanizadoId, RegistradoPor)
       VALUES ('PROCESADO', ?, ?, ?, ?, ?, ?, ?, 'KG', ?, ?, ?, ?)`,
-      fecha, DESTINO_CIERRE, l.Lote, g.ClaseSalida, l.Talla, l.FechaLote, kg, kg,
+      fecha, DESTINO_CIERRE, l.Lote, g.ClaseSalida, Number(g.Talla), l.FechaLote, kg, kg,
       `Empanizado · ${DESTINOS_PESADA[destino] ?? destino} · ${Number(g.Bandejas)} bandejas`, id, operador);
-    trasladado.push({ Clase: String(g.ClaseSalida), Destino: destino, Kg: kg, Bandejas: Number(g.Bandejas) });
+    trasladado.push({ Clase: String(g.ClaseSalida), Talla: Number(g.Talla), Destino: destino, Kg: kg, Bandejas: Number(g.Bandejas) });
   }
   await tx.$executeRawUnsafe(
     `UPDATE LoteEmpanizado SET Estado = 'Cerrado', CerradoPor = ?, CerradoEn = NOW() WHERE LoteEmpanizadoId = ?`, operador, id);

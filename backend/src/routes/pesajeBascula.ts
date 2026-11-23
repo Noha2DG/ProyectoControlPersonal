@@ -205,7 +205,7 @@ router.get("/sesion/:id/catalogos", requirePerm("pesaje_bascula", "usar"), async
     }
     if (s.Modo === "EMPANIZADO") {
       // Los lotes que el encargado tomó del piso y siguen abiertos: de ahí salen lote, clase y talla.
-      const [empaques, clases, pedidos, lotesEmp] = await Promise.all([
+      const [empaques, clases, pedidos, lotesEmp, tallas] = await Promise.all([
         prisma.$queryRawUnsafe(`
           SELECT Codigo, Nombre, Unidad, PesoNetoG, DeshidratacionPct, DeshidratacionG, PesoBrutoG, MinG, MaxG, ConRango
             FROM EmpaquePesaje WHERE Activo = 1 ORDER BY Nombre`),
@@ -222,10 +222,11 @@ router.get("/sesion/:id/catalogos", requirePerm("pesaje_bascula", "usar"), async
             LEFT JOIN Clase cl ON cl.Clase = le.Clase
             LEFT JOIN Tallas ta ON ta.Codigo = le.Talla
            WHERE le.Estado = 'Abierto' ORDER BY le.Fecha, le.LoteEmpanizadoId`),
+        prisma.$queryRawUnsafe(`SELECT Codigo, Descripcion FROM Tallas WHERE Activo = 1 ORDER BY Codigo`),
       ]);
       res.json({
         empaques: (empaques as any[]).map(e => ({ ...e, ConRango: Number(e.ConRango) === 1 })),
-        clases, pedidos, tallas: [], lotes: [],
+        clases, pedidos, tallas, lotes: [],
         lotesEmpanizado: (lotesEmp as any[]).map(l => ({ ...l, LoteEmpanizadoId: Number(l.LoteEmpanizadoId), Talla: Number(l.Talla), PesadoG: Number(l.PesadoG) })),
       });
       return;
@@ -349,7 +350,9 @@ router.post("/pesadas", requirePerm("pesaje_bascula", "usar"), async (req: AuthR
           Number(b.LoteEmpanizadoId) || 0);
         if (!loteEmp) throw new ErrorNegocio(400, "Elija el lote");
         if (loteEmp.Estado !== "Abierto") throw new ErrorNegocio(400, `El lote ${loteEmp.Lote} ya se cerró: elija otro`);
-        b.Lote = loteEmp.Lote; b.Clase = loteEmp.Clase; b.Talla = Number(loteEmp.Talla);
+        // La talla que se guarda es la del PRODUCTO QUE SALE (puede no ser la del lote, usuario
+        // 23 nov 2026); sin elegir, la del lote. Se valida contra Tallas abajo.
+        b.Lote = loteEmp.Lote; b.Clase = loteEmp.Clase; b.Talla = Number(b.TallaSalida) || Number(loteEmp.Talla);
       }
       const loteTxt = String(b.Lote ?? "").trim(), claseTxt = String(b.Clase ?? "").trim();
       if (!loteTxt) throw new ErrorNegocio(400, "Elija el lote");
