@@ -74,6 +74,24 @@ function Posiciones() {
   const ocupante = useMemo(() => new Map(posiciones.map(p => [`${p.MesaCodigo}#${p.Posicion}`, p])), [posiciones]);
   const total = posiciones.length;
 
+  // Los números impresos van corridos en toda el área (Banda 1 del 1 al 27, Banda 2 del 28 al 55,
+  // Mesa 1 del 56 al 61 y el 83…; usuario, 23 nov 2026), así que una mesa no siempre empieza en 1.
+  // Cada tarjeta muestra los puestos ocupados y los libres que quedan ENTRE dos de los suyos, si
+  // ninguna otra mesa usa ese tramo. Una mesa vacía muestra del 1 a sus Posiciones, como antes.
+  const numerosDe = m => {
+    const propios = posiciones.filter(p => p.MesaCodigo === m.Codigo).map(p => Number(p.Posicion)).sort((a, b) => a - b);
+    if (!propios.length) return Array.from({ length: m.Posiciones }, (_, i) => i + 1);
+    const ajenos = new Set(posiciones.filter(p => p.MesaCodigo !== m.Codigo).map(p => Number(p.Posicion)));
+    const nums = [propios[0]];
+    for (let i = 1; i < propios.length; i++) {
+      const hueco = [];
+      for (let n = propios[i - 1] + 1; n < propios[i]; n++) hueco.push(n);
+      if (!hueco.some(n => ajenos.has(n))) nums.push(...hueco);
+      nums.push(propios[i]);
+    }
+    return nums;
+  };
+
   return (
     <div>
       <div className="flex flex-wrap items-center gap-3 mb-4">
@@ -98,19 +116,21 @@ function Posiciones() {
       ) : (
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           {mesas.map(m => {
-            const ocupadas = Array.from({ length: m.Posiciones }, (_, i) => ocupante.get(`${m.Codigo}#${i + 1}`)).filter(Boolean).length;
+            const numeros = numerosDe(m);
+            const ocupadas = numeros.filter(n => ocupante.get(`${m.Codigo}#${n}`)).length;
             return (
               <div key={m.Codigo} className="bg-white rounded-xl shadow overflow-hidden">
                 <div className="px-4 py-2.5 border-b flex items-center gap-2">
                   <span className="font-bold text-gray-800">{m.Nombre}</span>
                   <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${tipoDe(m.Tipo).cls}`}>{tipoDe(m.Tipo).label}</span>
-                  <span className="ml-auto text-xs text-gray-500">{ocupadas}/{m.Posiciones} ocupadas</span>
+                  <span className="ml-auto text-xs text-gray-500">{ocupadas}/{numeros.length} ocupadas</span>
                 </div>
                 <ul className="divide-y divide-gray-50">
-                  {Array.from({ length: m.Posiciones }, (_, i) => i + 1).map(n => {
+                  {numeros.map((n, i) => {
                     const p = ocupante.get(`${m.Codigo}#${n}`);
+                    const salto = i > 0 && n - numeros[i - 1] > 1;
                     return (
-                      <li key={n} className="flex items-center gap-3 px-4 py-1.5">
+                      <li key={n} className={`flex items-center gap-3 px-4 py-1.5 ${salto ? "border-t-2 border-dashed border-gray-200" : ""}`}>
                         <span className={`w-8 h-7 shrink-0 rounded-md flex items-center justify-center text-sm font-bold ${p ? "bg-slate-800 text-white" : "border-2 border-dashed border-gray-300 text-gray-400"}`}>{n}</span>
                         {p ? (
                           <button onClick={() => puedeEditar && esHoy && setAcciones(p)} disabled={!puedeEditar || !esHoy}
