@@ -45,6 +45,7 @@ const TIPOS_PESADA = {
   PPV:      { titulo: "Pesar PPV",          detalle: "control de peso · lote escrito",  cls: "bg-teal-600 hover:bg-teal-500 border-teal-300" },
   PERSONA:  { titulo: "Producto terminado", detalle: "carnet por cada bandeja",          cls: "bg-indigo-600 hover:bg-indigo-500 border-indigo-300" },
   PRODUCTO: { titulo: "Por producto",       detalle: "lote del inventario al piso",      cls: "bg-slate-600 hover:bg-slate-500 border-slate-300" },
+  EMPANIZADO: { titulo: "Empanizado",       detalle: "bandeja por persona · carnet",     cls: "bg-amber-500 hover:bg-amber-400 border-amber-200 text-amber-950" },
 };
 
 function Login({ balanza, conectado, carnetInicial, onSesion, onSalirSistema }) {
@@ -145,6 +146,9 @@ function Login({ balanza, conectado, carnetInicial, onSesion, onSalirSistema }) 
 //     se elige el producto que sale y el destino (exportación con pedido / venta local). Carnet de UNA
 //     persona antes de cada bandeja. Peso libre salvo que el tipo de empaque elegido tenga rango.
 //   - POR PRODUCTO: lote, tipo de producto, talla y tipo de empaque (obligatorio), sin carnet.
+//   - EMPANIZADO (20 nov 2026): como producto terminado, pero el lote es uno de los que el encargado
+//     tomó del piso en Empanizado y sigue abierto (lote, clase y talla vienen de ahí). La posición de la
+//     persona (mesa/banda y número) sale sola de Catálogos → Mesas de Empanizado al leer el carnet.
 //   - PESAR PPV (prueba, 19 nov 2026): solo control de peso. Lote ESCRITO (no está amarrado al piso),
 //     talla, tipo de empaque con rango y pedido de referencia (no toca el pedido). Una sola persona
 //     pesa todo. Va a PesadaPrueba; los intentos fuera de rango también quedan registrados.
@@ -155,14 +159,15 @@ const FUERA_CUENTA_MS = 2000;
 
 function Pesaje({ sesion, b, onCerrar, onMenu }) {
   const puedeAnular = usePuede("pesaje_bascula", "anular_caja");
-  const pt = sesion.Modo === "PERSONA";
+  const empz = sesion.Modo === "EMPANIZADO";
+  const pt = sesion.Modo === "PERSONA" || empz;
   const ppv = sesion.Modo === "PPV";
   // Lo que se está trabajando se recuerda por báscula y por tipo: el lote escrito de PPV no debe
   // aparecer como lote del piso al volver a "por producto", ni al revés.
-  const claveT = claveTrabajo(sesion.BalanzaCodigo) + (ppv ? "_ppv" : "");
+  const claveT = claveTrabajo(sesion.BalanzaCodigo) + (ppv ? "_ppv" : empz ? "_emp" : "");
   // Carrito: solo en producto terminado y donde el área lo pide (usuario, 17 nov 2026: "por producto" no lleva).
   const pideCarrito = pt && Number(sesion.PideCarrito) === 1;
-  const [cat, setCat] = useState({ empaques: [], tallas: [], lotes: [], clases: [], pedidos: [] });
+  const [cat, setCat] = useState({ empaques: [], tallas: [], lotes: [], clases: [], pedidos: [], lotesEmpanizado: [] });
   const [trabajo, setTrabajo] = useState(() => {
     const t = leerLS(claveT) ?? {};
     // Versión anterior guardaba "LOTE|CLASE" en un solo campo.
@@ -170,6 +175,7 @@ function Pesaje({ sesion, b, onCerrar, onMenu }) {
     return {
       talla: t.talla ?? "", lote, clase, empaque: t.empaque ?? "",
       claseSalida: t.claseSalida ?? "", destino: t.destino ?? "", pedido: t.pedido ?? "", carrito: t.carrito ?? "",
+      loteEmp: t.loteEmp ?? null,
     };
   });
   const [persona, setPersona] = useState(null); // { Codigo, NombreCompleto }
@@ -190,6 +196,7 @@ function Pesaje({ sesion, b, onCerrar, onMenu }) {
   const empaque = cat.empaques.find(e => e.Codigo === trabajo.empaque) ?? null;
   const conRango = Boolean(empaque?.ConRango);
   const loteSel = trabajo.lote && trabajo.clase ? { Lote: trabajo.lote, Clase: trabajo.clase } : null;
+  const loteEmpSel = empz ? (cat.lotesEmpanizado ?? []).find(l => l.LoteEmpanizadoId === trabajo.loteEmp) ?? null : null;
   const lotesUnicos = [...new Map(cat.lotes.map(l => [l.Lote, l])).keys()];
   const kgLote = (lote) => cat.lotes.filter(l => l.Lote === lote).reduce((s, l) => s + l.Kg, 0);
   const clasesDelLote = (() => {
@@ -207,6 +214,10 @@ function Pesaje({ sesion, b, onCerrar, onMenu }) {
   const faltan = ppv ? [
     !trabajo.lote.trim() && "lote", !trabajo.talla && "talla", !trabajo.carrito.trim() && "número de carrito",
     !empaque && "tipo de empaque", !trabajo.pedido && "pedido",
+  ].filter(Boolean) : empz ? [
+    !loteEmpSel && "lote", !trabajo.claseSalida && "producto que sale", !trabajo.destino && "destino",
+    trabajo.destino === "EXPORTACION" && !trabajo.pedido && "pedido",
+    pideCarrito && !trabajo.carrito.trim() && "número de carrito",
   ].filter(Boolean) : [
     !trabajo.lote && "lote", trabajo.lote && !trabajo.clase && "tipo de producto", !trabajo.talla && "talla",
     !pt && !empaque && "tipo de empaque",
@@ -228,18 +239,23 @@ function Pesaje({ sesion, b, onCerrar, onMenu }) {
       if (t.empaque && !cat.empaques.some(e => e.Codigo === t.empaque)) n = { ...n, empaque: "" };
       if (!pt && !n.empaque && cat.empaques.length === 1) n = { ...n, empaque: cat.empaques[0].Codigo };
       if (t.pedido && !cat.pedidos.some(p => p.CodigoPedido === t.pedido)) n = { ...n, pedido: "" };
+      if (empz && t.loteEmp && !(cat.lotesEmpanizado ?? []).some(l => l.LoteEmpanizadoId === t.loteEmp)) n = { ...n, loteEmp: null };
+      // Un solo lote abierto: queda elegido solo.
+      if (empz && !n.loteEmp && cat.lotesEmpanizado?.length === 1) n = { ...n, loteEmp: cat.lotesEmpanizado[0].LoteEmpanizadoId };
       return n;
     });
-  }, [cat.empaques, cat.pedidos]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [cat.empaques, cat.pedidos, cat.lotesEmpanizado]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const cargarResumen = useCallback(async () => {
     try { setResumen(await api(`/api/pesaje-bascula/sesion/${sesion.SesionId}/resumen`)); } catch { /* siguiente */ }
   }, [sesion.SesionId]);
-
   // Catálogos al entrar y cada minuto (un tipo de empaque o pedido nuevo aparece solo).
   const cargarCatalogos = useCallback(() =>
     api(`/api/pesaje-bascula/sesion/${sesion.SesionId}/catalogos`).then(setCat).catch(e => setAviso({ tipo: "error", texto: "ERROR", detalle: e.message })),
   [sesion.SesionId]);
+
+  // Catálogos al entrar y cada minuto (un tipo de empaque o pedido nuevo aparece solo).
+  // (Definido arriba, junto a cargarResumen: enviar() también lo usa.)
   useEffect(() => {
     cargarCatalogos();
     cargarResumen();
@@ -260,7 +276,14 @@ function Pesaje({ sesion, b, onCerrar, onMenu }) {
   }, [onCerrar]);
 
   // Producto terminado: el foco vive en el carnet de la bandeja mientras falte.
-  useEffect(() => { if (faltaCarnet) carnetRef.current?.focus(); }, [faltaCarnet, aviso]);
+  // También después de tocar lote, producto o destino: si no, el escáner del siguiente carnet escribía
+  // sobre ese botón y la lectura se perdía. No mientras se teclea otro campo (el carrito).
+  useEffect(() => {
+    if (!faltaCarnet) return;
+    const a = document.activeElement;
+    const tecleando = a && a !== carnetRef.current && a.tagName === "INPUT" && a.type !== "range";
+    if (!tecleando) carnetRef.current?.focus();
+  }, [faltaCarnet, aviso, trabajo]);
 
   const leerCarnet = async (codigo) => {
     setErrorCarnet("");
@@ -275,8 +298,10 @@ function Pesaje({ sesion, b, onCerrar, onMenu }) {
       setCola(c => c.filter(x => x.Uuid !== p.Uuid));
       // PPV: un intento fuera de rango queda registrado, pero la pantalla ya dijo "SIN GUARDAR".
       if (r.guardada === false) { cargarResumen(); return; }
-      setAviso({ tipo: "guardado", texto: `GUARDADO #${r.Numero ?? ""}`, detalle: `${g(p.PesoBrutoG)} g${p.nombrePersona ? " · " + p.nombrePersona : ""}` });
+      const pos = r.Posicion ? ` · ${r.Posicion.MesaNombre} #${r.Posicion.Posicion}` : "";
+      setAviso({ tipo: "guardado", texto: `GUARDADO #${r.Numero ?? ""}`, detalle: `${g(p.PesoBrutoG)} g${p.nombrePersona ? " · " + p.nombrePersona : ""}${pos}` });
       cargarResumen();
+      if (p.LoteEmpanizadoId) cargarCatalogos(); // kilos del lote al día
     } catch (e) {
       if (e.status === 409 && e.datos?.sesionCerrada) { onCerrar(e.message); return; }
       if (!e.status || e.status >= 500) {
@@ -287,7 +312,7 @@ function Pesaje({ sesion, b, onCerrar, onMenu }) {
         setAviso({ tipo: "sin_guardar", texto: "SIN GUARDAR", detalle: e.message });
       }
     }
-  }, [cargarResumen, onCerrar]);
+  }, [cargarResumen, cargarCatalogos, onCerrar]);
 
   useEffect(() => {
     if (!cola.length) return undefined;
@@ -335,8 +360,10 @@ function Pesaje({ sesion, b, onCerrar, onMenu }) {
     if (faltaCarnet) { setAviso({ tipo: "sin_guardar", texto: "SIN GUARDAR", detalle: "falta el carnet de esta bandeja" }); return; }
     if (ppv) { enviar(datosPrueba(gramos)); return; }
     const p = {
-      Uuid: uuid(), SesionId: sesion.SesionId, EmpaqueCodigo: empaque?.Codigo ?? null, Lote: loteSel.Lote, Clase: loteSel.Clase,
-      Talla: Number(trabajo.talla), PersonaCodigo: pt ? persona.Codigo : null, PesoBrutoG: gramos,
+      Uuid: uuid(), SesionId: sesion.SesionId, EmpaqueCodigo: empaque?.Codigo ?? null,
+      // Empanizado: lote, clase y talla los pone el servidor a partir del lote abierto.
+      ...(empz ? { LoteEmpanizadoId: loteEmpSel.LoteEmpanizadoId } : { Lote: loteSel.Lote, Clase: loteSel.Clase, Talla: Number(trabajo.talla) }),
+      PersonaCodigo: pt ? persona.Codigo : null, PesoBrutoG: gramos,
       Carrito: pideCarrito ? trabajo.carrito.trim() : null,
       ClaseSalida: pt ? trabajo.claseSalida : null, Destino: pt ? trabajo.destino : null,
       CodigoPedido: pt && trabajo.destino === "EXPORTACION" ? trabajo.pedido : null,
@@ -388,7 +415,9 @@ function Pesaje({ sesion, b, onCerrar, onMenu }) {
   const icono = aviso && { guardado: "✓", sin_guardar: "✗", pendiente: "…", error: "!" }[aviso.tipo];
 
   // Producto terminado se distingue por el fondo índigo (usuario, 17 nov 2026).
-  const tema = ppv
+  const tema = empz
+    ? { pagina: "bg-stone-900", barra: "bg-amber-700", campo: "bg-stone-800 border-amber-700", panel: "bg-stone-800/80", etiqueta: "EMPANIZADO", chip: "bg-amber-300 text-amber-950" }
+    : ppv
     ? { pagina: "bg-teal-950", barra: "bg-teal-800", campo: "bg-teal-900 border-teal-600", panel: "bg-teal-900/70", etiqueta: "PESAR PPV · PRUEBA", chip: "bg-amber-400 text-amber-950" }
     : pt
     ? { pagina: "bg-indigo-950", barra: "bg-indigo-800", campo: "bg-indigo-900 border-indigo-600", panel: "bg-indigo-900/70", etiqueta: "PRODUCTO TERMINADO", chip: "bg-amber-400 text-amber-950" }
@@ -431,6 +460,32 @@ function Pesaje({ sesion, b, onCerrar, onMenu }) {
                   placeholder="OBLIGATORIO"
                   className={`${sel} mt-0.5 font-mono text-lg tracking-widest ${trabajo.carrito.trim() ? "" : "!bg-amber-300 !text-amber-950 placeholder:text-amber-900 placeholder:font-bold !border-amber-100"}`} />
               </label>
+            </>
+          ) : empz ? (
+            <>
+              <p className={etq}>Lote abierto (tomado del piso)</p>
+              <div className="grid grid-cols-1 gap-2">
+                {(cat.lotesEmpanizado ?? []).map(l => {
+                  const sel = trabajo.loteEmp === l.LoteEmpanizadoId;
+                  return (
+                    <button key={l.LoteEmpanizadoId} onClick={() => setTrabajo(t => ({ ...t, loteEmp: l.LoteEmpanizadoId }))}
+                      className={`rounded-xl border-2 px-3 py-2 text-left active:scale-[0.98] transition ${sel ? "bg-amber-400 text-amber-950 border-white" : `${tema.campo} text-white`}`}>
+                      <span className="block font-mono text-xl font-extrabold">{l.Lote}</span>
+                      <span className="block text-sm">{l.Clase} · {l.TallaDesc ?? l.Talla} · {(l.PesadoG / 1000).toLocaleString("es", { maximumFractionDigits: 1 })} kg pesados</span>
+                    </button>
+                  );
+                })}
+                {(cat.lotesEmpanizado ?? []).length === 0 && (
+                  <p className="rounded-lg bg-amber-300 text-amber-950 px-3 py-2 text-sm font-semibold">No hay lotes abiertos. El encargado tiene que tomar del piso en Empanizado.</p>
+                )}
+              </div>
+              {pideCarrito && (
+                <label className={etq}>N.º de carrito *
+                  <input value={trabajo.carrito} onChange={e => setTrabajo(t => ({ ...t, carrito: e.target.value.toUpperCase() }))} autoComplete="off" maxLength={20}
+                    placeholder="OBLIGATORIO"
+                    className={`${sel} mt-0.5 font-mono text-lg tracking-widest ${trabajo.carrito.trim() ? "" : "!bg-amber-300 !text-amber-950 placeholder:text-amber-900 placeholder:font-bold !border-amber-100"}`} />
+                </label>
+              )}
             </>
           ) : (<>
           <label className={etq}>Lote (piso de {sesion.BodegaNombre ?? "la bodega"})
@@ -480,6 +535,11 @@ function Pesaje({ sesion, b, onCerrar, onMenu }) {
               <p className="text-[11px] text-violet-100 uppercase">Carnet de esta bandeja *</p>
               {persona ? (
                 <>
+                  {empz && (
+                    persona.Posicion
+                      ? <p className="text-4xl font-black text-amber-300 leading-none my-1">{persona.Posicion.MesaNombre} · #{persona.Posicion.Posicion}</p>
+                      : <p className="text-sm font-bold text-amber-200 my-1">SIN POSICIÓN ASIGNADA (se guarda igual)</p>
+                  )}
                   <p className="text-lg font-bold leading-tight">{persona.NombreCompleto}</p>
                   <p className="text-sm text-violet-200 font-mono">{persona.Codigo} <button onClick={() => setPersona(null)} className="ml-2 underline">cambiar</button></p>
                 </>
@@ -600,13 +660,30 @@ function Pesaje({ sesion, b, onCerrar, onMenu }) {
               <p className="text-sm text-teal-100">{g(resumen.Cajas)} cajas</p>
             </div>
           )}
+          {empz && loteEmpSel && (
+            <div className="rounded-xl bg-white/10 border-2 border-amber-300/60 px-3 py-2 mt-1">
+              <p className="text-xs text-amber-100 uppercase tracking-wide">Pesado · lote {loteEmpSel.Lote}</p>
+              <p className="text-4xl font-extrabold font-mono leading-tight">
+                {(loteEmpSel.PesadoG / 1000).toLocaleString("es", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}<span className="text-xl ml-1">kg</span>
+              </p>
+            </div>
+          )}
           <div className={`${tema.panel} rounded-xl px-3 py-2 flex items-baseline gap-2 mt-1 ${ppv ? "hidden" : ""}`}><span className="text-xs text-slate-300">{ppv ? "Cajas hoy" : "Bandejas hoy"}</span><span className="text-2xl font-bold">{g(resumen.Cajas)}</span><span className="text-xs text-slate-300 ml-auto">{(resumen.NetoG / 1000).toLocaleString("es", { maximumFractionDigits: 1 })} kg</span></div>
           {ppv && <div className={`${tema.panel} rounded-xl px-3 py-1.5 flex items-baseline gap-2`}><span className="text-xs text-slate-300">Fuera de rango hoy</span><span className="text-xl font-bold text-amber-300">{g(resumen.Fuera ?? 0)}</span><span className="text-[11px] text-slate-400 ml-auto">no cuentan como caja</span></div>}
           <div className={`${tema.panel} rounded-xl p-3 flex-1 min-h-[90px] overflow-auto`}>
             <p className="text-xs text-slate-300 mb-2">Últimas guardadas</p>
-            <ul className="space-y-1.5 text-sm font-mono">
+            {/* Solo peso y NOMBRE de quien armó la bandeja (usuario, 21 nov 2026): sin mesa ni posición. */}
+            <ul className="space-y-1.5">
               {resumen.ultimas.map(u => (
-                <li key={u.PesadaId} className="flex justify-between gap-2"><span>{g(u.PesoBrutoG)} g</span><span className="text-emerald-300 truncate">✓ {u.PersonaCodigo ?? (u.Carrito ? `carrito ${u.Carrito}` : u.Hora)}</span></li>
+                <li key={u.PesadaId} className="rounded-lg bg-black/20 px-2 py-1">
+                  <div className="flex items-baseline justify-between gap-2">
+                    <span className="font-mono text-base font-bold">{g(u.PesoBrutoG)} g</span>
+                    <span className="text-[11px] text-slate-400 font-mono">{u.Hora}</span>
+                  </div>
+                  <p className="text-sm text-emerald-300 truncate">
+                    ✓ {u.Persona || u.PersonaCodigo || (u.Carrito ? `carrito ${u.Carrito}` : "")}
+                  </p>
+                </li>
               ))}
             </ul>
             <p className="text-[11px] text-slate-400 mt-3">Lo que sale "sin guardar" no aparece aquí.</p>

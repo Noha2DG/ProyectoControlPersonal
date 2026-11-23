@@ -1,6 +1,7 @@
 import prisma from "./prisma.ts";
 import { hoyGT, diaSemanaDe } from "./dateGT.ts";
 import { cerrarMesaPorBaja } from "./mesaAsignacion.ts";
+import { cerrarPosicionPorBaja } from "./posicionEmpanizado.ts";
 import { leerMarcaje, registrarBitacora } from "./bitacoraMarcaje.ts";
 
 // Baja automática por abandono (20 nov 2026, regla del usuario, en prueba "esta semana"): quien no
@@ -114,6 +115,7 @@ export async function aplicarBajaAutomatica(hoy = hoyGT()) {
           `INSERT INTO Bajas (Codigo, FechaBaja, Motivo, Recontratable, Observaciones, RegistradoPor) VALUES (?, ?, 'Abandono de trabajo', 1, ?, ?)`,
           c.Codigo, c.FechaBaja, obs, USUARIO);
         await cerrarMesaPorBaja(tx, c.Codigo, c.FechaBaja);
+        await cerrarPosicionPorBaja(tx, c.Codigo, c.FechaBaja);
         hechas.push(c.Codigo);
       }, { timeout: 30_000 });
     } catch (err: any) {

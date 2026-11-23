@@ -63,6 +63,11 @@ export interface Permisos {
   // Pantalla de pesaje (#/pesaje): aparte de `basculas` para dársela a quien pesa sin la
   // configuración. `anular_caja` es de supervisor: quita una caja ya guardada.
   pesaje_bascula?: { usar?: boolean; anular_caja?: boolean };
+  // Empanizado: toma del piso, lotes y cierre a Túnel (routes/empanizado.ts). Aparte de `destajo`:
+  // su pesaje y su pago no se mezclan con los de Pelado. `reporte` = producción por persona.
+  empanizado?:     { ver?: boolean; editar?: boolean; reporte?: boolean };
+  // Mesas y bandas de Empanizado con posición fija: pestaña de Catálogos, como Mesas de Pelado.
+  mesas_empanizado?: { ver?: boolean; editar?: boolean };
 }
 
 export interface AuthPayload {

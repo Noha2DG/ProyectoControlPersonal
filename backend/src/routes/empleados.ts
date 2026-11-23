@@ -3,6 +3,7 @@ import jwt from "jsonwebtoken";
 import prisma from "../lib/prisma.ts";
 import { requirePerm } from "../middleware/auth.ts";
 import { cerrarMesaPorBaja } from "../lib/mesaAsignacion.ts";
+import { cerrarPosicionPorBaja } from "../lib/posicionEmpanizado.ts";
 
 function getOperador(req: Request): string {
   try {
@@ -252,6 +253,7 @@ router.delete("/:codigo", requirePerm("empleados", "baja"), async (req: Request,
     // Si estaba en una mesa de pelado, la fecha de baja es su último día ahí. Al recontratarla no
     // vuelve sola a ninguna mesa: la supervisora la asigna de nuevo.
     await cerrarMesaPorBaja(prisma, codigo, fechaBaja);
+    await cerrarPosicionPorBaja(prisma, codigo, fechaBaja); // y su posición en Empanizado
     res.json({ ok: true });
   } catch (err: any) {
     res.status(500).json({ error: err.message });

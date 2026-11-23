@@ -17,6 +17,7 @@ import CatalogosPage from "./pages/CatalogosPage.jsx";
 import DestajoPage from "./pages/DestajoPage.jsx";
 import DescongeladoPage from "./pages/DescongeladoPage.jsx";
 import TratamientoPage from "./pages/TratamientoPage.jsx";
+import EmpanizadoPage from "./pages/EmpanizadoPage.jsx";
 import EtiquetadoPage from "./pages/EtiquetadoPage.jsx";
 import ImpresionEtiquetasPage from "./pages/ImpresionEtiquetasPage.jsx";
 import PalletsPage from "./pages/PalletsPage.jsx";
@@ -69,6 +70,8 @@ const Icon = {
   destajo:   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M12 3v17.25m0 0c-1.472 0-2.882.265-4.185.75M12 20.25c1.472 0 2.882.265 4.185.75M18.75 4.97A48.416 48.416 0 0012 4.5c-2.291 0-4.545.16-6.75.47m13.5 0c1.01.143 2.01.317 3 .52m-3-.52l2.62 10.726c.122.499-.106 1.028-.589 1.202a5.988 5.988 0 01-2.031.352 5.988 5.988 0 01-2.031-.352c-.483-.174-.711-.703-.59-1.202L18.75 4.971zm-16.5.52c.99-.203 1.99-.377 3-.52m0 0l2.62 10.726c.122.499-.106 1.028-.589 1.202a5.989 5.989 0 01-2.031.352 5.989 5.989 0 01-2.031-.352c-.483-.174-.711-.703-.59-1.202L5.25 4.971z" />,
   // Copo de nieve: lo que se descongela.
   descongelado: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M12 3v18M4.2 7.5l15.6 9M4.2 16.5l15.6-9M12 3l-2 2m2-2l2 2M12 21l-2-2m2 2l2-2M4.2 7.5l.73 2.73M4.2 7.5l2.73-.73M19.8 16.5l-.73-2.73M19.8 16.5l-2.73.73M4.2 16.5l2.73.73M4.2 16.5l.73-2.73M19.8 7.5l-2.73-.73M19.8 7.5l-.73 2.73" />,
+  // Capas apiladas: el producto empanizado (camarón, harina, empaque).
+  empanizado: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M6.429 9.75L2.25 12l4.179 2.25m0-4.5l5.571 3 5.571-3m-11.142 0L2.25 7.5 12 2.25l9.75 5.25-4.179 2.25m0 0L21.75 12l-4.179 2.25m0 0l4.179 2.25L12 21.75 2.25 16.5l4.179-2.25m11.142 0l-5.571 3-5.571-3" />,
   // Matraz: el tratamiento químico.
   tratamiento: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 014.5 0m0 0v5.714c0 .597.237 1.17.659 1.591L19.8 15.3M14.25 3.104c.251.023.501.05.75.082M19.8 15.3l-1.57.393A9.065 9.065 0 0112 15a9.065 9.065 0 00-6.23-.693L5 14.5m14.8.8l1.402 1.402c1.232 1.232.65 3.318-1.067 3.611A48.309 48.309 0 0112 21c-2.773 0-5.491-.235-8.135-.687-1.718-.293-2.3-2.379-1.067-3.61L5 14.5" />,
   etiquetado: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M9.568 3H5.25A2.25 2.25 0 003 5.25v4.318c0 .597.237 1.169.659 1.591l9.581 9.581a2.25 2.25 0 003.182 0l4.318-4.318a2.25 2.25 0 000-3.182L10.16 3.66A2.25 2.25 0 008.568 3zM6 6h.008v.008H6V6z" />,
@@ -245,6 +248,9 @@ function Dashboard({ inicio }) {
   if (perm("planificacion",   "ver")) nav.push({ key: "planif",    label: "Planificación",       icon: "planif"   });
   if (perm("descongelado",   "ver")) nav.push({ key: "descongelado", label: "Descongelado",     icon: "descongelado" });
   if (perm("tratamiento",    "ver")) nav.push({ key: "tratamiento",  label: "Tratamiento",      icon: "tratamiento"  });
+  // Empanizado: también con solo `empanizado.reporte` (quien revisa la producción para el pago).
+  const verEmpanizado = perm("empanizado", "ver") || perm("empanizado", "reporte");
+  if (verEmpanizado)                 nav.push({ key: "empanizado",   label: "Empanizado",       icon: "empanizado"   });
   // Destajo también aparece con solo `mesas.reporte` (supervisores que consultan la producción por
   // mesa); adentro DestajoPage muestra solo las pestañas de cada permiso.
   const verDestajo = perm("destajo", "ver") || perm("mesas", "reporte");
@@ -264,7 +270,7 @@ function Dashboard({ inicio }) {
   if (perm("usuarios",       "ver")) nav.push({ key: "usuarios",  label: "Usuarios",            icon: "usuarios" });
   // Mesas de Pelado, Tarifas, Áreas y Tipos de Permiso viven dentro de Catálogos, cada una con su
   // permiso propio: basta cualquiera de ellos para entrar (y adentro solo se ven sus pestañas).
-  const verCatalogos = perm("catalogos", "ver") || perm("mesas", "ver") || perm("tarifas", "ver")
+  const verCatalogos = perm("catalogos", "ver") || perm("mesas", "ver") || perm("mesas_empanizado", "ver") || perm("tarifas", "ver")
     || perm("areas", "ver") || perm("tipos_permiso", "ver");
   if (verCatalogos)                  nav.push({ key: "catalogos", label: "Catálogos",           icon: "catalogos" });
 
@@ -286,6 +292,7 @@ function Dashboard({ inicio }) {
     planif:    "Planificación por Área",
     descongelado: "Descongelado de Materia Prima",
     tratamiento: "Tratamiento de Camarón",
+    empanizado: "Empanizado — Lotes y producción",
     destajo:   "Destajo — Materia Prima y Pesaje",
     etiquetado: "Agrupación — Orden de Trabajo",
     imprimirEtiquetas: "Impresión de Etiquetas",
@@ -450,6 +457,7 @@ function Dashboard({ inicio }) {
             {seccion === "planif"   && perm("planificacion",   "ver") && <PlanificacionPage />}
             {seccion === "descongelado" && perm("descongelado", "ver") && <DescongeladoPage />}
             {seccion === "tratamiento"  && perm("tratamiento",  "ver") && <TratamientoPage />}
+            {seccion === "empanizado"   && verEmpanizado && <EmpanizadoPage />}
             {seccion === "destajo"  && verDestajo && <DestajoPage tabInicial={inicio?.tab} />}
             {seccion === "pedidos"   && perm("pedidos",       "ver") && <PedidosClientesPage />}
             {seccion === "importaciones" && perm("importaciones", "ver") && <ImportacionesPage />}

@@ -449,7 +449,7 @@ function autoWidth(ws, data) {
 // Básculas → reporte de pesadas (GET /api/balanzas/reporte): una hoja con TODAS las pesadas y todos
 // sus datos, y otra resumida por lote / talla / empaque / pedido / carrito. Solo cuentan en el resumen
 // las cajas guardadas (dentro del rango) y no anuladas; los intentos fuera de rango van en su columna.
-export const TIPO_PESADA_TXT = { PPV: "Pesar PPV", PERSONA: "Producto terminado", PRODUCTO: "Por producto" };
+export const TIPO_PESADA_TXT = { PPV: "Pesar PPV", PERSONA: "Producto terminado", PRODUCTO: "Por producto", EMPANIZADO: "Empanizado" };
 export const RESULTADO_PESADA_TXT = { OK: "Guardada", BAJO: "Bajo peso (no guardada)", SOBRE: "Sobrepeso (no guardada)" };
 
 export function exportarPesadasBascula(filas, desde, hasta) {
@@ -496,4 +496,32 @@ export function exportarPesadasBascula(filas, desde, hasta) {
   autoWidth(ws2, resumen);
   XLSX.utils.book_append_sheet(wb, ws2, "Resumen por lote");
   XLSX.writeFile(wb, `Pesadas_basculas_${desde}_a_${hasta}.xlsx`);
+}
+
+// Empanizado → Producción por persona (20 nov 2026): base del pago de Empanizado, aparte de Pelado.
+// Hoja 1 un renglón por persona; hoja 2 el detalle por día, lote, producto y destino.
+export function exportarProduccionEmpanizado(porPersona, filas, desde, hasta) {
+  const fecha = (iso) => {
+    const [a, m, d] = String(iso ?? "").slice(0, 10).split("-").map(Number);
+    return a ? new Date(a, m - 1, d) : null;
+  };
+  const destino = (d) => ({ EXPORTACION: "Exportación", LOCAL: "Venta local" }[d] ?? d ?? "");
+  const resumen = porPersona.map(p => ({
+    "Mesa / banda": p.MesaNombre ?? "sin posición", "Posición": p.Posicion ?? "", "Código": p.Codigo, "Nombre": p.Nombre,
+    "Días": p.Dias, "Bandejas": p.Bandejas, "Kilos": +Number(p.Kg).toFixed(3),
+  }));
+  const detalle = filas.map(f => ({
+    "Fecha": fecha(f.Fecha), "Mesa / banda": f.MesaNombre ?? "sin posición", "Posición": f.Posicion ?? "",
+    "Código": f.Codigo, "Nombre": f.Nombre, "Lote": f.Lote, "Talla": f.DescripcionTalla ?? f.Talla,
+    "Producto que sale": `${f.ClaseSalida ?? ""} ${f.DescripcionClaseSalida ?? ""}`.trim(), "Destino": destino(f.Destino),
+    "Pedido": f.CodigoPedido ?? "", "Primera": f.Primera, "Última": f.Ultima, "Bandejas": f.Bandejas, "Kilos": +Number(f.Kg).toFixed(3),
+  }));
+  const wb = XLSX.utils.book_new();
+  const ws1 = XLSX.utils.json_to_sheet(resumen);
+  autoWidth(ws1, resumen);
+  XLSX.utils.book_append_sheet(wb, ws1, "Por persona");
+  const ws2 = XLSX.utils.json_to_sheet(detalle, { cellDates: true });
+  autoWidth(ws2, detalle);
+  XLSX.utils.book_append_sheet(wb, ws2, "Detalle");
+  XLSX.writeFile(wb, `Empanizado_produccion_${desde}_a_${hasta}.xlsx`);
 }

@@ -42,6 +42,7 @@ import reportesRouter from "./routes/reportes.ts";
 import descongeladoRouter from "./routes/descongelado.ts";
 import tratamientoRouter from "./routes/tratamiento.ts";
 import mesasRouter from "./routes/mesas.ts";
+import empanizadoRouter from "./routes/empanizado.ts";
 import tarifasRouter from "./routes/tarifas.ts";
 import importacionesRouter from "./routes/importaciones.ts";
 import balanzasRouter from "./routes/balanzas.ts";
@@ -128,6 +129,7 @@ app.use("/api/reportes", reportesRouter);
 app.use("/api/descongelado", descongeladoRouter);
 app.use("/api/tratamiento", tratamientoRouter);
 app.use("/api/mesas", mesasRouter);
+app.use("/api/empanizado", empanizadoRouter);
 app.use("/api/tarifas", tarifasRouter);
 app.use("/api/importaciones", importacionesRouter);
 // Sin requireAuth aquí: /latido lo llama el cabezal con su propio token; el resto de rutas lo pide

@@ -4,6 +4,7 @@ import ClasePage from "./ClasePage.jsx";
 import PresentacionPage from "./PresentacionPage.jsx";
 import PiscinaCicloPage from "./PiscinaCicloPage.jsx";
 import MesasPage from "./MesasPage.jsx";
+import MesasEmpanizadoPage from "./MesasEmpanizadoPage.jsx";
 import TarifasPage from "./TarifasPage.jsx";
 import AreasPage from "./AreasPage.jsx";
 import TiposPermisoPage from "./TiposPermisoPage.jsx";
@@ -29,6 +30,8 @@ const TABS = [
   // Mesas de pelado: permiso propio `mesas`, no `catalogos` — solo la supervisora de pelado la ve.
   // Quien tenga solo `mesas` entra a Catálogos y ve únicamente esta pestaña.
   { key: "mesas", label: "Mesas de Pelado", perm: "mesas" },
+  // Mesas y bandas de Empanizado con posición fija: mismo esquema, permiso propio.
+  { key: "mesasEmpanizado", label: "Mesas de Empanizado", perm: "mesas_empanizado" },
   // Tarifas de destajo: permiso propio `tarifas` (es dinero, base de la planilla).
   { key: "tarifas", label: "Tarifas", perm: "tarifas" },
   // Áreas y Tipos de Permiso se movieron aquí desde el menú principal (8 oct 2026); conservan su
@@ -40,10 +43,11 @@ const TABS = [
 export default function CatalogosPage() {
   const verCatalogos = usePuede("catalogos", "ver");
   const verMesas = usePuede("mesas", "ver");
+  const verMesasEmp = usePuede("mesas_empanizado", "ver");
   const verTarifas = usePuede("tarifas", "ver");
   const verAreas = usePuede("areas", "ver");
   const verTiposPermiso = usePuede("tipos_permiso", "ver");
-  const puede = { mesas: verMesas, tarifas: verTarifas, areas: verAreas, tipos_permiso: verTiposPermiso };
+  const puede = { mesas: verMesas, mesas_empanizado: verMesasEmp, tarifas: verTarifas, areas: verAreas, tipos_permiso: verTiposPermiso };
   const tabs = TABS.filter(t => (t.perm ? puede[t.perm] : verCatalogos));
   const [tab, setTab] = useState(tabs[0]?.key);
 
@@ -90,6 +94,7 @@ export default function CatalogosPage() {
         <CatalogoSimpleTable api="/api/unidades-congelacion" pk="Codigo" pkLabel="Código" nuevoLabel="+ Nueva Unidad de Congelación" />
       )}
       {tab === "mesas" && verMesas && <MesasPage />}
+      {tab === "mesasEmpanizado" && verMesasEmp && <MesasEmpanizadoPage />}
       {tab === "tarifas" && verTarifas && <TarifasPage />}
       {tab === "areas" && verAreas && <AreasPage />}
       {tab === "tiposPermiso" && verTiposPermiso && <TiposPermisoPage />}

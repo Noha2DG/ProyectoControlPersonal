@@ -67,7 +67,7 @@ function estadoDe(b) {
 /** "Empanizado · producto terminado · Ana Pérez", o "sin sesión". */
 function dondeEsta(b) {
   if (!b.SesionId) return "sin sesión";
-  return [b.SesionBodega ?? b.SesionArea, b.SesionModo === "PERSONA" ? "producto terminado" : "por producto", b.SesionOperadora]
+  return [b.SesionBodega ?? b.SesionArea, (TIPO_PESADA_TXT[b.SesionModo] ?? b.SesionModo ?? "").toLowerCase(), b.SesionOperadora]
     .filter(Boolean).join(" · ");
 }
 

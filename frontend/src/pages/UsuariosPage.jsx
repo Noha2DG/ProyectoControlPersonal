@@ -34,6 +34,10 @@ const MODULOS = [
   // Igual que Descongelado: "cerrar" fija las diferencias de báscula del día y reabrir las borra.
   { key: "tratamiento",    label: "Tratamiento de Camarón (químico)", acciones: ["ver","crear","editar","eliminar","cerrar"], grupo: "Operación" },
   { key: "destajo",        label: "Destajo — Materia Prima y Pesaje", acciones: ["ver","crear","editar","eliminar"], grupo: "Operación" },
+  // Empanizado (20 nov 2026): aparte de Destajo, su pesaje y su pago no se mezclan con los de Pelado.
+  // "editar" = tomar del piso, bajar, descartar, cerrar y reabrir lotes; "reporte" = producción por persona.
+  { key: "empanizado",     label: "Empanizado — Lotes y producción", acciones: ["ver","editar","reporte"], grupo: "Operación",
+    etiquetas: { reporte: "Ver producción por persona" } },
   { key: "etiquetado",     label: "Etiquetado — Orden de Trabajo",   acciones: ["ver","crear","editar","eliminar","imprimir"], grupo: "Operación" },
   // "trasladar" es la acción fuerte de bodega: mueve cajas de un polín SELLADO (cerrado y ubicado en
   // el rack) a otro, sin des-ubicarlo. Se separa de "editar" —que es la operación diaria de armar y
@@ -52,7 +56,8 @@ const MODULOS = [
   // Básculas de empaque: "configurar" registra equipos y emite tokens; "comandos" reinicia o cambia
   // parámetros de un cabezal en marcha (operación de turno, no de alta de equipos).
   // "reporte" (19 nov 2026): solo la pestaña Reporte de pesadas, sin ver equipos, empaques ni áreas.
-  { key: "basculas",      label: "Básculas — Equipos en línea",      acciones: ["ver","configurar","comandos","reporte"], grupo: "Operación" },
+  { key: "basculas",      label: "Básculas — Equipos en línea",      acciones: ["ver","configurar","comandos","reporte"], grupo: "Operación",
+    etiquetas: { reporte: "Ver reporte de pesadas" } },
   // ── Pedidos
   // Separado de `catalogos` porque es trabajo diario: capturar y corregir proformas, y dar de alta
   // clientes. Con `catalogos` venía de regalo Presentaciones, donde CajasXMaster define el objetivo
@@ -72,6 +77,8 @@ const MODULOS = [
   // mesas y personas (ver/crear/editar/eliminar). "reporte" es la producción del día por mesa
   // (Destajo → Por Mesa y el QR de cada mesa), para supervisores que no mueven personas.
   { key: "mesas",          label: "Mesas de Pelado",                acciones: ["ver","crear","editar","eliminar","reporte"], grupo: "Config"   },
+  // Mesas y bandas de Empanizado con posición fija (pestaña de Catálogos), aparte de las de Pelado.
+  { key: "mesas_empanizado", label: "Mesas de Empanizado",          acciones: ["ver","editar"], grupo: "Config"   },
   // Pestaña dentro de Catálogos con permiso propio porque es dinero (base de la planilla): "editar"
   // prepara versiones en borrador; "aprobar" las pone en vigor o las anula y registra el salario mínimo.
   { key: "tarifas",        label: "Tarifas de Destajo",             acciones: ["ver","editar","aprobar"], grupo: "Config"   },
@@ -91,7 +98,6 @@ const ACCION_LABELS = {
   liberar: "Liberar / rechazar",
   configurar: "Registrar y configurar",
   comandos: "Enviar comandos",
-  reporte: "Ver reporte de pesadas",
   usar: "Usar",
   anular_caja: "Anular caja",
   muestra: "Muestra para análisis",
@@ -294,7 +300,7 @@ function UsuarioModal({ usuario, onSave, onClose }) {
                                 <input type="checkbox" checked={hasPerm(m.key, accion)}
                                   onChange={() => togglePerm(m.key, accion)}
                                   className="w-4 h-4 accent-blue-600 cursor-pointer" />
-                                {ACCION_LABELS[accion] ?? accion}
+                                {m.etiquetas?.[accion] ?? ACCION_LABELS[accion] ?? accion}
                               </label>
                             ))}
                           </div>

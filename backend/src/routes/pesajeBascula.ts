@@ -2,6 +2,7 @@ import { Router, Response } from "express";
 import prisma from "../lib/prisma.ts";
 import { requireAuth, requirePerm, AuthRequest } from "../middleware/auth.ts";
 import { hoyGT } from "../lib/dateGT.ts";
+import { posicionDe, BODEGA_EMPANIZADO } from "../lib/empanizado.ts";
 
 // Pantalla de pesaje en báscula (#/pesaje). Permiso propio `pesaje_bascula` — separado de
 // `basculas` (configuración) para dárselo a quien pesa sin darle la configuración.
@@ -21,7 +22,18 @@ const MIN_INACTIVIDAD = 15;
 // talla, tipo de empaque CON rango y pedido de referencia (no toca el avance del pedido). Una sola
 // persona pesa todo: sin carnet por caja. Va a su propia tabla, PesadaPrueba, para no mezclarse con
 // Pesada mientras sea prueba; ahí también quedan los intentos fuera de rango (Resultado BAJO/SOBRE).
-const MODOS = ["PERSONA", "PRODUCTO", "PPV"];
+// EMPANIZADO (20 nov 2026): producto terminado de Empanizado amarrado al lote que el encargado tomó
+// del piso (LoteEmpanizado, lib/empanizado.ts). Carnet por bandeja como PERSONA; la posición de la
+// persona sale sola de Catálogos → Mesas de Empanizado y queda guardada en la pesada.
+const MODOS = ["PERSONA", "PRODUCTO", "PPV", "EMPANIZADO"];
+// Carnet de una persona por cada bandeja, producto que sale y destino.
+const esProductoTerminado = (modo: string) => modo === "PERSONA" || modo === "EMPANIZADO";
+
+// La posición no debe trabar el pesaje: si la tabla aún no existe, la bandeja se guarda sin posición.
+async function posicionSegura(client: any, codigo: string, fecha: string) {
+  try { return await posicionDe(client, codigo, fecha); }
+  catch (err: any) { if (/doesn't exist|1146/.test(String(err.message))) return null; throw err; }
+}
 
 class ErrorNegocio extends Error { constructor(public status: number, msg: string, public extra?: any) { super(msg); } }
 const responder = (res: Response, err: any) =>
@@ -94,7 +106,7 @@ router.get("/persona/:codigo", requirePerm("pesaje_bascula", "usar"), async (req
   try {
     const e = await empleadoActivo(prisma, String(req.params.codigo).trim().toUpperCase());
     if (!e) { res.status(404).json({ error: "Carnet no encontrado o empleado de baja" }); return; }
-    res.json(e);
+    res.json({ ...e, Posicion: await posicionSegura(prisma, e.Codigo, hoyGT()) });
   } catch (err: any) { responder(res, err); }
 });
 
@@ -119,12 +131,14 @@ router.post("/sesion", requirePerm("pesaje_bascula", "usar"), async (req: AuthRe
       if (Number(a.EsPesadora) !== 1) throw new ErrorNegocio(400, `${e.NombreCompleto} está en ${a.NombreArea}, que no usa básculas.`);
 
       const modoArea = MODOS.includes(a.ModoPesaje) && a.ModoPesaje !== "PPV" ? a.ModoPesaje : null;
-      const opciones = [...(modoArea ? [modoArea] : ["PERSONA", "PRODUCTO"]), "PPV"];
+      // Un área de Empanizado sin modo propio pesa lo de Empanizado (lotes tomados del piso).
+      const deEmpanizado = a.BodegaVirtualCodigo === BODEGA_EMPANIZADO;
+      const opciones = [...(modoArea ? [modoArea] : deEmpanizado ? ["EMPANIZADO"] : ["PERSONA", "PRODUCTO"]), "PPV"];
       const modo = String(req.body?.modo ?? "").toUpperCase();
       if (!opciones.includes(modo)) return { menu: true, opciones, operadora: e.NombreCompleto, area: a.NombreArea };
 
       // PPV no toca el inventario al piso: no necesita bodega.
-      let bodega: string | null = modo === "PPV" ? null : (a.BodegaVirtualCodigo ?? null);
+      let bodega: string | null = modo === "PPV" ? null : modo === "EMPANIZADO" ? BODEGA_EMPANIZADO : (a.BodegaVirtualCodigo ?? null);
       if (modo !== "PPV" && !bodega && req.body?.bodega) {
         const [bv]: any[] = await tx.$queryRaw`SELECT Codigo FROM BodegaVirtual WHERE Codigo = ${String(req.body.bodega)} AND Activo = 1`;
         if (bv) bodega = bv.Codigo;
@@ -140,7 +154,7 @@ router.post("/sesion", requirePerm("pesaje_bascula", "usar"), async (req: AuthRe
          WHERE BalanzaCodigo = ${balanza} AND Fin IS NULL`;
       await tx.$executeRaw`
         INSERT INTO SesionBascula (BalanzaCodigo, OperadoraCodigo, AreaCodigo, BodegaVirtualCodigo, Modo, PideCarrito, FechaProduccion, Usuario)
-        VALUES (${balanza}, ${carnet}, ${a.CodigoArea}, ${bodega}, ${modo}, ${modo === "PERSONA" && Number(a.PideCarrito) === 1 ? 1 : 0}, ${hoyGT()}, ${req.user!.username})`;
+        VALUES (${balanza}, ${carnet}, ${a.CodigoArea}, ${bodega}, ${modo}, ${esProductoTerminado(modo) && Number(a.PideCarrito) === 1 ? 1 : 0}, ${hoyGT()}, ${req.user!.username})`;
       const [{ id }]: any[] = await tx.$queryRaw`SELECT LAST_INSERT_ID() AS id`;
       return { sesion: await datosSesion(tx, Number(id)) };
     });
@@ -186,6 +200,33 @@ router.get("/sesion/:id/catalogos", requirePerm("pesaje_bascula", "usar"), async
       res.json({
         empaques: (empaques as any[]).map(e => ({ ...e, ConRango: true })),
         tallas, pedidos, lotes: [], clases: [],
+      });
+      return;
+    }
+    if (s.Modo === "EMPANIZADO") {
+      // Los lotes que el encargado tomó del piso y siguen abiertos: de ahí salen lote, clase y talla.
+      const [empaques, clases, pedidos, lotesEmp] = await Promise.all([
+        prisma.$queryRawUnsafe(`
+          SELECT Codigo, Nombre, Unidad, PesoNetoG, DeshidratacionPct, DeshidratacionG, PesoBrutoG, MinG, MaxG, ConRango
+            FROM EmpaquePesaje WHERE Activo = 1 ORDER BY Nombre`),
+        prisma.$queryRawUnsafe(`SELECT Clase, Descripcion FROM Clase WHERE Activo = 1 ORDER BY Clase`),
+        prisma.$queryRawUnsafe(`
+          SELECT p.CodigoPedido, p.Descripcion, c.RazonSocial AS Cliente
+            FROM Pedidos p JOIN Clientes c ON c.Codigo = p.CodigoCliente
+           WHERE p.Estatus = 'Proceso' AND c.Tipo = 'Exportacion'
+           ORDER BY c.RazonSocial, p.CodigoPedido`),
+        prisma.$queryRawUnsafe(`
+          SELECT le.LoteEmpanizadoId, le.Lote, le.Clase, cl.Descripcion AS ClaseDesc, le.Talla, ta.Descripcion AS TallaDesc,
+                 COALESCE((SELECT SUM(p.PesoNetoG) FROM Pesada p WHERE p.LoteEmpanizadoId = le.LoteEmpanizadoId AND p.Anulada = 0), 0) AS PesadoG
+            FROM LoteEmpanizado le
+            LEFT JOIN Clase cl ON cl.Clase = le.Clase
+            LEFT JOIN Tallas ta ON ta.Codigo = le.Talla
+           WHERE le.Estado = 'Abierto' ORDER BY le.Fecha, le.LoteEmpanizadoId`),
+      ]);
+      res.json({
+        empaques: (empaques as any[]).map(e => ({ ...e, ConRango: Number(e.ConRango) === 1 })),
+        clases, pedidos, tallas: [], lotes: [],
+        lotesEmpanizado: (lotesEmp as any[]).map(l => ({ ...l, LoteEmpanizadoId: Number(l.LoteEmpanizadoId), Talla: Number(l.Talla), PesadoG: Number(l.PesadoG) })),
       });
       return;
     }
@@ -250,7 +291,8 @@ router.post("/pesadas", requirePerm("pesaje_bascula", "usar"), async (req: AuthR
 
       const s = await exigirSesionAbierta(tx, Number(b.SesionId));
       if (s.Modo === "PPV") throw new ErrorNegocio(400, "Esta sesión es de prueba PPV: sus pesadas van a /pruebas");
-      const pt = s.Modo === "PERSONA"; // producto terminado: carnet por bandeja, producto que sale y destino
+      const pt = esProductoTerminado(s.Modo); // carnet por bandeja, producto que sale y destino
+      const emp_ = s.Modo === "EMPANIZADO";
       const peso = Number(b.PesoBrutoG);
       if (!Number.isInteger(peso) || peso <= 0) throw new ErrorNegocio(400, "Peso inválido");
 
@@ -297,6 +339,18 @@ router.post("/pesadas", requirePerm("pesaje_bascula", "usar"), async (req: AuthR
       // con la de materia prima (D30, D31): exigir el par (Lote, Clase) en Lotes rechazaba todo lo del
       // piso (17 nov 2026, "Elija el lote" en BAL-01). Basta con que el lote exista —en Lotes o al piso—
       // y la clase exista en el catálogo.
+      // Empanizado: lote, clase y talla son los del lote tomado del piso, y tiene que seguir abierto.
+      // LOCK IN SHARE MODE: varias básculas pesan a la vez, pero cerrar el lote (FOR UPDATE) espera a
+      // que terminen, y una bandeja que llega después del cierre se rechaza.
+      let loteEmp: any = null;
+      if (emp_) {
+        [loteEmp] = await tx.$queryRawUnsafe(
+          `SELECT LoteEmpanizadoId, Lote, Clase, Talla, Estado FROM LoteEmpanizado WHERE LoteEmpanizadoId = ? LOCK IN SHARE MODE`,
+          Number(b.LoteEmpanizadoId) || 0);
+        if (!loteEmp) throw new ErrorNegocio(400, "Elija el lote");
+        if (loteEmp.Estado !== "Abierto") throw new ErrorNegocio(400, `El lote ${loteEmp.Lote} ya se cerró: elija otro`);
+        b.Lote = loteEmp.Lote; b.Clase = loteEmp.Clase; b.Talla = Number(loteEmp.Talla);
+      }
       const loteTxt = String(b.Lote ?? "").trim(), claseTxt = String(b.Clase ?? "").trim();
       if (!loteTxt) throw new ErrorNegocio(400, "Elija el lote");
       if (!claseTxt) throw new ErrorNegocio(400, "Elija el tipo de producto");
@@ -314,6 +368,8 @@ router.post("/pesadas", requirePerm("pesaje_bascula", "usar"), async (req: AuthR
         if (!persona) throw new ErrorNegocio(400, "Escanee el carnet de quien armó esta bandeja");
         if (!(await empleadoActivo(tx, persona))) throw new ErrorNegocio(400, `${persona}: carnet no encontrado o de baja`);
       }
+      // La posición que la persona tiene HOY queda en la pesada: si mañana la mueven, esto no cambia.
+      const pos = emp_ && persona ? await posicionSegura(tx, persona, s.FechaProduccion) : null;
 
       await tx.$executeRaw`
         INSERT INTO Pesada (Uuid, SesionId, BalanzaCodigo, OperadoraCodigo, AreaCodigo, BodegaVirtualCodigo, Modo,
@@ -325,10 +381,15 @@ router.post("/pesadas", requirePerm("pesaje_bascula", "usar"), async (req: AuthR
                 ${conRango ? Number(emp.PesoNetoG) : null}, ${conRango ? Number(emp.MinG) : null}, ${conRango ? Number(emp.MaxG) : null},
                 ${s.FechaProduccion}, ${claseSalida}, ${destino}, ${pedido}, ${carrito})`;
       const [{ id }]: any[] = await tx.$queryRaw`SELECT LAST_INSERT_ID() AS id`;
+      if (emp_) {
+        await tx.$executeRaw`
+          UPDATE Pesada SET LoteEmpanizadoId = ${Number(loteEmp.LoteEmpanizadoId)}, MesaCodigo = ${pos?.MesaCodigo ?? null}, Posicion = ${pos?.Posicion ?? null}
+           WHERE PesadaId = ${Number(id)}`;
+      }
       await tx.$executeRaw`UPDATE SesionBascula SET UltimaActividad = NOW() WHERE SesionId = ${s.SesionId}`;
       const [{ n }]: any[] = await tx.$queryRaw`
         SELECT COUNT(*) AS n FROM Pesada WHERE BalanzaCodigo = ${s.BalanzaCodigo} AND FechaProduccion = ${s.FechaProduccion} AND Anulada = 0`;
-      return { PesadaId: Number(id), Numero: Number(n) };
+      return { PesadaId: Number(id), Numero: Number(n), Posicion: pos };
     });
     res.status(201).json(r);
   } catch (err: any) { responder(res, err); }
@@ -360,11 +421,12 @@ router.get("/sesion/:id/resumen", requirePerm("pesaje_bascula", "usar"), async (
       SELECT COUNT(*) AS Cajas, COALESCE(SUM(PesoNetoG), 0) AS NetoG FROM Pesada
        WHERE BalanzaCodigo = ${s.BalanzaCodigo} AND FechaProduccion = ${s.FechaProduccion} AND Anulada = 0`;
     const ultimas: any[] = await prisma.$queryRaw`
-      SELECT p.PesadaId, p.PesoBrutoG, p.PersonaCodigo, p.Lote, DATE_FORMAT(p.CreadoEn, '%H:%i:%s') AS Hora,
-             CONCAT_WS(' ', e.PrimerNombre, e.PrimerApellido) AS Persona
+      SELECT p.PesadaId, p.PesoBrutoG, p.PersonaCodigo, p.Lote, p.Carrito, DATE_FORMAT(p.CreadoEn, '%H:%i:%s') AS Hora,
+             CONCAT_WS(' ', e.PrimerNombre, e.PrimerApellido) AS Persona, p.Posicion, me.Nombre AS MesaNombre
         FROM Pesada p LEFT JOIN Empleados e ON e.Codigo = p.PersonaCodigo
+        LEFT JOIN MesasEmpanizado me ON me.Codigo = p.MesaCodigo
        WHERE p.SesionId = ${s.SesionId} AND p.Anulada = 0 ORDER BY p.PesadaId DESC LIMIT 8`;
-    res.json({ Cajas: Number(tot.Cajas), NetoG: Number(tot.NetoG), ultimas: ultimas.map(u => ({ ...u, PesadaId: Number(u.PesadaId) })) });
+    res.json({ Cajas: Number(tot.Cajas), NetoG: Number(tot.NetoG), ultimas: ultimas.map(u => ({ ...u, PesadaId: Number(u.PesadaId), Posicion: u.Posicion == null ? null : Number(u.Posicion) })) });
   } catch (err: any) { responder(res, err); }
 });
 
@@ -373,6 +435,11 @@ router.post("/pesadas/:id/anular", requirePerm("pesaje_bascula", "anular_caja"),
   try {
     const motivo = String(req.body?.motivo ?? "").trim().slice(0, 200);
     if (!motivo) throw new ErrorNegocio(400, "Escriba por qué se anula");
+    // Una bandeja de un lote de Empanizado ya cerrado ya pasó a Túnel: primero se reabre el lote.
+    const [le]: any[] = await (prisma as any).$queryRawUnsafe(`
+      SELECT le.Lote, le.Estado FROM Pesada p JOIN LoteEmpanizado le ON le.LoteEmpanizadoId = p.LoteEmpanizadoId
+       WHERE p.PesadaId = ?`, Number(req.params.id)).catch(() => []);
+    if (le && le.Estado !== "Abierto") throw new ErrorNegocio(400, `El lote ${le.Lote} ya se cerró y pasó a Túnel: reábralo en Empanizado para anular esta bandeja`);
     const n = await prisma.$executeRaw`
       UPDATE Pesada SET Anulada = 1, AnuladaPor = ${req.user!.username}, AnuladaEn = NOW(), MotivoAnulacion = ${motivo}
        WHERE PesadaId = ${Number(req.params.id)} AND Anulada = 0`;
