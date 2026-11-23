@@ -429,17 +429,23 @@ function Pesaje({ sesion, b, onCerrar, onMenu }) {
   // Color y textos del recuadro: SIEMPRE según el peso. Lo que falta para poder guardar va en un aviso
   // aparte arriba; antes reemplazaba el color y en rango se veía gris (usuario, 17 nov 2026).
   const faltaTodo = [...faltan, faltaCarnet && "carnet de la bandeja"].filter(Boolean);
+  // Empaque sin rango obligatorio pero con su rango calculado: se usa como referencia de colores.
+  const refLibre = !conRango && !!empaque && Number(empaque.MaxG) > 0 && Number(empaque.MaxG) >= Number(empaque.MinG);
   const textoFuera = (gr) => (!guardaFuera ? "no se guarda" : creible(gr) ? "se guarda marcada" : "no parece una bandeja");
   let fondo = "bg-slate-700", estado = "SIN LECTURA", sub = "revise la báscula o la app Báscula Puente";
   if (b.vigente) {
     if (b.gramos < vacioBajo) {
       fondo = "bg-slate-800"; estado = "PESA VACÍA";
-      sub = conRango ? `debe pesar ${g(empaque.MinG)} – ${g(empaque.MaxG)} g` : "ponga la bandeja";
+      sub = conRango ? `debe pesar ${g(empaque.MinG)} – ${g(empaque.MaxG)} g` : refLibre ? `referencia ${g(empaque.MinG)} – ${g(empaque.MaxG)} g` : "ponga la bandeja";
       if (b.gramos >= UMBRAL_VACIO_G) sub += ` · marca ${g(b.gramos)} g: ¿tarar la báscula?`;
     }
     else if (conRango && b.gramos < empaque.MinG) { fondo = "bg-amber-400 text-amber-950"; estado = "BAJO PESO"; sub = `faltan ${g(empaque.MinG - b.gramos)} g · ${textoFuera(b.gramos)}`; }
     else if (conRango && b.gramos > empaque.MaxG) { fondo = "bg-red-600"; estado = "SOBREPESO"; sub = `sobran ${g(b.gramos - empaque.MaxG)} g · ${textoFuera(b.gramos)}`; }
-    else { fondo = "bg-emerald-600"; estado = conRango ? "PESO CORRECTO" : "PESO REGISTRABLE"; sub = b.estable ? "retire la bandeja para guardar" : "esperando que se estabilice"; }
+    // Peso libre con rango de referencia (23 nov 2026, usuario): mismos colores como guía, pero se
+    // guarda cualquier peso estable.
+    else if (refLibre && b.gramos < empaque.MinG) { fondo = "bg-amber-400 text-amber-950"; estado = "BAJO PESO"; sub = `faltan ${g(empaque.MinG - b.gramos)} g · peso libre: se guarda igual`; }
+    else if (refLibre && b.gramos > empaque.MaxG) { fondo = "bg-red-600"; estado = "SOBREPESO"; sub = `sobran ${g(b.gramos - empaque.MaxG)} g · peso libre: se guarda igual`; }
+    else { fondo = "bg-emerald-600"; estado = conRango || refLibre ? "PESO CORRECTO" : "PESO REGISTRABLE"; sub = b.estable ? "retire la bandeja para guardar" : "esperando que se estabilice"; }
     if (faltaTodo.length && b.gramos >= vacioBajo) sub = "no se guardará: complete lo que falta";
   }
   // Aviso de guardado: franja grande abajo del recuadro del peso, en color sólido (usuario, 19 nov 2026:
@@ -626,9 +632,9 @@ function Pesaje({ sesion, b, onCerrar, onMenu }) {
             )}
             {/* El rango en grande (usuario, 17 nov 2026): la barra de abajo se quitó, el color ya dice bajo/sobre. */}
             {refUnidades != null && <p className="text-4xl font-extrabold mb-1 tracking-tight">{refUnidades} UNIDADES POR BANDEJA</p>}
-            {conRango && <p className="text-sm font-bold uppercase tracking-[0.25em] opacity-80">Debe pesar</p>}
+            {(conRango || refLibre) && <p className="text-sm font-bold uppercase tracking-[0.25em] opacity-80">{conRango ? "Debe pesar" : "Peso libre · referencia"}</p>}
             <p className="text-5xl font-extrabold mb-2 tracking-tight">
-              {conRango ? `${g(empaque.MinG)} – ${g(empaque.MaxG)} g` : "Peso libre"}
+              {conRango || refLibre ? `${g(empaque.MinG)} – ${g(empaque.MaxG)} g` : "Peso libre"}
             </p>
             <p className="text-[110px] leading-none font-bold font-mono tracking-tight">{b.vigente ? g(b.gramos) : "—"}<span className="text-4xl ml-2 font-semibold">g</span></p>
             <p className="text-2xl font-bold mt-2 tracking-wide text-center">{estado}</p>

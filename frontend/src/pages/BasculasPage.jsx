@@ -692,9 +692,11 @@ function FormEmpaque({ inicial, nuevo, puedeConfigurar, onGuardado, onCancelar }
                 <p className="text-xs text-slate-500">{calc.MinG} mínimo + {calc.RangoG} de rango</p></div>
               <div><p className="text-xs text-slate-500">Rango que se guarda</p>{calc.ConRango
                 ? <p className="text-3xl font-bold text-emerald-600">{calc.MinG.toLocaleString("es")} – {calc.MaxG.toLocaleString("es")} g</p>
-                : <p className="text-3xl font-bold text-slate-600">Peso libre</p>}</div>
+                : <><p className="text-3xl font-bold text-slate-600">Peso libre</p>
+                    <p className="text-xs text-slate-500">la báscula pinta los colores con {calc.MinG.toLocaleString("es")} – {calc.MaxG.toLocaleString("es")} g de referencia y guarda cualquier peso</p></>}</div>
             </div>
-            {calc.ConRango && <div className="mt-4 h-9 rounded-lg overflow-hidden flex text-xs font-semibold text-white">
+            {/* Con peso libre la barra queda como referencia de colores en la báscula (se guarda igual). */}
+            {calc.MaxG > 0 && <div className={`mt-4 h-9 rounded-lg overflow-hidden flex text-xs font-semibold text-white ${calc.ConRango ? "" : "opacity-60"}`}>
               <div style={{ width: `${barra.bajo}%` }} className="bg-amber-400 text-amber-950 flex items-center justify-center">BAJO</div>
               <div style={{ width: `${barra.ok}%` }} className="bg-emerald-500 flex items-center justify-center min-w-[80px]">GUARDA</div>
               <div className="flex-1 bg-red-500 flex items-center justify-center">SOBREPESO</div>
