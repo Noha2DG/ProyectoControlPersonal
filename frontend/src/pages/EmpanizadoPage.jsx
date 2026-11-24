@@ -14,8 +14,8 @@ import { exportarProduccionEmpanizado } from "../utils/exportExcel.js";
 
 const API = "/api/empanizado";
 const hoyGT = () => new Date().toLocaleDateString("sv-SE", { timeZone: "America/Guatemala" });
-const kg = (n, d = 2) => (n == null ? "—" : Number(n).toLocaleString("es", { minimumFractionDigits: d, maximumFractionDigits: d }));
-const pct = (n) => (n == null ? "—" : `${n > 0 ? "+" : ""}${Number(n).toLocaleString("es", { minimumFractionDigits: 1, maximumFractionDigits: 1 })} %`);
+const kg = (n, d = 2) => (n == null ? "—" : Number(n).toLocaleString("es-GT", { minimumFractionDigits: d, maximumFractionDigits: d }));
+const pct = (n) => (n == null ? "—" : `${n > 0 ? "+" : ""}${Number(n).toLocaleString("es-GT", { minimumFractionDigits: 1, maximumFractionDigits: 1 })} %`);
 const titulo = s => String(s ?? "").trim().replace(/\s+/g, " ").toLowerCase().replace(/(^|\s)\p{L}/gu, c => c.toUpperCase());
 const DESTINO = { EXPORTACION: { txt: "Exportación", cls: "bg-blue-100 text-blue-800" }, LOCAL: { txt: "Venta local", cls: "bg-orange-100 text-orange-800" } };
 const TIPO_MOV = { TOMA_EMPANIZADO: "Tomado del piso", BAJADO: "Bajado al piso", DESCARTE: "Descarte", PROCESADO: "Trasladado a Túnel" };
@@ -190,6 +190,7 @@ function AlPiso({ onTomado }) {
                       title={termos ? (abierta ? "Ocultar los termos" : "Ver los termos y tomar de ahí") : undefined}>
                       {termos && <span className="inline-block w-4 text-amber-600 font-sans">{abierta ? "▾" : "▸"}</span>}
                       {l.Lote}
+                      {l.LoteDia && l.LoteDia !== l.Lote && <span className="block text-[11px] font-sans font-normal text-emerald-700" title="Se pesa con el lote del día, como en Pelado">→ {l.LoteDia} hoy</span>}
                       {l.EsBajado && <span className="block text-[11px] font-sans font-normal text-amber-700">Bajado de la mesa</span>}
                       {l.FolioRemision && <span className="block text-[11px] font-sans font-normal text-gray-400">{l.FolioRemision}</span>}
                     </td>
@@ -329,7 +330,7 @@ function TarjetaLote({ l, puedeEditar, onDetalle, onAjuste, onCerrar, onReabrir 
     <div className={`bg-white rounded-xl shadow p-4 border-2 ${abierto ? "border-amber-300" : "border-transparent"}`}>
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
         <span className="text-xl font-bold font-mono">{l.Lote}</span>
-        <span className="text-gray-500">{l.Clase} {l.DescripcionClase} · {l.DescripcionTalla} · tomado {l.Fecha}{l.FechaLote ? ` · lote del ${l.FechaLote}` : ""}</span>
+        <span className="text-gray-500">{l.Clase} {l.DescripcionClase} · {l.DescripcionTalla} · tomado {l.Fecha}{l.FechaLote && l.FechaLote !== l.Fecha ? ` · lote del ${l.FechaLote}` : ""}</span>
         <span className={`ml-auto text-xs px-2 py-1 rounded font-semibold ${abierto ? "bg-amber-100 text-amber-800" : "bg-slate-100 text-slate-600"}`}>
           {abierto ? "ABIERTO" : `CERRADO ${l.CerradoEn ?? ""}`}
         </span>
@@ -531,7 +532,7 @@ function Produccion() {
       </div>
       <Aviso>{error}</Aviso>
       <div className="grid grid-cols-3 gap-3 mb-4">
-        <Cifra t="Personas" v={porPersona.length} /><Cifra t="Bandejas" v={tot.b.toLocaleString("es")} /><Cifra t="Kilos" v={`${kg(tot.k)} kg`} fuerte />
+        <Cifra t="Personas" v={porPersona.length} /><Cifra t="Bandejas" v={tot.b.toLocaleString("es-GT")} /><Cifra t="Kilos" v={`${kg(tot.k)} kg`} fuerte />
       </div>
       <div className="bg-white rounded-xl shadow overflow-x-auto">
         <table className="w-full text-sm">

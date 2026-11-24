@@ -213,7 +213,7 @@ function Panel({ b, bodegas, puedeConfigurar, puedeComandos, onCambio, onToken }
         <div className="flex items-center gap-2 flex-wrap">
           <span className="font-mono font-bold text-xl">{b.Codigo}</span>
           <span className={`w-2.5 h-2.5 rounded-full ${est.punto}`} />
-          <span className={`text-sm ${est.c}`}>{est.t}{b.EnLinea && b.UltimoPesoG !== null ? ` · ${b.UltimoPesoG.toLocaleString("es")} g` : ""}</span>
+          <span className={`text-sm ${est.c}`}>{est.t}{b.EnLinea && b.UltimoPesoG !== null ? ` · ${b.UltimoPesoG.toLocaleString("es-GT")} g` : ""}</span>
         </div>
         <p className="text-xs text-slate-500 mt-1">
           Último aviso {hace(b.SegSinContacto)}
@@ -385,7 +385,7 @@ function Equipos({ puedeConfigurar, puedeComandos }) {
                         <td className="px-2 truncate"><span className={`inline-flex items-center gap-1.5 ${est.c}`}><span className={`w-2 h-2 rounded-full shrink-0 ${est.punto}`} />{est.t}</span></td>
                         <td className={`px-2 truncate ${b.Activa && !b.EnLinea ? "text-red-600" : "text-slate-500"}`}>{hace(b.SegSinContacto)}</td>
                         <td className="px-2 font-mono text-slate-600 truncate" title={b.EnLinea ? "IP actual" : "Última IP conocida"}>{b.IpLocal ?? "—"}{b.IpLocal && !b.EnLinea ? " ?" : ""}</td>
-                        <td className="px-2 text-right font-mono">{b.EnLinea && b.UltimoPesoG !== null ? `${b.UltimoPesoG.toLocaleString("es")} g` : "—"}</td>
+                        <td className="px-2 text-right font-mono">{b.EnLinea && b.UltimoPesoG !== null ? `${b.UltimoPesoG.toLocaleString("es-GT")} g` : "—"}</td>
                         <td className="px-4 text-slate-500 truncate">{b.VersionApp ?? "—"}</td>
                       </tr>
                     );
@@ -686,14 +686,14 @@ function FormEmpaque({ inicial, nuevo, puedeConfigurar, onGuardado, onCancelar }
           <>
             <div className="flex flex-wrap items-end gap-8">
               <div><p className="text-xs text-slate-500">Deshidratación</p><p className="text-2xl font-bold">{calc.DeshidratacionG} g</p></div>
-              <div><p className="text-xs text-slate-500">Mínimo</p><p className="text-3xl font-bold">{calc.MinG.toLocaleString("es")} g</p>
+              <div><p className="text-xs text-slate-500">Mínimo</p><p className="text-3xl font-bold">{calc.MinG.toLocaleString("es-GT")} g</p>
                 <p className="text-xs text-slate-500">{calc.PesoNetoG} neto + {calc.DeshidratacionG} deshidratación</p></div>
-              <div><p className="text-xs text-slate-500">Máximo</p><p className="text-3xl font-bold">{calc.MaxG.toLocaleString("es")} g</p>
+              <div><p className="text-xs text-slate-500">Máximo</p><p className="text-3xl font-bold">{calc.MaxG.toLocaleString("es-GT")} g</p>
                 <p className="text-xs text-slate-500">{calc.MinG} mínimo + {calc.RangoG} de rango</p></div>
               <div><p className="text-xs text-slate-500">Rango que se guarda</p>{calc.ConRango
-                ? <p className="text-3xl font-bold text-emerald-600">{calc.MinG.toLocaleString("es")} – {calc.MaxG.toLocaleString("es")} g</p>
+                ? <p className="text-3xl font-bold text-emerald-600">{calc.MinG.toLocaleString("es-GT")} – {calc.MaxG.toLocaleString("es-GT")} g</p>
                 : <><p className="text-3xl font-bold text-slate-600">Peso libre</p>
-                    <p className="text-xs text-slate-500">la báscula pinta los colores con {calc.MinG.toLocaleString("es")} – {calc.MaxG.toLocaleString("es")} g de referencia y guarda cualquier peso</p></>}</div>
+                    <p className="text-xs text-slate-500">la báscula pinta los colores con {calc.MinG.toLocaleString("es-GT")} – {calc.MaxG.toLocaleString("es-GT")} g de referencia y guarda cualquier peso</p></>}</div>
             </div>
             {/* Con peso libre la barra queda como referencia de colores en la báscula (se guarda igual). */}
             {calc.MaxG > 0 && <div className={`mt-4 h-9 rounded-lg overflow-hidden flex text-xs font-semibold text-white ${calc.ConRango ? "" : "opacity-60"}`}>
@@ -757,7 +757,7 @@ function TiposEmpaque({ puedeConfigurar }) {
                 <tr key={e.Codigo} onClick={() => setSel(e.Codigo)} className={`cursor-pointer hover:bg-slate-50 ${sel === e.Codigo ? "bg-blue-50" : ""} ${e.Activo ? "" : "opacity-50"}`}>
                   <td className="px-4 py-2.5 font-mono truncate">{e.Codigo}</td>
                   <td className="px-2 truncate" title={e.Nombre}>{e.Nombre}</td>
-                  <td className="px-2 text-right">{e.PesoNetoG.toLocaleString("es")} g</td>
+                  <td className="px-2 text-right">{e.PesoNetoG.toLocaleString("es-GT")} g</td>
                   <td className="px-2 text-right">{e.DeshidratacionPct}%</td>
                   <td className="px-4 text-right font-mono">{e.ConRango ? `${e.MinG}–${e.MaxG}` : "libre"}</td>
                 </tr>
@@ -787,7 +787,7 @@ function TiposEmpaque({ puedeConfigurar }) {
 //   - la pestaña está visible (en segundo plano se pausa; al volver se actualiza una vez).
 // Cada 60 s, no 30: alcanza para ir viendo la producción y es la mitad de carga por persona.
 const hoyGT = () => new Date().toLocaleDateString("sv-SE", { timeZone: "America/Guatemala" });
-const kg = (g) => (Number(g || 0) / 1000).toLocaleString("es", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const kg = (g) => (Number(g || 0) / 1000).toLocaleString("es-GT", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const MAX_FILAS_PANTALLA = 500;
 const REFRESCO_REPORTE_MS = 60_000;
 const AUTO_MAX_DIAS = 2;
@@ -916,11 +916,11 @@ function ReportePesadas() {
       {error && <p className="text-sm text-red-600">{error}</p>}
 
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-        {tarjeta("Cajas guardadas", guardadas.length.toLocaleString("es"))}
+        {tarjeta("Cajas guardadas", guardadas.length.toLocaleString("es-GT"))}
         {tarjeta("Kilos pesados", kg(netoG), fueraGuardadas ? `incluye ${fueraGuardadas} guardadas fuera de rango` : "cajas guardadas")}
-        {tarjeta("Promedio por caja", guardadas.length ? `${Math.round(netoG / guardadas.length).toLocaleString("es")} g` : "—")}
-        {tarjeta("Fuera de rango", fuera.toLocaleString("es"), intentos ? `${((fuera / intentos) * 100).toFixed(1)} % de los intentos` : "", fuera ? "text-amber-600" : "")}
-        {tarjeta("Anuladas", vistas.filter(anulada).length.toLocaleString("es"))}
+        {tarjeta("Promedio por caja", guardadas.length ? `${Math.round(netoG / guardadas.length).toLocaleString("es-GT")} g` : "—")}
+        {tarjeta("Fuera de rango", fuera.toLocaleString("es-GT"), intentos ? `${((fuera / intentos) * 100).toFixed(1)} % de los intentos` : "", fuera ? "text-amber-600" : "")}
+        {tarjeta("Anuladas", vistas.filter(anulada).length.toLocaleString("es-GT"))}
       </div>
 
       <div className="bg-white rounded-xl border overflow-hidden">
@@ -943,7 +943,7 @@ function ReportePesadas() {
                   <td className={td}>{r.CodigoPedido ? `${r.CodigoPedido} · ${r.Cliente ?? ""}` : "—"}</td>
                   <td className={`${td} font-mono`}>{r.Carrito ?? "—"}</td>
                   <td className={`${td} text-right font-semibold`}>{cajas}</td><td className={`${td} text-right font-semibold`}>{kg(n)}</td>
-                  <td className={`${td} text-right`}>{cajas ? Math.round(n / cajas).toLocaleString("es") : "—"}</td>
+                  <td className={`${td} text-right`}>{cajas ? Math.round(n / cajas).toLocaleString("es-GT") : "—"}</td>
                   <td className={`${td} text-right ${f ? "text-amber-600 font-semibold" : ""}`}>{f}</td><td className={td}>{ultima}</td>
                 </tr>
               ))}
@@ -954,7 +954,7 @@ function ReportePesadas() {
 
       <div className="bg-white rounded-xl border overflow-hidden">
         <p className="px-4 py-2 border-b text-sm font-semibold">
-          Detalle: {vistas.length.toLocaleString("es")} pesadas
+          Detalle: {vistas.length.toLocaleString("es-GT")} pesadas
           {vistas.length > MAX_FILAS_PANTALLA && <span className="font-normal text-slate-500"> · se muestran las últimas {MAX_FILAS_PANTALLA}; el Excel lleva todas</span>}
         </p>
         <div className="overflow-x-auto max-h-[60vh]">
@@ -972,7 +972,7 @@ function ReportePesadas() {
                   <td className={td}>{r.Fecha}</td><td className={`${td} font-mono`}>{r.Hora}</td>
                   <td className={`${td} font-mono`}>{r.BalanzaCodigo}</td><td className={td}>{TIPO_PESADA_TXT[r.Tipo] ?? r.Tipo}</td>
                   <td className={td}>{insignia(r)}</td>
-                  <td className={`${td} text-right font-mono font-semibold`}>{Number(r.PesoBrutoG).toLocaleString("es")}</td>
+                  <td className={`${td} text-right font-mono font-semibold`}>{Number(r.PesoBrutoG).toLocaleString("es-GT")}</td>
                   <td className={`${td} font-mono text-slate-500`}>{r.MinG != null ? `${r.MinG}–${r.MaxG}` : "libre"}</td>
                   <td className={`${td} font-mono`}>{r.Lote}</td>
                   <td className={td}>{[r.Clase, r.ClaseSalida && `→ ${r.ClaseSalida}`].filter(Boolean).join(" ") || "—"}</td>

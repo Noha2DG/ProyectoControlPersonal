@@ -19,6 +19,7 @@
 // meta (usuario, 20 nov 2026). Sale positiva casi siempre.
 
 import { saldoLineas } from "./destajoPiso.ts";
+import { componerCodigoLote, descomponerCodigoLote, piscinaRequiereCiclo, cargarPiscinas, type Piscina } from "./codigoLote.ts";
 
 export const BODEGA_EMPANIZADO = "EMPANIZADO";
 export const DESTINO_CIERRE = "TUNEL";
@@ -43,10 +44,26 @@ const claveLinea = (x: any) =>
 // igual que en Pelado (usuario, 23 nov 2026).
 export async function saldoPiso(client: any, bodega = BODEGA_EMPANIZADO, lotes?: string[], fecha?: string) {
   const rows = await saldoLineas(client, bodega, lotes);
+  const piscinas = fecha ? await cargarPiscinas(client) : [];
   return rows.map((r: any) => ({
     ...r, Clave: claveLinea(r),
     DiasAlPiso: fecha && r.FechaIngreso ? Math.max(0, Math.round((Date.parse(fecha) - Date.parse(r.FechaIngreso)) / 86400000)) : 0,
+    // El lote en que quedaría si se toma hoy (para mostrarlo antes de tomar).
+    ...(fecha ? { LoteDia: loteDelDia(String(r.Lote), fecha, piscinas).lote } : {}),
   }));
+}
+
+// ── Lote del día ────────────────────────────────────────────────────────────────────────────────
+// Lo que se pesa y pasa a Túnel lleva el lote del DÍA en que se trabaja, como en Pelado
+// (destajoPiso.tomarDelPiso): la misma piscina y ciclo del lote que llegó al piso, con la fecha de
+// hoy. G547Q012 y G647Q012 tomados el martes de la semana 48 quedan los dos en G248Q012 (usuario,
+// 24 nov 2026). Lo que se toma sigue saliendo del piso con su lote de origen (el kardex lo guarda).
+// Si el código no se puede leer (piscina desconocida, o lleva ciclo y no lo trae), se queda con el
+// de origen: no se adivina.
+export function loteDelDia(lote: string, fecha: string, piscinas: Piscina[]) {
+  const d = descomponerCodigoLote(lote, piscinas);
+  if (!d || (piscinaRequiereCiclo(d.piscina.Nombre, d.piscina.CodigoFinca) && !d.ciclo)) return { lote, delDia: false };
+  return { lote: componerCodigoLote(d.piscina.Nombre, fecha, d.ciclo ? String(d.ciclo) : ""), delDia: true };
 }
 
 // ── Tomar del piso ──────────────────────────────────────────────────────────────────────────────
@@ -54,8 +71,9 @@ export async function saldoPiso(client: any, bodega = BODEGA_EMPANIZADO, lotes?:
 type LineaToma = { RemisionId: number | null; Lote: string; Clase: string; Talla: number; FechaLote: string | null; Kg: number; Termo?: string | null };
 
 /**
- * Saca del piso lo que escogió el encargado y lo pone en su LoteEmpanizado (uno por Lote + Clase +
- * Talla). Si ya hay uno ABIERTO de lo mismo, suma ahí: así no se parte el pesaje en dos lotes.
+ * Saca del piso lo que escogió el encargado y lo pone en su LoteEmpanizado (uno por lote del DÍA +
+ * Clase + Talla, ver loteDelDia). Si ya hay uno ABIERTO de lo mismo, suma ahí: así no se parte el
+ * pesaje en dos lotes.
  */
 export async function tomarDelPiso(tx: any, p: { lineas: LineaToma[]; fecha: string; operador: string }) {
   if (!p.lineas?.length) throw new ErrorEmpanizado(400, "No escogió nada del piso");
@@ -95,17 +113,22 @@ export async function tomarDelPiso(tx: any, p: { lineas: LineaToma[]; fecha: str
     }
   }
 
-  const grupos = new Map<string, typeof lineas>();
+  // Un LoteEmpanizado por lote del día + clase + talla: lotes de origen distintos de la misma piscina
+  // (llegaron otro día) caen juntos.
+  const piscinas = await cargarPiscinas(tx);
+  const grupos = new Map<string, { Lote: string; delDia: boolean; lineas: typeof lineas }>();
   for (const l of lineas) {
-    const k = `${l.Lote}|${l.Clase}|${l.Talla}`;
-    if (!grupos.has(k)) grupos.set(k, []);
-    grupos.get(k)!.push(l);
+    const dia = loteDelDia(l.Lote, p.fecha, piscinas);
+    const k = `${dia.lote}|${l.Clase}|${l.Talla}`;
+    if (!grupos.has(k)) grupos.set(k, { Lote: dia.lote, delDia: dia.delDia, lineas: [] });
+    grupos.get(k)!.lineas.push(l);
   }
 
   const lotes: { LoteEmpanizadoId: number; Lote: string; Clase: string; Talla: number; Kg: number; Nuevo: boolean }[] = [];
-  for (const g of grupos.values()) {
-    const { Lote, Clase, Talla } = g[0];
-    const fechaLote = g.map(x => x.FechaLote).filter(Boolean).sort()[0] ?? null;
+  for (const { Lote, delDia, lineas: g } of grupos.values()) {
+    const { Clase, Talla } = g[0];
+    // El lote del día es de hoy; si se quedó con el de origen, conserva la fecha de ese lote.
+    const fechaLote = delDia ? p.fecha : g.map(x => x.FechaLote).filter(Boolean).sort()[0] ?? null;
     const [abierto]: any[] = await tx.$queryRawUnsafe(
       `SELECT LoteEmpanizadoId FROM LoteEmpanizado WHERE Lote = ? AND Clase = ? AND Talla = ? AND Estado = 'Abierto' FOR UPDATE`,
       Lote, Clase, Talla);

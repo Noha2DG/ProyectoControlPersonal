@@ -35,7 +35,7 @@ function uuid() {
   });
 }
 
-const g = (n) => (n === null || n === undefined ? "—" : Number(n).toLocaleString("es"));
+const g = (n) => (n === null || n === undefined ? "—" : Number(n).toLocaleString("es-GT"));
 const claveSesion = (bal) => `pesaje_sesion_${bal}`;
 const claveTrabajo = (bal) => `pesaje_trabajo_${bal}`;
 const leerLS = (k) => { try { return JSON.parse(localStorage.getItem(k) || "null"); } catch { return null; } };
@@ -514,7 +514,7 @@ function Pesaje({ sesion, b, onCerrar, onMenu }) {
                     <button key={l.LoteEmpanizadoId} onClick={() => setTrabajo(t => ({ ...t, loteEmp: l.LoteEmpanizadoId, tallaSalida: t.tallaSalida || String(l.Talla) }))}
                       className={`rounded-xl border-2 px-3 py-2 text-left active:scale-[0.98] transition ${sel ? "bg-amber-400 text-amber-950 border-white" : `${tema.campo} text-white`}`}>
                       <span className="block font-mono text-xl font-extrabold">{l.Lote}</span>
-                      <span className="block text-sm">{l.Clase} · {l.TallaDesc ?? l.Talla} · {(l.PesadoG / 1000).toLocaleString("es", { maximumFractionDigits: 1 })} kg pesados</span>
+                      <span className="block text-sm">{l.Clase} · {l.TallaDesc ?? l.Talla} · {(l.PesadoG / 1000).toLocaleString("es-GT", { maximumFractionDigits: 1 })} kg pesados</span>
                     </button>
                   );
                 })}
@@ -534,7 +534,7 @@ function Pesaje({ sesion, b, onCerrar, onMenu }) {
           <label className={etq}>Lote (piso de {sesion.BodegaNombre ?? "la bodega"})
             <select value={trabajo.lote} onChange={e => elegirLote(e.target.value)} className={sel + " mt-0.5 font-mono"}>
               <option value="">— elija —</option>
-              {lotesUnicos.map(l => <option key={l} value={l}>{l} · {kgLote(l).toLocaleString("es", { maximumFractionDigits: 0 })} kg</option>)}
+              {lotesUnicos.map(l => <option key={l} value={l}>{l} · {kgLote(l).toLocaleString("es-GT", { maximumFractionDigits: 0 })} kg</option>)}
               {trabajo.lote && !lotesUnicos.includes(trabajo.lote) && <option value={trabajo.lote}>{trabajo.lote} (buscado)</option>}
             </select>
           </label>
@@ -708,7 +708,7 @@ function Pesaje({ sesion, b, onCerrar, onMenu }) {
             <div className="rounded-xl bg-white/10 border-2 border-teal-300/60 px-3 py-2 mt-1">
               <p className="text-xs text-teal-100 uppercase tracking-wide">Pesado hoy</p>
               <p className="text-5xl font-extrabold font-mono leading-tight">
-                {(resumen.NetoG / 1000).toLocaleString("es", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}<span className="text-2xl ml-1">kg</span>
+                {(resumen.NetoG / 1000).toLocaleString("es-GT", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}<span className="text-2xl ml-1">kg</span>
               </p>
               <p className="text-sm text-teal-100">{g(resumen.Cajas)} cajas</p>
             </div>
@@ -717,11 +717,11 @@ function Pesaje({ sesion, b, onCerrar, onMenu }) {
             <div className="rounded-xl bg-white/10 border-2 border-amber-300/60 px-3 py-2 mt-1">
               <p className="text-xs text-amber-100 uppercase tracking-wide">Pesado · lote {loteEmpSel.Lote}</p>
               <p className="text-4xl font-extrabold font-mono leading-tight">
-                {(loteEmpSel.PesadoG / 1000).toLocaleString("es", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}<span className="text-xl ml-1">kg</span>
+                {(loteEmpSel.PesadoG / 1000).toLocaleString("es-GT", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}<span className="text-xl ml-1">kg</span>
               </p>
             </div>
           )}
-          <div className={`${tema.panel} rounded-xl px-3 py-2 flex items-baseline gap-2 mt-1 ${ppv ? "hidden" : ""}`}><span className="text-xs text-slate-300">{ppv ? "Cajas hoy" : "Bandejas hoy"}</span><span className="text-2xl font-bold">{g(resumen.Cajas)}</span><span className="text-xs text-slate-300 ml-auto">{(resumen.NetoG / 1000).toLocaleString("es", { maximumFractionDigits: 1 })} kg</span></div>
+          <div className={`${tema.panel} rounded-xl px-3 py-2 flex items-baseline gap-2 mt-1 ${ppv ? "hidden" : ""}`}><span className="text-xs text-slate-300">{ppv ? "Cajas hoy" : "Bandejas hoy"}</span><span className="text-2xl font-bold">{g(resumen.Cajas)}</span><span className="text-xs text-slate-300 ml-auto">{(resumen.NetoG / 1000).toLocaleString("es-GT", { maximumFractionDigits: 1 })} kg</span></div>
           {(ppv || guardaFuera) && <div className={`${tema.panel} rounded-xl px-3 py-1.5 flex items-baseline gap-2`}><span className="text-xs text-slate-300">Fuera de rango hoy</span><span className="text-xl font-bold text-amber-300">{g(resumen.Fuera ?? 0)}</span><span className="text-[11px] text-slate-400 ml-auto">{ppv ? "no cuentan como caja" : "guardadas y marcadas"}</span></div>}
           <div className={`${tema.panel} rounded-xl p-3 flex-1 min-h-[90px] overflow-auto`}>
             <p className="text-xs text-slate-300 mb-2">Últimas guardadas</p>
