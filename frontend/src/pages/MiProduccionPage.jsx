@@ -238,15 +238,15 @@ const NOMBRE_PESADAS = { singular: "pesada anterior", plural: "pesadas anteriore
 const NOMBRE_BANDEJAS = { singular: "bandeja anterior", plural: "bandejas anteriores" };
 
 // Empanizado (24 nov 2026): lo que la persona ve es CUÁNTAS bandejas lleva —es como se cuenta su
-// trabajo en la báscula, carnet por bandeja—, con el peso al lado. Sin puesto del día: el ranking
-// de la pantalla es de libras de destajo y mezclarlo con bandejas no compararía lo mismo.
+// trabajo en la báscula, carnet por bandeja—, con el peso al lado. El puesto del día es su propio
+// ranking por bandejas entre la gente de Empanizado (puestoEmpanizado), no el de libras de destajo.
 function ResultadoEmpanizado({ datos }) {
-  const { empleado, bandejas } = datos;
+  const { empleado, bandejas, puestoEmpanizado } = datos;
   const totalKg = bandejas.reduce((s, b) => s + b.Kilos, 0);
 
   return (
     <div className="flex-1 min-h-0 grid grid-rows-[minmax(0,auto)_minmax(0,auto)_minmax(0,1fr)] gap-3">
-      <Identidad empleado={empleado} puesto={null} />
+      <Identidad empleado={empleado} puesto={puestoEmpanizado ?? null} />
 
       <div className="grid grid-cols-[3fr_2fr] gap-3 min-h-0 overflow-hidden">
         <div className={`${TARJETA} flex flex-col items-center justify-center py-2 min-h-0 overflow-hidden`}>

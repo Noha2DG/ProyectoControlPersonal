@@ -287,6 +287,21 @@ router.get("/mi-dia/:codigo", requireAuth, requirePerm("kiosco_destajo", "ver"),
        WHERE PersonaCodigo = ${codigo} AND Modo = 'EMPANIZADO' AND Anulada = 0
          AND FechaProduccion = DATE_SUB(${hoy}, INTERVAL 1 DAY)
     `;
+    // Puesto del día en Empanizado, por número de bandejas (no por peso: es lo que la persona cuenta
+    // y ve en la báscula). Con bandejas los empates son comunes, así que el puesto es 1 + cuántos
+    // llevan MÁS: quienes empatan comparten puesto, en vez de que el orden lo decida la base.
+    // Igual que en destajo, solo viaja la posición de quien escaneó, nunca la tabla de los demás.
+    let puestoEmpanizado: { Puesto: number; DeCuantos: number } | null = null;
+    if (bandejas.length) {
+      const [r]: any[] = await prisma.$queryRaw`
+        SELECT COUNT(*) AS DeCuantos, COALESCE(SUM(n > ${bandejas.length}), 0) AS Arriba
+          FROM (SELECT PersonaCodigo, COUNT(*) AS n FROM Pesada
+                 WHERE Modo = 'EMPANIZADO' AND Anulada = 0 AND FechaProduccion = ${hoy} AND PersonaCodigo IS NOT NULL
+                 GROUP BY PersonaCodigo) t
+      `;
+      puestoEmpanizado = { Puesto: Number(r.Arriba) + 1, DeCuantos: Number(r.DeCuantos) };
+    }
+
     // Mesa y posición de Empanizado vigentes hoy: dice que la persona es de Empanizado aunque todavía
     // no tenga bandejas (si no, la pantalla le diría "tu área no trabaja por destajo").
     const posicion = await posicionDe(prisma, codigo, hoy);
@@ -322,6 +337,7 @@ router.get("/mi-dia/:codigo", requireAuth, requirePerm("kiosco_destajo", "ver"),
         Kilos: Number(p.Kilos),
       })),
       puesto: indice >= 0 ? { Puesto: indice + 1, DeCuantos: ranking.length } : null,
+      puestoEmpanizado,
       ayer: { Kilos: Number(ayer[0].Kilos), Bandejas: Number(bandejasAyer.n) },
     });
   } catch (err: any) {
