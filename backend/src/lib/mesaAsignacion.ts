@@ -76,10 +76,23 @@ export async function asignarMesa(tx: any, datos: {
       throw new ErrorMesa(400, `La fecha es anterior a su mesa actual (desde ${actual.FechaInicio})`);
   } else {
     // Sin mesa vigente: que la fecha no caiga dentro de un tramo ya cerrado (dos mesas el mismo día).
+    // Excepción (12 nov 2026): si la quitaron con último día justo `fecha` (la quitaron hoy y hoy
+    // mismo va a otra mesa), es un movimiento: el tramo cerrado termina el día anterior y la nueva
+    // mesa cuenta desde `fecha`, con lo que pesó ese día. Si el tramo había empezado ese mismo día
+    // no queda nada de él: se borra (un tramo de cero días no dice nada).
     const choque: any[] = await tx.$queryRawUnsafe(`
-      SELECT DATE_FORMAT(FechaFin, '%Y-%m-%d') AS FechaFin FROM MesaAsignacion
-      WHERE Codigo = ? AND FechaFin >= ? ORDER BY FechaFin DESC LIMIT 1`, codigo, fecha);
-    if (choque.length) throw new ErrorMesa(400, `Ya tenía mesa hasta el ${choque[0].FechaFin}; la nueva debe empezar después`);
+      SELECT AsignacionId, MesaCodigo, DATE_FORMAT(FechaInicio, '%Y-%m-%d') AS FechaInicio,
+             DATE_FORMAT(FechaFin, '%Y-%m-%d') AS FechaFin FROM MesaAsignacion
+      WHERE Codigo = ? AND FechaFin >= ? ORDER BY FechaFin DESC FOR UPDATE`, codigo, fecha);
+    if (choque.length === 1 && choque[0].FechaFin === fecha) {
+      const c = choque[0];
+      if (c.FechaInicio === fecha) await tx.$executeRawUnsafe(`DELETE FROM MesaAsignacion WHERE AsignacionId = ?`, c.AsignacionId);
+      else await tx.$executeRawUnsafe(
+        `UPDATE MesaAsignacion SET FechaFin = DATE_SUB(?, INTERVAL 1 DAY), MotivoCierre = ? WHERE AsignacionId = ?`,
+        fecha, `Pasa a ${mesa}`, c.AsignacionId);
+    } else if (choque.length) {
+      throw new ErrorMesa(400, `Ya tenía mesa hasta el ${choque[0].FechaFin}; la nueva debe empezar después`);
+    }
   }
 
   const lideresReemplazadas: string[] = [];
