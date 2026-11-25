@@ -19,7 +19,7 @@ const COLOR_AREA = {
 
 // La pantalla se limpia sola. El resultado dura bastante más que en el kiosco de Entrada/Salida
 // (2 s) porque ahí la persona solo confirma que marcó, y aquí tiene que leer un detalle parada.
-const SEGUNDOS = { ok: 20, vacio: 12, error: 5 };
+const SEGUNDOS = { ok: 20, empanizado: 20, vacio: 12, error: 5 };
 
 // Solo las últimas 4 pesadas. En un panel de 7" cada renglón que se agrega obliga a achicar la
 // letra de todos, y lo que la persona viene a ver es su total del día, no su historial completo.
@@ -138,11 +138,17 @@ function Identidad({ empleado, puesto }) {
       )}
       <div className="flex-1 min-w-0">
         <p className={`${T.nombre} font-extrabold text-slate-900 leading-tight uppercase truncate`}>{empleado.Nombre}</p>
-        <div className="flex items-center gap-3 mt-1">
+        <div className="flex items-center gap-3 mt-1 min-w-0">
           <span className={`${T.medio} font-mono text-slate-600 tracking-widest`}>{empleado.Codigo}</span>
           {empleado.Area && (
-            <span className={`${T.medio} px-4 py-0.5 rounded-full border-2 border-emerald-700 bg-emerald-50 text-emerald-800 font-semibold tracking-widest uppercase`}>
+            <span className={`${T.medio} px-4 py-0.5 rounded-full border-2 border-emerald-700 bg-emerald-50 text-emerald-800 font-semibold tracking-widest uppercase truncate`}>
               {empleado.Area}
+            </span>
+          )}
+          {/* Mesa y posición de Empanizado: es el número que la persona tiene impreso en su puesto. */}
+          {empleado.PosicionEmpanizado && (
+            <span className={`${T.medio} shrink-0 px-4 py-0.5 rounded-full border-2 border-orange-700 bg-orange-50 text-orange-800 font-semibold tracking-widest uppercase`}>
+              {empleado.PosicionEmpanizado.MesaNombre} · Pos. {empleado.PosicionEmpanizado.Posicion}
             </span>
           )}
         </div>
@@ -176,17 +182,104 @@ function Identidad({ empleado, puesto }) {
   );
 }
 
+// Detalle de las últimas filas del día (pesadas de destajo o bandejas de Empanizado: las dos traen
+// Hora, Talla, Producto y Kilos). `nombre` es cómo se llaman en la línea de "+ N anteriores".
+function TablaDetalle({ filas, nombre }) {
+  const cuerpoRef = useRef(null);
+  const caben = useFilasQueCaben(cuerpoRef);
+  const ultimas = filas.slice(-Math.min(caben, MAX_FILAS));
+  const anteriores = filas.length - ultimas.length;
+
+  return (
+    <div className={`${TARJETA} min-h-0 overflow-hidden flex flex-col`}>
+      <div ref={cuerpoRef} className="flex-1 min-h-0">
+      {/* Sin h-full: cada fila mide lo que mide su texto más su padding. Con h-full las filas se
+          estiraban para rellenar la tarjeta, y con dos o tres pesadas quedaban altísimas. */}
+      <table className="w-full table-fixed">
+        <thead>
+          <tr className={`${T.medio} bg-slate-200 text-slate-800 uppercase tracking-widest border-b-2 border-slate-400`}>
+            <th className="px-5 py-1.5 text-left font-extrabold w-[14%]">Hora</th>
+            <th className="px-5 py-1.5 text-left font-extrabold w-[16%]">Talla</th>
+            <th className="px-5 py-1.5 text-left font-extrabold">Producto</th>
+            <th className="px-5 py-1.5 text-right font-extrabold w-[16%]">Kg</th>
+            <th className="px-5 py-1.5 text-right font-extrabold w-[16%]">Lb</th>
+          </tr>
+        </thead>
+        {/* Franjas alternas: en un panel chico visto de lejos son lo que evita que el ojo salte de
+            renglón al recorrer la fila de izquierda a derecha. */}
+        {/* Todo el cuerpo en negrita: a un metro de un panel de 7" el grosor del trazo pesa más
+            que el tamaño para que un número se distinga de un vistazo. */}
+        <tbody className={`${T.tabla} font-mono tabular-nums font-bold`}>
+          {ultimas.map((p, i) => (
+            <tr key={i} className="even:bg-slate-100">
+              <td className="px-5 py-0.5 text-slate-700">{p.Hora}</td>
+              <td className="px-5 py-0.5 text-slate-900">{p.DescripcionTalla}</td>
+              <td className="px-5 py-0.5 text-slate-800 font-sans font-semibold truncate">{p.Producto}</td>
+              <td className="px-5 py-0.5 text-right text-slate-900">{p.Kilos.toFixed(2)}</td>
+              <td className="px-5 py-0.5 text-right font-extrabold text-emerald-700">{lb(p.Kilos).toFixed(1)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      </div>
+      {/* Esta línea se reserva siempre su espacio (invisible cuando no hay más filas): si
+          apareciera y desapareciera según el número de filas, cambiaría el alto disponible y el
+          cálculo de arriba se realimentaría a sí mismo hasta quedarse en una sola fila. */}
+      <p className={`${T.medio} px-5 py-1 border-t-2 border-slate-200 ${anteriores > 0 ? "text-slate-600" : "invisible"}`}>
+        {anteriores > 0
+          ? `+ ${anteriores} ${anteriores !== 1 ? nombre.plural : nombre.singular} de hoy`
+          : " "}
+      </p>
+    </div>
+  );
+}
+
+const NOMBRE_PESADAS = { singular: "pesada anterior", plural: "pesadas anteriores" };
+const NOMBRE_BANDEJAS = { singular: "bandeja anterior", plural: "bandejas anteriores" };
+
+// Empanizado (24 nov 2026): lo que la persona ve es CUÁNTAS bandejas lleva —es como se cuenta su
+// trabajo en la báscula, carnet por bandeja—, con el peso al lado. Sin puesto del día: el ranking
+// de la pantalla es de libras de destajo y mezclarlo con bandejas no compararía lo mismo.
+function ResultadoEmpanizado({ datos }) {
+  const { empleado, bandejas } = datos;
+  const totalKg = bandejas.reduce((s, b) => s + b.Kilos, 0);
+
+  return (
+    <div className="flex-1 min-h-0 grid grid-rows-[minmax(0,auto)_minmax(0,auto)_minmax(0,1fr)] gap-3">
+      <Identidad empleado={empleado} puesto={null} />
+
+      <div className="grid grid-cols-[3fr_2fr] gap-3 min-h-0 overflow-hidden">
+        <div className={`${TARJETA} flex flex-col items-center justify-center py-2 min-h-0 overflow-hidden`}>
+          <p className={`${T.medio} text-slate-700 font-semibold uppercase tracking-[0.2em]`}>Bandejas hoy</p>
+          <p className={`${T.hero} font-mono font-extrabold text-slate-900 tabular-nums leading-none mt-1`}>
+            {bandejas.length}
+          </p>
+          <p className={`${T.medio} text-slate-600 mt-1`}>Empanizado</p>
+        </div>
+        <div className={`${TARJETA} border-l-8 border-l-orange-700 px-5 flex flex-col justify-center gap-1 min-h-0`}>
+          <p className={`${T.medio} text-orange-800 font-semibold uppercase tracking-widest`}>Peso</p>
+          <p className={`${T.tarjeta} font-mono font-bold tabular-nums text-orange-700 leading-none`}>
+            {lb(totalKg).toFixed(1)}<span className="text-[0.4em] text-slate-600 ml-2">lb</span>
+          </p>
+          <p className={`${T.medio} text-slate-600 font-mono tabular-nums`}>{totalKg.toFixed(2)} kg</p>
+        </div>
+      </div>
+
+      <TablaDetalle filas={bandejas} nombre={NOMBRE_BANDEJAS} />
+    </div>
+  );
+}
+
 function Resultado({ datos }) {
   const { empleado, pesadas, puesto } = datos;
+  const bandejas = datos.bandejas ?? [];
 
   const totalKg = pesadas.reduce((s, p) => s + p.Kilos, 0);
   const kgDe = (area) => pesadas.filter(p => p.Area === area).reduce((s, p) => s + p.Kilos, 0);
   const areasHoy = AREAS_DESTAJO.map(a => ({ ...a, kg: kgDe(a.nombre) })).filter(a => a.kg > 0);
-
-  const cuerpoRef = useRef(null);
-  const caben = useFilasQueCaben(cuerpoRef);
-  const ultimas = pesadas.slice(-Math.min(caben, MAX_FILAS));
-  const anteriores = pesadas.length - ultimas.length;
+  // Si el mismo día también armó bandejas en Empanizado (pasó de un área a otra), van como una
+  // tarjeta más a la derecha; el total y el detalle siguen siendo los de destajo.
+  const tarjetas = areasHoy.length + (bandejas.length ? 1 : 0);
 
   // Identidad y totales se ajustan a su contenido (auto) y el detalle se queda con todo lo que
   // sobre. Con proporciones fijas esas dos franjas se estiraban más allá de lo que necesitaban y
@@ -202,7 +295,7 @@ function Resultado({ datos }) {
           una ventana baja esta franja ceda alto en vez de empujar el detalle fuera de la pantalla.
           Si no hubo pesaje en ninguna área de destajo (área sin resolver), el total se queda con
           toda la franja en vez de dejar una columna vacía a la par. */}
-      <div className={`grid ${areasHoy.length ? "grid-cols-[3fr_2fr]" : "grid-cols-1"} gap-3 min-h-0 overflow-hidden`}>
+      <div className={`grid ${tarjetas ? "grid-cols-[3fr_2fr]" : "grid-cols-1"} gap-3 min-h-0 overflow-hidden`}>
         <div className={`${TARJETA} flex flex-col items-center justify-center py-2 min-h-0 overflow-hidden`}>
           <p className={`${T.medio} text-slate-700 font-semibold uppercase tracking-[0.2em]`}>Total procesado hoy</p>
           <p className={`${T.hero} font-mono font-extrabold text-slate-900 tabular-nums leading-none mt-1`}>
@@ -212,8 +305,8 @@ function Resultado({ datos }) {
           <p className={`${T.medio} text-slate-600 font-mono tabular-nums mt-1`}>{totalKg.toFixed(2)} kg</p>
         </div>
 
-        {areasHoy.length > 0 && (
-          <div className="grid gap-3" style={{ gridTemplateRows: `repeat(${areasHoy.length}, minmax(0, 1fr))` }}>
+        {tarjetas > 0 && (
+          <div className="grid gap-3" style={{ gridTemplateRows: `repeat(${tarjetas}, minmax(0, 1fr))` }}>
             {areasHoy.map(a => (
               <div key={a.codigo} className={`${TARJETA} border-l-8 ${COLOR_AREA[a.codigo].borde} px-5 flex items-center justify-between gap-3`}>
                 <p className={`${T.medio} ${COLOR_AREA[a.codigo].titulo} font-semibold uppercase tracking-widest`}>{a.etiqueta}</p>
@@ -222,57 +315,27 @@ function Resultado({ datos }) {
                 </p>
               </div>
             ))}
+            {bandejas.length > 0 && (
+              <div className={`${TARJETA} border-l-8 border-l-orange-700 px-5 flex items-center justify-between gap-3`}>
+                <p className={`${T.medio} text-orange-800 font-semibold uppercase tracking-widest`}>Empanizado</p>
+                <p className={`${T.tarjeta} font-mono font-bold tabular-nums text-orange-700 leading-none`}>
+                  {bandejas.length}<span className="text-[0.4em] text-slate-600 ml-2">{bandejas.length === 1 ? "bandeja" : "bandejas"}</span>
+                </p>
+              </div>
+            )}
           </div>
         )}
       </div>
 
-      <div className={`${TARJETA} min-h-0 overflow-hidden flex flex-col`}>
-        <div ref={cuerpoRef} className="flex-1 min-h-0">
-        {/* Sin h-full: cada fila mide lo que mide su texto más su padding. Con h-full las filas se
-            estiraban para rellenar la tarjeta, y con dos o tres pesadas quedaban altísimas. */}
-        <table className="w-full table-fixed">
-          <thead>
-            <tr className={`${T.medio} bg-slate-200 text-slate-800 uppercase tracking-widest border-b-2 border-slate-400`}>
-              <th className="px-5 py-1.5 text-left font-extrabold w-[14%]">Hora</th>
-              <th className="px-5 py-1.5 text-left font-extrabold w-[16%]">Talla</th>
-              <th className="px-5 py-1.5 text-left font-extrabold">Producto</th>
-              <th className="px-5 py-1.5 text-right font-extrabold w-[16%]">Kg</th>
-              <th className="px-5 py-1.5 text-right font-extrabold w-[16%]">Lb</th>
-            </tr>
-          </thead>
-          {/* Franjas alternas: en un panel chico visto de lejos son lo que evita que el ojo salte de
-              renglón al recorrer la fila de izquierda a derecha. */}
-          {/* Todo el cuerpo en negrita: a un metro de un panel de 7" el grosor del trazo pesa más
-              que el tamaño para que un número se distinga de un vistazo. */}
-          <tbody className={`${T.tabla} font-mono tabular-nums font-bold`}>
-            {ultimas.map((p, i) => (
-              <tr key={i} className="even:bg-slate-100">
-                <td className="px-5 py-0.5 text-slate-700">{p.Hora}</td>
-                <td className="px-5 py-0.5 text-slate-900">{p.DescripcionTalla}</td>
-                <td className="px-5 py-0.5 text-slate-800 font-sans font-semibold truncate">{p.Producto}</td>
-                <td className="px-5 py-0.5 text-right text-slate-900">{p.Kilos.toFixed(2)}</td>
-                <td className="px-5 py-0.5 text-right font-extrabold text-emerald-700">{lb(p.Kilos).toFixed(1)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        </div>
-        {/* Esta línea se reserva siempre su espacio (invisible cuando no hay más pesadas): si
-            apareciera y desapareciera según el número de filas, cambiaría el alto disponible y el
-            cálculo de arriba se realimentaría a sí mismo hasta quedarse en una sola fila. */}
-        <p className={`${T.medio} px-5 py-1 border-t-2 border-slate-200 ${anteriores > 0 ? "text-slate-600" : "invisible"}`}>
-          {anteriores > 0
-            ? `+ ${anteriores} pesada${anteriores !== 1 ? "s" : ""} anterior${anteriores !== 1 ? "es" : ""} de hoy`
-            : " "}
-        </p>
-      </div>
+      <TablaDetalle filas={pesadas} nombre={NOMBRE_PESADAS} />
     </div>
   );
 }
 
 function SinPesadas({ datos }) {
   const { empleado, ayer } = datos;
-  const noEsDestajo = !empleado.EsAreaDestajo;
+  const esEmpanizado = !!empleado.EsEmpanizado;
+  const noEsDestajo = !empleado.EsAreaDestajo && !esEmpanizado;
 
   return (
     <div className="flex-1 min-h-0 flex flex-col gap-3">
@@ -287,8 +350,13 @@ function SinPesadas({ datos }) {
           <>
             <p className={`${T.nombre} font-bold text-slate-900 mt-4`}>TU ÁREA NO TRABAJA POR DESTAJO</p>
             <p className={`${T.medio} text-slate-600 mt-2`}>
-              {empleado.Area ? `Estás en ${empleado.Area}.` : "No tienes un área asignada en este momento."} Esta pantalla solo muestra libras de Descabezado y Pelado y Devenado.
+              {empleado.Area ? `Estás en ${empleado.Area}.` : "No tienes un área asignada en este momento."} Esta pantalla solo muestra libras de Descabezado y Pelado y Devenado, y bandejas de Empanizado.
             </p>
+          </>
+        ) : esEmpanizado ? (
+          <>
+            <p className={`${T.nombre} font-bold text-slate-900 mt-4`}>AÚN NO TIENES BANDEJAS REGISTRADAS HOY</p>
+            <p className={`${T.medio} text-slate-600 mt-2`}>Tu primera bandeja aparecerá aquí en cuanto la pesen en la báscula con tu carnet</p>
           </>
         ) : (
           <>
@@ -302,6 +370,11 @@ function SinPesadas({ datos }) {
         {ayer.Kilos > 0 && (
           <p className={`${T.medio} text-slate-600 mt-6`}>
             Ayer procesaste <span className="text-slate-900 font-mono font-bold tabular-nums">{lb(ayer.Kilos).toFixed(1)} lb</span>
+          </p>
+        )}
+        {ayer.Bandejas > 0 && (
+          <p className={`${T.medio} text-slate-600 ${ayer.Kilos > 0 ? "mt-1" : "mt-6"}`}>
+            Ayer armaste <span className="text-slate-900 font-mono font-bold tabular-nums">{ayer.Bandejas} {ayer.Bandejas === 1 ? "bandeja" : "bandejas"}</span>
           </p>
         )}
       </div>
@@ -349,7 +422,7 @@ function Reposo({ hora, fecha, campo, cargando }) {
       </svg>
       <p className={`${T.nombre} font-bold text-slate-900 mt-3 tracking-wide`}>PASE SU CARNET POR EL LECTOR</p>
       <p className={`${T.medio} mt-2 font-semibold ${cargando ? "text-emerald-700" : "text-slate-700"}`}>
-        {cargando ? "Consultando…" : "y vea las libras que lleva procesadas hoy"}
+        {cargando ? "Consultando…" : "y vea las libras o bandejas que lleva hoy"}
       </p>
       <div className="mt-[3vh]">{campo}</div>
     </div>
@@ -421,7 +494,11 @@ export default function MiProduccionPage() {
       const res = await fetch(`/api/pesaje/mi-dia/${encodeURIComponent(cod)}`, { headers: authHeader() });
       const data = await res.json();
       if (!res.ok) mostrar({ tipo: "error", mensaje: data.error || "No se pudo consultar" });
-      else mostrar({ tipo: data.pesadas.length ? "ok" : "vacio", datos: data });
+      // Con pesadas de destajo manda la vista de libras (y las bandejas van como tarjeta extra); solo
+      // con bandejas, la vista de Empanizado.
+      else if (data.pesadas.length) mostrar({ tipo: "ok", datos: data });
+      else if (data.bandejas?.length) mostrar({ tipo: "empanizado", datos: data });
+      else mostrar({ tipo: "vacio", datos: data });
     } catch {
       mostrar({ tipo: "error", mensaje: "Sin conexión con el servidor" });
     } finally {
@@ -481,6 +558,7 @@ export default function MiProduccionPage() {
             estado actual y el resultado anterior se queda a la vista hasta que llega el nuevo. */}
         {!vista && <Reposo hora={hora} fecha={fecha} campo={campo(true)} cargando={cargando} />}
         {vista?.tipo === "ok" && <Resultado datos={vista.datos} />}
+        {vista?.tipo === "empanizado" && <ResultadoEmpanizado datos={vista.datos} />}
         {vista?.tipo === "vacio" && <SinPesadas datos={vista.datos} />}
         {vista?.tipo === "error" && (
           <div className="flex-1 flex flex-col items-center justify-center text-center">

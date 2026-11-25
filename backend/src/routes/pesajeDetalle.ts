@@ -5,6 +5,7 @@ import prisma from "../lib/prisma.ts";
 import { requireAuth, requirePerm } from "../middleware/auth.ts";
 import { hoyGT } from "../lib/dateGT.ts";
 import { sqlAjustesLote } from "../lib/destajoPiso.ts";
+import { posicionDe } from "../lib/empanizado.ts";
 
 const router = Router();
 
@@ -268,6 +269,28 @@ router.get("/mi-dia/:codigo", requireAuth, requirePerm("kiosco_destajo", "ver"),
         AND FechaHora >= DATE_SUB(${hoy}, INTERVAL 1 DAY) AND FechaHora < ${hoy}
     `;
 
+    // Bandejas de Empanizado (24 nov 2026): se pesan en la báscula con el carnet de quien armó cada
+    // una (Pesada, Modo EMPANIZADO). Mismo criterio que el reporte de pago de Empanizado
+    // (lib/empanizado.ts reporteProduccion): no anuladas y por jornada (FechaProduccion), no por la
+    // hora de la pesada — así lo que ve la persona aquí cuadra con lo que se le paga.
+    const bandejas: any[] = await prisma.$queryRaw`
+      SELECT DATE_FORMAT(p.CreadoEn, '%H:%i') AS Hora, p.ClaseSalida, cl.Descripcion AS Producto,
+             p.Talla, ta.Descripcion AS DescripcionTalla, p.PesoNetoG, p.Resultado
+        FROM Pesada p
+        LEFT JOIN Clase cl ON cl.Clase = p.ClaseSalida
+        LEFT JOIN Tallas ta ON ta.Codigo = p.Talla
+       WHERE p.PersonaCodigo = ${codigo} AND p.Modo = 'EMPANIZADO' AND p.Anulada = 0 AND p.FechaProduccion = ${hoy}
+       ORDER BY p.CreadoEn ASC, p.PesadaId ASC
+    `;
+    const [bandejasAyer]: any[] = await prisma.$queryRaw`
+      SELECT COUNT(*) AS n FROM Pesada
+       WHERE PersonaCodigo = ${codigo} AND Modo = 'EMPANIZADO' AND Anulada = 0
+         AND FechaProduccion = DATE_SUB(${hoy}, INTERVAL 1 DAY)
+    `;
+    // Mesa y posición de Empanizado vigentes hoy: dice que la persona es de Empanizado aunque todavía
+    // no tenga bandejas (si no, la pantalla le diría "tu área no trabaja por destajo").
+    const posicion = await posicionDe(prisma, codigo, hoy);
+
     const area = areaActual[0];
     res.json({
       fecha: hoy,
@@ -282,7 +305,13 @@ router.get("/mi-dia/:codigo", requireAuth, requirePerm("kiosco_destajo", "ver"),
         // La comparación se hace en SQL a propósito — DATE() vuelve como Date de JS y compararla
         // contra el texto "YYYY-MM-DD" en Node exige un formateo que es fácil equivocar.
         HoraEntradaArea: area && Number(area.EntradaEsDeHoy) === 1 ? area.HoraEntradaArea : null,
+        EsEmpanizado: posicion != null || bandejas.length > 0,
+        PosicionEmpanizado: posicion,
       },
+      bandejas: bandejas.map(b => ({
+        Hora: b.Hora, Producto: b.Producto ?? b.ClaseSalida, DescripcionTalla: b.DescripcionTalla,
+        Kilos: Number(b.PesoNetoG) / 1000, Resultado: b.Resultado,
+      })),
       // IdEmpleado/Nombre en cada fila porque utils/destajo.js agrupa por persona (viene del reporte,
       // donde las filas son de muchas personas a la vez).
       pesadas: pesadas.map(p => ({
@@ -293,7 +322,7 @@ router.get("/mi-dia/:codigo", requireAuth, requirePerm("kiosco_destajo", "ver"),
         Kilos: Number(p.Kilos),
       })),
       puesto: indice >= 0 ? { Puesto: indice + 1, DeCuantos: ranking.length } : null,
-      ayer: { Kilos: Number(ayer[0].Kilos) },
+      ayer: { Kilos: Number(ayer[0].Kilos), Bandejas: Number(bandejasAyer.n) },
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
