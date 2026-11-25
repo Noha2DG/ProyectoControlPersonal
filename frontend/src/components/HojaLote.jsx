@@ -8,14 +8,14 @@ import { fmtNum } from "../utils/numero.js";
 // La pieza central es el cuadre: la cadena Ingresada − Bajado = Trabajada → Pelado → Rendimiento.
 // printColorAdjust: sin eso el navegador quita los fondos al imprimir.
 
-const C = {
+export const C = {
   marea: "#0E3A53", coral: "#D9573B", laguna: "#0F7C74", hielo: "#EEF6F9",
   ambar: "#B7791F", rojo: "#B4232A", gris: "#94A3B8",
 };
-const IMPRIMIR_COLOR = { WebkitPrintColorAdjust: "exact", printColorAdjust: "exact" };
+export const IMPRIMIR_COLOR = { WebkitPrintColorAdjust: "exact", printColorAdjust: "exact" };
 const fechaCorta = (f) => (f ? f.split("-").reverse().join("/") : "");
 
-function Kg({ v, c }) {
+export function Kg({ v, c }) {
   return (
     <>
       <span className="tabular-nums">{fmtNum(v)}</span>
@@ -24,11 +24,11 @@ function Kg({ v, c }) {
   );
 }
 
-function Etiqueta({ children, c, color = "text-slate-500" }) {
+export function Etiqueta({ children, c, color = "text-slate-500" }) {
   return <div className={`${c ? "text-[8.5px]" : "text-[10.5px]"} font-semibold uppercase tracking-[0.08em] ${color}`}>{children}</div>;
 }
 
-function TituloSeccion({ children, extra, c }) {
+export function TituloSeccion({ children, extra, c }) {
   return (
     <div className={`flex items-baseline gap-2 ${c ? "mb-1" : "mb-1.5"}`}>
       <span className="inline-block w-1 self-stretch rounded-sm" style={{ background: C.marea }} />
@@ -39,7 +39,7 @@ function TituloSeccion({ children, extra, c }) {
 }
 
 // ── Encabezado ──────────────────────────────────────────────────────────────────────────────────
-function Dato({ titulo, children, c, ancho = false }) {
+export function Dato({ titulo, children, c, ancho = false }) {
   return (
     <div className={`${ancho ? "col-span-2" : ""} ${c ? "px-2.5 py-1" : "px-3 py-1.5"}`}>
       <Etiqueta c={c}>{titulo}</Etiqueta>
@@ -96,7 +96,7 @@ function Encabezado({ l, d, c }) {
 }
 
 // ── Cuadre del lote (la pieza central) ──────────────────────────────────────────────────────────
-function Eslabon({ titulo, children, color, fondo, c, op }) {
+export function Eslabon({ titulo, children, color, fondo, c, op }) {
   return (
     <>
       {op && <span className={`${c ? "text-sm px-0.5" : "text-lg px-1"} font-bold text-slate-400 self-center`}>{op}</span>}
