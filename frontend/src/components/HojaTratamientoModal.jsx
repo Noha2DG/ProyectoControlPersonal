@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { createPortal } from "react-dom";
 import { fmtNum } from "../utils/numero.js";
+import { C, IMPRIMIR_COLOR, Kg, Dato, Eslabon, TituloSeccion } from "./HojaLote.jsx";
 
 // La hoja de tratamiento impresa: el formulario "TRATAMIENTO DE CAMARON" ya con los números que el
 // sistema calculó (tiempo, pick-up, totales del turno). Se imprime con el diálogo del navegador
@@ -20,6 +21,13 @@ const hora = (s) => (s ? String(s).slice(11, 16) : "—");
 const fmtTiempo = (min) => (min == null ? "—" : `${Math.floor(min / 60)}:${String(min % 60).padStart(2, "0")}`);
 const pct = (p) => (p == null ? "—" : `${p > 0 ? "+" : ""}${fmtNum(p, 1)} %`);
 const colorAlerta = (a) => (a === "PERDIDA" ? "text-red-700 font-bold" : a === "EXCEDE" ? "text-amber-700 font-bold" : "");
+// Pick-up arriba de +10 % va en verde y abajo de 3 % (negativos incluidos) en rojo (usuario, 25 nov
+// 2026). La alerta de "excede el máximo" (ámbar) manda sobre el verde.
+const PICKUP_VERDE = 10;
+const PICKUP_ROJO = 3;
+const VERDE = "#15803D";
+const colorPickupCelda = (p, a) =>
+  colorAlerta(a) || (p == null ? "" : p > PICKUP_VERDE ? "text-green-700 font-bold" : p < PICKUP_ROJO ? "text-red-700 font-bold" : "");
 // El corte es la clase sin el "CULTIVO PELADO" con que empiezan todas las de pelado: lo que distingue
 // a una de otra es lo que viene después (P&D T-OFF, PUD T-ON…).
 const corteDe = (t) => `${t.Clase} · ${String(t.DescripcionClase ?? "").replace(/^CULTIVO\s+PELADO\s+/i, "")}`;
@@ -33,138 +41,159 @@ const COLUMNAS = [
 ];
 const CELDA = "py-0.5 px-1.5 truncate";
 
+// Mismo diseño que la Hoja de Lote de Pelado y la de Descongelado (usuario, 25 nov 2026): las piezas
+// vienen de HojaLote.jsx para no tener otro estilo más.
 export function ContenidoHojaTratamiento({ hoja, pickupMaximo = 20 }) {
+  const c = true; // letra de papel: la hoja lleva doce columnas aun en pantalla
   const abierta = hoja.Estatus !== "Cerrada";
   const t = hoja.Totales;
   const aux = hoja.Auxiliares;
   const insumos = hoja.Insumos.filter(i => i.Cantidad != null);
   const diferencias = hoja.Lineas.filter(l => l.KgDiferencia > 0);
+  const colorPickup = t.Alerta === "PERDIDA" ? C.rojo : t.Alerta === "EXCEDE" ? C.ambar
+    : t.Pickup == null ? C.marea : t.Pickup > PICKUP_VERDE ? VERDE : t.Pickup < PICKUP_ROJO ? C.rojo : C.marea;
+  const th = "py-1 px-1.5 text-[9px] font-semibold uppercase tracking-wide leading-tight";
+  const Seccion = "break-inside-avoid pt-2 pb-2";
 
   return (
-    <div className="text-gray-900">
-      <div className="flex items-start justify-between mb-2">
-        <div>
-          <h1 className="text-2xl font-bold">Tratamiento de Camarón</h1>
-          <p className="text-sm text-gray-500">Hoja de proceso · una hoja por cliente</p>
+    <div className="text-slate-800" style={IMPRIMIR_COLOR}>
+      {/* ── Encabezado ── */}
+      <div className="rounded-md overflow-hidden border mb-3" style={{ borderColor: C.marea }}>
+        <div className="flex items-center justify-between px-3 py-1.5" style={{ background: C.marea }}>
+          <h3 className="text-sm font-bold uppercase tracking-wide text-white">
+            Hoja de Tratamiento <span className="font-mono tracking-normal">#{hoja.HojaId}</span>
+            <span className="font-normal text-sky-200"> — Camarón</span>
+          </h3>
+          <span className="text-[11px] font-semibold text-sky-100 tabular-nums">
+            {abierta && <span className="mr-2 rounded bg-red-600 px-1.5 py-0.5 text-white uppercase">Borrador — hoja abierta</span>}
+            Jornada {fmtDia(hoja.FechaProduccion)}
+          </span>
         </div>
-        <div className="text-right">
-          <p className="text-2xl font-mono font-bold">Hoja #{hoja.HojaId}</p>
-          <p className="text-sm text-gray-500">Jornada {fmtDia(hoja.FechaProduccion)}</p>
-          {abierta && <p className="text-sm font-bold text-red-600 uppercase">Borrador — hoja abierta</p>}
-        </div>
-      </div>
-
-      <div className="border-y-2 border-gray-800 py-2 mb-3 grid grid-cols-4 gap-x-6 gap-y-1 text-sm">
-        <div className="col-span-2"><span className="text-gray-500">Cliente previsto:</span> <b>{hoja.NombreCliente || "—"}</b></div>
-        <div><span className="text-gray-500">Encargado:</span> <b>{hoja.NombreEncargado || hoja.Encargado || "—"}</b></div>
-        <div><span className="text-gray-500">Horario:</span> <b>{hora(hoja.HoraInicio)} – {abierta ? "…" : hora(hoja.HoraFin)}</b></div>
-        <div className="col-span-4">
-          <span className="text-gray-500">Personas:</span> <b>{aux ? aux.Personas : hoja.Personas ?? "—"}</b>
-          {aux && <span className="text-gray-500"> (del marcaje del área, sin contar al encargado)</span>}
-        </div>
-      </div>
-
-      <table className="w-full table-fixed text-[11px] print-table mb-3">
-        <colgroup>{COLUMNAS.map(([n, w]) => <col key={n} style={{ width: w }} />)}</colgroup>
-        <thead>
-          <tr className="uppercase border-b-2 border-gray-800 text-[10px] text-gray-600 align-bottom">
-            {COLUMNAS.map(([n, , der]) => (
-              <th key={n} className={`py-1 px-1.5 font-semibold leading-tight ${der ? "text-right" : "text-left"}`}>{n}</th>
-            ))}
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-gray-200">
-          {hoja.Termos.map(x => (
-            <tr key={x.TermoId}>
-              <td className={`${CELDA} font-mono font-semibold`}>{x.NumeroTermo ?? "—"}</td>
-              <td className={`${CELDA} font-mono`} title={x.Lote}>{x.Lote}</td>
-              <td className={CELDA}>{x.DescripcionTalla}</td>
-              <td className={CELDA}>{hora(x.HoraInicio)}–{x.HoraSalida ? hora(x.HoraSalida) : "en termo"}</td>
-              <td className={CELDA}>{fmtTiempo(x.Minutos)}</td>
-              <td className={CELDA}>{x.ConteoFinal ?? "—"}</td>
-              <td className={CELDA}>{x.NombreQuimico || "—"}</td>
-              <td className={CELDA} title={`${x.Clase} ${x.DescripcionClase ?? ""}`}>{corteDe(x)}</td>
-              <td className={`${CELDA} text-right`}>{fmtNum(x.KgSinTratar)}</td>
-              <td className={`${CELDA} text-right font-semibold`}>{x.KgTratadas != null ? fmtNum(x.KgTratadas) : "—"}</td>
-              <td className={`${CELDA} text-right ${colorAlerta(x.Alerta)}`}>{pct(x.Pickup)}{x.Alerta ? " ⚠" : ""}</td>
-              <td className={CELDA}>{x.NombreDestino || "—"}</td>
-            </tr>
-          ))}
-          {hoja.Termos.length === 0 && <tr><td colSpan={COLUMNAS.length} className="py-3 text-center text-gray-400">Sin termos</td></tr>}
-        </tbody>
-        <tfoot>
-          <tr className="border-t-2 border-gray-800 font-bold">
-            <td colSpan={8} className={`${CELDA} text-right uppercase text-[10px]`}>Totales</td>
-            <td className={`${CELDA} text-right`}>{fmtNum(t.KgRecibidos)}</td>
-            <td className={`${CELDA} text-right`}>{fmtNum(t.KgTratados)}</td>
-            <td className={`${CELDA} text-right ${colorAlerta(t.Alerta)}`}>{pct(t.Pickup)}</td>
-            <td></td>
-          </tr>
-        </tfoot>
-      </table>
-
-      <div className="grid grid-cols-2 gap-4 mb-3">
-        <div>
-          <h2 className="text-sm font-bold uppercase mb-1">Totales del turno</h2>
-          {/* "En termo" solo aparece si hay termos adentro: ganados y pick-up son de lo que ya salió, y
-              sin ese recuadro "recibidos" contra "tratados" se leía como pérdida. */}
-          <div className="grid border border-gray-800 text-center" style={{ gridTemplateColumns: `repeat(${t.KgEnTermo > 0.001 ? 5 : 4}, minmax(0, 1fr))` }}>
-            {[["Kg recibidos", fmtNum(t.KgRecibidos)], ...(t.KgEnTermo > 0.001 ? [["En termo", fmtNum(t.KgEnTermo)]] : []),
-              ["Kg tratados", fmtNum(t.KgTratados)], ["Kg ganados", fmtNum(t.KgGanados)], ["% Pick-up", pct(t.Pickup)]].map(([e, v], i) => (
-              <div key={e} className={`py-1.5 ${i ? "border-l border-gray-800" : ""}`}>
-                <div className="text-[10px] uppercase text-gray-500">{e}</div>
-                <div className={`font-mono font-bold ${e === "% Pick-up" ? colorAlerta(t.Alerta) : ""}`}>{v}</div>
-              </div>
-            ))}
+        <div className="grid grid-cols-4 divide-x divide-y divide-white" style={{ background: C.hielo }}>
+          <Dato c={c} ancho titulo="Cliente previsto">{hoja.NombreCliente || "—"}</Dato>
+          <Dato c={c} titulo="Encargado de turno">{hoja.NombreEncargado || hoja.Encargado || "—"}</Dato>
+          <Dato c={c} titulo="Horario">
+            <span className="tabular-nums">{hora(hoja.HoraInicio)} – {abierta ? "…" : hora(hoja.HoraFin)}</span>
+          </Dato>
+          <div className="col-span-4">
+            <Dato c={c} titulo="Personal del turno">
+              {aux ? aux.Personas : hoja.Personas ?? "—"} personas
+              {aux && <span className="font-normal text-slate-500"> · del marcaje del área, sin contar al encargado</span>}
+            </Dato>
           </div>
-          {t.EnTermo > 0 && <p className="text-[10px] text-red-600 mt-1">{t.EnTermo} termo{t.EnTermo > 1 ? "s" : ""} todavía en termo ({fmtNum(t.KgEnTermo)} kg): no entran a ganados ni al pick-up.</p>}
         </div>
-        <div>
-          <h2 className="text-sm font-bold uppercase mb-1">Insumos — consumo</h2>
-          {insumos.length ? (
-            <div className="grid border border-gray-800 text-center" style={{ gridTemplateColumns: `repeat(${insumos.length}, minmax(0, 1fr))` }}>
-              {insumos.map((i, k) => (
-                <div key={i.Codigo} className={`py-1.5 ${k ? "border-l border-gray-800" : ""}`}>
-                  <div className="text-[10px] uppercase text-gray-500">{i.Nombre} ({i.UM.toLowerCase()})</div>
-                  <div className="font-mono font-bold">{fmtNum(i.Cantidad)}</div>
-                </div>
+      </div>
+
+      <div className="divide-y-2 divide-slate-300">
+        {/* ── Termos ── */}
+        <div className={`${Seccion} !pt-0`}>
+          <TituloSeccion c={c} extra={`${hoja.Termos.length} termo${hoja.Termos.length !== 1 ? "s" : ""}`}>Tratamiento por termo</TituloSeccion>
+          <table className="print-table w-full table-fixed border-collapse text-[10.5px]">
+            <colgroup>{COLUMNAS.map(([n, w]) => <col key={n} style={{ width: w }} />)}</colgroup>
+            <thead>
+              <tr className="align-bottom" style={{ background: C.hielo, color: C.marea }}>
+                {COLUMNAS.map(([n, , der]) => (
+                  <th key={n} className={`${th} ${der ? "text-right" : "text-left"}`}>{n}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {hoja.Termos.map((x, i) => (
+                <tr key={x.TermoId} className="border-b border-slate-100" style={i % 2 ? { background: "#FAFCFD" } : undefined}>
+                  <td className={`${CELDA} font-mono font-semibold`} style={{ color: C.marea }}>{x.NumeroTermo ?? "—"}</td>
+                  <td className={`${CELDA} font-mono`} title={x.Lote}>{x.Lote}</td>
+                  <td className={CELDA}>{x.DescripcionTalla}</td>
+                  <td className={`${CELDA} tabular-nums`}>{hora(x.HoraInicio)}–{x.HoraSalida ? hora(x.HoraSalida) : "en termo"}</td>
+                  <td className={`${CELDA} tabular-nums`}>{fmtTiempo(x.Minutos)}</td>
+                  <td className={CELDA}>{x.ConteoFinal ?? "—"}</td>
+                  <td className={CELDA}>{x.NombreQuimico || "—"}</td>
+                  <td className={`${CELDA} text-slate-700`} title={`${x.Clase} ${x.DescripcionClase ?? ""}`}>{corteDe(x)}</td>
+                  <td className={`${CELDA} text-right tabular-nums`}>{fmtNum(x.KgSinTratar)}</td>
+                  <td className={`${CELDA} text-right tabular-nums font-semibold`}>{x.KgTratadas != null ? fmtNum(x.KgTratadas) : "—"}</td>
+                  <td className={`${CELDA} text-right tabular-nums ${colorPickupCelda(x.Pickup, x.Alerta)}`}>{pct(x.Pickup)}{x.Alerta ? " ⚠" : ""}</td>
+                  <td className={CELDA}>{x.NombreDestino || "—"}</td>
+                </tr>
               ))}
+              {hoja.Termos.length === 0 && <tr><td colSpan={COLUMNAS.length} className="py-3 text-center text-slate-400">Sin termos</td></tr>}
+            </tbody>
+            <tfoot>
+              <tr className="font-bold" style={{ borderTop: `2px solid ${C.marea}` }}>
+                <td colSpan={8} className={`${CELDA} text-right uppercase text-[9px] text-slate-500`}>Totales</td>
+                <td className={`${CELDA} text-right tabular-nums`}>{fmtNum(t.KgRecibidos)}</td>
+                <td className={`${CELDA} text-right tabular-nums`} style={{ color: C.coral }}>{fmtNum(t.KgTratados)}</td>
+                <td className={`${CELDA} text-right tabular-nums ${colorPickupCelda(t.Pickup, t.Alerta)}`}>{pct(t.Pickup)}</td>
+                <td></td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+
+        {/* ── Totales del turno e insumos ── */}
+        <div className={`${Seccion} grid grid-cols-3 gap-4`}>
+          <div className="col-span-2">
+            <TituloSeccion c={c}>Cuadre del turno</TituloSeccion>
+            {/* "En termo" solo aparece si hay termos adentro: ganados y pick-up son de lo que ya salió, y
+                sin ese recuadro "recibidos" contra "tratados" se leía como pérdida. */}
+            <div className="flex items-stretch gap-1">
+              <Eslabon c={c} titulo="Kg recibidos" color={C.marea}><Kg c={c} v={t.KgRecibidos} /></Eslabon>
+              {t.KgEnTermo > 0.001 && <Eslabon c={c} op="−" titulo="En termo" color={C.ambar}><Kg c={c} v={t.KgEnTermo} /></Eslabon>}
+              <Eslabon c={c} op="→" titulo="Kg tratados" color={C.coral}><Kg c={c} v={t.KgTratados} /></Eslabon>
+              <Eslabon c={c} op="=" titulo="Kg ganados" color={C.marea} fondo={C.hielo}><Kg c={c} v={t.KgGanados} /></Eslabon>
+              <span className="w-1.5" />
+              <Eslabon c={c} titulo="Pick-up" color={colorPickup} fondo="#E6F4F2">
+                <span className="tabular-nums">{pct(t.Pickup)}</span>
+                <div className="text-[8px] font-normal leading-tight whitespace-nowrap text-slate-500">ganado ÷ sin tratar</div>
+              </Eslabon>
             </div>
-          ) : <p className="text-xs text-gray-400 border border-dashed border-gray-300 py-2 text-center">Sin consumo registrado</p>}
+            {t.EnTermo > 0 && <p className="text-[9.5px] mt-1" style={{ color: C.rojo }}>{t.EnTermo} termo{t.EnTermo > 1 ? "s" : ""} todavía en termo ({fmtNum(t.KgEnTermo)} kg): no entran a ganados ni al pick-up.</p>}
+          </div>
+          <div>
+            <TituloSeccion c={c}>Insumos — consumo</TituloSeccion>
+            {insumos.length ? (
+              <div className="rounded-md border border-slate-200 px-2 py-1">
+                {insumos.map((i, k) => (
+                  <div key={i.Codigo} className={`text-[10.5px] flex items-center justify-between gap-3 py-0.5 ${k ? "border-t border-slate-100" : ""}`}>
+                    <span className="truncate">{i.Nombre}</span>
+                    <span className="tabular-nums whitespace-nowrap font-semibold" style={{ color: C.marea }}>
+                      {fmtNum(i.Cantidad)} <span className="text-[9px] font-normal text-slate-400">{i.UM.toLowerCase()}</span>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            ) : <p className="text-[10.5px] text-slate-400 rounded-md border border-dashed border-slate-300 py-2 text-center">Sin consumo registrado</p>}
+          </div>
         </div>
-      </div>
 
-      {diferencias.length > 0 && (
-        <p className="text-[11px] mb-2">
-          <span className="font-bold uppercase text-[10px]">Diferencias de báscula al cerrar:</span>{" "}
-          {diferencias.map(l => `${l.Lote} ${l.Clase} ${l.DescripcionTalla ?? ""} ${fmtNum(l.KgDiferencia)} kg`).join(" · ")}
-        </p>
-      )}
+        {/* Las firmas y el pie no se separan: con 14 termos se iban solas a una segunda hoja. */}
+        <div className={`${Seccion} !pb-0`}>
+          {diferencias.length > 0 && (
+            <p className="text-[10.5px] mb-1">
+              <span className="font-bold uppercase text-[9px]" style={{ color: C.ambar }}>Diferencias de báscula al cerrar:</span>{" "}
+              {diferencias.map(l => `${l.Lote} ${l.Clase} ${l.DescripcionTalla ?? ""} ${fmtNum(l.KgDiferencia)} kg`).join(" · ")}
+            </p>
+          )}
+          {hoja.Observaciones && <p className="text-[10.5px] mb-1"><span className="text-slate-500">Observaciones:</span> {hoja.Observaciones}</p>}
+          <p className="text-[9.5px] text-slate-500 mb-6">
+            % Pick-up = (kg tratadas − kg sin tratar) ÷ kg sin tratar × 100. ⚠ = alerta: pick-up negativo (salió pesando menos) o mayor a {pickupMaximo} %.
+            El corte es el de la clase del producto.
+          </p>
 
-      {hoja.Observaciones && <p className="text-sm mb-2"><span className="text-gray-500">Observaciones:</span> {hoja.Observaciones}</p>}
+          <div className="grid grid-cols-2 gap-16">
+            <div className="text-center">
+              <p className="text-sm font-medium h-5">{hoja.NombreEncargado || ""}</p>
+              <div className="border-t border-slate-800 pt-1 text-xs text-slate-600">Firma encargado</div>
+            </div>
+            <div className="text-center">
+              <p className="text-sm font-medium h-5"></p>
+              <div className="border-t border-slate-800 pt-1 text-xs text-slate-600">Revisado por</div>
+            </div>
+          </div>
 
-      <p className="text-[10px] text-gray-500 mb-6">
-        % Pick-up = (kg tratadas − kg sin tratar) ÷ kg sin tratar × 100. ⚠ = alerta: pick-up negativo (salió pesando menos) o mayor a {pickupMaximo} %.
-        El corte es el de la clase del producto.
-      </p>
-
-      {/* Las firmas y el pie no se separan: con 14 termos se iban solas a una segunda hoja. */}
-      <div className="break-inside-avoid">
-      <div className="grid grid-cols-2 gap-16">
-        <div className="text-center">
-          <p className="text-sm font-medium h-5">{hoja.NombreEncargado || ""}</p>
-          <div className="border-t border-gray-800 pt-1 text-xs text-gray-600">Firma encargado</div>
+          <p className="text-[10px] text-slate-400 mt-3">
+            Impreso {new Date().toLocaleString("es-GT", { dateStyle: "short", timeStyle: "short" })}
+            {hoja.CerradaEn ? ` · Cerrada por ${hoja.CerradaPor} el ${fmtDia(hoja.CerradaEn)} ${hora(hoja.CerradaEn)}` : ""}
+          </p>
         </div>
-        <div className="text-center">
-          <p className="text-sm font-medium h-5"></p>
-          <div className="border-t border-gray-800 pt-1 text-xs text-gray-600">Revisado por</div>
-        </div>
-      </div>
-
-      <p className="text-[10px] text-gray-400 mt-3">
-        Impreso {new Date().toLocaleString("es-GT", { dateStyle: "short", timeStyle: "short" })}
-        {hoja.CerradaEn ? ` · Cerrada por ${hoja.CerradaPor} el ${fmtDia(hoja.CerradaEn)} ${hora(hoja.CerradaEn)}` : ""}
-      </p>
       </div>
     </div>
   );
