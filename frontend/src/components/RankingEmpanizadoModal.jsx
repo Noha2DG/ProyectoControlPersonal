@@ -53,7 +53,7 @@ export function ContenidoRankingEmpanizado({ lista, desde, hasta, totales }) {
         </thead>
         <tbody>
           {lista.map(p => {
-            const color = p.LbHora == null ? "" : p.LbHora < META_LBH ? "text-red-700" : "text-emerald-700";
+            const color = p.LbHora == null ? "" : Math.round(p.LbHora * 100) / 100 < META_LBH ? "text-red-700" : "text-emerald-700";
             return (
               // Los tres primeros con fondo ámbar suave; print-color-adjust para que el navegador no lo quite.
               <tr key={p.Codigo} className={`border-t border-gray-200 ${p.Puesto <= 3 ? "bg-amber-50 font-semibold" : ""}`}

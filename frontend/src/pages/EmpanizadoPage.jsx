@@ -803,11 +803,12 @@ function RitmoDelDia({ bandejas, ponderada }) {
 
 const sinTildes = s => String(s ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
 
-// Lb/hora: menos de 4 en rojo, de 4 para arriba en verde (usuario, 26 nov 2026).
+// Lb/hora: menos de 4 en rojo, de 4 para arriba en verde (usuario, 26 nov 2026). Se compara el número
+// YA REDONDEADO a 2 decimales: 3.998 se ve "4.00" y debe salir verde.
 const META_LBH = 4;
 
 function FilaPersona({ p, abierta, onClick, nuevaMesa, puesto = null, cols = 6 }) {
-  const color = p.LbHora == null ? "" : p.LbHora < META_LBH ? "bg-red-50 text-red-700" : "bg-emerald-50 text-emerald-700";
+  const color = p.LbHora == null ? "" : Math.round(p.LbHora * 100) / 100 < META_LBH ? "bg-red-50 text-red-700" : "bg-emerald-50 text-emerald-700";
   return (
     <>
       <tr onClick={onClick} className={`cursor-pointer hover:bg-amber-50 ${nuevaMesa ? "border-t-2 border-amber-200" : ""}`}>
