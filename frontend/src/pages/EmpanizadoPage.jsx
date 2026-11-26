@@ -676,8 +676,15 @@ function RitmoDelDia({ bandejas, ponderada }) {
     if (x.lbp == null) { abierto = false; return; }
     d += `${abierto ? "L" : "M"}${X(i)},${Y(x.lbp)} `; abierto = true;
   });
-  const pico = horas.reduce((a, x, i) => (x.lbp != null && (a < 0 || x.lbp > horas[a].lbp) ? i : a), -1);
-  const ultimo = horas.map(x => x.lbp != null).lastIndexOf(true);
+  // Etiqueta en CADA punto (usuario, 26 nov 2026): arriba del punto; debajo si es un valle (más bajo que
+  // sus vecinos) o si arriba se saldría de la gráfica. En los extremos se alinea hacia adentro.
+  const posEtiqueta = i => {
+    const v = horas[i].lbp, a = horas[i - 1]?.lbp, s = horas[i + 1]?.lbp;
+    const valle = (a == null || v < a) && (s == null || v < s) && (a != null || s != null);
+    const y = Y(v);
+    const abajo = (valle && y + 16 < H - B) || y - 10 < 10;
+    return { y: abajo ? y + 16 : y - 9, ancla: n > 1 && i === 0 ? "start" : n > 1 && i === n - 1 ? "end" : "middle" };
+  };
   const etiqueta = h => `${h}:00`;
   const hv = hover != null ? horas[hover] : null;
 
@@ -686,6 +693,12 @@ function RitmoDelDia({ bandejas, ponderada }) {
       <div className="flex flex-wrap items-baseline gap-x-3 mb-1">
         <h3 className="font-bold text-stone-800">Ritmo del día</h3>
         <p className="text-xs text-stone-500">Libras por persona en cada hora: lo pesado en esa hora ÷ las personas que pesaron.</p>
+        {ponderada != null && (
+          <span className="ml-auto flex items-center gap-1.5 text-xs font-semibold text-stone-600">
+            <svg width="22" height="6" aria-hidden="true"><line x1="0" x2="22" y1="3" y2="3" stroke="#78716c" strokeWidth="1.5" strokeDasharray="5 4" /></svg>
+            ritmo del día {kg(ponderada)}
+          </span>
+        )}
       </div>
       <div className="relative" onMouseLeave={() => setHover(null)}>
         <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-auto" role="img"
@@ -702,7 +715,6 @@ function RitmoDelDia({ bandejas, ponderada }) {
           {ponderada != null && (
             <g>
               <line x1={L} x2={W - R} y1={Y(ponderada)} y2={Y(ponderada)} stroke="#78716c" strokeWidth="1.5" strokeDasharray="5 4" />
-              <text x={W - R} y={Y(ponderada) - 6} textAnchor="end" fontSize="11" fill="#57534e" fontWeight="600">ritmo del día {kg(ponderada)}</text>
             </g>
           )}
           {hv && <line x1={X(hover)} x2={X(hover)} y1={T - 6} y2={H - B} stroke="#d6d3d1" strokeWidth="1" />}
@@ -710,9 +722,14 @@ function RitmoDelDia({ bandejas, ponderada }) {
           {horas.map((x, i) => x.lbp != null && (
             <circle key={x.h} cx={X(i)} cy={Y(x.lbp)} r={hover === i ? 6 : 4} fill={AMBAR} stroke="#fff" strokeWidth="2" />
           ))}
-          {[...new Set([pico, ultimo])].filter(i => i >= 0 && i !== hover).map(i => (
-            <text key={`l${i}`} x={X(i)} y={Y(horas[i].lbp) - 10} textAnchor="middle" fontSize="11" fontWeight="700" fill="#292524">{kg(horas[i].lbp, 1)}</text>
-          ))}
+          {horas.map((x, i) => {
+            if (x.lbp == null) return null;
+            const { y, ancla } = posEtiqueta(i);
+            return (
+              <text key={`l${x.h}`} x={X(i) + (ancla === "start" ? -4 : ancla === "end" ? 4 : 0)} y={y} textAnchor={ancla}
+                fontSize="11" fontWeight="700" fill="#292524" stroke="#fff" strokeWidth="3" paintOrder="stroke">{kg(x.lbp, 1)}</text>
+            );
+          })}
           {horas.map((x, i) => (
             <rect key={`h${x.h}`} x={X(i) - ancho / 2} y={0} width={ancho} height={H} fill="transparent"
               onMouseEnter={() => setHover(i)} onClick={() => setHover(i)} />
