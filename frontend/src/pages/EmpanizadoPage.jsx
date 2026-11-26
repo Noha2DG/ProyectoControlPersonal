@@ -503,6 +503,7 @@ function Produccion() {
   const [datos, setDatos] = useState(null);
   const [error, setError] = useState("");
   const [abierta, setAbierta] = useState(null);
+  const [buscar, setBuscar] = useState("");
 
   const cargar = useCallback(() => { setError(""); return pedir(`${API}/reporte?desde=${desde}&hasta=${hasta}`).then(setDatos).catch(e => setError(e.message)); }, [desde, hasta]);
   useEffect(() => { cargar(); }, [cargar]);
@@ -540,6 +541,21 @@ function Produccion() {
     return lista;
   }, [datos]);
   const tot = porPersona.reduce((s, p) => ({ b: s.b + p.Bandejas, lb: s.lb + p.Lb }), { b: 0, lb: 0 });
+  // Buscador (usuario, 26 nov 2026): filtra SOLO la tabla; tarjetas, ponderada, gráfica y Excel siguen
+  // siendo del día completo. Un número solo = esa posición exacta; el nombre de una banda = esa banda;
+  // lo demás, cada palabra en nombre o código (sin importar mayúsculas ni tildes).
+  const visibles = useMemo(() => {
+    const q = sinTildes(buscar).trim().replace(/\s+/g, " ");
+    if (!q) return porPersona;
+    if (/^\d+$/.test(q)) return porPersona.filter(p => p.Posicion === Number(q));
+    const banda = porPersona.filter(p => sinTildes(p.MesaNombre) === q);
+    if (banda.length) return banda;
+    const palabras = q.split(" ");
+    return porPersona.filter(p => {
+      const texto = sinTildes(`${p.Nombre} ${p.Codigo} ${p.MesaNombre ?? "sin posicion"}`);
+      return palabras.every(w => texto.includes(w));
+    });
+  }, [porPersona, buscar]);
 
   return (
     <div>
@@ -566,6 +582,23 @@ function Produccion() {
         </div>
       </div>
       {datos?.tiempos && <RitmoDelDia bandejas={datos.tiempos.bandejas} ponderada={porPersona.ponderada} />}
+      {porPersona.length > 0 && (
+        <div className="flex flex-wrap items-center gap-3 mb-2">
+          <div className="relative w-full sm:w-80">
+            <svg className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-stone-400" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+              <circle cx="9" cy="9" r="6" /><path d="M14 14l4 4" strokeLinecap="round" />
+            </svg>
+            <input value={buscar} onChange={e => setBuscar(e.target.value)} onKeyDown={e => e.key === "Escape" && setBuscar("")}
+              placeholder="Buscar por nombre, código, posición o banda" aria-label="Buscar persona"
+              className="w-full rounded-lg border border-stone-300 bg-white pl-8 pr-8 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-300 focus:border-amber-400" />
+            {buscar && (
+              <button onClick={() => setBuscar("")} title="Limpiar búsqueda" aria-label="Limpiar búsqueda"
+                className="absolute right-1.5 top-1/2 -translate-y-1/2 w-6 h-6 rounded-md text-stone-400 hover:text-stone-700 hover:bg-stone-100">✕</button>
+            )}
+          </div>
+          {buscar.trim() && <span className="text-xs text-stone-500">Mostrando {visibles.length} de {porPersona.length}</span>}
+        </div>
+      )}
       <div className="bg-white rounded-xl shadow overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
@@ -577,11 +610,16 @@ function Produccion() {
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
-            {porPersona.map((p, i) => (
+            {visibles.map((p, i) => (
               <FilaPersona key={p.Codigo} p={p} abierta={abierta === p.Codigo} onClick={() => setAbierta(a => (a === p.Codigo ? null : p.Codigo))}
-                nuevaMesa={i > 0 && (p.MesaNombre ?? "") !== (porPersona[i - 1].MesaNombre ?? "")} />
+                nuevaMesa={i > 0 && (p.MesaNombre ?? "") !== (visibles[i - 1].MesaNombre ?? "")} />
             ))}
             {datos && porPersona.length === 0 && <tr><td colSpan={6} className="px-4 py-10 text-center text-gray-400">Sin bandejas pesadas en esas fechas</td></tr>}
+            {porPersona.length > 0 && visibles.length === 0 && (
+              <tr><td colSpan={6} className="px-4 py-8 text-center text-stone-500">
+                Nadie coincide con «{buscar.trim()}». <button onClick={() => setBuscar("")} className="underline text-amber-700">Ver a todos</button>
+              </td></tr>
+            )}
           </tbody>
         </table>
       </div>
@@ -706,6 +744,8 @@ function RitmoDelDia({ bandejas, ponderada }) {
     </div>
   );
 }
+
+const sinTildes = s => String(s ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
 
 // Lb/hora: menos de 4 en rojo, de 4 para arriba en verde (usuario, 26 nov 2026).
 const META_LBH = 4;
