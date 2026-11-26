@@ -584,7 +584,7 @@ function Produccion() {
       {datos?.tiempos && <RitmoDelDia bandejas={datos.tiempos.bandejas} ponderada={porPersona.ponderada} />}
       {porPersona.length > 0 && (
         <div className="flex flex-wrap items-center gap-3 mb-2">
-          <div className="relative w-full sm:w-80">
+          <div className="relative w-full sm:w-96">
             <svg className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-stone-400" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
               <circle cx="9" cy="9" r="6" /><path d="M14 14l4 4" strokeLinecap="round" />
             </svg>
