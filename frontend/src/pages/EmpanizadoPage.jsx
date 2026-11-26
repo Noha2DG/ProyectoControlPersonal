@@ -2,6 +2,7 @@ import { Fragment, useState, useEffect, useMemo, useCallback, useRef } from "rea
 import { authHeader, usePuede } from "../context/AuthContext.jsx";
 import { exportarProduccionEmpanizado } from "../utils/exportExcel.js";
 import { calcularLbHora, totalLbHora, LB_POR_KG } from "../utils/destajo.js";
+import RankingEmpanizadoModal from "../components/RankingEmpanizadoModal.jsx";
 
 // Empanizado (#/empanizado, 20 nov 2026). Para el encargado o chequeador de Empanizado:
 //   Al piso          lo que mandó Tratamiento (ya con el pick-up): se escoge y se TOMA → nace el lote.
@@ -504,6 +505,8 @@ function Produccion() {
   const [error, setError] = useState("");
   const [abierta, setAbierta] = useState(null);
   const [buscar, setBuscar] = useState("");
+  const [orden, setOrden] = useState("banda"); // "banda" | "ranking"
+  const [verRanking, setVerRanking] = useState(false);
 
   const cargar = useCallback(() => { setError(""); return pedir(`${API}/reporte?desde=${desde}&hasta=${hasta}`).then(setDatos).catch(e => setError(e.message)); }, [desde, hasta]);
   useEffect(() => { cargar(); }, [cargar]);
@@ -544,18 +547,26 @@ function Produccion() {
   // Buscador (usuario, 26 nov 2026): filtra SOLO la tabla; tarjetas, ponderada, gráfica y Excel siguen
   // siendo del día completo. Un número solo = esa posición exacta; el nombre de una banda = esa banda;
   // lo demás, cada palabra en nombre o código (sin importar mayúsculas ni tildes).
+  // Ranking por bandejas acumuladas (usuario, 26 nov 2026); con las mismas bandejas, por libras. El
+  // puesto es del día completo: buscar a alguien no le cambia el número.
+  const ranking = useMemo(() => porPersona.filter(p => p.Codigo)
+    .sort((a, b) => b.Bandejas - a.Bandejas || b.Lb - a.Lb || String(a.Nombre ?? "").localeCompare(String(b.Nombre ?? ""), "es"))
+    .map((p, i) => ({ ...p, Puesto: i + 1 })), [porPersona]);
+  const esRanking = orden === "ranking";
   const visibles = useMemo(() => {
+    const base = esRanking ? ranking : porPersona;
     const q = sinTildes(buscar).trim().replace(/\s+/g, " ");
-    if (!q) return porPersona;
-    if (/^\d+$/.test(q)) return porPersona.filter(p => p.Posicion === Number(q));
-    const banda = porPersona.filter(p => sinTildes(p.MesaNombre) === q);
+    if (!q) return base;
+    if (/^\d+$/.test(q)) return base.filter(p => p.Posicion === Number(q));
+    const banda = base.filter(p => sinTildes(p.MesaNombre) === q);
     if (banda.length) return banda;
     const palabras = q.split(" ");
-    return porPersona.filter(p => {
+    return base.filter(p => {
       const texto = sinTildes(`${p.Nombre} ${p.Codigo} ${p.MesaNombre ?? "sin posicion"}`);
       return palabras.every(w => texto.includes(w));
     });
-  }, [porPersona, buscar]);
+  }, [porPersona, ranking, esRanking, buscar]);
+  const cols = esRanking ? 7 : 6;
 
   return (
     <div>
@@ -598,12 +609,23 @@ function Produccion() {
             )}
           </div>
           {buscar.trim() && <span className="text-xs text-stone-500">Mostrando {visibles.length} de {porPersona.length}</span>}
+          <div className="ml-auto flex items-center gap-2">
+            <div className="inline-flex rounded-lg border border-stone-300 bg-white p-0.5 text-sm" role="group" aria-label="Ordenar la tabla">
+              {[["banda", "Por banda"], ["ranking", "Ranking"]].map(([v, t]) => (
+                <button key={v} onClick={() => setOrden(v)} aria-pressed={orden === v}
+                  className={`px-3 py-1 rounded-md font-semibold transition ${orden === v ? "bg-amber-600 text-white" : "text-stone-600 hover:bg-stone-100"}`}>{t}</button>
+              ))}
+            </div>
+            <button onClick={() => setVerRanking(true)} title="Ranking por bandejas acumuladas, para imprimir o guardar como PDF"
+              className="px-3 py-1.5 rounded-lg border border-amber-600 text-amber-700 text-sm font-semibold hover:bg-amber-50">Ranking PDF</button>
+          </div>
         </div>
       )}
       <div className="bg-white rounded-xl shadow overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
             <tr className="bg-amber-50 text-amber-900/70 uppercase text-xs tracking-wider">
+              {esRanking && <th className="px-3 py-3 text-right w-12">#</th>}
               <th className="px-3 py-3 text-left">Mesa / banda</th><th className="px-3 py-3 text-left">Pos.</th><th className="px-3 py-3 text-left">Persona</th>
               <th className="px-3 py-3 text-right">Bandejas</th>
               <th className="px-3 py-3 text-right">Libras</th>
@@ -613,11 +635,12 @@ function Produccion() {
           <tbody className="divide-y divide-gray-100">
             {visibles.map((p, i) => (
               <FilaPersona key={p.Codigo} p={p} abierta={abierta === p.Codigo} onClick={() => setAbierta(a => (a === p.Codigo ? null : p.Codigo))}
-                nuevaMesa={i > 0 && (p.MesaNombre ?? "") !== (visibles[i - 1].MesaNombre ?? "")} />
+                puesto={esRanking ? p.Puesto : null} cols={cols}
+                nuevaMesa={!esRanking && i > 0 && (p.MesaNombre ?? "") !== (visibles[i - 1].MesaNombre ?? "")} />
             ))}
-            {datos && porPersona.length === 0 && <tr><td colSpan={6} className="px-4 py-10 text-center text-gray-400">Sin bandejas pesadas en esas fechas</td></tr>}
+            {datos && porPersona.length === 0 && <tr><td colSpan={cols} className="px-4 py-10 text-center text-gray-400">Sin bandejas pesadas en esas fechas</td></tr>}
             {porPersona.length > 0 && visibles.length === 0 && (
-              <tr><td colSpan={6} className="px-4 py-8 text-center text-stone-500">
+              <tr><td colSpan={cols} className="px-4 py-8 text-center text-stone-500">
                 Nadie coincide con «{buscar.trim()}». <button onClick={() => setBuscar("")} className="underline text-amber-700">Ver a todos</button>
               </td></tr>
             )}
@@ -625,6 +648,10 @@ function Produccion() {
         </table>
       </div>
       <p className="mt-2 text-xs text-gray-500">Solo bandejas guardadas y no anuladas, pesadas en modo Empanizado. Lb/hora: mismo cálculo que destajo (desde la entrada al área del día hasta cada bandeja, sin cafetería ni permisos); la ponderada es el total de libras válidas entre el total de horas. "—" = sin entrada al área ese día. Lb/hora en rojo: menos de 4; en verde: 4 o más. La posición es la que la persona tenía el día que pesó.</p>
+      {verRanking && (
+        <RankingEmpanizadoModal lista={ranking} desde={desde} hasta={hasta} onCerrar={() => setVerRanking(false)}
+          totales={{ personas: porPersona.length, bandejas: tot.b, lb: tot.lb, ponderada: porPersona.ponderada }} />
+      )}
     </div>
   );
 }
@@ -779,11 +806,16 @@ const sinTildes = s => String(s ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").
 // Lb/hora: menos de 4 en rojo, de 4 para arriba en verde (usuario, 26 nov 2026).
 const META_LBH = 4;
 
-function FilaPersona({ p, abierta, onClick, nuevaMesa }) {
+function FilaPersona({ p, abierta, onClick, nuevaMesa, puesto = null, cols = 6 }) {
   const color = p.LbHora == null ? "" : p.LbHora < META_LBH ? "bg-red-50 text-red-700" : "bg-emerald-50 text-emerald-700";
   return (
     <>
       <tr onClick={onClick} className={`cursor-pointer hover:bg-amber-50 ${nuevaMesa ? "border-t-2 border-amber-200" : ""}`}>
+        {puesto != null && (
+          <td className="px-3 py-2 text-right">
+            <span className={`inline-flex items-center justify-center min-w-[1.75rem] h-7 rounded-full px-1.5 text-xs font-extrabold tabular-nums ${puesto <= 3 ? "bg-amber-600 text-white" : "bg-stone-100 text-stone-700"}`}>{puesto}</span>
+          </td>
+        )}
         <td className="px-3 py-2">{p.MesaNombre
           ? <span className="inline-block rounded-md bg-amber-100 text-amber-900 px-2 py-0.5 text-xs font-semibold">{p.MesaNombre}</span>
           : <span className="text-gray-400">sin posición</span>}</td>
@@ -797,7 +829,7 @@ function FilaPersona({ p, abierta, onClick, nuevaMesa }) {
         </td>
       </tr>
       {abierta && (
-        <tr><td colSpan={6} className="bg-slate-50 px-6 py-2">
+        <tr><td colSpan={cols} className="bg-slate-50 px-6 py-2">
           <table className="w-full text-xs">
             <thead><tr className="text-gray-500 text-left"><th className="py-1">Fecha</th><th>Lote</th><th>Producto</th><th>Destino</th><th>Horario</th><th className="text-right">Bandejas</th><th className="text-right">Libras</th></tr></thead>
             <tbody>
