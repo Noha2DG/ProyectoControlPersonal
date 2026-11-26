@@ -1,4 +1,4 @@
-import { Fragment, useState, useEffect, useMemo, useCallback } from "react";
+import { Fragment, useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { authHeader, usePuede } from "../context/AuthContext.jsx";
 import { exportarProduccionEmpanizado } from "../utils/exportExcel.js";
 import { calcularLbHora, totalLbHora, LB_POR_KG } from "../utils/destajo.js";
@@ -643,6 +643,10 @@ const Dato = ({ t, v, u }) => (
 // (Lb/hora ponderada). Una sola serie: sin leyenda, la tarjeta la nombra (usuario, 26 nov 2026).
 function RitmoDelDia({ bandejas, ponderada }) {
   const [hover, setHover] = useState(null);
+  // El ancho del dibujo = el de la pantalla, en píxeles: así la letra no se encoge en pantallas chicas
+  // (usuario, 26 nov 2026); solo se acorta la gráfica.
+  const caja = useRef(null);
+  const [anchoPx, setAnchoPx] = useState(960);
   const horas = useMemo(() => {
     const m = new Map();
     for (const [c, t, g] of bandejas) {
@@ -660,9 +664,16 @@ function RitmoDelDia({ bandejas, ponderada }) {
     }
     return out;
   }, [bandejas]);
-  if (!horas.length) return null;
+  useEffect(() => {
+    const el = caja.current;
+    if (!el || typeof ResizeObserver === "undefined") return undefined;
+    const ro = new ResizeObserver(([e]) => setAnchoPx(Math.max(320, Math.round(e.contentRect.width))));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [horas.length > 0]); // eslint-disable-line react-hooks/exhaustive-deps
+  if (!horas.length) return <div ref={caja} />;
 
-  const W = 960, H = 150, L = 40, R = 16, T = 18, B = 22; // baja: ~180 px de alto en pantalla ancha (usuario, 26 nov 2026)
+  const W = anchoPx, H = 180, L = 34, R = 14, T = 20, B = 24; // 180 px de alto fijo (usuario, 26 nov 2026: "más pequeña")
   const vals = horas.map(x => x.lbp).filter(v => v != null);
   const bruto = Math.max(...vals, ponderada ?? 0) * 1.15;
   const paso = [1, 2, 2.5, 5, 10, 20, 25, 50].find(s => bruto / s <= 3) ?? 100;
@@ -701,8 +712,8 @@ function RitmoDelDia({ bandejas, ponderada }) {
           </span>
         )}
       </div>
-      <div className="relative" onMouseLeave={() => setHover(null)}>
-        <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-auto" role="img"
+      <div ref={caja} className="relative" onMouseLeave={() => setHover(null)}>
+        <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H} className="block" role="img"
           aria-label={`Libras por persona en cada hora, de ${etiqueta(horas[0].h)} a ${etiqueta(horas[n - 1].h)}`}>
           {Array.from({ length: Math.round(tope / paso) + 1 }, (_, k) => k * paso).map(v => (
             <g key={v}>
