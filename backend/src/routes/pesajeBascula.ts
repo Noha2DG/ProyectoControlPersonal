@@ -392,10 +392,15 @@ router.post("/pesadas", requirePerm("pesaje_bascula", "usar"), async (req: AuthR
       const loteTxt = String(b.Lote ?? "").trim(), claseTxt = String(b.Clase ?? "").trim();
       if (!loteTxt) throw new ErrorNegocio(400, "Elija el lote");
       if (!claseTxt) throw new ErrorNegocio(400, "Elija el tipo de producto");
-      const [lote]: any[] = await tx.$queryRaw`
-        SELECT 1 AS ok FROM Lotes WHERE Lote = ${loteTxt}
-        UNION ALL SELECT 1 FROM MovimientoPiso WHERE Lote = ${loteTxt} LIMIT 1`;
-      if (!lote) throw new ErrorNegocio(400, `No existe el lote ${loteTxt}`);
+      // Empanizado no: su lote es el LOTE DEL DÍA (piscina + fecha de hoy), que no está en Lotes ni al
+      // piso (la toma guarda el de origen); ya quedó validado arriba con el LoteEmpanizado abierto.
+      // Exigirlo rechazaba todas las bandejas de G448Q012 (26 nov 2026, BAL-04).
+      if (!emp_) {
+        const [lote]: any[] = await tx.$queryRaw`
+          SELECT 1 AS ok FROM Lotes WHERE Lote = ${loteTxt}
+          UNION ALL SELECT 1 FROM MovimientoPiso WHERE Lote = ${loteTxt} LIMIT 1`;
+        if (!lote) throw new ErrorNegocio(400, `No existe el lote ${loteTxt}`);
+      }
       const [clase]: any[] = await tx.$queryRaw`SELECT Clase FROM Clase WHERE Clase = ${claseTxt}`;
       if (!clase) throw new ErrorNegocio(400, `No existe el tipo de producto ${claseTxt}`);
       const [talla]: any[] = await tx.$queryRaw`SELECT Codigo FROM Tallas WHERE Codigo = ${Number(b.Talla)}`;
