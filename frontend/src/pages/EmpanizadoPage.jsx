@@ -571,14 +571,15 @@ function Produccion() {
       <Aviso>{error}</Aviso>
       {/* El ritmo del día (Lb/hora ponderada) es el hilo de todo el reporte: tarjeta principal, línea
           punteada en la gráfica (usuario, 26 nov 2026: "dale color"). */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+      {/* Compactas: miden lo que su número, no se estiran al ancho (usuario, 26 nov 2026: "muy grandes"). */}
+      <div className="flex flex-wrap gap-2 mb-3">
         <Dato t="Personas" v={porPersona.length.toLocaleString("es-GT")} />
         <Dato t="Bandejas" v={tot.b.toLocaleString("es-GT")} />
         <Dato t="Libras" v={kg(tot.lb)} u="lb" />
-        <div className="rounded-xl p-3 shadow-sm text-white" style={{ background: AMBAR }}>
-          <div className="text-[11px] uppercase tracking-wider text-amber-100 font-semibold">Lb/hora ponderada</div>
-          <div className="text-3xl font-extrabold tabular-nums leading-tight">{porPersona.ponderada == null ? "—" : kg(porPersona.ponderada)}</div>
-          <div className="text-[11px] text-amber-100">ritmo del día · libra válida ÷ horas</div>
+        <div className="rounded-lg px-3 py-1.5 shadow-sm text-white min-w-[8.5rem]" style={{ background: AMBAR }}
+          title="Ritmo del día: total de libras válidas ÷ total de horas">
+          <div className="text-[10px] uppercase tracking-wider text-amber-100 font-semibold">Lb/hora ponderada</div>
+          <div className="text-xl font-extrabold tabular-nums leading-tight">{porPersona.ponderada == null ? "—" : kg(porPersona.ponderada)}</div>
         </div>
       </div>
       {datos?.tiempos && <RitmoDelDia bandejas={datos.tiempos.bandejas} ponderada={porPersona.ponderada} />}
@@ -631,9 +632,9 @@ function Produccion() {
 const AMBAR = "#D97706"; // amber-600: el color de Empanizado; validado (contraste ≥ 3:1 sobre blanco)
 
 const Dato = ({ t, v, u }) => (
-  <div className="rounded-xl bg-white shadow-sm border-t-4 border-amber-200 p-3">
-    <div className="text-[11px] uppercase tracking-wider text-stone-500 font-semibold">{t}</div>
-    <div className="text-2xl font-bold text-stone-800 tabular-nums leading-tight">{v}{u && <span className="ml-1 text-sm font-semibold text-stone-500">{u}</span>}</div>
+  <div className="rounded-lg bg-white shadow-sm border-l-4 border-amber-200 px-3 py-1.5 min-w-[6.5rem]">
+    <div className="text-[10px] uppercase tracking-wider text-stone-500 font-semibold">{t}</div>
+    <div className="text-xl font-bold text-stone-800 tabular-nums leading-tight">{v}{u && <span className="ml-1 text-xs font-semibold text-stone-500">{u}</span>}</div>
   </div>
 );
 
