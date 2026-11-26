@@ -540,8 +540,6 @@ function Produccion() {
     return lista;
   }, [datos]);
   const tot = porPersona.reduce((s, p) => ({ b: s.b + p.Bandejas, lb: s.lb + p.Lb }), { b: 0, lb: 0 });
-  // Barra de Lb/hora de cada fila: escala común (la más alta, o el ritmo del día si alguien no lo alcanza).
-  const escalaLbH = Math.max(1, porPersona.ponderada ?? 0, ...porPersona.map(p => p.LbHora ?? 0));
 
   return (
     <div>
@@ -556,7 +554,7 @@ function Produccion() {
       </div>
       <Aviso>{error}</Aviso>
       {/* El ritmo del día (Lb/hora ponderada) es el hilo de todo el reporte: tarjeta principal, línea
-          punteada en la gráfica y marca en la barra de cada persona (usuario, 26 nov 2026: "dale color"). */}
+          punteada en la gráfica y Lb/hora en ámbar de quien lo alcanza (usuario, 26 nov 2026: "dale color"). */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
         <Dato t="Personas" v={porPersona.length.toLocaleString("es-GT")} />
         <Dato t="Bandejas" v={tot.b.toLocaleString("es-GT")} />
@@ -574,21 +572,21 @@ function Produccion() {
             <tr className="bg-amber-50 text-amber-900/70 uppercase text-xs tracking-wider">
               <th className="px-3 py-3 text-left">Mesa / banda</th><th className="px-3 py-3 text-left">Pos.</th><th className="px-3 py-3 text-left">Persona</th>
               <th className="px-3 py-3 text-right">Bandejas</th>
-              <th className="px-3 py-3 text-right" title="Libra válida ÷ horas: desde su entrada al área del día hasta cada bandeja, sin cafetería ni permisos (mismo cálculo que destajo). La raya gris es el ritmo del día.">Lb/hora</th>
+              <th className="px-3 py-3 text-right" title="Libra válida ÷ horas: desde su entrada al área del día hasta cada bandeja, sin cafetería ni permisos (mismo cálculo que destajo).">Lb/hora</th>
               <th className="px-3 py-3 text-right">Libras</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
             {porPersona.map((p, i) => (
               <FilaPersona key={p.Codigo} p={p} abierta={abierta === p.Codigo} onClick={() => setAbierta(a => (a === p.Codigo ? null : p.Codigo))}
-                escala={escalaLbH} ponderada={porPersona.ponderada}
+                ponderada={porPersona.ponderada}
                 nuevaMesa={i > 0 && (p.MesaNombre ?? "") !== (porPersona[i - 1].MesaNombre ?? "")} />
             ))}
             {datos && porPersona.length === 0 && <tr><td colSpan={6} className="px-4 py-10 text-center text-gray-400">Sin bandejas pesadas en esas fechas</td></tr>}
           </tbody>
         </table>
       </div>
-      <p className="mt-2 text-xs text-gray-500">Solo bandejas guardadas y no anuladas, pesadas en modo Empanizado. Lb/hora: mismo cálculo que destajo (desde la entrada al área del día hasta cada bandeja, sin cafetería ni permisos); la ponderada es el total de libras válidas entre el total de horas. "—" = sin entrada al área ese día. En la barra, la raya gris es el ritmo del día; en ámbar, quien lo alcanza o supera. La posición es la que la persona tenía el día que pesó.</p>
+      <p className="mt-2 text-xs text-gray-500">Solo bandejas guardadas y no anuladas, pesadas en modo Empanizado. Lb/hora: mismo cálculo que destajo (desde la entrada al área del día hasta cada bandeja, sin cafetería ni permisos); la ponderada es el total de libras válidas entre el total de horas. "—" = sin entrada al área ese día. En ámbar, quien alcanza o supera el ritmo del día. La posición es la que la persona tenía el día que pesó.</p>
     </div>
   );
 }
@@ -710,7 +708,7 @@ function RitmoDelDia({ bandejas, ponderada }) {
   );
 }
 
-function FilaPersona({ p, abierta, onClick, escala, ponderada, nuevaMesa }) {
+function FilaPersona({ p, abierta, onClick, ponderada, nuevaMesa }) {
   const arriba = p.LbHora != null && ponderada != null && p.LbHora >= ponderada;
   return (
     <>
@@ -721,16 +719,8 @@ function FilaPersona({ p, abierta, onClick, escala, ponderada, nuevaMesa }) {
         <td className="px-3 py-2 font-mono font-bold text-stone-700">{p.Posicion ?? ""}</td>
         <td className="px-3 py-2">{titulo(p.Nombre)} <span className="text-xs text-gray-400 font-mono">{p.Codigo}</span></td>
         <td className="px-3 py-2 text-right tabular-nums">{p.Bandejas.toLocaleString("es-GT")}</td>
-        <td className="px-3 py-2">
-          <div className="flex items-center justify-end gap-2">
-            <div className="relative hidden sm:block h-2 w-28 rounded-full bg-amber-100" aria-hidden="true">
-              {p.LbHora != null && <div className="absolute inset-y-0 left-0 rounded-full" style={{ width: `${Math.min(100, (p.LbHora / escala) * 100)}%`, background: AMBAR }} />}
-              {ponderada != null && <div className="absolute -top-1 -bottom-1 w-0.5 rounded bg-stone-500" style={{ left: `${(ponderada / escala) * 100}%` }} />}
-            </div>
-            <span className={`w-12 text-right tabular-nums ${arriba ? "font-bold text-amber-700" : "font-semibold text-stone-700"}`}>
-              {p.LbHora == null ? <span className="text-gray-400 font-normal">—</span> : kg(p.LbHora)}
-            </span>
-          </div>
+        <td className={`px-3 py-2 text-right tabular-nums ${arriba ? "font-bold text-amber-700" : "font-semibold text-stone-700"}`}>
+          {p.LbHora == null ? <span className="text-gray-400 font-normal">—</span> : kg(p.LbHora)}
         </td>
         <td className="px-3 py-2 text-right tabular-nums">{kg(p.Lb)}</td>
       </tr>
