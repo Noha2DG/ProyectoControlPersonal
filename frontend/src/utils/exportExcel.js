@@ -1,6 +1,6 @@
 import * as XLSX from "xlsx";
 import { diasPermiso } from "./permisos.js";
-import { AREAS_DESTAJO } from "./destajo.js";
+import { AREAS_DESTAJO, LB_POR_KG } from "./destajo.js";
 
 export function exportarTransferencias(registros, fecha, permisos = []) {
   const detalle = registros.map(r => ({
@@ -513,14 +513,14 @@ export function exportarProduccionEmpanizado(porPersona, filas, desde, hasta) {
   const destino = (d) => ({ EXPORTACION: "Exportación", LOCAL: "Venta local" }[d] ?? d ?? "");
   const resumen = porPersona.map(p => ({
     "Mesa / banda": p.MesaNombre ?? "sin posición", "Posición": p.Posicion ?? "", "Código": p.Codigo, "Nombre": p.Nombre,
-    "Días": p.Dias, "Bandejas": p.Bandejas, "Bajo peso": p.BajoPeso ?? 0, "Sobrepeso": p.SobrePeso ?? 0, "Kilos": +Number(p.Kg).toFixed(3),
+    "Bandejas": p.Bandejas, "Lb/hora": p.LbHora == null ? "" : +Number(p.LbHora).toFixed(2), "Libras": +Number(p.Lb).toFixed(2),
   }));
   const detalle = filas.map(f => ({
     "Fecha": fecha(f.Fecha), "Mesa / banda": f.MesaNombre ?? "sin posición", "Posición": f.Posicion ?? "",
     "Código": f.Codigo, "Nombre": f.Nombre, "Lote": f.Lote, "Talla": f.DescripcionTalla ?? f.Talla,
     "Producto que sale": `${f.ClaseSalida ?? ""} ${f.DescripcionClaseSalida ?? ""}`.trim(), "Destino": destino(f.Destino),
     "Pedido": f.CodigoPedido ?? "", "Unidades (referencia)": f.UnidadesRef ?? "", "Primera": f.Primera, "Última": f.Ultima,
-    "Bandejas": f.Bandejas, "Bajo peso": f.BajoPeso ?? 0, "Sobrepeso": f.SobrePeso ?? 0, "Kilos": +Number(f.Kg).toFixed(3),
+    "Bandejas": f.Bandejas, "Libras": +(Number(f.Kg) * LB_POR_KG).toFixed(2),
   }));
   const wb = XLSX.utils.book_new();
   const ws1 = XLSX.utils.json_to_sheet(resumen);

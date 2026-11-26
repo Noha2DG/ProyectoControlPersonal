@@ -456,6 +456,36 @@ export async function posicionDe(client: any, codigo: string, fecha: string) {
  * bandejas no anuladas. La pantalla arma de aquí los totales por persona y por lote. Es la base del
  * pago de Empanizado, aparte del de Pelado.
  */
+// Lo que necesita calcularLbHora (frontend/src/utils/destajo.js, el MISMO cálculo de Lb/Hora que destajo)
+// para la Lb/hora de Empanizado (usuario, 26 nov 2026): cada bandeja con su hora y peso, las entradas a
+// área de esas personas (ancla del primer bloque del día) y sus pausas en áreas que no generan paga.
+// En arreglos compactos [código, hora, …] porque un rango largo son decenas de miles de bandejas.
+// Las horas van como texto de Guatemala ('YYYY-MM-DDTHH:MM:SS', sin Z) para no correrlas 6 h.
+export async function tiemposProduccion(client: any, desde: string, hasta: string) {
+  const F = `'%Y-%m-%dT%H:%i:%s'`;
+  const personas = `SELECT DISTINCT PersonaCodigo FROM Pesada
+                     WHERE Modo = 'EMPANIZADO' AND Anulada = 0 AND PersonaCodigo IS NOT NULL AND FechaProduccion BETWEEN ? AND ?`;
+  const [bandejas, entradas, pausas]: any[][] = await Promise.all([
+    client.$queryRawUnsafe(`
+      SELECT PersonaCodigo AS c, DATE_FORMAT(CreadoEn, ${F}) AS t, PesoNetoG AS g FROM Pesada
+       WHERE Modo = 'EMPANIZADO' AND Anulada = 0 AND PersonaCodigo IS NOT NULL AND FechaProduccion BETWEEN ? AND ?`, desde, hasta),
+    client.$queryRawUnsafe(`
+      SELECT tr.Codigo AS c, DATE_FORMAT(tr.FechaHora, ${F}) AS i, DATE_FORMAT(tr.FechaSalida, ${F}) AS s FROM Transferencias tr
+       WHERE tr.Codigo IN (${personas}) AND tr.FechaHora < DATE_ADD(?, INTERVAL 1 DAY)
+         AND (tr.FechaSalida IS NULL OR tr.FechaSalida >= ?)`, desde, hasta, hasta, desde),
+    client.$queryRawUnsafe(`
+      SELECT tr.Codigo AS c, DATE_FORMAT(tr.FechaHora, ${F}) AS i, DATE_FORMAT(tr.FechaSalida, ${F}) AS s FROM Transferencias tr
+        JOIN Areas a ON a.Codigo = tr.CodigoArea AND a.GeneraPaga = 0
+       WHERE tr.Codigo IN (${personas}) AND tr.FechaHora < DATE_ADD(?, INTERVAL 1 DAY)
+         AND (tr.FechaSalida IS NULL OR tr.FechaSalida >= ?)`, desde, hasta, hasta, desde),
+  ]);
+  return {
+    bandejas: bandejas.map(b => [b.c, b.t, Number(b.g)]),
+    entradas: entradas.map(e => [e.c, e.i, e.s]),
+    pausas: pausas.map(e => [e.c, e.i, e.s]),
+  };
+}
+
 export async function reporteProduccion(client: any, desde: string, hasta: string) {
   const rows: any[] = await client.$queryRawUnsafe(`
     SELECT DATE_FORMAT(p.FechaProduccion, '%Y-%m-%d') AS Fecha, p.PersonaCodigo AS Codigo,

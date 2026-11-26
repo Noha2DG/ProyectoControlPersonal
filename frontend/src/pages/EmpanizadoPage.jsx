@@ -1,6 +1,7 @@
 import { Fragment, useState, useEffect, useMemo, useCallback } from "react";
 import { authHeader, usePuede } from "../context/AuthContext.jsx";
 import { exportarProduccionEmpanizado } from "../utils/exportExcel.js";
+import { calcularLbHora, totalLbHora, LB_POR_KG } from "../utils/destajo.js";
 
 // Empanizado (#/empanizado, 20 nov 2026). Para el encargado o chequeador de Empanizado:
 //   Al piso          lo que mandó Tratamiento (ya con el pick-up): se escoge y se TOMA → nace el lote.
@@ -514,10 +515,31 @@ function Produccion() {
       if (f.MesaCodigo) { x.MesaCodigo = f.MesaCodigo; x.MesaNombre = f.MesaNombre; x.Posicion = f.Posicion; } // la más reciente
       m.set(f.Codigo, x);
     }
-    return [...m.values()].map(x => ({ ...x, Dias: x.Dias.size }))
+    // Lb/hora con el MISMO cálculo de destajo (calcularLbHora): bloques desde la entrada al área del día
+    // hasta cada bandeja, sin pausas en áreas sin paga; libra válida ÷ horas (usuario, 26 nov 2026).
+    const t = datos?.tiempos;
+    const tasa = new Map();
+    let ponderada = null;
+    if (t) {
+      const entradasDe = new Map();
+      for (const [c, i, s] of t.entradas) (entradasDe.get(c) ?? entradasDe.set(c, []).get(c)).push([i, s]);
+      const entrada = (c, h) => {
+        let mejor = null;
+        for (const [i, s] of entradasDe.get(c) ?? []) if (i <= h && (s == null || s >= h) && (mejor == null || i > mejor)) mejor = i;
+        return mejor;
+      };
+      const pesadas = t.bandejas.map(([c, h, g]) => ({ IdEmpleado: c, Nombre: c, FechaHora: h, Kilos: g / 1000, EntradaArea: entrada(c, h) }));
+      const pausas = t.pausas.map(([c, i, s]) => ({ IdEmpleado: c, FechaHora: i, FechaSalida: s }));
+      const filasLb = calcularLbHora(pesadas, () => ({ key: "EMPANIZADO", campos: {} }), pausas);
+      for (const f of filasLb) tasa.set(f.IdEmpleado, f.LbPorHora);
+      ponderada = totalLbHora(filasLb).PromedioLbHora;
+    }
+    const lista = [...m.values()].map(x => ({ ...x, Dias: x.Dias.size, Lb: x.Kg * LB_POR_KG, LbHora: tasa.get(x.Codigo) ?? null }))
       .sort((a, b) => (a.MesaCodigo == null) - (b.MesaCodigo == null) || String(a.MesaNombre ?? "").localeCompare(String(b.MesaNombre ?? ""), "es", { numeric: true }) || (a.Posicion ?? 0) - (b.Posicion ?? 0));
+    lista.ponderada = ponderada;
+    return lista;
   }, [datos]);
-  const tot = porPersona.reduce((s, p) => ({ b: s.b + p.Bandejas, k: s.k + p.Kg }), { b: 0, k: 0 });
+  const tot = porPersona.reduce((s, p) => ({ b: s.b + p.Bandejas, lb: s.lb + p.Lb }), { b: 0, lb: 0 });
 
   return (
     <div>
@@ -531,27 +553,30 @@ function Produccion() {
           className="ml-auto px-4 py-1.5 rounded-lg bg-emerald-600 text-white font-semibold hover:bg-emerald-700 disabled:opacity-40">Excel</button>
       </div>
       <Aviso>{error}</Aviso>
-      <div className="grid grid-cols-3 gap-3 mb-4">
-        <Cifra t="Personas" v={porPersona.length} /><Cifra t="Bandejas" v={tot.b.toLocaleString("es-GT")} /><Cifra t="Kilos" v={`${kg(tot.k)} kg`} fuerte />
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+        <Cifra t="Personas" v={porPersona.length} /><Cifra t="Bandejas" v={tot.b.toLocaleString("es-GT")} />
+        <Cifra t="Libras" v={`${kg(tot.lb)} lb`} />
+        <Cifra t="Lb/hora ponderada" v={porPersona.ponderada == null ? "—" : kg(porPersona.ponderada)} fuerte />
       </div>
       <div className="bg-white rounded-xl shadow overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
             <tr className="bg-gray-100 text-gray-600 uppercase text-xs tracking-wider">
               <th className="px-3 py-3 text-left">Mesa / banda</th><th className="px-3 py-3 text-left">Pos.</th><th className="px-3 py-3 text-left">Persona</th>
-              <th className="px-3 py-3 text-right">Días</th><th className="px-3 py-3 text-right">Bandejas</th>
-              <th className="px-3 py-3 text-right" title="Bandejas guardadas bajo / sobre el rango de peso (cuentan igual)">Bajo · Sobre</th><th className="px-3 py-3 text-right">Kg</th>
+              <th className="px-3 py-3 text-right">Bandejas</th>
+              <th className="px-3 py-3 text-right" title="Libra válida ÷ horas: desde su entrada al área del día hasta cada bandeja, sin cafetería ni permisos (mismo cálculo que destajo)">Lb/hora</th>
+              <th className="px-3 py-3 text-right">Libras</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
             {porPersona.map(p => (
               <FilaPersona key={p.Codigo} p={p} abierta={abierta === p.Codigo} onClick={() => setAbierta(a => (a === p.Codigo ? null : p.Codigo))} />
             ))}
-            {datos && porPersona.length === 0 && <tr><td colSpan={7} className="px-4 py-10 text-center text-gray-400">Sin bandejas pesadas en esas fechas</td></tr>}
+            {datos && porPersona.length === 0 && <tr><td colSpan={6} className="px-4 py-10 text-center text-gray-400">Sin bandejas pesadas en esas fechas</td></tr>}
           </tbody>
         </table>
       </div>
-      <p className="mt-2 text-xs text-gray-500">Solo bandejas guardadas y no anuladas, pesadas en la báscula en modo Empanizado; las de bajo o sobre peso cuentan igual. La posición es la que la persona tenía el día que pesó.</p>
+      <p className="mt-2 text-xs text-gray-500">Solo bandejas guardadas y no anuladas, pesadas en modo Empanizado. Lb/hora: mismo cálculo que destajo (desde la entrada al área del día hasta cada bandeja, sin cafetería ni permisos); la ponderada es el total de libras válidas entre el total de horas. "—" = sin entrada al área ese día. La posición es la que la persona tenía el día que pesó.</p>
     </div>
   );
 }
@@ -563,19 +588,18 @@ function FilaPersona({ p, abierta, onClick }) {
         <td className="px-3 py-2">{p.MesaNombre ?? <span className="text-gray-400">sin posición</span>}</td>
         <td className="px-3 py-2 font-mono font-bold">{p.Posicion ?? ""}</td>
         <td className="px-3 py-2">{titulo(p.Nombre)} <span className="text-xs text-gray-400 font-mono">{p.Codigo}</span></td>
-        <td className="px-3 py-2 text-right">{p.Dias}</td>
-        <td className="px-3 py-2 text-right">{p.Bandejas}</td>
-        <td className={`px-3 py-2 text-right ${p.BajoPeso + p.SobrePeso ? "text-amber-700 font-semibold" : "text-gray-400"}`}>{p.BajoPeso} · {p.SobrePeso}</td>
-        <td className="px-3 py-2 text-right font-semibold">{kg(p.Kg)}</td>
+        <td className="px-3 py-2 text-right">{p.Bandejas.toLocaleString("es-GT")}</td>
+        <td className="px-3 py-2 text-right font-semibold">{p.LbHora == null ? <span className="text-gray-400">—</span> : kg(p.LbHora)}</td>
+        <td className="px-3 py-2 text-right">{kg(p.Lb)}</td>
       </tr>
       {abierta && (
-        <tr><td colSpan={7} className="bg-slate-50 px-6 py-2">
+        <tr><td colSpan={6} className="bg-slate-50 px-6 py-2">
           <table className="w-full text-xs">
-            <thead><tr className="text-gray-500 text-left"><th className="py-1">Fecha</th><th>Lote</th><th>Producto</th><th>Destino</th><th>Horario</th><th className="text-right">Bandejas</th><th className="text-right">Kg</th></tr></thead>
+            <thead><tr className="text-gray-500 text-left"><th className="py-1">Fecha</th><th>Lote</th><th>Producto</th><th>Destino</th><th>Horario</th><th className="text-right">Bandejas</th><th className="text-right">Libras</th></tr></thead>
             <tbody>
               {p.filas.map((f, i) => (
                 <tr key={i}><td className="py-0.5">{f.Fecha}</td><td className="font-mono">{f.Lote}</td><td>{f.ClaseSalida} {f.DescripcionClaseSalida} · {f.DescripcionTalla}</td>
-                  <td>{DESTINO[f.Destino]?.txt ?? f.Destino}</td><td>{f.Primera}–{f.Ultima}</td><td className="text-right">{f.Bandejas}</td><td className="text-right">{kg(f.Kg)}</td></tr>
+                  <td>{DESTINO[f.Destino]?.txt ?? f.Destino}</td><td>{f.Primera}–{f.Ultima}</td><td className="text-right">{f.Bandejas}</td><td className="text-right">{kg(f.Kg * LB_POR_KG)}</td></tr>
               ))}
             </tbody>
           </table>

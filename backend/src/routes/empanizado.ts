@@ -4,7 +4,7 @@ import { requireAuth, requirePerm, requireAnyPerm, AuthRequest } from "../middle
 import { hoyGT } from "../lib/dateGT.ts";
 import {
   ErrorEmpanizado, saldoPiso, tomarDelPiso, listarLotes, detalleLote, bajarAlPiso, registrarDescarte,
-  deshacerMovimiento, cerrarLote, reabrirLote, reporteProduccion,
+  deshacerMovimiento, cerrarLote, reabrirLote, reporteProduccion, tiemposProduccion,
 } from "../lib/empanizado.ts";
 import { ErrorPosicion, asignarPosicion, quitarPosicion, deshacerPosicion, validarFecha } from "../lib/posicionEmpanizado.ts";
 
@@ -100,7 +100,8 @@ router.post("/lotes/:id/reabrir", requirePerm("empanizado", "editar"), async (re
 router.get("/reporte", requirePerm("empanizado", "reporte"), async (req: AuthRequest, res: Response) => {
   try {
     const { desde, hasta } = rango(req, 62);
-    res.json({ desde, hasta, filas: await reporteProduccion(prisma, desde, hasta) });
+    const [filas, tiempos] = await Promise.all([reporteProduccion(prisma, desde, hasta), tiemposProduccion(prisma, desde, hasta)]);
+    res.json({ desde, hasta, filas, tiempos });
   } catch (err) { responder(res, err); }
 });
 
