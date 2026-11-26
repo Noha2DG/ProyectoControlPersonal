@@ -540,6 +540,8 @@ function Produccion() {
     return lista;
   }, [datos]);
   const tot = porPersona.reduce((s, p) => ({ b: s.b + p.Bandejas, lb: s.lb + p.Lb }), { b: 0, lb: 0 });
+  // Barra de Lb/hora de cada fila: escala común (la más alta, o el ritmo del día si alguien no lo alcanza).
+  const escalaLbH = Math.max(1, porPersona.ponderada ?? 0, ...porPersona.map(p => p.LbHora ?? 0));
 
   return (
     <div>
@@ -553,44 +555,184 @@ function Produccion() {
           className="ml-auto px-4 py-1.5 rounded-lg bg-emerald-600 text-white font-semibold hover:bg-emerald-700 disabled:opacity-40">Excel</button>
       </div>
       <Aviso>{error}</Aviso>
+      {/* El ritmo del día (Lb/hora ponderada) es el hilo de todo el reporte: tarjeta principal, línea
+          punteada en la gráfica y marca en la barra de cada persona (usuario, 26 nov 2026: "dale color"). */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-        <Cifra t="Personas" v={porPersona.length} /><Cifra t="Bandejas" v={tot.b.toLocaleString("es-GT")} />
-        <Cifra t="Libras" v={`${kg(tot.lb)} lb`} />
-        <Cifra t="Lb/hora ponderada" v={porPersona.ponderada == null ? "—" : kg(porPersona.ponderada)} fuerte />
+        <Dato t="Personas" v={porPersona.length.toLocaleString("es-GT")} />
+        <Dato t="Bandejas" v={tot.b.toLocaleString("es-GT")} />
+        <Dato t="Libras" v={kg(tot.lb)} u="lb" />
+        <div className="rounded-xl p-3 shadow-sm text-white" style={{ background: AMBAR }}>
+          <div className="text-[11px] uppercase tracking-wider text-amber-100 font-semibold">Lb/hora ponderada</div>
+          <div className="text-3xl font-extrabold tabular-nums leading-tight">{porPersona.ponderada == null ? "—" : kg(porPersona.ponderada)}</div>
+          <div className="text-[11px] text-amber-100">ritmo del día · libra válida ÷ horas</div>
+        </div>
       </div>
+      {datos?.tiempos && <RitmoDelDia bandejas={datos.tiempos.bandejas} ponderada={porPersona.ponderada} />}
       <div className="bg-white rounded-xl shadow overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
-            <tr className="bg-gray-100 text-gray-600 uppercase text-xs tracking-wider">
+            <tr className="bg-amber-50 text-amber-900/70 uppercase text-xs tracking-wider">
               <th className="px-3 py-3 text-left">Mesa / banda</th><th className="px-3 py-3 text-left">Pos.</th><th className="px-3 py-3 text-left">Persona</th>
               <th className="px-3 py-3 text-right">Bandejas</th>
-              <th className="px-3 py-3 text-right" title="Libra válida ÷ horas: desde su entrada al área del día hasta cada bandeja, sin cafetería ni permisos (mismo cálculo que destajo)">Lb/hora</th>
+              <th className="px-3 py-3 text-right" title="Libra válida ÷ horas: desde su entrada al área del día hasta cada bandeja, sin cafetería ni permisos (mismo cálculo que destajo). La raya gris es el ritmo del día.">Lb/hora</th>
               <th className="px-3 py-3 text-right">Libras</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
-            {porPersona.map(p => (
-              <FilaPersona key={p.Codigo} p={p} abierta={abierta === p.Codigo} onClick={() => setAbierta(a => (a === p.Codigo ? null : p.Codigo))} />
+            {porPersona.map((p, i) => (
+              <FilaPersona key={p.Codigo} p={p} abierta={abierta === p.Codigo} onClick={() => setAbierta(a => (a === p.Codigo ? null : p.Codigo))}
+                escala={escalaLbH} ponderada={porPersona.ponderada}
+                nuevaMesa={i > 0 && (p.MesaNombre ?? "") !== (porPersona[i - 1].MesaNombre ?? "")} />
             ))}
             {datos && porPersona.length === 0 && <tr><td colSpan={6} className="px-4 py-10 text-center text-gray-400">Sin bandejas pesadas en esas fechas</td></tr>}
           </tbody>
         </table>
       </div>
-      <p className="mt-2 text-xs text-gray-500">Solo bandejas guardadas y no anuladas, pesadas en modo Empanizado. Lb/hora: mismo cálculo que destajo (desde la entrada al área del día hasta cada bandeja, sin cafetería ni permisos); la ponderada es el total de libras válidas entre el total de horas. "—" = sin entrada al área ese día. La posición es la que la persona tenía el día que pesó.</p>
+      <p className="mt-2 text-xs text-gray-500">Solo bandejas guardadas y no anuladas, pesadas en modo Empanizado. Lb/hora: mismo cálculo que destajo (desde la entrada al área del día hasta cada bandeja, sin cafetería ni permisos); la ponderada es el total de libras válidas entre el total de horas. "—" = sin entrada al área ese día. En la barra, la raya gris es el ritmo del día; en ámbar, quien lo alcanza o supera. La posición es la que la persona tenía el día que pesó.</p>
     </div>
   );
 }
 
-function FilaPersona({ p, abierta, onClick }) {
+const AMBAR = "#D97706"; // amber-600: el color de Empanizado; validado (contraste ≥ 3:1 sobre blanco)
+
+const Dato = ({ t, v, u }) => (
+  <div className="rounded-xl bg-white shadow-sm border-t-4 border-amber-200 p-3">
+    <div className="text-[11px] uppercase tracking-wider text-stone-500 font-semibold">{t}</div>
+    <div className="text-2xl font-bold text-stone-800 tabular-nums leading-tight">{v}{u && <span className="ml-1 text-sm font-semibold text-stone-500">{u}</span>}</div>
+  </div>
+);
+
+// Ritmo del día: libras por persona en cada hora del reloj = libras pesadas en esa hora ÷ personas que
+// pesaron en esa hora (en un rango de varios días, persona-día). Línea punteada = ritmo del día
+// (Lb/hora ponderada). Una sola serie: sin leyenda, la tarjeta la nombra (usuario, 26 nov 2026).
+function RitmoDelDia({ bandejas, ponderada }) {
+  const [hover, setHover] = useState(null);
+  const horas = useMemo(() => {
+    const m = new Map();
+    for (const [c, t, g] of bandejas) {
+      const h = Number(t.slice(11, 13));
+      const x = m.get(h) ?? { g: 0, b: 0, p: new Set() };
+      x.g += g; x.b += 1; x.p.add(`${t.slice(0, 10)}|${c}`);
+      m.set(h, x);
+    }
+    if (!m.size) return [];
+    const hs = [...m.keys()], out = [];
+    for (let h = Math.min(...hs); h <= Math.max(...hs); h++) {
+      const x = m.get(h);
+      const lb = x ? (x.g / 1000) * LB_POR_KG : 0;
+      out.push({ h, lb, b: x?.b ?? 0, personas: x?.p.size ?? 0, lbp: x ? lb / x.p.size : null });
+    }
+    return out;
+  }, [bandejas]);
+  if (!horas.length) return null;
+
+  const W = 960, H = 250, L = 46, R = 20, T = 26, B = 30;
+  const vals = horas.map(x => x.lbp).filter(v => v != null);
+  const bruto = Math.max(...vals, ponderada ?? 0) * 1.15;
+  const paso = [1, 2, 2.5, 5, 10, 20, 25, 50].find(s => bruto / s <= 5) ?? 100;
+  const tope = Math.ceil(bruto / paso) * paso;
+  const n = horas.length;
+  const X = i => (n === 1 ? L + (W - L - R) / 2 : L + (i * (W - L - R)) / (n - 1));
+  const Y = v => T + (1 - v / tope) * (H - T - B);
+  const ancho = n === 1 ? W - L - R : (W - L - R) / (n - 1);
+  // La línea se corta donde una hora no tuvo bandejas (no se inventa el tramo).
+  let d = "", abierto = false;
+  horas.forEach((x, i) => {
+    if (x.lbp == null) { abierto = false; return; }
+    d += `${abierto ? "L" : "M"}${X(i)},${Y(x.lbp)} `; abierto = true;
+  });
+  const pico = horas.reduce((a, x, i) => (x.lbp != null && (a < 0 || x.lbp > horas[a].lbp) ? i : a), -1);
+  const ultimo = horas.map(x => x.lbp != null).lastIndexOf(true);
+  const etiqueta = h => `${h}:00`;
+  const hv = hover != null ? horas[hover] : null;
+
+  return (
+    <div className="bg-white rounded-xl shadow p-4 mb-4">
+      <div className="flex flex-wrap items-baseline gap-x-3 mb-1">
+        <h3 className="font-bold text-stone-800">Ritmo del día</h3>
+        <p className="text-xs text-stone-500">Libras por persona en cada hora: lo pesado en esa hora ÷ las personas que pesaron.</p>
+      </div>
+      <div className="relative" onMouseLeave={() => setHover(null)}>
+        <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-auto" role="img"
+          aria-label={`Libras por persona en cada hora, de ${etiqueta(horas[0].h)} a ${etiqueta(horas[n - 1].h)}`}>
+          {Array.from({ length: Math.round(tope / paso) + 1 }, (_, k) => k * paso).map(v => (
+            <g key={v}>
+              <line x1={L} x2={W - R} y1={Y(v)} y2={Y(v)} stroke="#e7e5e4" strokeWidth="1" />
+              <text x={L - 8} y={Y(v) + 4} textAnchor="end" fontSize="11" fill="#78716c">{v.toLocaleString("es-GT")}</text>
+            </g>
+          ))}
+          {horas.map((x, i) => (
+            <text key={x.h} x={X(i)} y={H - 8} textAnchor="middle" fontSize="11" fill={hover === i ? "#292524" : "#78716c"} fontWeight={hover === i ? 700 : 400}>{etiqueta(x.h)}</text>
+          ))}
+          {ponderada != null && (
+            <g>
+              <line x1={L} x2={W - R} y1={Y(ponderada)} y2={Y(ponderada)} stroke="#78716c" strokeWidth="1.5" strokeDasharray="5 4" />
+              <text x={W - R} y={Y(ponderada) - 6} textAnchor="end" fontSize="11" fill="#57534e" fontWeight="600">ritmo del día {kg(ponderada)}</text>
+            </g>
+          )}
+          {hv && <line x1={X(hover)} x2={X(hover)} y1={T - 6} y2={H - B} stroke="#d6d3d1" strokeWidth="1" />}
+          <path d={d} fill="none" stroke={AMBAR} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
+          {horas.map((x, i) => x.lbp != null && (
+            <circle key={x.h} cx={X(i)} cy={Y(x.lbp)} r={hover === i ? 6 : 4} fill={AMBAR} stroke="#fff" strokeWidth="2" />
+          ))}
+          {[...new Set([pico, ultimo])].filter(i => i >= 0 && i !== hover).map(i => (
+            <text key={`l${i}`} x={X(i)} y={Y(horas[i].lbp) - 10} textAnchor="middle" fontSize="11" fontWeight="700" fill="#292524">{kg(horas[i].lbp, 1)}</text>
+          ))}
+          {horas.map((x, i) => (
+            <rect key={`h${x.h}`} x={X(i) - ancho / 2} y={0} width={ancho} height={H} fill="transparent"
+              onMouseEnter={() => setHover(i)} onClick={() => setHover(i)} />
+          ))}
+        </svg>
+        {hv && (
+          <div className="pointer-events-none absolute top-0 z-10 rounded-lg bg-stone-800 text-white text-xs px-3 py-2 shadow-lg whitespace-nowrap"
+            style={{ left: `${(X(hover) / W) * 100}%`, transform: `translateX(${X(hover) > W * 0.75 ? "-105%" : "8px"})` }}>
+            <div className="font-bold mb-0.5">{etiqueta(hv.h)} – {etiqueta(hv.h + 1)}</div>
+            {hv.lbp == null ? <div className="text-stone-300">Sin bandejas</div> : (<>
+              <div><span className="font-bold text-amber-300">{kg(hv.lbp)}</span> lb por persona</div>
+              <div className="text-stone-300">{kg(hv.lb)} lb · {hv.b.toLocaleString("es-GT")} bandejas · {hv.personas} personas</div>
+            </>)}
+          </div>
+        )}
+      </div>
+      <details className="mt-1 text-xs">
+        <summary className="cursor-pointer text-stone-500 hover:text-stone-700">Ver por hora</summary>
+        <table className="mt-2 w-full max-w-xl text-xs tabular-nums">
+          <thead><tr className="text-stone-500 text-left"><th className="py-1">Hora</th><th className="text-right">Personas</th><th className="text-right">Bandejas</th><th className="text-right">Libras</th><th className="text-right">Lb por persona</th></tr></thead>
+          <tbody className="divide-y divide-stone-100">
+            {horas.map(x => (
+              <tr key={x.h}><td className="py-0.5">{etiqueta(x.h)} – {etiqueta(x.h + 1)}</td><td className="text-right">{x.personas}</td>
+                <td className="text-right">{x.b.toLocaleString("es-GT")}</td><td className="text-right">{kg(x.lb)}</td><td className="text-right font-semibold">{x.lbp == null ? "—" : kg(x.lbp)}</td></tr>
+            ))}
+          </tbody>
+        </table>
+      </details>
+    </div>
+  );
+}
+
+function FilaPersona({ p, abierta, onClick, escala, ponderada, nuevaMesa }) {
+  const arriba = p.LbHora != null && ponderada != null && p.LbHora >= ponderada;
   return (
     <>
-      <tr onClick={onClick} className="cursor-pointer hover:bg-amber-50">
-        <td className="px-3 py-2">{p.MesaNombre ?? <span className="text-gray-400">sin posición</span>}</td>
-        <td className="px-3 py-2 font-mono font-bold">{p.Posicion ?? ""}</td>
+      <tr onClick={onClick} className={`cursor-pointer hover:bg-amber-50 ${nuevaMesa ? "border-t-2 border-amber-200" : ""}`}>
+        <td className="px-3 py-2">{p.MesaNombre
+          ? <span className="inline-block rounded-md bg-amber-100 text-amber-900 px-2 py-0.5 text-xs font-semibold">{p.MesaNombre}</span>
+          : <span className="text-gray-400">sin posición</span>}</td>
+        <td className="px-3 py-2 font-mono font-bold text-stone-700">{p.Posicion ?? ""}</td>
         <td className="px-3 py-2">{titulo(p.Nombre)} <span className="text-xs text-gray-400 font-mono">{p.Codigo}</span></td>
-        <td className="px-3 py-2 text-right">{p.Bandejas.toLocaleString("es-GT")}</td>
-        <td className="px-3 py-2 text-right font-semibold">{p.LbHora == null ? <span className="text-gray-400">—</span> : kg(p.LbHora)}</td>
-        <td className="px-3 py-2 text-right">{kg(p.Lb)}</td>
+        <td className="px-3 py-2 text-right tabular-nums">{p.Bandejas.toLocaleString("es-GT")}</td>
+        <td className="px-3 py-2">
+          <div className="flex items-center justify-end gap-2">
+            <div className="relative hidden sm:block h-2 w-28 rounded-full bg-amber-100" aria-hidden="true">
+              {p.LbHora != null && <div className="absolute inset-y-0 left-0 rounded-full" style={{ width: `${Math.min(100, (p.LbHora / escala) * 100)}%`, background: AMBAR }} />}
+              {ponderada != null && <div className="absolute -top-1 -bottom-1 w-0.5 rounded bg-stone-500" style={{ left: `${(ponderada / escala) * 100}%` }} />}
+            </div>
+            <span className={`w-12 text-right tabular-nums ${arriba ? "font-bold text-amber-700" : "font-semibold text-stone-700"}`}>
+              {p.LbHora == null ? <span className="text-gray-400 font-normal">—</span> : kg(p.LbHora)}
+            </span>
+          </div>
+        </td>
+        <td className="px-3 py-2 text-right tabular-nums">{kg(p.Lb)}</td>
       </tr>
       {abierta && (
         <tr><td colSpan={6} className="bg-slate-50 px-6 py-2">
