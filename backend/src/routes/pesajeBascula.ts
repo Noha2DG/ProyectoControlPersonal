@@ -471,7 +471,17 @@ router.get("/sesion/:id/resumen", requirePerm("pesaje_bascula", "usar"), async (
         FROM Pesada p LEFT JOIN Empleados e ON e.Codigo = p.PersonaCodigo
         LEFT JOIN MesasEmpanizado me ON me.Codigo = p.MesaCodigo
        WHERE p.SesionId = ${s.SesionId} AND p.Anulada = 0 ORDER BY p.PesadaId DESC LIMIT 8`;
-    res.json({ Cajas: Number(tot.Cajas), NetoG: Number(tot.NetoG), Fuera: Number(tot.Fuera), ultimas: ultimas.map(u => ({ ...u, PesadaId: Number(u.PesadaId), Posicion: u.Posicion == null ? null : Number(u.Posicion) })) });
+    // Bandejas que lleva cada carrito hoy en el área (de cualquier báscula), para ver cuánto le falta
+    // (usuario, 26 nov 2026).
+    const carritos: any[] = await prisma.$queryRaw`
+      SELECT Carrito, COUNT(*) AS Bandejas, COALESCE(SUM(PesoNetoG), 0) AS NetoG FROM Pesada
+       WHERE AreaCodigo = ${s.AreaCodigo} AND FechaProduccion = ${s.FechaProduccion} AND Anulada = 0 AND Carrito IS NOT NULL
+       GROUP BY Carrito`;
+    res.json({
+      Cajas: Number(tot.Cajas), NetoG: Number(tot.NetoG), Fuera: Number(tot.Fuera),
+      ultimas: ultimas.map(u => ({ ...u, PesadaId: Number(u.PesadaId), Posicion: u.Posicion == null ? null : Number(u.Posicion) })),
+      carritos: carritos.map(c => ({ Carrito: c.Carrito, Bandejas: Number(c.Bandejas), NetoG: Number(c.NetoG) })),
+    });
   } catch (err: any) { responder(res, err); }
 });
 

@@ -467,6 +467,40 @@ function Pesaje({ sesion, b, onCerrar, onMenu }) {
     : { pagina: "bg-slate-900", barra: "bg-slate-800", campo: "bg-slate-800 border-slate-600", panel: "bg-slate-800", etiqueta: "POR PRODUCTO", chip: "bg-violet-500/30 text-violet-200" };
   const sel = `w-full rounded-lg border px-3 py-2 text-base text-white focus:outline-none focus:border-blue-400 ${tema.campo}`;
   const etq = "text-[11px] text-slate-300 uppercase tracking-wide";
+  // Bandejas que ya lleva el carrito escrito (hoy, en el área): para ver cuánto le falta (usuario, 26 nov 2026).
+  const carritoTxt = trabajo.carrito.trim();
+  const enCarrito = carritoTxt ? ((resumen.carritos ?? []).find(c => String(c.Carrito) === carritoTxt)?.Bandejas ?? 0) : null;
+  // A la par del número de carrito, para ahorrar espacio (usuario, 26 nov 2026).
+  const cuentaCarrito = enCarrito != null && (
+    <div className="shrink-0 min-w-[92px] rounded-lg bg-white/10 border-2 border-sky-300/60 px-2 flex flex-col items-center justify-center normal-case tracking-normal"
+      title={`Bandejas que lleva hoy el carrito ${carritoTxt}`}>
+      <span className="text-3xl font-extrabold font-mono leading-none text-white">{g(enCarrito)}</span>
+      <span className="text-[11px] text-sky-100 leading-tight">{enCarrito === 1 ? "bandeja" : "bandejas"}</span>
+    </div>
+  );
+  // Últimas guardadas: en la columna izquierda, debajo del carnet (usuario, 26 nov 2026).
+  const ultimasGuardadas = (
+    <div className={`${tema.panel} rounded-xl p-3 flex-1 min-h-[90px] overflow-auto`}>
+      <p className="text-xs text-slate-300 mb-2">Últimas guardadas</p>
+      {/* Solo peso y NOMBRE de quien armó la bandeja (usuario, 21 nov 2026): sin mesa ni posición. */}
+      <ul className="space-y-1.5">
+        {resumen.ultimas.map(u => (
+          <li key={u.PesadaId} className="rounded-lg bg-black/20 px-2 py-1">
+            <div className="flex items-baseline justify-between gap-2">
+              <span className="font-mono text-base font-bold">{g(u.PesoBrutoG)} g</span>
+              {u.Carrito && <span className="text-[11px] text-sky-200 font-mono">carrito {u.Carrito}</span>}
+              <span className="text-[11px] text-slate-400 font-mono">{u.Hora}</span>
+            </div>
+            <p className="text-sm text-emerald-300 truncate">
+              ✓ {u.Persona || u.PersonaCodigo || (u.Carrito ? `carrito ${u.Carrito}` : "")}
+              {u.Resultado && u.Resultado !== "OK" && <span className="ml-1 rounded bg-amber-400 px-1 text-[11px] font-bold text-amber-950">{u.Resultado === "BAJO" ? "BAJO" : "SOBRE"}</span>}
+            </p>
+          </li>
+        ))}
+      </ul>
+      <p className="text-[11px] text-slate-400 mt-3">Lo que sale "sin guardar" no aparece aquí.</p>
+    </div>
+  );
 
   return (
     // 100dvh y no h-screen (100vh): en Chrome de Android 100vh incluye la barra de direcciones y la
@@ -524,9 +558,12 @@ function Pesaje({ sesion, b, onCerrar, onMenu }) {
               </div>
               {pideCarrito && (
                 <label className={etq}>N.º de carrito *
-                  <input value={trabajo.carrito} onChange={e => setTrabajo(t => ({ ...t, carrito: e.target.value.toUpperCase() }))} autoComplete="off" maxLength={20}
-                    placeholder="OBLIGATORIO"
-                    className={`${sel} mt-0.5 font-mono text-lg tracking-widest ${trabajo.carrito.trim() ? "" : "!bg-amber-300 !text-amber-950 placeholder:text-amber-900 placeholder:font-bold !border-amber-100"}`} />
+                  <span className="mt-0.5 flex gap-2">
+                    <input value={trabajo.carrito} onChange={e => setTrabajo(t => ({ ...t, carrito: e.target.value.toUpperCase() }))} autoComplete="off" maxLength={20}
+                      placeholder="OBLIGATORIO"
+                      className={`${sel} min-w-0 flex-1 font-mono text-lg tracking-widest ${trabajo.carrito.trim() ? "" : "!bg-amber-300 !text-amber-950 placeholder:text-amber-900 placeholder:font-bold !border-amber-100"}`} />
+                    {cuentaCarrito}
+                  </span>
                 </label>
               )}
             </>
@@ -566,8 +603,11 @@ function Pesaje({ sesion, b, onCerrar, onMenu }) {
 
           {pideCarrito && (
             <label className={etq}>N.º de carrito *
-              <input value={trabajo.carrito} onChange={e => setTrabajo(t => ({ ...t, carrito: e.target.value.toUpperCase() }))} autoComplete="off"
-                placeholder="obligatorio" className={sel + " mt-0.5 font-mono tracking-widest"} />
+              <span className="mt-0.5 flex gap-2">
+                <input value={trabajo.carrito} onChange={e => setTrabajo(t => ({ ...t, carrito: e.target.value.toUpperCase() }))} autoComplete="off"
+                  placeholder="obligatorio" className={sel + " min-w-0 flex-1 font-mono tracking-widest"} />
+                {cuentaCarrito}
+              </span>
             </label>
           )}
 
@@ -595,6 +635,7 @@ function Pesaje({ sesion, b, onCerrar, onMenu }) {
               )}
             </div>
           )}
+          {ultimasGuardadas}
         </div>
 
         {/* El peso */}
@@ -723,25 +764,6 @@ function Pesaje({ sesion, b, onCerrar, onMenu }) {
           )}
           <div className={`${tema.panel} rounded-xl px-3 py-2 flex items-baseline gap-2 mt-1 ${ppv ? "hidden" : ""}`}><span className="text-xs text-slate-300">{ppv ? "Cajas hoy" : "Bandejas hoy"}</span><span className="text-2xl font-bold">{g(resumen.Cajas)}</span><span className="text-xs text-slate-300 ml-auto">{(resumen.NetoG / 1000).toLocaleString("es-GT", { maximumFractionDigits: 1 })} kg</span></div>
           {(ppv || guardaFuera) && <div className={`${tema.panel} rounded-xl px-3 py-1.5 flex items-baseline gap-2`}><span className="text-xs text-slate-300">Fuera de rango hoy</span><span className="text-xl font-bold text-amber-300">{g(resumen.Fuera ?? 0)}</span><span className="text-[11px] text-slate-400 ml-auto">{ppv ? "no cuentan como caja" : "guardadas y marcadas"}</span></div>}
-          <div className={`${tema.panel} rounded-xl p-3 flex-1 min-h-[90px] overflow-auto`}>
-            <p className="text-xs text-slate-300 mb-2">Últimas guardadas</p>
-            {/* Solo peso y NOMBRE de quien armó la bandeja (usuario, 21 nov 2026): sin mesa ni posición. */}
-            <ul className="space-y-1.5">
-              {resumen.ultimas.map(u => (
-                <li key={u.PesadaId} className="rounded-lg bg-black/20 px-2 py-1">
-                  <div className="flex items-baseline justify-between gap-2">
-                    <span className="font-mono text-base font-bold">{g(u.PesoBrutoG)} g</span>
-                    <span className="text-[11px] text-slate-400 font-mono">{u.Hora}</span>
-                  </div>
-                  <p className="text-sm text-emerald-300 truncate">
-                    ✓ {u.Persona || u.PersonaCodigo || (u.Carrito ? `carrito ${u.Carrito}` : "")}
-                    {u.Resultado && u.Resultado !== "OK" && <span className="ml-1 rounded bg-amber-400 px-1 text-[11px] font-bold text-amber-950">{u.Resultado === "BAJO" ? "BAJO" : "SOBRE"}</span>}
-                  </p>
-                </li>
-              ))}
-            </ul>
-            <p className="text-[11px] text-slate-400 mt-3">Lo que sale "sin guardar" no aparece aquí.</p>
-          </div>
           {puedeAnular && resumen.ultimas.length > 0 && (
             <button onClick={anularUltima} className="rounded-xl bg-white/10 py-2.5 text-sm">Anular última (supervisor)</button>
           )}
