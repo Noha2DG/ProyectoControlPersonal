@@ -554,7 +554,7 @@ function Produccion() {
       </div>
       <Aviso>{error}</Aviso>
       {/* El ritmo del día (Lb/hora ponderada) es el hilo de todo el reporte: tarjeta principal, línea
-          punteada en la gráfica y Lb/hora en ámbar de quien lo alcanza (usuario, 26 nov 2026: "dale color"). */}
+          punteada en la gráfica (usuario, 26 nov 2026: "dale color"). */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
         <Dato t="Personas" v={porPersona.length.toLocaleString("es-GT")} />
         <Dato t="Bandejas" v={tot.b.toLocaleString("es-GT")} />
@@ -572,21 +572,20 @@ function Produccion() {
             <tr className="bg-amber-50 text-amber-900/70 uppercase text-xs tracking-wider">
               <th className="px-3 py-3 text-left">Mesa / banda</th><th className="px-3 py-3 text-left">Pos.</th><th className="px-3 py-3 text-left">Persona</th>
               <th className="px-3 py-3 text-right">Bandejas</th>
-              <th className="px-3 py-3 text-right" title="Libra válida ÷ horas: desde su entrada al área del día hasta cada bandeja, sin cafetería ni permisos (mismo cálculo que destajo).">Lb/hora</th>
               <th className="px-3 py-3 text-right">Libras</th>
+              <th className="px-3 py-3 text-right" title="Libra válida ÷ horas: desde su entrada al área del día hasta cada bandeja, sin cafetería ni permisos (mismo cálculo que destajo). Rojo: menos de 4; verde: 4 o más.">Lb/hora</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
             {porPersona.map((p, i) => (
               <FilaPersona key={p.Codigo} p={p} abierta={abierta === p.Codigo} onClick={() => setAbierta(a => (a === p.Codigo ? null : p.Codigo))}
-                ponderada={porPersona.ponderada}
                 nuevaMesa={i > 0 && (p.MesaNombre ?? "") !== (porPersona[i - 1].MesaNombre ?? "")} />
             ))}
             {datos && porPersona.length === 0 && <tr><td colSpan={6} className="px-4 py-10 text-center text-gray-400">Sin bandejas pesadas en esas fechas</td></tr>}
           </tbody>
         </table>
       </div>
-      <p className="mt-2 text-xs text-gray-500">Solo bandejas guardadas y no anuladas, pesadas en modo Empanizado. Lb/hora: mismo cálculo que destajo (desde la entrada al área del día hasta cada bandeja, sin cafetería ni permisos); la ponderada es el total de libras válidas entre el total de horas. "—" = sin entrada al área ese día. En ámbar, quien alcanza o supera el ritmo del día. La posición es la que la persona tenía el día que pesó.</p>
+      <p className="mt-2 text-xs text-gray-500">Solo bandejas guardadas y no anuladas, pesadas en modo Empanizado. Lb/hora: mismo cálculo que destajo (desde la entrada al área del día hasta cada bandeja, sin cafetería ni permisos); la ponderada es el total de libras válidas entre el total de horas. "—" = sin entrada al área ese día. Lb/hora en rojo: menos de 4; en verde: 4 o más. La posición es la que la persona tenía el día que pesó.</p>
     </div>
   );
 }
@@ -708,8 +707,11 @@ function RitmoDelDia({ bandejas, ponderada }) {
   );
 }
 
-function FilaPersona({ p, abierta, onClick, ponderada, nuevaMesa }) {
-  const arriba = p.LbHora != null && ponderada != null && p.LbHora >= ponderada;
+// Lb/hora: menos de 4 en rojo, de 4 para arriba en verde (usuario, 26 nov 2026).
+const META_LBH = 4;
+
+function FilaPersona({ p, abierta, onClick, nuevaMesa }) {
+  const color = p.LbHora == null ? "" : p.LbHora < META_LBH ? "bg-red-50 text-red-700" : "bg-emerald-50 text-emerald-700";
   return (
     <>
       <tr onClick={onClick} className={`cursor-pointer hover:bg-amber-50 ${nuevaMesa ? "border-t-2 border-amber-200" : ""}`}>
@@ -719,10 +721,11 @@ function FilaPersona({ p, abierta, onClick, ponderada, nuevaMesa }) {
         <td className="px-3 py-2 font-mono font-bold text-stone-700">{p.Posicion ?? ""}</td>
         <td className="px-3 py-2">{titulo(p.Nombre)} <span className="text-xs text-gray-400 font-mono">{p.Codigo}</span></td>
         <td className="px-3 py-2 text-right tabular-nums">{p.Bandejas.toLocaleString("es-GT")}</td>
-        <td className={`px-3 py-2 text-right tabular-nums ${arriba ? "font-bold text-amber-700" : "font-semibold text-stone-700"}`}>
-          {p.LbHora == null ? <span className="text-gray-400 font-normal">—</span> : kg(p.LbHora)}
-        </td>
         <td className="px-3 py-2 text-right tabular-nums">{kg(p.Lb)}</td>
+        <td className="px-3 py-2 text-right tabular-nums">
+          {p.LbHora == null ? <span className="text-gray-400">—</span>
+            : <span className={`inline-block min-w-[3.5rem] rounded-md px-2 py-0.5 font-bold ${color}`}>{kg(p.LbHora)}</span>}
+        </td>
       </tr>
       {abierta && (
         <tr><td colSpan={6} className="bg-slate-50 px-6 py-2">

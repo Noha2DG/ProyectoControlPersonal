@@ -513,7 +513,7 @@ export function exportarProduccionEmpanizado(porPersona, filas, desde, hasta) {
   const destino = (d) => ({ EXPORTACION: "Exportación", LOCAL: "Venta local" }[d] ?? d ?? "");
   const resumen = porPersona.map(p => ({
     "Mesa / banda": p.MesaNombre ?? "sin posición", "Posición": p.Posicion ?? "", "Código": p.Codigo, "Nombre": p.Nombre,
-    "Bandejas": p.Bandejas, "Lb/hora": p.LbHora == null ? "" : +Number(p.LbHora).toFixed(2), "Libras": +Number(p.Lb).toFixed(2),
+    "Bandejas": p.Bandejas, "Libras": +Number(p.Lb).toFixed(2), "Lb/hora": p.LbHora == null ? "" : +Number(p.LbHora).toFixed(2),
   }));
   const detalle = filas.map(f => ({
     "Fecha": fecha(f.Fecha), "Mesa / banda": f.MesaNombre ?? "sin posición", "Posición": f.Posicion ?? "",
