@@ -626,10 +626,10 @@ function RitmoDelDia({ bandejas, ponderada }) {
   }, [bandejas]);
   if (!horas.length) return null;
 
-  const W = 960, H = 250, L = 46, R = 20, T = 26, B = 30;
+  const W = 960, H = 150, L = 40, R = 16, T = 18, B = 22; // baja: ~180 px de alto en pantalla ancha (usuario, 26 nov 2026)
   const vals = horas.map(x => x.lbp).filter(v => v != null);
   const bruto = Math.max(...vals, ponderada ?? 0) * 1.15;
-  const paso = [1, 2, 2.5, 5, 10, 20, 25, 50].find(s => bruto / s <= 5) ?? 100;
+  const paso = [1, 2, 2.5, 5, 10, 20, 25, 50].find(s => bruto / s <= 3) ?? 100;
   const tope = Math.ceil(bruto / paso) * paso;
   const n = horas.length;
   const X = i => (n === 1 ? L + (W - L - R) / 2 : L + (i * (W - L - R)) / (n - 1));
@@ -658,11 +658,11 @@ function RitmoDelDia({ bandejas, ponderada }) {
           {Array.from({ length: Math.round(tope / paso) + 1 }, (_, k) => k * paso).map(v => (
             <g key={v}>
               <line x1={L} x2={W - R} y1={Y(v)} y2={Y(v)} stroke="#e7e5e4" strokeWidth="1" />
-              <text x={L - 8} y={Y(v) + 4} textAnchor="end" fontSize="11" fill="#78716c">{v.toLocaleString("es-GT")}</text>
+              <text x={L - 6} y={Y(v) + 3} textAnchor="end" fontSize="10" fill="#78716c">{v.toLocaleString("es-GT")}</text>
             </g>
           ))}
           {horas.map((x, i) => (
-            <text key={x.h} x={X(i)} y={H - 8} textAnchor="middle" fontSize="11" fill={hover === i ? "#292524" : "#78716c"} fontWeight={hover === i ? 700 : 400}>{etiqueta(x.h)}</text>
+            <text key={x.h} x={X(i)} y={H - 6} textAnchor="middle" fontSize="10" fill={hover === i ? "#292524" : "#78716c"} fontWeight={hover === i ? 700 : 400}>{etiqueta(x.h)}</text>
           ))}
           {ponderada != null && (
             <g>
