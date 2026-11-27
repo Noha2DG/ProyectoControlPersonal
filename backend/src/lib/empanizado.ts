@@ -75,7 +75,7 @@ type LineaToma = { RemisionId: number | null; Lote: string; Clase: string; Talla
  * Clase + Talla, ver loteDelDia). Si ya hay uno ABIERTO de lo mismo, suma ahí: así no se parte el
  * pesaje en dos lotes.
  */
-export async function tomarDelPiso(tx: any, p: { lineas: LineaToma[]; fecha: string; operador: string }) {
+export async function tomarDelPiso(tx: any, p: { lineas: LineaToma[]; fecha: string; operador: string; unirA?: number | null }) {
   if (!p.lineas?.length) throw new ErrorEmpanizado(400, "No escogió nada del piso");
   // Dos personas tomando a la vez: el saldo se calcula sumando, así que se serializa en la bodega.
   await tx.$queryRawUnsafe(`SELECT Codigo FROM BodegaVirtual WHERE Codigo = ? FOR UPDATE`, BODEGA_EMPANIZADO);
@@ -113,9 +113,11 @@ export async function tomarDelPiso(tx: any, p: { lineas: LineaToma[]; fecha: str
     }
   }
 
+  const piscinas = await cargarPiscinas(tx);
+  if (p.unirA != null) return unirALote(tx, Number(p.unirA), lineas, piscinas, p.fecha, p.operador);
+
   // Un LoteEmpanizado por lote del día + clase + talla: lotes de origen distintos de la misma piscina
   // (llegaron otro día) caen juntos.
-  const piscinas = await cargarPiscinas(tx);
   const grupos = new Map<string, { Lote: string; delDia: boolean; lineas: typeof lineas }>();
   for (const l of lineas) {
     const dia = loteDelDia(l.Lote, p.fecha, piscinas);
@@ -141,18 +143,50 @@ export async function tomarDelPiso(tx: any, p: { lineas: LineaToma[]; fecha: str
       const [{ nid }]: any[] = await tx.$queryRawUnsafe(`SELECT LAST_INSERT_ID() AS nid`);
       id = Number(nid); nuevo = true;
     }
-    const filas: string[] = [], args: any[] = [];
-    for (const l of g) {
-      filas.push("('TOMA_EMPANIZADO', ?, ?, ?, ?, ?, ?, ?, 'KG', ?, ?, ?, ?, ?)");
-      args.push(p.fecha, BODEGA_EMPANIZADO, l.Lote, l.Clase, l.Talla, l.FechaLote, l.Kg, l.Kg, l.RemisionId, l.Termo, id, p.operador);
-    }
-    await tx.$executeRawUnsafe(`
-      INSERT INTO MovimientoPiso (Tipo, FechaProduccion, BodegaOrigen, Lote, Clase, Talla, FechaLote,
-                                  Peso, UM, PesoKg, RemisionId, NumeroTermo, LoteEmpanizadoId, RegistradoPor)
-      VALUES ${filas.join(",")}`, ...args);
+    await insertarTomas(tx, id, g, p.fecha, p.operador);
     lotes.push({ LoteEmpanizadoId: id, Lote, Clase, Talla, Kg: r2(g.reduce((s, x) => s + x.Kg, 0)), Nuevo: nuevo });
   }
   return { ok: true, lotes };
+}
+
+/** Los renglones de la toma al kardex, enlazados al lote; cada uno con su lote de origen. */
+async function insertarTomas(tx: any, id: number, g: any[], fecha: string, operador: string) {
+  const filas: string[] = [], args: any[] = [];
+  for (const l of g) {
+    filas.push("('TOMA_EMPANIZADO', ?, ?, ?, ?, ?, ?, ?, 'KG', ?, ?, ?, ?, ?)");
+    args.push(fecha, BODEGA_EMPANIZADO, l.Lote, l.Clase, l.Talla, l.FechaLote, l.Kg, l.Kg, l.RemisionId, l.Termo, id, operador);
+  }
+  await tx.$executeRawUnsafe(`
+    INSERT INTO MovimientoPiso (Tipo, FechaProduccion, BodegaOrigen, Lote, Clase, Talla, FechaLote,
+                                Peso, UM, PesoKg, RemisionId, NumeroTermo, LoteEmpanizadoId, RegistradoPor)
+    VALUES ${filas.join(",")}`, ...args);
+}
+
+// ── Unir a un lote abierto ──────────────────────────────────────────────────────────────────────
+// Cuando un contenedor termina y el siguiente empieza en la misma banda, físicamente no se separan:
+// se decide trabajarlos con UN lote (27 nov 2026: Q013 se pesó como G548Q012 y se inició Q013 al día
+// siguiente). Lo tomado suma al lote abierto que escoge el encargado aunque venga de otro contenedor.
+// A propósito SÍ se permite entre contenedores de importación (IM001), que Pelado no unifica: aquí el
+// producto ya viene pelado y tratado (usuario, 27 nov 2026). Lo que se pierde es la ganancia por
+// contenedor de ese lote; de qué lote vino cada kilo queda en el kardex (MovimientoPiso.Lote).
+// Debe ser la misma clase, talla y finca del lote: es el mismo producto con otro código.
+async function unirALote(tx: any, id: number, lineas: (LineaToma & { Termo: string | null })[], piscinas: Piscina[], fecha: string, operador: string) {
+  const [le]: any[] = await tx.$queryRawUnsafe(
+    `SELECT LoteEmpanizadoId, Lote, Clase, Talla, Estado FROM LoteEmpanizado WHERE LoteEmpanizadoId = ? FOR UPDATE`, id);
+  if (!le) throw new ErrorEmpanizado(404, "El lote al que quiere unir ya no existe");
+  if (le.Estado !== "Abierto") throw new ErrorEmpanizado(400, `El lote ${le.Lote} ya se cerró: no se le puede unir nada`);
+  const fincaDe = (lote: string) => descomponerCodigoLote(lote, piscinas)?.piscina.CodigoFinca ?? null;
+  const finca = fincaDe(String(le.Lote));
+  for (const l of lineas) {
+    if (l.Clase !== le.Clase || l.Talla !== Number(le.Talla)) {
+      throw new ErrorEmpanizado(400, `${l.Lote} ${l.Clase} talla ${l.Talla} no es el mismo producto que ${le.Lote} ${le.Clase} talla ${Number(le.Talla)}: solo se une la misma clase y talla`);
+    }
+    const f = fincaDe(l.Lote);
+    if (finca && f && f !== finca) throw new ErrorEmpanizado(400, `${l.Lote} es de otra finca (${f}) que ${le.Lote} (${finca}): no se unen`);
+  }
+  await insertarTomas(tx, id, lineas, fecha, operador);
+  return { ok: true, lotes: [{ LoteEmpanizadoId: id, Lote: String(le.Lote), Clase: String(le.Clase), Talla: Number(le.Talla),
+                               Kg: r2(lineas.reduce((s, x) => s + x.Kg, 0)), Nuevo: false, Unido: true }] };
 }
 
 // ── Números de un lote ──────────────────────────────────────────────────────────────────────────

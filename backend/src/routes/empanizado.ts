@@ -40,10 +40,11 @@ router.get("/piso", requirePerm("empanizado", "ver"), async (_req: AuthRequest, 
   try { res.json(await saldoPiso(prisma, undefined, undefined, hoyGT())); } catch (err) { responder(res, err); }
 });
 
-// POST /api/empanizado/tomar { lineas: [{ RemisionId, Lote, Clase, Talla, FechaLote, Kg }] }
+// POST /api/empanizado/tomar { lineas: [{ RemisionId, Lote, Clase, Talla, FechaLote, Kg, Termo }], unirA? }
+// unirA = LoteEmpanizadoId abierto: todo suma a ese lote aunque venga de otro contenedor (ver unirALote).
 router.post("/tomar", requirePerm("empanizado", "editar"), async (req: AuthRequest, res: Response) => {
   try {
-    const r = await prisma.$transaction(tx => tomarDelPiso(tx, { lineas: req.body?.lineas ?? [], fecha: hoyGT(), operador: usuarioDe(req) }), OPCIONES_TX);
+    const r = await prisma.$transaction(tx => tomarDelPiso(tx, { lineas: req.body?.lineas ?? [], unirA: req.body?.unirA ?? null, fecha: hoyGT(), operador: usuarioDe(req) }), OPCIONES_TX);
     res.status(201).json(r);
   } catch (err) { responder(res, err); }
 });

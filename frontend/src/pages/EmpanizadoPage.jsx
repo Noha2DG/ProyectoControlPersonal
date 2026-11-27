@@ -80,6 +80,8 @@ export default function EmpanizadoPage() {
 // Igual que "Tomar del piso" de Destajo (usuario, 23 nov 2026): una fila por lote, con sus TERMOS
 // adentro. Marcar el lote toma todos sus termos; abriéndolo (▸) se escoge termo por termo y se
 // ajustan los kilos. Lo que llega de Tratamiento trae su termo; lo bajado, el termo en que se dejó.
+// "Unir a" suma lo escogido a un lote ABIERTO del mismo producto aunque sea de otro contenedor:
+// cuando uno termina y el siguiente empieza y no se pueden separar (Q012 → Q013, 27 nov 2026).
 function AlPiso({ onTomado }) {
   const puedeEditar = usePuede("empanizado", "editar");
   const [lineas, setLineas] = useState(null);
@@ -87,9 +89,11 @@ function AlPiso({ onTomado }) {
   const [abiertas, setAbiertas] = useState(() => new Set());
   const [error, setError] = useState("");
   const [tomando, setTomando] = useState(false);
+  const [abiertos, setAbiertos] = useState([]);    // lotes abiertos, para "Unir a"
+  const [unirA, setUnirA] = useState("");          // LoteEmpanizadoId o "" = lote del día
 
-  const cargar = useCallback(() => pedir(`${API}/piso`)
-    .then(l => { setLineas([...l].sort((a, b) => (b.DiasAlPiso ?? 0) - (a.DiasAlPiso ?? 0))); setSel({}); })
+  const cargar = useCallback(() => Promise.all([pedir(`${API}/piso`), pedir(`${API}/lotes?estado=Abierto`).catch(() => [])])
+    .then(([l, a]) => { setLineas([...l].sort((x, y) => (y.DiasAlPiso ?? 0) - (x.DiasAlPiso ?? 0))); setAbiertos(a); setSel({}); setUnirA(""); })
     .catch(e => setError(e.message)), []);
   useEffect(() => { cargar(); }, [cargar]);
 
@@ -119,6 +123,13 @@ function AlPiso({ onTomado }) {
   const todas = !!lineas?.length && elegidas.length === lineas.length;
   const alternarTodas = () => setSel(todas ? {} : Object.fromEntries(lineas.map(l => [l.Clave, nuevaSel(l)])));
 
+  // Se puede unir a un lote abierto de la misma clase y talla que TODO lo escogido.
+  const candidatos = elegidas.length
+    ? abiertos.filter(a => elegidas.every(l => l.Clase === a.Clase && Number(l.Talla) === Number(a.Talla)))
+    : [];
+  const destino = candidatos.find(a => String(a.LoteEmpanizadoId) === unirA) ?? null;
+  useEffect(() => { if (unirA && !destino) setUnirA(""); }, [unirA, destino]);
+
   const problema = (() => {
     for (const l of elegidas) {
       if (conTermos(l)) {
@@ -138,9 +149,16 @@ function AlPiso({ onTomado }) {
 
   const tomar = async () => {
     if (problema) { setError(problema); return; }
+    if (destino) {
+      const otros = [...new Set(elegidas.map(l => l.Lote))].join(", ");
+      if (!window.confirm(`Unir ${kg(kgElegido)} kg de ${otros} al lote ${destino.Lote}.
+
+Se pesan y pasan a Túnel como ${destino.Lote}; el registro guarda de qué lote vino cada kilo.`)) return;
+    }
     setError(""); setTomando(true);
     try {
       const r = await pedir(`${API}/tomar`, { method: "POST", body: JSON.stringify({
+        unirA: destino ? destino.LoteEmpanizadoId : null,
         // Una línea por termo escogido: el servidor guarda de qué termo salió cada toma.
         lineas: elegidas.flatMap(l => {
           const base = { RemisionId: l.RemisionId, Lote: l.Lote, Clase: l.Clase, Talla: l.Talla, FechaLote: l.FechaLote };
@@ -148,7 +166,7 @@ function AlPiso({ onTomado }) {
           return Object.entries(sel[l.Clave].termos).map(([k, v]) => ({ ...base, Termo: k || null, Kg: Number(v) }));
         }),
       }) });
-      alert(r.lotes.map(x => `${x.Lote} ${x.Clase} · ${kg(x.Kg)} kg ${x.Nuevo ? "(lote nuevo)" : "(sumado al lote abierto)"}`).join("\n"));
+      alert(r.lotes.map(x => `${x.Lote} ${x.Clase} · ${kg(x.Kg)} kg ${x.Unido ? "(unido al lote)" : x.Nuevo ? "(lote nuevo)" : "(sumado al lote abierto)"}`).join("\n"));
       onTomado();
     } catch (e) { setError(e.message); cargar(); } finally { setTomando(false); }
   };
@@ -159,10 +177,24 @@ function AlPiso({ onTomado }) {
       <div className="flex flex-wrap items-center gap-3 mb-3">
         <span className="px-4 py-2 rounded-lg bg-white shadow text-sm">Al piso <b>{kg(total)} kg</b> · {lineas.length} lote{lineas.length !== 1 ? "s" : ""}</span>
         <span className="text-xs text-gray-500">Lo que mandó Tratamiento, por termo: el peso es el de su báscula, ya con el pick-up.</span>
+        {puedeEditar && candidatos.length > 0 && (
+          <label className="ml-auto flex items-center gap-2 text-sm text-gray-600">
+            Lote
+            <select value={unirA} onChange={e => setUnirA(e.target.value)}
+              className={`border rounded-lg px-2 py-2 text-sm ${destino ? "border-amber-400 bg-amber-50 font-semibold text-amber-800" : "border-gray-300"}`}>
+              <option value="">Lote del día</option>
+              {candidatos.map(a => (
+                <option key={a.LoteEmpanizadoId} value={a.LoteEmpanizadoId}>
+                  Unir a {a.Lote} · {a.Bandejas} bandeja{a.Bandejas !== 1 ? "s" : ""}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         {puedeEditar && (
           <button disabled={!elegidas.length || tomando} onClick={tomar}
-            className="ml-auto bg-emerald-600 text-white text-sm font-semibold px-5 py-2.5 rounded-lg hover:bg-emerald-700 disabled:opacity-40">
-            {tomando ? "Tomando…" : `Tomar del piso${elegidas.length ? ` · ${kg(kgElegido)} kg` : ""}`}
+            className={`${candidatos.length ? "" : "ml-auto "}${destino ? "bg-amber-600 hover:bg-amber-700" : "bg-emerald-600 hover:bg-emerald-700"} text-white text-sm font-semibold px-5 py-2.5 rounded-lg disabled:opacity-40`}>
+            {tomando ? "Tomando…" : destino ? `Unir a ${destino.Lote} · ${kg(kgElegido)} kg` : `Tomar del piso${elegidas.length ? ` · ${kg(kgElegido)} kg` : ""}`}
           </button>
         )}
       </div>
@@ -192,7 +224,9 @@ function AlPiso({ onTomado }) {
                       title={termos ? (abierta ? "Ocultar los termos" : "Ver los termos y tomar de ahí") : undefined}>
                       {termos && <span className="inline-block w-4 text-amber-600 font-sans">{abierta ? "▾" : "▸"}</span>}
                       {l.Lote}
-                      {l.LoteDia && l.LoteDia !== l.Lote && <span className="block text-[11px] font-sans font-normal text-emerald-700" title="Se pesa con el lote del día, como en Pelado">→ {l.LoteDia} hoy</span>}
+                      {s && destino
+                        ? <span className="block text-[11px] font-sans font-semibold text-amber-700" title="Se une al lote abierto">→ unido a {destino.Lote}</span>
+                        : l.LoteDia && l.LoteDia !== l.Lote && <span className="block text-[11px] font-sans font-normal text-emerald-700" title="Se pesa con el lote del día, como en Pelado">→ {l.LoteDia} hoy</span>}
                       {l.EsBajado && <span className="block text-[11px] font-sans font-normal text-amber-700">Bajado de la mesa</span>}
                       {l.FolioRemision && <span className="block text-[11px] font-sans font-normal text-gray-400">{l.FolioRemision}</span>}
                     </td>
