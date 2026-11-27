@@ -199,13 +199,13 @@ function Pesaje({ sesion, b, onCerrar, onMenu }) {
   const set = (k) => (e) => setTrabajo(t => ({ ...t, [k]: e.target.value }));
 
   const empaque = cat.empaques.find(e => e.Codigo === trabajo.empaque) ?? null;
-  const conRango = Boolean(empaque?.ConRango);
+  // Venta local de Empanizado: PESO LIBRE (usuario, 27 nov 2026): se guarda cualquier peso estable, el
+  // empaque es opcional y su rango no aplica (solo queda de referencia); sin unidades por bandeja.
+  const porPeso = empz && trabajo.destino === "LOCAL";
+  const conRango = Boolean(empaque?.ConRango) && !porPeso;
   // Fuera de rango (23 nov 2026): donde el área lo permite (Empanizado) mandan las unidades, así que la
   // bandeja fuera del rango se guarda y queda marcada BAJO / SOBRE. Límite de cordura: a más de 10 %
   // del rango no parece una bandeja (mano apoyada, algo encima) y no se guarda. El servidor lo repite.
-  // Venta local de Empanizado: bolsa de 1 lb y manda el PESO (usuario, 23 nov 2026): empaque con rango
-  // obligatorio, fuera de rango no se guarda y no aplican las unidades por bandeja.
-  const porPeso = empz && trabajo.destino === "LOCAL";
   const guardaFuera = !ppv && sesion.FueraDeRango === "GUARDA" && !porPeso;
   const creible = (gr) => conRango && gr >= Math.floor(empaque.MinG * 0.9) && gr <= Math.ceil(empaque.MaxG * 1.1);
   // Unidades de referencia de la bandeja (Básculas → Unidades por bandeja): por producto y talla; la de
@@ -237,7 +237,6 @@ function Pesaje({ sesion, b, onCerrar, onMenu }) {
   ].filter(Boolean) : empz ? [
     !loteEmpSel && "lote", !trabajo.claseSalida && "producto que sale", !trabajo.tallaSalida && "talla que sale", !trabajo.destino && "destino",
     trabajo.destino === "EXPORTACION" && !trabajo.pedido && "pedido",
-    porPeso && !conRango && "tipo de empaque (venta local va por peso)",
     pideCarrito && !trabajo.carrito.trim() && "número de carrito",
   ].filter(Boolean) : [
     !trabajo.lote && "lote", trabajo.lote && !trabajo.clase && "tipo de producto", !trabajo.talla && "talla",
@@ -737,9 +736,9 @@ function Pesaje({ sesion, b, onCerrar, onMenu }) {
               </>
             )}
   
-            <label className={etq}>Tipo de empaque{porPeso ? " * (venta local: por peso)" : pt ? " (opcional)" : ""}
+            <label className={etq}>Tipo de empaque{porPeso ? " (venta local: peso libre)" : pt ? " (opcional)" : ""}
               <select value={trabajo.empaque} onChange={set("empaque")} className={sel + " mt-0.5"}>
-                <option value="">{pt && !porPeso ? "— peso libre —" : "— elija —"}</option>
+                <option value="">{pt ? "— peso libre —" : "— elija —"}</option>
                 {cat.empaques.map(e => <option key={e.Codigo} value={e.Codigo}>{e.Nombre}{e.ConRango ? ` · ${g(e.MinG)}–${g(e.MaxG)} g` : " · libre"}</option>)}
               </select>
             </label>

@@ -329,14 +329,11 @@ router.post("/pesadas", requirePerm("pesaje_bascula", "usar"), async (req: AuthR
       } else if (!pt) {
         throw new ErrorNegocio(400, "Elija el tipo de empaque");
       }
-      const conRango = emp && Number(emp.ConRango) === 1;
-      // Venta local de Empanizado (23 nov 2026, usuario): bolsa de 1 libra y MANDA EL PESO — empaque con
-      // rango obligatorio y fuera de rango no se guarda, aunque el área guarde fuera de rango (eso es
-      // para exportación, donde mandan las unidades).
+      // Venta local de Empanizado: PESO LIBRE (usuario, 27 nov 2026; antes, 23 nov, exigía la bolsa de
+      // 1 lb con rango). Cualquier peso estable se guarda: el rango del empaque no aplica, el empaque es
+      // opcional y no hay unidades por bandeja.
       const ventaLocalPorPeso = emp_ && String(b.Destino ?? "").toUpperCase() === "LOCAL";
-      if (ventaLocalPorPeso && !conRango) {
-        throw new ErrorNegocio(400, "Venta local va por peso: elija el tipo de empaque (bolsa de 1 lb) con su rango");
-      }
+      const conRango = emp && Number(emp.ConRango) === 1 && !ventaLocalPorPeso;
       const guardaFuera = s.FueraDeRango === "GUARDA" && !ventaLocalPorPeso;
       const resultado = conRango ? resultadoPeso(peso, Number(emp.MinG), Number(emp.MaxG)) : "OK";
       if (resultado !== "OK") {
