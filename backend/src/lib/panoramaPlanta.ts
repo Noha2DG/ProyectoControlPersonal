@@ -11,9 +11,16 @@
 //   TRASLADO / MERMA desde una hoja    → la bodega de la hoja (Descongelado, Tratamiento)
 //   PROCESADO (cierre de transacción)  → la bodega de la que se tomó el lote (DESTAJO), casi siempre PELADO
 // Lo bajado de las mesas y los ajustes no son flujo entre áreas y no entran.
+//
+// EMPANIZADO (27 nov 2026): lo que sale del área NO es el kardex (el PROCESADO a Túnel nace solo al
+// cerrar el lote) sino lo que pesan las BÁSCULAS (Pesada, Modo EMPANIZADO), por día de producción.
+// Todo lo pesado va a TÚNEL, como en las demás áreas: Red Lobster / venta local es el CLIENTE para el
+// que se trabaja, no un destino (usuario, 27 nov 2026), y solo aparece en el resumen del área. Lo
+// pesado lleva la harina, así que sale más de lo que entra: la diferencia es la ganancia, no un error.
 import { calcularLbHora, agruparPorArea } from "../../../frontend/src/utils/destajo.js";
+import { tiemposProduccion } from "./empanizado.ts";
 
-const AREAS = ["DESCONGELADO", "PELADO", "TRATAMIENTO"];
+const AREAS = ["DESCONGELADO", "PELADO", "TRATAMIENTO", "EMPANIZADO"];
 const AREAS_PELADORAS = ["PELADO Y DEVENADO", "PELADO Y PINCHADO"];
 // Los DATETIME llegan de Prisma como Date con la hora de Guatemala en los dígitos (la "Z" miente, ver
 // frontend/src/utils/fecha.js); calcularLbHora espera el mismo texto ISO que recibe el navegador.
@@ -227,10 +234,45 @@ export async function panoramaPlanta(client: any, fecha: string) {
      WHERE c.Tipo = 'CONSUMO' AND h.FechaProduccion BETWEEN ? AND ?
      GROUP BY h.FechaProduccion
     UNION ALL
+    -- Empanizado, lo pesado en las básculas (las mismas bandejas que Producción por persona; sin
+    -- destino cuenta como exportación, igual que esa pantalla). Gramos.
+    SELECT 'EMP_PES', DATE_FORMAT(FechaProduccion, '%Y-%m-%d'),
+           SUM(CASE WHEN Destino = 'LOCAL' THEN 0 ELSE PesoNetoG END), SUM(CASE WHEN Destino = 'LOCAL' THEN PesoNetoG ELSE 0 END),
+           SUM(Destino IS NULL OR Destino <> 'LOCAL'), SUM(Destino = 'LOCAL'), NULL
+      FROM Pesada
+     WHERE Modo = 'EMPANIZADO' AND Anulada = 0 AND FechaProduccion BETWEEN ? AND ?
+     GROUP BY FechaProduccion
+    UNION ALL
+    -- Empanizado, lo tomado del piso por los lotes (y lo que volvió al piso o se descartó).
+    SELECT 'EMP_PIS', DATE_FORMAT(FechaProduccion, '%Y-%m-%d'),
+           ROUND(SUM(CASE WHEN Tipo = 'TOMA_EMPANIZADO' THEN PesoKg END), 2),
+           ROUND(SUM(CASE WHEN Tipo = 'BAJADO' THEN PesoKg END), 2),
+           ROUND(SUM(CASE WHEN Tipo = 'DESCARTE' THEN PesoKg END), 2), NULL, NULL
+      FROM MovimientoPiso
+     WHERE LoteEmpanizadoId IS NOT NULL AND Tipo IN ('TOMA_EMPANIZADO', 'BAJADO', 'DESCARTE')
+       AND FechaProduccion BETWEEN ? AND ?
+     GROUP BY FechaProduccion
+    UNION ALL
+    -- Empanizado, ganancia de los lotes CERRADOS ese día (como el rendimiento de Pelado, solo lo
+    -- terminado: a medio lote lo tomado sigue en las mesas). Pesado ÷ (tomado − bajado − descarte).
+    SELECT 'EMP_LOT', DATE_FORMAT(le.CerradoEn, '%Y-%m-%d'),
+           ROUND(SUM((SELECT COALESCE(SUM(CASE m.Tipo WHEN 'TOMA_EMPANIZADO' THEN m.PesoKg ELSE -m.PesoKg END), 0)
+                        FROM MovimientoPiso m WHERE m.LoteEmpanizadoId = le.LoteEmpanizadoId
+                         AND m.Tipo IN ('TOMA_EMPANIZADO', 'BAJADO', 'DESCARTE'))), 2),
+           SUM((SELECT COALESCE(SUM(p.PesoNetoG), 0) FROM Pesada p WHERE p.LoteEmpanizadoId = le.LoteEmpanizadoId AND p.Anulada = 0)),
+           COUNT(*), NULL, NULL
+      FROM LoteEmpanizado le
+     WHERE le.Estado = 'Cerrado' AND le.CerradoEn >= ? AND le.CerradoEn < DATE_ADD(?, INTERVAL 1 DAY)
+     GROUP BY DATE_FORMAT(le.CerradoEn, '%Y-%m-%d')
+    UNION ALL
     SELECT CONCAT('HOJAS_', BodegaCodigo), NULL, COUNT(*), NULL, NULL, NULL, NULL
       FROM HojaProceso WHERE Estatus = 'Abierta' AND BodegaCodigo IN (${AR})
-     GROUP BY BodegaCodigo`,
-    R.inicio, fecha, R.inicio, fecha, R.inicio, fecha, R.inicio, fecha, R.inicio, fecha, ...AREAS);
+     GROUP BY BodegaCodigo
+    UNION ALL
+    -- Empanizado no lleva hojas: sus lotes abiertos hacen ese papel.
+    SELECT 'LOTES_EMPANIZADO', NULL, COUNT(*), NULL, NULL, NULL, NULL FROM LoteEmpanizado WHERE Estado = 'Abierto'`,
+    R.inicio, fecha, R.inicio, fecha, R.inicio, fecha, R.inicio, fecha, R.inicio, fecha,
+    R.inicio, fecha, R.inicio, fecha, R.inicio, fecha, ...AREAS);
 
   const [diario, lotes, piso, sumas] = await Promise.all([diarioP, lotesP, pisoP, sumasP]);
   const bloque = (g: string, ...campos: string[]) => sumas.filter(x => x.G === g).map(x => {
@@ -243,6 +285,17 @@ export async function panoramaPlanta(client: any, fecha: string) {
   const pelPesado = bloque("PEL_PES", "Kg");
   const pelPiso = bloque("PEL_PIS", "Tomado", "Bajado");
   const traHojas = bloque("TRA_HOJ", "Recibido", "Base", "Tratado");
+  const kgG = (x: any) => Math.round(Number(x || 0)) / 1000;
+  const empPesado = bloque("EMP_PES", "ExpG", "LocG", "ExpBandejas", "LocBandejas")
+    .map(x => ({ Fecha: x.Fecha, Exportacion: kgG(x.ExpG), Local: kgG(x.LocG), Pesado: kgG(Number(x.ExpG || 0) + Number(x.LocG || 0)),
+                 Bandejas: Number(x.ExpBandejas || 0) + Number(x.LocBandejas || 0) }));
+  const empPiso = bloque("EMP_PIS", "Tomado", "Bajado", "Descarte");
+  const empLotes = bloque("EMP_LOT", "TrabajadoCerrados", "PesadoG", "LotesCerrados")
+    .map(x => ({ ...x, PesadoCerrados: kgG(x.PesadoG) }));
+  const lotesEmpAbiertos = Number(sumas.find(x => x.G === "LOTES_EMPANIZADO")?.V1 ?? 0);
+  // Lo pesado es la salida de Empanizado en el gráfico de flujo, y va a Túnel (ver encabezado).
+  const empFlujo = empPesado.map(x => ({ Fecha: x.Fecha, Origen: "EMPANIZADO", Destino: "TUNEL", Kg: x.Pesado }))
+    .filter(x => x.Kg > 0);
   const hojas = sumas.filter(x => String(x.G).startsWith("HOJAS_")).map(x => ({ Bodega: String(x.G).slice(6), Abiertas: x.V1 }));
 
   const alPiso: Record<string, { Kg: number; Lineas: any[] }> = {};
@@ -261,7 +314,7 @@ export async function panoramaPlanta(client: any, fecha: string) {
   return {
     Fecha: fecha,
     Rangos: { dia: R.dia, semana: R.semana, mes: R.mes },
-    Diario: diario.map(x => ({ Fecha: x.Fecha, Origen: x.Origen, Destino: x.Destino, Kg: Number(x.Kg) })),
+    Diario: [...diario.map(x => ({ Fecha: x.Fecha, Origen: x.Origen, Destino: x.Destino, Kg: Number(x.Kg) })), ...empFlujo],
     Lotes: lotes.map(l => ({
       Lote: l.Lote, Clase: l.Clase, Fecha: l.Fecha, Tomado: r2(l.Tomado), Bajado: r2(l.Bajado), Pelado: r2(l.Pelado),
       Terminado: Number(l.Transacciones) > 0 && Number(l.Abiertas) === 0,
@@ -273,8 +326,13 @@ export async function panoramaPlanta(client: any, fecha: string) {
                          [desHojas, "PesadoConPar", "PesadoConPar"], [desHojas, "Devuelto", "Devuelto"], [desHojas, "Merma", "Merma"]),
       PELADO: unir([pelPiso, "Tomado", "Tomado"], [pelPiso, "Bajado", "Bajado"], [pelPesado, "Pelado", "Kg"]),
       TRATAMIENTO: unir([traHojas, "Recibido", "Recibido"], [traHojas, "Base", "Base"], [traHojas, "Tratado", "Tratado"]),
+      EMPANIZADO: unir([empPiso, "Tomado", "Tomado"], [empPiso, "Bajado", "Bajado"], [empPiso, "Descarte", "Descarte"],
+                       [empPesado, "Pesado", "Pesado"], [empPesado, "Exportacion", "Exportacion"], [empPesado, "Local", "Local"],
+                       [empPesado, "Bandejas", "Bandejas"], [empLotes, "TrabajadoCerrados", "TrabajadoCerrados"],
+                       [empLotes, "PesadoCerrados", "PesadoCerrados"], [empLotes, "LotesCerrados", "LotesCerrados"]),
     },
     HojasAbiertas: Object.fromEntries(hojas.map(h => [h.Bodega, Number(h.Abiertas)])),
+    LotesEmpanizadoAbiertos: lotesEmpAbiertos,
   };
 }
 
@@ -286,5 +344,46 @@ export async function panoramaPlanta(client: any, fecha: string) {
 export async function ritmoPlanta(client: any, fecha: string) {
   const turno = limitador(2);
   const q = (sql: string, ...args: any[]) => turno(() => client.$queryRawUnsafe(sql, ...args) as Promise<any[]>);
-  return { Fecha: fecha, Ritmo: await ritmoPorDia(q, rangos(fecha).inicio, fecha) };
+  const inicio = rangos(fecha).inicio;
+  // tiemposProduccion consulta por su cuenta: se le pasa un cliente que respeta el mismo limitador.
+  const [Ritmo, RitmoEmpanizado] = await Promise.all([
+    ritmoPorDia(q, inicio, fecha),
+    ritmoEmpanizadoPorDia({ $queryRawUnsafe: q }, inicio, fecha),
+  ]);
+  return { Fecha: fecha, Ritmo, RitmoEmpanizado };
+}
+
+/**
+ * Lb/hora de Empanizado por día y destino, con la MISMA cuenta que Empanizado → Producción por persona
+ * (pages/EmpanizadoPage.jsx): cada destino aparte, ancla = la Transferencia que cubre la bandeja,
+ * pausas en áreas sin paga, calcularLbHora. Se agrupa por día para que la semana y el mes se sumen
+ * (Lb ÷ Horas) como el ritmo de las peladoras.
+ */
+async function ritmoEmpanizadoPorDia(client: any, inicio: string, fecha: string) {
+  const t = await tiemposProduccion(client, inicio, fecha);
+  if (!t.bandejas.length) return [];
+  const entradasDe = new Map<string, [string, string | null][]>();
+  for (const [c, i, s] of t.entradas) { if (!entradasDe.has(c)) entradasDe.set(c, []); entradasDe.get(c)!.push([i, s]); }
+  const entrada = (c: string, h: string) => {
+    let mejor: string | null = null;
+    for (const [i, s] of entradasDe.get(c) ?? []) if (i <= h && (s == null || s >= h) && (mejor == null || i > mejor)) mejor = i;
+    return mejor;
+  };
+  const pausas = t.pausas.map(([c, i, s]: any[]) => ({ IdEmpleado: c, FechaHora: i, FechaSalida: s }));
+  const salida: { Fecha: string; Destino: string; Lb: number; Horas: number; Personas: number }[] = [];
+  for (const destino of ["EXPORTACION", "LOCAL"]) {
+    const pesadas = t.bandejas.filter((b: any[]) => (b[3] === "LOCAL" ? "LOCAL" : "EXPORTACION") === destino)
+      .map(([c, h, g]: any[]) => ({ IdEmpleado: c, Nombre: c, FechaHora: h, Kilos: g / 1000, EntradaArea: entrada(c, h) }));
+    // Un grupo por día: el primer bloque de cada día se ancla a la entrada, como en la pantalla de un día.
+    const porDia = (p: any) => { const d = String(p.FechaHora).slice(0, 10); return { key: d, campos: { Fecha: d } }; };
+    const por = new Map<string, { Lb: number; Horas: number; Personas: Set<string> }>();
+    for (const f of calcularLbHora(pesadas, porDia, pausas) as any[]) {
+      const d = por.get(f.Fecha) ?? { Lb: 0, Horas: 0, Personas: new Set<string>() };
+      if (f.LbPorHora != null) { d.Lb += f.Lb; d.Horas += f.Horas; }
+      d.Personas.add(f.IdEmpleado);
+      por.set(f.Fecha, d);
+    }
+    for (const [Fecha, d] of por) salida.push({ Fecha, Destino: destino, Lb: r2(d.Lb), Horas: r2(d.Horas), Personas: d.Personas.size });
+  }
+  return salida.sort((a, b) => a.Fecha.localeCompare(b.Fecha) || a.Destino.localeCompare(b.Destino));
 }

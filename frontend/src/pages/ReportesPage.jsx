@@ -3,25 +3,37 @@ import { authHeader } from "../context/AuthContext.jsx";
 import { fmtNum } from "../utils/numero.js";
 
 // Panorama de planta (Gerencia): el recorrido del producto Bodega → Descongelado → Pelado →
-// Tratamiento y a dónde sale de cada área, con el día y el acumulado de la semana o del mes. Los
+// Tratamiento → Empanizado y a dónde sale de cada área, con el día y el acumulado de la semana o del mes. Los
 // datos vienen por día de GET /api/gerencia/panorama (lib/panoramaPlanta.ts) y aquí se suman según
 // el periodo, así que cambiar Día/Semana/Mes no vuelve a consultar. Tocar un área abre su resumen.
+// Empanizado sale por lo que pesan sus básculas, no por el kardex, y lo pesado va a Túnel como en las
+// demás áreas (Red Lobster / venta local es el cliente, no un destino: solo sale en su resumen). Lo
+// pesado lleva la harina y por eso sale más de lo que entra.
 
 const COLOR = {
   BODEGA: "#8a8a85", DESCONGELADO: "#2a78d6", PELADO: "#eb6834", TRATAMIENTO: "#1baf7a",
   TUNEL: "#eda100", EMPANIZADO: "#e87ba4", OTRAS: "#b5b4ad", GRIS: "#d9d8d2",
+  TUNEL_EMP: "#eda100",
 };
 const NOMBRE = {
   BODEGA: "Bodega", DESCONGELADO: "Descongelado", PELADO: "Pelado", TRATAMIENTO: "Tratamiento",
   TUNEL: "Túnel", EMPANIZADO: "Empanizado", OTRAS: "Otras áreas",
+  // Túnel de lo que pesa Empanizado: otro nodo porque el Túnel de Pelado/Tratamiento está en la
+  // misma columna que Empanizado.
+  TUNEL_EMP: "Túnel",
 };
-const AREAS = ["DESCONGELADO", "PELADO", "TRATAMIENTO"];
+const AREAS = ["DESCONGELADO", "PELADO", "TRATAMIENTO", "EMPANIZADO"];
+// Destinos finales (no son áreas del recorrido): se rotulan "· destino".
+const FINALES = ["TUNEL", "OTRAS", "TUNEL_EMP"];
+// La tarjeta resalta el número principal del área con su color.
+const PRINCIPAL = { PELADO: { bg: "#fff7ed", fg: "#b4471d" }, EMPANIZADO: { bg: "#fdf0f5", fg: "#a8396a" } };
 // Lo que no sigue adelante desde cada área (entró − salió en el periodo).
 // Segundo renglón del gris en el gráfico: qué incluye lo que no siguió.
-const NO_SIGUE_DETALLE = { PELADO: "al piso, en mesas o sin cerrar" };
-const NO_SIGUE = { DESCONGELADO: "Queda en Descongelado", PELADO: "Queda en Pelado", TRATAMIENTO: "En proceso en Tratamiento" };
+const NO_SIGUE_DETALLE = { PELADO: "al piso, en mesas o sin cerrar", EMPANIZADO: "al piso, sin tomar" };
+const NO_SIGUE = { DESCONGELADO: "Queda en Descongelado", PELADO: "Queda en Pelado", TRATAMIENTO: "En proceso en Tratamiento", EMPANIZADO: "Queda en Empanizado" };
 // Destinos que se dibujan con nombre propio; el resto se junta en "Otras áreas".
-const DESTINOS = { DESCONGELADO: ["PELADO"], PELADO: ["TUNEL", "TRATAMIENTO"], TRATAMIENTO: ["TUNEL", "EMPANIZADO"] };
+const DESTINOS = { DESCONGELADO: ["PELADO"], PELADO: ["TUNEL", "TRATAMIENTO"], TRATAMIENTO: ["TUNEL", "EMPANIZADO"],
+                   EMPANIZADO: ["TUNEL"] };
 const PERIODOS = [["dia", "Día"], ["semana", "Semana"], ["mes", "Mes"]];
 const kg = v => fmtNum(v, 0);
 const pct = v => (v == null ? "—" : `${fmtNum(v, 1)} %`);
@@ -64,7 +76,35 @@ const METRICAS = {
       { t: "Pick-up", pct: s => (s.Base > 0.001 ? (s.Tratado - s.Base) / s.Base * 100 : null), clave: true },
     ],
   },
+  // Lo que pesan las básculas de Empanizado (Pesada) y lo que sus lotes tomaron del piso
+  // (lib/empanizado.ts). Lb/hora y ganancia con las mismas cuentas que la pantalla de Empanizado.
+  EMPANIZADO: {
+    grafica: ["Pesado", "Pesado en básculas por día", "kg pesados"],
+    filas: [
+      { t: "Recibido al piso (de Tratamiento)", kg: (s, r) => r.entro("EMPANIZADO") },
+      { t: "Tomado del piso", kg: s => s.Tomado - s.Bajado },
+      { t: "Pesado (básculas)", kg: s => s.Pesado },
+      // Para qué cliente se pesó (no es destino: todo va a Túnel).
+      { t: "Pesado para Red Lobster", kg: s => s.Exportacion, soloResumen: true },
+      { t: "Pesado para venta local", kg: s => s.Local, soloResumen: true },
+      { t: "Bajado al piso", kg: s => s.Bajado, soloResumen: true },
+      { t: "Descarte", kg: s => s.Descarte, soloResumen: true },
+      { t: "Bandejas pesadas", txt: s => fmtNum(s.Bandejas, 0), soloResumen: true },
+      { t: "Lb/hora (Red Lobster)", lbh: (s, r) => r.lbHoraEmp?.EXPORTACION, clave: true, principal: true },
+      { t: "Lb/hora (venta local)", lbh: (s, r) => r.lbHoraEmp?.LOCAL },
+      { t: "Ganancia (lotes cerrados)", pct: s => (s.TrabajadoCerrados > 0.001 && s.PesadoCerrados > 0 ? (s.PesadoCerrados / s.TrabajadoCerrados - 1) * 100 : null), clave: true },
+      { t: "Lotes cerrados / abiertos", txt: (s, r) => `${fmtNum(s.LotesCerrados, 0)} / ${r.lotesEmpAbiertos}`, soloResumen: true },
+    ],
+  },
 };
+// lb/hr de un periodo = libras ÷ horas sumadas (no promedio de días). undefined = todavía calculando.
+function lbHoraDe(ritmo, desde, hasta) {
+  if (ritmo == null) return undefined;
+  const dias = ritmo.filter(x => x.Fecha >= desde && x.Fecha <= hasta);
+  const lb = dias.reduce((t, x) => t + x.Lb, 0), h = dias.reduce((t, x) => t + x.Horas, 0);
+  return h > 0 ? lb / h : null;
+}
+const ritmoEmp = (datos, destino) => (datos.RitmoEmpanizado == null ? null : datos.RitmoEmpanizado.filter(x => x.Destino === destino));
 function sumaArea(datos, area, desde, hasta) {
   const s = {};
   for (const d of datos.PorDia[area] ?? []) {
@@ -114,12 +154,9 @@ function resumirPeriodo(datos, per) {
     desde, hasta, flujo, entro, salio, merma, area,
     rend: mpTerm > 0 ? pelTerm / mpTerm * 100 : null,
     lotesTerminados: term.length, lotesEnMesas: lotes.length - term.length,
-    lbHora: (() => {
-      if (datos.Ritmo == null) return undefined;   // todavía calculando
-      const dias = datos.Ritmo.filter(x => x.Fecha >= desde && x.Fecha <= hasta);
-      const lb = dias.reduce((t, x) => t + x.Lb, 0), h = dias.reduce((t, x) => t + x.Horas, 0);
-      return h > 0 ? lb / h : null;
-    })(),
+    lbHora: lbHoraDe(datos.Ritmo, desde, hasta),
+    lbHoraEmp: { EXPORTACION: lbHoraDe(ritmoEmp(datos, "EXPORTACION"), desde, hasta), LOCAL: lbHoraDe(ritmoEmp(datos, "LOCAL"), desde, hasta) },
+    lotesEmpAbiertos: datos.LotesEmpanizadoAbiertos ?? 0,
   };
 }
 
@@ -134,32 +171,40 @@ function Flujo({ r, onAbrir }) {
     for (const [k, v] of Object.entries(r.flujo)) {
       const [o, d] = k.split("|");
       if (o !== a || d === "MERMA" || !v) continue;
-      if (DESTINOS[a].includes(d)) L.push([a, d, v]);
+      if (DESTINOS[a].includes(d)) L.push([a, a === "EMPANIZADO" && d === "TUNEL" ? "TUNEL_EMP" : d, v]);
       else otras[a] = (otras[a] ?? 0) + v;
     }
     if (otras[a]) L.push([a, "OTRAS", otras[a]]);
-    const resto = r.entro(a) - r.salio(a);
+    // Empanizado: lo pesado lleva la harina, así que lo que no siguió es lo recibido que no se tomó.
+    const resto = a === "EMPANIZADO" ? r.entro(a) - (r.area.EMPANIZADO.Tomado - r.area.EMPANIZADO.Bajado) : r.entro(a) - r.salio(a);
     if (resto > 0.5) L.push([a, `GRIS_${a}`, resto]);
   }
   // Orden de apilado: los destinos principales arriba, el gris al final.
-  const orden = ["DESCONGELADO", "PELADO", "TUNEL", "TRATAMIENTO", "EMPANIZADO", "OTRAS"];
+  const orden = ["DESCONGELADO", "PELADO", "TUNEL", "TRATAMIENTO", "EMPANIZADO", "OTRAS", "TUNEL_EMP"];
   L.sort((x, y) => (x[0] === y[0] ? (x[1].startsWith("GRIS") ? 1 : y[1].startsWith("GRIS") ? -1 : orden.indexOf(x[1]) - orden.indexOf(y[1])) : 0));
 
   const kgIn = {}, kgOut = {};
   for (const [a, b, v] of L) { kgOut[a] = (kgOut[a] ?? 0) + v; kgIn[b] = (kgIn[b] ?? 0) + v; }
+  kgOut.EMPANIZADO_PESADO = r.flujo["EMPANIZADO|TUNEL"] ?? 0;
   const kgN = id => Math.max(kgIn[id] ?? 0, kgOut[id] ?? 0);
   const maxN = Math.max(...["BODEGA", ...AREAS].map(kgN), 1);
   const k = 300 / maxN, Wn = 18;
   const H = id => (kgN(id) ? Math.max(kgN(id) * k, 3) : 0);
   const f = (a, b) => (L.find(x => x[0] === a && x[1] === b)?.[2] ?? 0) * k;
 
-  const X = { BODEGA: 20, DESCONGELADO: 320, PELADO: 620, TRATAMIENTO: 900, TUNEL: 1180, EMPANIZADO: 1180, OTRAS: 1180,
-              GRIS_DESCONGELADO: 620, GRIS_PELADO: 900, GRIS_TRATAMIENTO: 1180 };
+  // Cinco columnas: Bodega · Descongelado · Pelado · Tratamiento · (Túnel, Empanizado, otras) · salidas de Empanizado.
+  const X = { BODEGA: 20, DESCONGELADO: 260, PELADO: 500, TRATAMIENTO: 740, TUNEL: 980, EMPANIZADO: 980, OTRAS: 980,
+              GRIS_DESCONGELADO: 500, GRIS_PELADO: 740, GRIS_TRATAMIENTO: 980,
+              TUNEL_EMP: 1230, GRIS_EMPANIZADO: 1230 };
   const Y = { BODEGA: 50, DESCONGELADO: 50, PELADO: 50, TUNEL: 50 };
   Y.TRATAMIENTO = 50 + f("PELADO", "TUNEL") + 56;
-  Y.EMPANIZADO = Y.TUNEL + H("TUNEL") + 34;
+  // Empanizado lleva el rótulo arriba (a la derecha salen sus bandas): deja espacio para él.
+  Y.EMPANIZADO = Y.TUNEL + H("TUNEL") + (H("TUNEL") ? 78 : 34);
   Y.GRIS_TRATAMIENTO = Y.EMPANIZADO + H("EMPANIZADO") + 34;
   Y.OTRAS = Y.GRIS_TRATAMIENTO + H("GRIS_TRATAMIENTO") + 34;
+  Y.TUNEL_EMP = Y.EMPANIZADO;
+  // Rótulos de dos o tres renglones: una banda delgada igual deja ~30 px para el suyo.
+  Y.GRIS_EMPANIZADO = Y.TUNEL_EMP + (H("TUNEL_EMP") ? Math.max(H("TUNEL_EMP"), 30) + 34 : 0);
   Y.GRIS_PELADO = Y.TRATAMIENTO + H("TRATAMIENTO") + 46;
   Y.GRIS_DESCONGELADO = Y.PELADO + H("PELADO") + 34;
   const alto = Math.max(420, ...Object.keys(Y).map(id => Y[id] + H(id) + 40));
@@ -191,7 +236,7 @@ function Flujo({ r, onAbrir }) {
         );
       })}
       {Object.keys(X).filter(id => kgN(id) > 0).map(id => {
-        const gris = id.startsWith("GRIS"), area = abre(id), arriba = id === "TRATAMIENTO";
+        const gris = id.startsWith("GRIS"), area = abre(id), arriba = id === "TRATAMIENTO" || id === "EMPANIZADO";
         const tx = arriba ? X[id] - 2 : X[id] + Wn + 8, ty = arriba ? Y[id] - 58 : Y[id] + 4;
         return (
           <g key={id} onClick={area ? () => onAbrir(area) : undefined} style={{ cursor: area ? "pointer" : "default" }}
@@ -202,7 +247,8 @@ function Flujo({ r, onAbrir }) {
               {gris ? NO_SIGUE[id.slice(5)] : NOMBRE[id]}
               {gris && NO_SIGUE_DETALLE[id.slice(5)] && <tspan x={tx} dy="15" fontSize="11" fill="#8b8a85">{NO_SIGUE_DETALLE[id.slice(5)]}</tspan>}
               <tspan x={tx} dy="17" fontSize="12" fontWeight="600" fill="#52514e">
-                {kg(kgN(id))} kg{["TUNEL", "EMPANIZADO", "OTRAS"].includes(id) ? " · destino" : ""}
+                {id === "EMPANIZADO" ? `${kg(kgIn[id] ?? 0)} kg recibido · ${kg(kgOut.EMPANIZADO_PESADO ?? 0)} kg pesado`
+                  : `${kg(kgN(id))} kg${FINALES.includes(id) ? " · destino" : ""}`}
               </tspan>
               {area && <tspan x={tx} dy="16" fontSize="11" fontWeight="600" fill="#0E3A53">Ver resumen ›</tspan>}
             </text>
@@ -214,7 +260,7 @@ function Flujo({ r, onAbrir }) {
 }
 
 // ── Línea de lb/hr por día (Pelado). Una sola escala: va en su propio gráfico, no encima de las barras.
-function LineaLbHora({ dias, etiquetas, ritmo, alto = 110 }) {
+function LineaLbHora({ dias, etiquetas, ritmo, alto = 110, color = COLOR.PELADO }) {
   if (ritmo == null) return (
     <div className="flex items-center justify-center gap-2 text-xs text-gray-400" style={{ height: alto }}>
       <span className="w-3 h-3 border-2 border-orange-400 border-t-transparent rounded-full animate-spin" />Calculando el ritmo…
@@ -234,10 +280,10 @@ function LineaLbHora({ dias, etiquetas, ritmo, alto = 110 }) {
         <g key={g}><line x1="30" x2={W} y1={Y(g)} y2={Y(g)} stroke="#efeee9" />
           <text x="26" y={Y(g) + 4} textAnchor="end" fontSize="10" fill="#8b8a85">{fmtNum(g, 0)}</text></g>
       ))}
-      <path d={"M" + pts.map(p => `${p[0]},${p[1]}`).join(" L")} fill="none" stroke={COLOR.PELADO} strokeWidth="2" />
+      <path d={"M" + pts.map(p => `${p[0]},${p[1]}`).join(" L")} fill="none" stroke={color} strokeWidth="2" />
       {pts.map(([x, y, val, i]) => (
         <g key={i}>
-          <circle cx={x} cy={y} r="4" fill={COLOR.PELADO} stroke="#fff" strokeWidth="2"><title>{`${etiquetas[i]}: ${fmtNum(val, 1)} lb/hr`}</title></circle>
+          <circle cx={x} cy={y} r="4" fill={color} stroke="#fff" strokeWidth="2"><title>{`${etiquetas[i]}: ${fmtNum(val, 1)} lb/hr`}</title></circle>
           {(dias.length <= 8 || i === dias.length - 1) && <text x={x} y={y - 8} textAnchor="middle" fontSize="10.5" fontWeight="600" fill="#52514e">{fmtNum(val, 1)}</text>}
         </g>
       ))}
@@ -287,7 +333,7 @@ export default function ReportesPage() {
     // El ritmo se pide en paralelo pero no detiene la pantalla: el flujo y las tarjetas se muestran
     // en cuanto llega el panorama, y las lb/hr se completan cuando llegan.
     fetch(`/api/gerencia/panorama/ritmo?fecha=${fecha}`, { headers: authHeader() })
-      .then(r => (r.ok ? r.json() : null)).then(d => { if (d?.Fecha === fecha) setRitmo(d.Ritmo); }).catch(() => {});
+      .then(r => (r.ok ? r.json() : null)).then(d => { if (d?.Fecha === fecha) setRitmo(d); }).catch(() => {});
     try {
       const res = await fetch(`/api/gerencia/panorama?fecha=${fecha}`, { headers: authHeader() });
       const d = await res.json();
@@ -297,7 +343,8 @@ export default function ReportesPage() {
   // Al cambiar de fecha, lo de la fecha anterior no vale: se muestra calculando hasta que llegue.
   const [fechaVista, setFechaVista] = useState(fecha);
   if (fechaVista !== fecha) { setFechaVista(fecha); setRitmo(null); }
-  const datos = useMemo(() => (base && base.Fecha === fecha ? { ...base, Ritmo: ritmo } : null), [base, ritmo, fecha]);
+  const datos = useMemo(() => (base && base.Fecha === fecha
+    ? { ...base, Ritmo: ritmo ? ritmo.Ritmo : null, RitmoEmpanizado: ritmo ? (ritmo.RitmoEmpanizado ?? []) : null } : null), [base, ritmo, fecha]);
   useEffect(() => { cargar(); }, [cargar]);
   // En vivo: con la fecha de hoy se refresca cada 2 min (el servidor guarda 1 min).
   useEffect(() => {
@@ -366,17 +413,17 @@ export default function ReportesPage() {
       </div>
 
       {/* Tarjetas: los números propios del área, del día y el acumulado */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 md:grid-cols-2 2xl:grid-cols-4 gap-3">
         {AREAS.map(a => {
           const M = METRICAS[a], kgs = M.filas.filter(f => f.kg && !f.soloResumen).slice(0, 3), claves = M.filas.filter(f => f.clave);
           return (
-            <button key={a} onClick={() => setAbierta(a)} className="text-left bg-white rounded-xl border border-gray-200 p-4 hover:shadow-md hover:-translate-y-px transition"
+            <button key={a} onClick={() => setAbierta(a)} className="flex flex-col text-left bg-white rounded-xl border border-gray-200 p-4 hover:shadow-md hover:-translate-y-px transition"
               style={{ borderTop: `4px solid ${COLOR[a]}` }}>
               <div className="flex items-center gap-2.5 mb-3">
                 <span className="font-bold text-lg">{NOMBRE[a]}</span>
                 <span className="ml-auto text-[11px] font-semibold text-[#0E3A53]">Ver resumen ›</span>
               </div>
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-3 gap-2 mb-3">
                 {kgs.map(f => (
                   <div key={f.t}>
                     <div className="text-[11px] uppercase tracking-wide text-gray-400 font-semibold leading-tight h-7">{f.t.replace(/ \(.*\)/, "")}</div>
@@ -385,11 +432,11 @@ export default function ReportesPage() {
                   </div>
                 ))}
               </div>
-              <div className={`mt-3 pt-2 border-t border-gray-100 grid gap-2 text-xs ${claves.length > 1 ? "grid-cols-3" : "grid-cols-2"}`}>
+              <div className={`mt-auto pt-2 border-t border-gray-100 grid gap-2 text-xs ${claves.length > 1 ? "grid-cols-3" : "grid-cols-2"}`}>
                 {claves.map(clave => (
-                  <div key={clave.t} className={clave.principal ? "rounded-lg px-2 py-1 -my-1 bg-orange-50" : ""}>
-                    <span className={clave.principal ? "font-semibold text-[#b4471d]" : "text-gray-500"}>{clave.t.replace(/ \(.*\)/, "")}</span>
-                    <div><b className={`${clave.principal ? "text-xl" : "text-base"} tabular-nums`}>{valorFila(clave, d.area[a], d)}</b></div>
+                  <div key={clave.t} className={clave.principal ? "rounded-lg px-2 py-1 -my-1" : ""} style={clave.principal ? { background: PRINCIPAL[a]?.bg } : undefined}>
+                    <span className={clave.principal ? "font-semibold" : "text-gray-500"} style={clave.principal ? { color: PRINCIPAL[a]?.fg } : undefined}>{clave.t.replace(/ \(.*\)/, "")}</span>
+                    <div className="whitespace-nowrap"><b className={`${clave.principal ? "text-xl" : "text-base"} tabular-nums`}>{valorFila(clave, d.area[a], d).replace(" lb/hr", "")}</b>{valorFila(clave, d.area[a], d).endsWith(" lb/hr") && <span className="text-gray-500"> lb/hr</span>}</div>
                     <div className="text-gray-400 tabular-nums">{acum} {valorFila(clave, ac.area[a], ac)}</div>
                   </div>
                 ))}
@@ -405,14 +452,15 @@ export default function ReportesPage() {
       <div className="bg-white rounded-xl border border-gray-200 p-5">
         <h2 className="text-base font-bold">Día a día</h2>
         <div className="text-xs text-gray-500 mb-2">Lo que trabajó cada área por día · {per === "mes" ? "el mes" : "la semana"}</div>
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
+        <div className="grid grid-cols-1 md:grid-cols-2 2xl:grid-cols-4 gap-6 items-start">
           {AREAS.map(a => {
             const v = serie.dias.map(dd => serie.valor(a, dd));
             return (
               <button key={a} onClick={() => setAbierta(a)} className="text-left rounded-lg -m-2 p-2 hover:bg-gray-50">
-                <div className="flex items-baseline justify-between">
-                  <span className="text-sm font-semibold flex items-center gap-2"><span className="w-2.5 h-2.5 rounded-sm" style={{ background: COLOR[a] }} />{NOMBRE[a]}<span className="font-normal text-gray-400">· {METRICAS[a].grafica[2]}</span></span>
-                  <span className="text-xs text-gray-500 tabular-nums">{acum} <b>{kg(v.reduce((s, x) => s + x, 0))}</b> kg</span>
+                {/* Con cuatro áreas por fila el subtítulo no cabe completo: se recorta en vez de partirse. */}
+                <div className="flex items-baseline justify-between gap-2">
+                  <span className="text-sm font-semibold flex items-center gap-2 min-w-0 whitespace-nowrap"><span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ background: COLOR[a] }} />{NOMBRE[a]}<span className="font-normal text-gray-400 truncate">· {METRICAS[a].grafica[2]}</span></span>
+                  <span className="text-xs text-gray-500 tabular-nums whitespace-nowrap shrink-0">{acum} <b>{kg(v.reduce((s, x) => s + x, 0))}</b> kg</span>
                 </div>
                 <Barras valores={v} etiquetas={serie.etiquetas} color={COLOR[a]} />
                 {a === "PELADO" && (<>
@@ -421,6 +469,13 @@ export default function ReportesPage() {
                     <span className="text-xs text-gray-500 tabular-nums">{acum} <b>{R[acum].lbHora === undefined ? "…" : R[acum].lbHora == null ? "—" : fmtNum(R[acum].lbHora, 1)}</b> lb/hr</span>
                   </div>
                   <LineaLbHora dias={serie.dias} etiquetas={serie.etiquetas} ritmo={datos.Ritmo} />
+                </>)}
+                {a === "EMPANIZADO" && (<>
+                  <div className="flex items-baseline justify-between mt-2">
+                    <span className="text-sm font-semibold">Ritmo Red Lobster <span className="font-normal text-gray-400">· lb/hr</span></span>
+                    <span className="text-xs text-gray-500 tabular-nums">{acum} <b>{R[acum].lbHoraEmp.EXPORTACION === undefined ? "…" : R[acum].lbHoraEmp.EXPORTACION == null ? "—" : fmtNum(R[acum].lbHoraEmp.EXPORTACION, 1)}</b> lb/hr</span>
+                  </div>
+                  <LineaLbHora dias={serie.dias} etiquetas={serie.etiquetas} ritmo={ritmoEmp(datos, "EXPORTACION")} color={COLOR.EMPANIZADO} />
                 </>)}
               </button>
             );
@@ -450,7 +505,9 @@ function ResumenArea({ area, R, per, datos, serie, onCerrar }) {
             <div>
               <div className="text-[11px] tracking-wider uppercase text-gray-400 font-semibold">Resumen del área</div>
               <h2 className="text-2xl font-bold flex items-center gap-2.5"><span className="w-3 h-7 rounded-sm" style={{ background: COLOR[area] }} />{NOMBRE[area]}</h2>
-              <div className="text-sm text-gray-500">{etiquetaDia(datos.Fecha)} · {datos.HojasAbiertas[area] ? `${datos.HojasAbiertas[area]} hoja(s) abierta(s)` : "sin hojas abiertas"}</div>
+              <div className="text-sm text-gray-500">{etiquetaDia(datos.Fecha)} · {area === "EMPANIZADO"
+                ? (datos.LotesEmpanizadoAbiertos ? `${datos.LotesEmpanizadoAbiertos} lote(s) abierto(s)` : "sin lotes abiertos")
+                : datos.HojasAbiertas[area] ? `${datos.HojasAbiertas[area]} hoja(s) abierta(s)` : "sin hojas abiertas"}</div>
             </div>
             <button onClick={onCerrar} className="text-2xl leading-none text-gray-400 hover:text-gray-800 px-2" aria-label="Cerrar">×</button>
           </div>
@@ -474,6 +531,10 @@ function ResumenArea({ area, R, per, datos, serie, onCerrar }) {
           {area === "PELADO" && (<>
             <h3 className="text-sm font-bold mt-4 mb-1">Ritmo de las peladoras · lb/hr</h3>
             <LineaLbHora dias={serie.dias} etiquetas={serie.etiquetas} ritmo={datos.Ritmo} alto={130} />
+          </>)}
+          {area === "EMPANIZADO" && (<>
+            <h3 className="text-sm font-bold mt-4 mb-1">Ritmo Red Lobster · lb/hr</h3>
+            <LineaLbHora dias={serie.dias} etiquetas={serie.etiquetas} ritmo={ritmoEmp(datos, "EXPORTACION")} alto={130} color={COLOR.EMPANIZADO} />
           </>)}
 
           <h3 className="text-sm font-bold mt-5 mb-2">A dónde se fue · {PERIODOS.find(p => p[0] === per)[1].toLowerCase()}</h3>
