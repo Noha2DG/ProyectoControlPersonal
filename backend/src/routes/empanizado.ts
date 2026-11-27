@@ -4,7 +4,7 @@ import { requireAuth, requirePerm, requireAnyPerm, AuthRequest } from "../middle
 import { hoyGT } from "../lib/dateGT.ts";
 import {
   ErrorEmpanizado, saldoPiso, tomarDelPiso, listarLotes, detalleLote, bajarAlPiso, registrarDescarte,
-  deshacerMovimiento, cerrarLote, reabrirLote, reporteProduccion, tiemposProduccion,
+  deshacerMovimiento, cerrarLote, reabrirLote, reporteProduccion, tiemposProduccion, ritmoAnterior,
 } from "../lib/empanizado.ts";
 import { ErrorPosicion, asignarPosicion, quitarPosicion, deshacerPosicion, validarFecha } from "../lib/posicionEmpanizado.ts";
 
@@ -100,8 +100,10 @@ router.post("/lotes/:id/reabrir", requirePerm("empanizado", "editar"), async (re
 router.get("/reporte", requirePerm("empanizado", "reporte"), async (req: AuthRequest, res: Response) => {
   try {
     const { desde, hasta } = rango(req, 62);
-    const [filas, tiempos] = await Promise.all([reporteProduccion(prisma, desde, hasta), tiemposProduccion(prisma, desde, hasta)]);
-    res.json({ desde, hasta, filas, tiempos });
+    // Un solo día: también el ritmo del día anterior trabajado, para la gráfica (usuario, 27 nov 2026).
+    const [filas, tiempos, anterior] = await Promise.all([reporteProduccion(prisma, desde, hasta), tiemposProduccion(prisma, desde, hasta),
+      desde === hasta ? ritmoAnterior(prisma, desde) : null]);
+    res.json({ desde, hasta, filas, tiempos, anterior });
   } catch (err) { responder(res, err); }
 });
 

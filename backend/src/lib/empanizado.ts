@@ -487,6 +487,25 @@ export async function tiemposProduccion(client: any, desde: string, hasta: strin
   };
 }
 
+/**
+ * Ritmo del DÍA ANTERIOR para comparar en la gráfica (usuario, 27 nov 2026): el último día con bandejas
+ * de Empanizado antes de `fecha` (el lunes se compara con el sábado), por destino y hora del reloj.
+ * Ya agregado en el servidor: [destino, hora, gramos, personas, bandejas] (unas 20 filas).
+ */
+export async function ritmoAnterior(client: any, fecha: string) {
+  // Busca hacia atrás hasta 14 días (índice FechaProduccion+BalanzaCodigo).
+  const [u]: any[] = await client.$queryRawUnsafe(`
+    SELECT DATE_FORMAT(MAX(FechaProduccion), '%Y-%m-%d') AS f FROM Pesada
+     WHERE Modo = 'EMPANIZADO' AND Anulada = 0 AND FechaProduccion < ? AND FechaProduccion >= DATE_SUB(?, INTERVAL 14 DAY)`, fecha, fecha);
+  if (!u?.f) return null;
+  const rows: any[] = await client.$queryRawUnsafe(`
+    SELECT COALESCE(Destino, 'EXPORTACION') AS d, HOUR(CreadoEn) AS h, SUM(PesoNetoG) AS g,
+           COUNT(DISTINCT PersonaCodigo) AS p, COUNT(*) AS b
+      FROM Pesada WHERE Modo = 'EMPANIZADO' AND Anulada = 0 AND PersonaCodigo IS NOT NULL AND FechaProduccion = ?
+     GROUP BY d, h`, u.f);
+  return { fecha: u.f, horas: rows.map(r => [r.d, Number(r.h), Number(r.g), Number(r.p), Number(r.b)]) };
+}
+
 export async function reporteProduccion(client: any, desde: string, hasta: string) {
   const rows: any[] = await client.$queryRawUnsafe(`
     SELECT DATE_FORMAT(p.FechaProduccion, '%Y-%m-%d') AS Fecha, p.PersonaCodigo AS Codigo,

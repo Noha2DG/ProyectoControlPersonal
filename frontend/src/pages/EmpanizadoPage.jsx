@@ -622,7 +622,8 @@ function Produccion() {
           <div className="text-xl font-extrabold tabular-nums leading-tight">{porPersona.ponderada == null ? "—" : kg(porPersona.ponderada)}</div>
         </div>
       </div>
-      {datos?.tiempos && <RitmoDelDia bandejas={bandejasDestino} ponderada={porPersona.ponderada} />}
+      {datos?.tiempos && <RitmoDelDia bandejas={bandejasDestino} ponderada={porPersona.ponderada}
+        anterior={datos.anterior ? { fecha: datos.anterior.fecha, horas: datos.anterior.horas.filter(r => deDestino(r[0])) } : null} />}
       {porPersona.length > 0 && (
         <div className="flex flex-wrap items-center gap-3 mb-2">
           <div className="relative w-full sm:w-96">
@@ -702,8 +703,9 @@ const Dato = ({ t, v, u }) => (
 
 // Ritmo del día: libras por persona en cada hora del reloj = libras pesadas en esa hora ÷ personas que
 // pesaron en esa hora (en un rango de varios días, persona-día). Línea punteada = ritmo del día
-// (Lb/hora ponderada). Una sola serie: sin leyenda, la tarjeta la nombra (usuario, 26 nov 2026).
-function RitmoDelDia({ bandejas, ponderada }) {
+// (Lb/hora ponderada). Línea gris = el día anterior trabajado a la misma hora, para comparar el ritmo
+// (usuario, 27 nov 2026); llega ya sumada del servidor: [destino, hora, gramos, personas, bandejas].
+function RitmoDelDia({ bandejas, ponderada, anterior = null }) {
   const [hover, setHover] = useState(null);
   // El ancho del dibujo = el de la pantalla, en píxeles: así la letra no se encoge en pantallas chicas
   // (usuario, 26 nov 2026); solo se acorta la gráfica.
@@ -718,14 +720,19 @@ function RitmoDelDia({ bandejas, ponderada }) {
       m.set(h, x);
     }
     if (!m.size) return [];
-    const hs = [...m.keys()], out = [];
+    const ant = new Map((anterior?.horas ?? []).map(([, h, g, p, b]) => [h, { lb: (g / 1000) * LB_POR_KG, p, b }]));
+    // El eje cubre las horas de los dos días: así se ve hasta dónde llegó ayer a esta misma hora.
+    const hs = [...m.keys(), ...ant.keys()], out = [];
     for (let h = Math.min(...hs); h <= Math.max(...hs); h++) {
-      const x = m.get(h);
+      const x = m.get(h), a = ant.get(h);
       const lb = x ? (x.g / 1000) * LB_POR_KG : 0;
-      out.push({ h, lb, b: x?.b ?? 0, personas: x?.p.size ?? 0, lbp: x ? lb / x.p.size : null });
+      out.push({ h, lb, b: x?.b ?? 0, personas: x?.p.size ?? 0, lbp: x ? lb / x.p.size : null,
+        ant: a ? { lb: a.lb, b: a.b, personas: a.p, lbp: a.lb / a.p } : null });
     }
     return out;
-  }, [bandejas]);
+  }, [bandejas, anterior]);
+  const hayAnterior = horas.some(x => x.ant);
+  const diaAnterior = anterior?.fecha ? `${anterior.fecha.slice(8, 10)}/${anterior.fecha.slice(5, 7)}` : "";
   useEffect(() => {
     const el = caja.current;
     if (!el || typeof ResizeObserver === "undefined") return undefined;
@@ -736,7 +743,7 @@ function RitmoDelDia({ bandejas, ponderada }) {
   if (!horas.length) return <div ref={caja} />;
 
   const W = anchoPx, H = 180, L = 34, R = 14, T = 20, B = 24; // 180 px de alto fijo (usuario, 26 nov 2026: "más pequeña")
-  const vals = horas.map(x => x.lbp).filter(v => v != null);
+  const vals = horas.flatMap(x => [x.lbp, x.ant?.lbp]).filter(v => v != null);
   const bruto = Math.max(...vals, ponderada ?? 0) * 1.15;
   const paso = [1, 2, 2.5, 5, 10, 20, 25, 50].find(s => bruto / s <= 3) ?? 100;
   const tope = Math.ceil(bruto / paso) * paso;
@@ -759,6 +766,12 @@ function RitmoDelDia({ bandejas, ponderada }) {
     const abajo = (valle && y + 16 < H - B) || y - 10 < 10;
     return { y: abajo ? y + 16 : y - 9, ancla: n > 1 && i === 0 ? "start" : n > 1 && i === n - 1 ? "end" : "middle" };
   };
+  let dAnt = "", abiertoAnt = false;
+  horas.forEach((x, i) => {
+    if (x.ant == null) { abiertoAnt = false; return; }
+    dAnt += `${abiertoAnt ? "L" : "M"}${X(i)},${Y(x.ant.lbp)} `; abiertoAnt = true;
+  });
+  const GRIS_ANT = "#a8a29e"; // stone-400: el día anterior es referencia, no compite con el de hoy
   const etiqueta = h => `${h}:00`;
   const hv = hover != null ? horas[hover] : null;
 
@@ -767,12 +780,24 @@ function RitmoDelDia({ bandejas, ponderada }) {
       <div className="flex flex-wrap items-baseline gap-x-3 mb-1">
         <h3 className="font-bold text-stone-800">Ritmo del día</h3>
         <p className="text-xs text-stone-500">Libras por persona en cada hora: lo pesado en esa hora ÷ las personas que pesaron.</p>
-        {ponderada != null && (
-          <span className="ml-auto flex items-center gap-1.5 text-xs font-semibold text-stone-600">
-            <svg width="22" height="6" aria-hidden="true"><line x1="0" x2="22" y1="3" y2="3" stroke="#78716c" strokeWidth="1.5" strokeDasharray="5 4" /></svg>
-            ritmo del día {kg(ponderada)}
-          </span>
-        )}
+        <span className="ml-auto flex flex-wrap items-center gap-x-4 gap-y-1 text-xs font-semibold text-stone-600">
+          {hayAnterior && (<>
+            <span className="flex items-center gap-1.5">
+              <svg width="22" height="8" aria-hidden="true"><line x1="0" x2="22" y1="4" y2="4" stroke={AMBAR} strokeWidth="2" /><circle cx="11" cy="4" r="3" fill={AMBAR} /></svg>
+              este día
+            </span>
+            <span className="flex items-center gap-1.5">
+              <svg width="22" height="8" aria-hidden="true"><line x1="0" x2="22" y1="4" y2="4" stroke={GRIS_ANT} strokeWidth="2" /><circle cx="11" cy="4" r="3" fill={GRIS_ANT} /></svg>
+              día anterior ({diaAnterior})
+            </span>
+          </>)}
+          {ponderada != null && (
+            <span className="flex items-center gap-1.5">
+              <svg width="22" height="6" aria-hidden="true"><line x1="0" x2="22" y1="3" y2="3" stroke="#78716c" strokeWidth="1.5" strokeDasharray="5 4" /></svg>
+              ritmo del día {kg(ponderada)}
+            </span>
+          )}
+        </span>
       </div>
       <div ref={caja} className="relative" onMouseLeave={() => setHover(null)}>
         <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H} className="block" role="img"
@@ -792,6 +817,11 @@ function RitmoDelDia({ bandejas, ponderada }) {
             </g>
           )}
           {hv && <line x1={X(hover)} x2={X(hover)} y1={T - 6} y2={H - B} stroke="#d6d3d1" strokeWidth="1" />}
+          {/* Día anterior debajo de la de hoy: gris, sin etiquetas fijas (el valor sale al pasar el mouse). */}
+          <path d={dAnt} fill="none" stroke={GRIS_ANT} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
+          {horas.map((x, i) => x.ant != null && (
+            <circle key={`a${x.h}`} cx={X(i)} cy={Y(x.ant.lbp)} r={hover === i ? 5 : 3} fill={GRIS_ANT} stroke="#fff" strokeWidth="1.5" />
+          ))}
           <path d={d} fill="none" stroke={AMBAR} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
           {horas.map((x, i) => x.lbp != null && (
             <circle key={x.h} cx={X(i)} cy={Y(x.lbp)} r={hover === i ? 6 : 4} fill={AMBAR} stroke="#fff" strokeWidth="2" />
@@ -813,21 +843,29 @@ function RitmoDelDia({ bandejas, ponderada }) {
           <div className="pointer-events-none absolute top-0 z-10 rounded-lg bg-stone-800 text-white text-xs px-3 py-2 shadow-lg whitespace-nowrap"
             style={{ left: `${(X(hover) / W) * 100}%`, transform: `translateX(${X(hover) > W * 0.75 ? "-105%" : "8px"})` }}>
             <div className="font-bold mb-0.5">{etiqueta(hv.h)} – {etiqueta(hv.h + 1)}</div>
-            {hv.lbp == null ? <div className="text-stone-300">Sin bandejas</div> : (<>
-              <div><span className="font-bold text-amber-300">{kg(hv.lbp)}</span> lb por persona</div>
+            {hv.lbp == null ? <div className="text-stone-300">{hayAnterior ? "Este día: sin bandejas" : "Sin bandejas"}</div> : (<>
+              <div>{hayAnterior && "Este día: "}<span className="font-bold text-amber-300">{kg(hv.lbp)}</span> lb por persona</div>
               <div className="text-stone-300">{kg(hv.lb)} lb · {hv.b.toLocaleString("es-GT")} bandejas · {hv.personas} personas</div>
             </>)}
+            {hayAnterior && (hv.ant ? (<>
+              <div className="mt-1">Día anterior ({diaAnterior}): <span className="font-bold text-stone-200">{kg(hv.ant.lbp)}</span> lb por persona</div>
+              {hv.lbp != null && (() => {
+                const dif = hv.lbp - hv.ant.lbp;
+                return <div className={dif >= 0 ? "text-emerald-300" : "text-red-300"}>{dif >= 0 ? "▲ +" : "▼ "}{kg(dif)} lb por persona vs. día anterior</div>;
+              })()}
+            </>) : <div className="mt-1 text-stone-400">Día anterior ({diaAnterior}): sin bandejas</div>)}
           </div>
         )}
       </div>
       <details className="mt-1 text-xs">
         <summary className="cursor-pointer text-stone-500 hover:text-stone-700">Ver por hora</summary>
         <table className="mt-2 w-full max-w-xl text-xs tabular-nums">
-          <thead><tr className="text-stone-500 text-left"><th className="py-1">Hora</th><th className="text-right">Personas</th><th className="text-right">Bandejas</th><th className="text-right">Libras</th><th className="text-right">Lb por persona</th></tr></thead>
+          <thead><tr className="text-stone-500 text-left"><th className="py-1">Hora</th><th className="text-right">Personas</th><th className="text-right">Bandejas</th><th className="text-right">Libras</th><th className="text-right">Lb por persona</th>{hayAnterior && <th className="text-right">Día anterior ({diaAnterior})</th>}</tr></thead>
           <tbody className="divide-y divide-stone-100">
             {horas.map(x => (
-              <tr key={x.h}><td className="py-0.5">{etiqueta(x.h)} – {etiqueta(x.h + 1)}</td><td className="text-right">{x.personas}</td>
-                <td className="text-right">{x.b.toLocaleString("es-GT")}</td><td className="text-right">{kg(x.lb)}</td><td className="text-right font-semibold">{x.lbp == null ? "—" : kg(x.lbp)}</td></tr>
+              <tr key={x.h}><td className="py-0.5">{etiqueta(x.h)} – {etiqueta(x.h + 1)}</td><td className="text-right">{x.b ? x.personas : "—"}</td>
+                <td className="text-right">{x.b ? x.b.toLocaleString("es-GT") : "—"}</td><td className="text-right">{x.b ? kg(x.lb) : "—"}</td><td className="text-right font-semibold">{x.lbp == null ? "—" : kg(x.lbp)}</td>
+                {hayAnterior && <td className="text-right text-stone-500">{x.ant ? kg(x.ant.lbp) : "—"}</td>}</tr>
             ))}
           </tbody>
         </table>
