@@ -67,6 +67,19 @@ async function empleadoActivo(tx: any, codigo: string) {
   return e ?? null;
 }
 
+// Empanizado (usuario, 27 nov 2026): solo pesa la bandeja de quien VINO A TRABAJAR, es decir, quien
+// tiene una Entrada en Movimientos ese día. No se exige estar en el área en ese momento (como en
+// Destajo): la bandeja queda en el carrito y se pesa después, cuando la persona puede estar en el
+// baño, en la cafetería o ya haber marcado salida (el 26 nov eso fueron 107 bandejas buenas).
+async function vinoATrabajar(tx: any, codigo: string, fecha: string) {
+  const [m]: any[] = await tx.$queryRaw`
+    SELECT 1 AS ok FROM Movimientos
+     WHERE Codigo = ${codigo} AND Tipo = 'Entrada' AND FechaHora >= ${fecha} AND FechaHora < ${fecha} + INTERVAL 1 DAY LIMIT 1`;
+  return !!m;
+}
+const sinEntrada = (nombre: string, codigo: string) =>
+  `${nombre} (${codigo}) no ha marcado entrada hoy: que marque en el reloj antes de pesar sus bandejas`;
+
 /** Área donde está hoy la persona: su transferencia abierta (kiosco de áreas). */
 async function areaActual(tx: any, codigo: string) {
   const [a]: any[] = await tx.$queryRaw`
@@ -122,11 +135,15 @@ async function exigirSesionAbierta(tx: any, id: number) {
   return s;
 }
 
-// GET /api/pesaje-bascula/persona/:codigo — para mostrar el nombre del carnet escaneado.
+// GET /api/pesaje-bascula/persona/:codigo[?modo=EMPANIZADO] — para mostrar el nombre del carnet
+// escaneado. En Empanizado avisa desde el escaneo si la persona no marcó entrada hoy (el POST lo exige).
 router.get("/persona/:codigo", requirePerm("pesaje_bascula", "usar"), async (req: AuthRequest, res: Response) => {
   try {
     const e = await empleadoActivo(prisma, String(req.params.codigo).trim().toUpperCase());
     if (!e) { res.status(404).json({ error: "Carnet no encontrado o empleado de baja" }); return; }
+    if (req.query.modo === "EMPANIZADO" && !(await vinoATrabajar(prisma, e.Codigo, hoyGT()))) {
+      res.status(400).json({ error: sinEntrada(e.NombreCompleto, e.Codigo) }); return;
+    }
     res.json({ ...e, Posicion: await posicionSegura(prisma, e.Codigo, hoyGT()) });
   } catch (err: any) { responder(res, err); }
 });
@@ -406,7 +423,9 @@ router.post("/pesadas", requirePerm("pesaje_bascula", "usar"), async (req: AuthR
       if (pt) {
         persona = String(b.PersonaCodigo ?? "").trim().toUpperCase();
         if (!persona) throw new ErrorNegocio(400, "Escanee el carnet de quien armó esta bandeja");
-        if (!(await empleadoActivo(tx, persona))) throw new ErrorNegocio(400, `${persona}: carnet no encontrado o de baja`);
+        const quien = await empleadoActivo(tx, persona);
+        if (!quien) throw new ErrorNegocio(400, `${persona}: carnet no encontrado o de baja`);
+        if (emp_ && !(await vinoATrabajar(tx, persona, s.FechaProduccion))) throw new ErrorNegocio(400, sinEntrada(quien.NombreCompleto, persona));
       }
       // La posición que la persona tiene HOY queda en la pesada: si mañana la mueven, esto no cambia.
       const pos = emp_ && persona ? await posicionSegura(tx, persona, s.FechaProduccion) : null;

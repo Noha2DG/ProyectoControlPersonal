@@ -307,7 +307,7 @@ function Pesaje({ sesion, b, onCerrar, onMenu }) {
 
   const leerCarnet = async (codigo) => {
     setErrorCarnet("");
-    try { setPersona(await api(`/api/pesaje-bascula/persona/${encodeURIComponent(codigo)}`)); actividadRef.current = Date.now(); }
+    try { setPersona(await api(`/api/pesaje-bascula/persona/${encodeURIComponent(codigo)}${empz ? "?modo=EMPANIZADO" : ""}`)); actividadRef.current = Date.now(); }
     catch (e) { setErrorCarnet(e.message); }
     finally { setCarnetCaja(""); }
   };
