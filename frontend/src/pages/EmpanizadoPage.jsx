@@ -860,12 +860,13 @@ function RitmoDelDia({ bandejas, ponderada, anterior = null }) {
       <details className="mt-1 text-xs">
         <summary className="cursor-pointer text-stone-500 hover:text-stone-700">Ver por hora</summary>
         <table className="mt-2 w-full max-w-xl text-xs tabular-nums">
-          <thead><tr className="text-stone-500 text-left"><th className="py-1">Hora</th><th className="text-right">Personas</th><th className="text-right">Bandejas</th><th className="text-right">Libras</th><th className="text-right">Lb por persona</th>{hayAnterior && <th className="text-right">Día anterior ({diaAnterior})</th>}</tr></thead>
+          <thead><tr className="text-stone-500 text-left"><th className="py-1">Hora</th><th className="text-right">Personas</th><th className="text-right pl-4">Libras</th><th className="text-right">Lb por persona</th>
+            {hayAnterior && <><th className="text-right pl-4">Libras {diaAnterior}</th><th className="text-right">Lb por persona {diaAnterior}</th></>}</tr></thead>
           <tbody className="divide-y divide-stone-100">
             {horas.map(x => (
               <tr key={x.h}><td className="py-0.5">{etiqueta(x.h)} – {etiqueta(x.h + 1)}</td><td className="text-right">{x.b ? x.personas : "—"}</td>
-                <td className="text-right">{x.b ? x.b.toLocaleString("es-GT") : "—"}</td><td className="text-right">{x.b ? kg(x.lb) : "—"}</td><td className="text-right font-semibold">{x.lbp == null ? "—" : kg(x.lbp)}</td>
-                {hayAnterior && <td className="text-right text-stone-500">{x.ant ? kg(x.ant.lbp) : "—"}</td>}</tr>
+                <td className="text-right pl-4">{x.b ? kg(x.lb) : "—"}</td><td className="text-right font-semibold">{x.lbp == null ? "—" : kg(x.lbp)}</td>
+                {hayAnterior && <><td className="text-right text-stone-500 pl-4">{x.ant ? kg(x.ant.lb) : "—"}</td><td className="text-right text-stone-500">{x.ant ? kg(x.ant.lbp) : "—"}</td></>}</tr>
             ))}
           </tbody>
         </table>
