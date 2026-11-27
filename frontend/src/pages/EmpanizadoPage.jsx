@@ -507,13 +507,27 @@ function Produccion() {
   const [buscar, setBuscar] = useState("");
   const [orden, setOrden] = useState("banda"); // "banda" | "ranking"
   const [verRanking, setVerRanking] = useState(false);
+  // Exportación y venta local por separado (usuario, 27 nov 2026): son trabajos y pagos distintos. Todo
+  // el reporte (tarjetas, gráfica, tabla, Excel y Ranking PDF) es del destino elegido.
+  const [destino, setDestino] = useState("EXPORTACION");
+  const titulo = DESTINOS_REPORTE[destino].titulo;
 
   const cargar = useCallback(() => { setError(""); return pedir(`${API}/reporte?desde=${desde}&hasta=${hasta}`).then(setDatos).catch(e => setError(e.message)); }, [desde, hasta]);
   useEffect(() => { cargar(); }, [cargar]);
 
+  // Sin destino (no debería haber) cuenta como exportación.
+  const deDestino = (d) => (d === "LOCAL" ? "LOCAL" : "EXPORTACION") === destino;
+  const filas = useMemo(() => (datos?.filas ?? []).filter(f => deDestino(f.Destino)), [datos, destino]); // eslint-disable-line react-hooks/exhaustive-deps
+  const bandejasDestino = useMemo(() => (datos?.tiempos?.bandejas ?? []).filter(b => deDestino(b[3])), [datos, destino]); // eslint-disable-line react-hooks/exhaustive-deps
+  const cuenta = useMemo(() => {
+    const c = { EXPORTACION: 0, LOCAL: 0 };
+    for (const f of datos?.filas ?? []) c[f.Destino === "LOCAL" ? "LOCAL" : "EXPORTACION"] += f.Bandejas;
+    return c;
+  }, [datos]);
+
   const porPersona = useMemo(() => {
     const m = new Map();
-    for (const f of datos?.filas ?? []) {
+    for (const f of filas) {
       const x = m.get(f.Codigo) ?? { Codigo: f.Codigo, Nombre: f.Nombre, MesaCodigo: f.MesaCodigo, MesaNombre: f.MesaNombre, Posicion: f.Posicion, Bandejas: 0, Kg: 0, BajoPeso: 0, SobrePeso: 0, Dias: new Set(), filas: [] };
       x.Bandejas += f.Bandejas; x.Kg += f.Kg; x.BajoPeso += f.BajoPeso ?? 0; x.SobrePeso += f.SobrePeso ?? 0; x.Dias.add(f.Fecha); x.filas.push(f);
       if (f.MesaCodigo) { x.MesaCodigo = f.MesaCodigo; x.MesaNombre = f.MesaNombre; x.Posicion = f.Posicion; } // la más reciente
@@ -532,7 +546,7 @@ function Produccion() {
         for (const [i, s] of entradasDe.get(c) ?? []) if (i <= h && (s == null || s >= h) && (mejor == null || i > mejor)) mejor = i;
         return mejor;
       };
-      const pesadas = t.bandejas.map(([c, h, g]) => ({ IdEmpleado: c, Nombre: c, FechaHora: h, Kilos: g / 1000, EntradaArea: entrada(c, h) }));
+      const pesadas = bandejasDestino.map(([c, h, g]) => ({ IdEmpleado: c, Nombre: c, FechaHora: h, Kilos: g / 1000, EntradaArea: entrada(c, h) }));
       const pausas = t.pausas.map(([c, i, s]) => ({ IdEmpleado: c, FechaHora: i, FechaSalida: s }));
       const filasLb = calcularLbHora(pesadas, () => ({ key: "EMPANIZADO", campos: {} }), pausas);
       for (const f of filasLb) tasa.set(f.IdEmpleado, f.LbPorHora);
@@ -542,7 +556,7 @@ function Produccion() {
       .sort((a, b) => (a.MesaCodigo == null) - (b.MesaCodigo == null) || String(a.MesaNombre ?? "").localeCompare(String(b.MesaNombre ?? ""), "es", { numeric: true }) || (a.Posicion ?? 0) - (b.Posicion ?? 0));
     lista.ponderada = ponderada;
     return lista;
-  }, [datos]);
+  }, [datos, filas, bandejasDestino]);
   const tot = porPersona.reduce((s, p) => ({ b: s.b + p.Bandejas, lb: s.lb + p.Lb }), { b: 0, lb: 0 });
   // Buscador (usuario, 26 nov 2026): filtra SOLO la tabla; tarjetas, ponderada, gráfica y Excel siguen
   // siendo del día completo. Un número solo = esa posición exacta; el nombre de una banda = esa banda;
@@ -570,13 +584,28 @@ function Produccion() {
 
   return (
     <div>
+      <div className="flex flex-wrap items-end justify-between gap-3 mb-3">
+        <div>
+          <p className="text-[11px] uppercase tracking-[0.2em] font-semibold text-amber-700">Producción por persona · {DESTINOS_REPORTE[destino].sub}</p>
+          <h2 className="text-2xl font-black text-stone-900 leading-tight">{titulo}</h2>
+        </div>
+        <div className="inline-flex rounded-xl border border-stone-300 bg-white p-1 text-sm" role="group" aria-label="Destino del reporte">
+          {Object.entries(DESTINOS_REPORTE).map(([v, d]) => (
+            <button key={v} onClick={() => { setDestino(v); setAbierta(null); }} aria-pressed={destino === v}
+              className={`px-3 py-1.5 rounded-lg font-semibold transition flex items-center gap-2 ${destino === v ? "bg-amber-600 text-white" : "text-stone-600 hover:bg-stone-100"}`}>
+              {d.titulo}
+              <span className={`text-xs tabular-nums rounded-md px-1.5 ${destino === v ? "bg-white/20" : "bg-stone-100 text-stone-500"}`}>{cuenta[v].toLocaleString("es-GT")}</span>
+            </button>
+          ))}
+        </div>
+      </div>
       <div className="flex flex-wrap items-center gap-2 mb-4 text-sm">
         <span className="text-gray-600">Del</span>
         <input type="date" value={desde} onChange={e => setDesde(e.target.value)} className="border border-gray-300 rounded-lg px-2 py-1.5" />
         <span className="text-gray-600">al</span>
         <input type="date" value={hasta} onChange={e => setHasta(e.target.value)} className="border border-gray-300 rounded-lg px-2 py-1.5" />
         <button onClick={cargar} className="px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200">Actualizar</button>
-        <button disabled={!datos?.filas?.length} onClick={() => exportarProduccionEmpanizado(porPersona, datos.filas, desde, hasta)}
+        <button disabled={!filas.length} onClick={() => exportarProduccionEmpanizado(porPersona, filas, desde, hasta, titulo)}
           className="ml-auto px-4 py-1.5 rounded-lg bg-emerald-600 text-white font-semibold hover:bg-emerald-700 disabled:opacity-40">Excel</button>
       </div>
       <Aviso>{error}</Aviso>
@@ -593,7 +622,7 @@ function Produccion() {
           <div className="text-xl font-extrabold tabular-nums leading-tight">{porPersona.ponderada == null ? "—" : kg(porPersona.ponderada)}</div>
         </div>
       </div>
-      {datos?.tiempos && <RitmoDelDia bandejas={datos.tiempos.bandejas} ponderada={porPersona.ponderada} />}
+      {datos?.tiempos && <RitmoDelDia bandejas={bandejasDestino} ponderada={porPersona.ponderada} />}
       {porPersona.length > 0 && (
         <div className="flex flex-wrap items-center gap-3 mb-2">
           <div className="relative w-full sm:w-96">
@@ -649,7 +678,7 @@ function Produccion() {
       </div>
       <p className="mt-2 text-xs text-gray-500">Solo bandejas guardadas y no anuladas, pesadas en modo Empanizado. Lb/hora: mismo cálculo que destajo (desde la entrada al área del día hasta cada bandeja, sin cafetería ni permisos); la ponderada es el total de libras válidas entre el total de horas. "—" = sin entrada al área ese día. Lb/hora en rojo: menos de 4; en verde: 4 o más. La posición es la que la persona tenía el día que pesó.</p>
       {verRanking && (
-        <RankingEmpanizadoModal lista={ranking} desde={desde} hasta={hasta} onCerrar={() => setVerRanking(false)}
+        <RankingEmpanizadoModal lista={ranking} desde={desde} hasta={hasta} marca={titulo} onCerrar={() => setVerRanking(false)}
           totales={{ personas: porPersona.length, bandejas: tot.b, lb: tot.lb, ponderada: porPersona.ponderada }} />
       )}
     </div>
@@ -657,6 +686,12 @@ function Produccion() {
 }
 
 const AMBAR = "#D97706"; // amber-600: el color de Empanizado; validado (contraste ≥ 3:1 sobre blanco)
+// Títulos del reporte por destino (usuario, 27 nov 2026): la exportación es para Pescanova y se rotula
+// con su marca, "Red Lobster"; si mañana hay otro cliente de exportación, este es el lugar.
+const DESTINOS_REPORTE = {
+  EXPORTACION: { titulo: "Red Lobster", sub: "exportación" },
+  LOCAL: { titulo: "Empanizado venta local", sub: "venta local" },
+};
 
 const Dato = ({ t, v, u }) => (
   <div className="rounded-lg bg-white shadow-sm border-l-4 border-amber-200 px-3 py-1.5 min-w-[6.5rem]">

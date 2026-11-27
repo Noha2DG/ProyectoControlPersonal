@@ -49,7 +49,7 @@ function Podio({ p }) {
   );
 }
 
-export function ContenidoRankingEmpanizado({ lista, desde, hasta, totales }) {
+export function ContenidoRankingEmpanizado({ lista, desde, hasta, totales, marca = "Empanizado" }) {
   const periodo = desde === hasta ? fmtDia(desde) : `${fmtDia(desde)} al ${fmtDia(hasta)}`;
   const top = lista.slice(0, 3);
   // Orden del podio en la hoja: 2.º, 1.º, 3.º (el primero al centro y más alto).
@@ -60,7 +60,7 @@ export function ContenidoRankingEmpanizado({ lista, desde, hasta, totales }) {
       {/* Encabezado: franja ámbar con el título; a la derecha, el período. */}
       <div className="flex items-stretch justify-between rounded-xl overflow-hidden mb-3" style={{ background: "#D97706" }}>
         <div className="px-5 py-3 text-white">
-          <p className="text-[10px] uppercase tracking-[0.25em] font-semibold" style={{ color: "#FEF3C7" }}>Empanizado · producción por persona</p>
+          <p className="text-[10px] uppercase tracking-[0.25em] font-semibold" style={{ color: "#FEF3C7" }}>{marca} · producción por persona</p>
           <h1 className="text-[26px] font-black leading-tight">Ranking de bandejas</h1>
         </div>
         <div className="px-5 py-3 text-right flex flex-col justify-center" style={{ background: "#B45309", color: "#FFFBEB" }}>
@@ -138,14 +138,14 @@ export function ContenidoRankingEmpanizado({ lista, desde, hasta, totales }) {
   );
 }
 
-export default function RankingEmpanizadoModal({ lista, desde, hasta, totales, onCerrar }) {
+export default function RankingEmpanizadoModal({ lista, desde, hasta, totales, marca = "Empanizado", onCerrar }) {
   // El nombre del PDF lo pone el navegador a partir del título de la página.
   useEffect(() => {
     const antes = document.title;
     const periodo = desde === hasta ? fmtDia(desde) : `${fmtDia(desde)} al ${fmtDia(hasta)}`;
-    document.title = `Ranking Empanizado ${periodo.replaceAll("/", "-")}`;
+    document.title = `Ranking ${marca} ${periodo.replaceAll("/", "-")}`;
     return () => { document.title = antes; };
-  }, [desde, hasta]);
+  }, [desde, hasta, marca]);
 
   return (
     <>
@@ -154,7 +154,7 @@ export default function RankingEmpanizadoModal({ lista, desde, hasta, totales, o
         onClick={(e) => { if (e.target === e.currentTarget) onCerrar(); }}>
         <div className="bg-white rounded-2xl shadow-xl w-full max-w-4xl max-h-full min-w-0 flex flex-col">
           <div className="px-6 py-4 border-b flex items-center justify-between shrink-0">
-            <h2 className="text-base font-semibold text-gray-800">Ranking de Empanizado — vista previa</h2>
+            <h2 className="text-base font-semibold text-gray-800">Ranking {marca} — vista previa</h2>
             <div className="flex items-center gap-2">
               <button onClick={() => window.print()}
                 className="px-4 py-2 rounded-lg text-sm font-semibold bg-blue-600 text-white hover:bg-blue-700 transition">
@@ -164,7 +164,7 @@ export default function RankingEmpanizadoModal({ lista, desde, hasta, totales, o
             </div>
           </div>
           <div className="px-8 py-6 overflow-auto">
-            <ContenidoRankingEmpanizado lista={lista} desde={desde} hasta={hasta} totales={totales} />
+            <ContenidoRankingEmpanizado lista={lista} desde={desde} hasta={hasta} totales={totales} marca={marca} />
           </div>
         </div>
       </div>
@@ -172,7 +172,7 @@ export default function RankingEmpanizadoModal({ lista, desde, hasta, totales, o
       {createPortal(
         <div className="hidden print:block">
           <style>{"@media print { @page { size: letter; margin: 1.2cm; } }"}</style>
-          <ContenidoRankingEmpanizado lista={lista} desde={desde} hasta={hasta} totales={totales} />
+          <ContenidoRankingEmpanizado lista={lista} desde={desde} hasta={hasta} totales={totales} marca={marca} />
         </div>,
         document.getElementById("print-root")
       )}

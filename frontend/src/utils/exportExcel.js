@@ -505,7 +505,7 @@ export function exportarPesadasBascula(filas, desde, hasta) {
 
 // Empanizado → Producción por persona (20 nov 2026): base del pago de Empanizado, aparte de Pelado.
 // Hoja 1 un renglón por persona; hoja 2 el detalle por día, lote, producto y destino.
-export function exportarProduccionEmpanizado(porPersona, filas, desde, hasta) {
+export function exportarProduccionEmpanizado(porPersona, filas, desde, hasta, titulo = "Empanizado") {
   const fecha = (iso) => {
     const [a, m, d] = String(iso ?? "").slice(0, 10).split("-").map(Number);
     return a ? new Date(a, m - 1, d) : null;
@@ -529,5 +529,6 @@ export function exportarProduccionEmpanizado(porPersona, filas, desde, hasta) {
   const ws2 = XLSX.utils.json_to_sheet(detalle, { cellDates: true });
   autoWidth(ws2, detalle);
   XLSX.utils.book_append_sheet(wb, ws2, "Detalle");
-  XLSX.writeFile(wb, `Empanizado_produccion_${desde}_a_${hasta}.xlsx`);
+  // Un archivo por destino (Red Lobster / Empanizado venta local): el nombre lo dice.
+  XLSX.writeFile(wb, `${titulo.replace(/\s+/g, "_")}_produccion_${desde}_a_${hasta}.xlsx`);
 }

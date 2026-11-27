@@ -467,7 +467,7 @@ export async function tiemposProduccion(client: any, desde: string, hasta: strin
                      WHERE Modo = 'EMPANIZADO' AND Anulada = 0 AND PersonaCodigo IS NOT NULL AND FechaProduccion BETWEEN ? AND ?`;
   const [bandejas, entradas, pausas]: any[][] = await Promise.all([
     client.$queryRawUnsafe(`
-      SELECT PersonaCodigo AS c, DATE_FORMAT(CreadoEn, ${F}) AS t, PesoNetoG AS g FROM Pesada
+      SELECT PersonaCodigo AS c, DATE_FORMAT(CreadoEn, ${F}) AS t, PesoNetoG AS g, Destino AS d FROM Pesada
        WHERE Modo = 'EMPANIZADO' AND Anulada = 0 AND PersonaCodigo IS NOT NULL AND FechaProduccion BETWEEN ? AND ?`, desde, hasta),
     client.$queryRawUnsafe(`
       SELECT tr.Codigo AS c, DATE_FORMAT(tr.FechaHora, ${F}) AS i, DATE_FORMAT(tr.FechaSalida, ${F}) AS s FROM Transferencias tr
@@ -480,7 +480,8 @@ export async function tiemposProduccion(client: any, desde: string, hasta: strin
          AND (tr.FechaSalida IS NULL OR tr.FechaSalida >= ?)`, desde, hasta, hasta, desde),
   ]);
   return {
-    bandejas: bandejas.map(b => [b.c, b.t, Number(b.g)]),
+    // 4.º elemento = destino (EXPORTACION / LOCAL): la pantalla separa Red Lobster de venta local (27 nov 2026).
+    bandejas: bandejas.map(b => [b.c, b.t, Number(b.g), b.d]),
     entradas: entradas.map(e => [e.c, e.i, e.s]),
     pausas: pausas.map(e => [e.c, e.i, e.s]),
   };
