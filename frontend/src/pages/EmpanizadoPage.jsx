@@ -701,6 +701,17 @@ const Dato = ({ t, v, u }) => (
   </div>
 );
 
+// Diferencia de libras contra el día anterior: ▲ verde si este día va arriba, ▼ rojo si va abajo, con el %.
+function DifLibras({ hoy, antes }) {
+  if (hoy == null || !antes) return <span className="text-stone-400">—</span>;
+  const dif = hoy - antes, pct = (dif / antes) * 100;
+  return (
+    <span className={dif >= 0 ? "text-emerald-700" : "text-red-700"}>
+      {dif >= 0 ? "▲ +" : "▼ "}{kg(dif)} <span className="text-[10px] opacity-80">({dif >= 0 ? "+" : ""}{pct.toFixed(1)} %)</span>
+    </span>
+  );
+}
+
 // Ritmo del día: libras por persona en cada hora del reloj = libras pesadas en esa hora ÷ personas que
 // pesaron en esa hora (en un rango de varios días, persona-día). Línea punteada = ritmo del día
 // (Lb/hora ponderada). Línea gris = el día anterior trabajado a la misma hora, para comparar el ritmo
@@ -859,16 +870,31 @@ function RitmoDelDia({ bandejas, ponderada, anterior = null }) {
       </div>
       <details className="mt-1 text-xs">
         <summary className="cursor-pointer text-stone-500 hover:text-stone-700">Ver por hora</summary>
-        <table className="mt-2 w-full max-w-xl text-xs tabular-nums">
+        <table className="mt-2 w-full max-w-3xl text-xs tabular-nums">
           <thead><tr className="text-stone-500 text-left"><th className="py-1">Hora</th><th className="text-right">Personas</th><th className="text-right pl-4">Libras</th><th className="text-right">Lb por persona</th>
-            {hayAnterior && <><th className="text-right pl-4">Libras {diaAnterior}</th><th className="text-right">Lb por persona {diaAnterior}</th></>}</tr></thead>
+            {hayAnterior && <><th className="text-right pl-4">Libras {diaAnterior}</th><th className="text-right">Lb por persona {diaAnterior}</th><th className="text-right pl-4">Dif. libras</th></>}</tr></thead>
           <tbody className="divide-y divide-stone-100">
             {horas.map(x => (
               <tr key={x.h}><td className="py-0.5">{etiqueta(x.h)} – {etiqueta(x.h + 1)}</td><td className="text-right">{x.b ? x.personas : "—"}</td>
                 <td className="text-right pl-4">{x.b ? kg(x.lb) : "—"}</td><td className="text-right font-semibold">{x.lbp == null ? "—" : kg(x.lbp)}</td>
-                {hayAnterior && <><td className="text-right text-stone-500 pl-4">{x.ant ? kg(x.ant.lb) : "—"}</td><td className="text-right text-stone-500">{x.ant ? kg(x.ant.lbp) : "—"}</td></>}</tr>
+                {hayAnterior && <><td className="text-right text-stone-500 pl-4">{x.ant ? kg(x.ant.lb) : "—"}</td><td className="text-right text-stone-500">{x.ant ? kg(x.ant.lbp) : "—"}</td>
+                  <td className="text-right pl-4"><DifLibras hoy={x.b ? x.lb : null} antes={x.ant?.lb ?? null} /></td></>}</tr>
             ))}
           </tbody>
+          {/* Comparación de libras a la MISMA hora: solo las horas que este día ya tiene (usuario, 27 nov 2026). */}
+          {hayAnterior && (() => {
+            const con = horas.filter(x => x.b);
+            if (!con.length) return null;
+            const hoy = con.reduce((t, x) => t + x.lb, 0), antes = con.reduce((t, x) => t + (x.ant?.lb ?? 0), 0);
+            return (
+              <tfoot><tr className="border-t-2 border-stone-300 font-semibold">
+                <td className="py-1" colSpan={2}>Total hasta las {etiqueta(con[con.length - 1].h + 1)}</td>
+                <td className="text-right pl-4">{kg(hoy)}</td><td />
+                <td className="text-right pl-4 text-stone-500">{kg(antes)}</td><td />
+                <td className="text-right pl-4"><DifLibras hoy={hoy} antes={antes} /></td>
+              </tr></tfoot>
+            );
+          })()}
         </table>
       </details>
     </div>
