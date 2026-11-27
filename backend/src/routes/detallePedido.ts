@@ -641,16 +641,28 @@ router.get("/cuadre", requireAuth, requireAnyPerm([["pedidos", "ver"], ["etiquet
       SELECT dp.DetalleId, dp.Proceso, dp.Clase, dp.Talla, dp.Presentacion, dp.EsGranel, dp.KgPedido,
              dp.CantidadCajas, pr.CajasXMaster,
              COALESCE(f.enBodega, 0) AS EnBodegaMaster,
-             COALESCE(f.enBodega, 0) * pr.PesoKG * pr.CajasXMaster AS EnBodegaKg
+             COALESCE(f.enBodega, 0) * pr.PesoKG * pr.CajasXMaster AS EnBodegaKg,
+             COALESCE(f.cargado, 0) AS CargadoMaster,
+             COALESCE(f.cargado, 0) * pr.PesoKG * pr.CajasXMaster AS CargadoKg
       FROM DetallePedido dp
       JOIN Presentacion pr ON pr.Codigo = dp.Presentacion
       LEFT JOIN (
-        SELECT oe.DetalleId, COUNT(*) AS enBodega
+        -- Cargado = escaneado en una remisión vigente (borrador o confirmada) de una serie que va a
+        -- Cliente. Desde el 27 nov 2026 cuenta para el avance: el master sale de bodega al escanearse
+        -- en la remisión, y con dos equipos (uno metiendo producción, otro cargando el contenedor) el
+        -- avance bajaba mientras se cargaba (025-2026: 31/35 y 36/40 completos se veían en ~2 %).
+        -- Los traslados internos (Destino 'Area') siguen sin contar, como se decidió el 28 oct.
+        -- Hay a lo sumo una remisión vigente por master (UNIQUE (MasterId, Vigente)): no duplica.
+        SELECT oe.DetalleId,
+               SUM(CASE WHEN m.Estatus <> 'Salido' THEN 1 ELSE 0 END) AS enBodega,
+               SUM(CASE WHEN m.Estatus = 'Salido' AND sv.Destino = 'Cliente' THEN 1 ELSE 0 END) AS cargado
         FROM Masters m
         JOIN EtiquetaImpresa ei ON ei.EtiquetaId = m.EtiquetaId
         JOIN OrdenEtiquetado oe ON oe.OrdenId = ei.OrdenId
-        WHERE m.Estatus <> 'Salido'
-          AND oe.DetalleId IN (SELECT DetalleId FROM DetallePedido WHERE CodigoPedido = ${pedido} AND Anulada = 0)
+        LEFT JOIN RemisionDetalle rdv ON rdv.MasterId = m.MasterId AND rdv.Vigente = 1
+        LEFT JOIN Remisiones rv ON rv.RemisionId = rdv.RemisionId AND rv.Estatus IN ('Borrador', 'Confirmada')
+        LEFT JOIN SerieRemision sv ON sv.Tipo = rv.Tipo
+        WHERE oe.DetalleId IN (SELECT DetalleId FROM DetallePedido WHERE CodigoPedido = ${pedido} AND Anulada = 0)
         GROUP BY oe.DetalleId
       ) f ON f.DetalleId = dp.DetalleId
       WHERE dp.CodigoPedido = ${pedido} AND dp.Anulada = 0
@@ -664,10 +676,13 @@ router.get("/cuadre", requireAuth, requireAnyPerm([["pedidos", "ver"], ["etiquet
       // peso de una caja — un número sin significado. Una línea de granel no está en la proforma.
       const objetivo = esGeneral || Number(r.EsGranel) === 1 ? null : r3(r.KgPedido);
       const enBodega = r3(r.EnBodegaKg);
+      const cargado = r3(r.CargadoKg);
+      const total = r3(enBodega + cargado);
       // En master el pedido es el mismo objetivo que topa el escaneo (cajas ÷ cajas por master,
       // redondeado hacia arriba). Lo que sobra no resta: una línea pasada no tapa lo que le falta a otra.
       const objetivoMaster = objetivoDeLinea({ ...r, EsGeneral: esGeneral ? 1 : 0 });
       const enBodegaMaster = Number(r.EnBodegaMaster);
+      const cargadoMaster = Number(r.CargadoMaster);
       return {
         DetalleId: Number(r.DetalleId),
         Proceso: Number(r.Proceso),
@@ -677,10 +692,13 @@ router.get("/cuadre", requireAuth, requireAnyPerm([["pedidos", "ver"], ["etiquet
         EsGranel: Number(r.EsGranel) === 1,
         ObjetivoKg: objetivo,
         EnBodegaKg: enBodega,
-        DiferenciaKg: objetivo === null ? null : r3(enBodega - objetivo),
+        CargadoKg: cargado,
+        TotalKg: total,
+        DiferenciaKg: objetivo === null ? null : r3(total - objetivo),
         ObjetivoMaster: objetivoMaster,
         EnBodegaMaster: enBodegaMaster,
-        FaltanMaster: objetivoMaster === null ? null : Math.max(0, objetivoMaster - enBodegaMaster),
+        CargadoMaster: cargadoMaster,
+        FaltanMaster: objetivoMaster === null ? null : Math.max(0, objetivoMaster - enBodegaMaster - cargadoMaster),
       };
     }));
   } catch (err: any) {
