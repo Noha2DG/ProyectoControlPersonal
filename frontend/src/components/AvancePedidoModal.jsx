@@ -55,11 +55,11 @@ const RAYADO = (color) => ({ ...COLOR_EXACTO, backgroundImage: `repeating-linear
 // valor = avance total (bodega + cargado); bodega = solo la parte en bodega (tramo sólido).
 function Barra({ valor, bodega = valor, umbral, alta }) {
   const total = Math.min(100, valor), solido = Math.min(total, bodega);
-  const listo = valor >= umbral;
   return (
     <div className={`relative ${alta ? "h-3" : "h-2"} border border-gray-800 bg-white flex`} style={COLOR_EXACTO}>
-      <div className={`h-full ${listo ? "bg-green-600" : "bg-gray-500"}`} style={{ width: `${solido}%`, ...COLOR_EXACTO }} />
-      <div className="h-full" style={{ width: `${total - solido}%`, ...RAYADO(listo ? "#16a34a" : "#4b5563") }} />
+      {/* Misma paleta que la pantalla: esmeralda = bodega, índigo (rayado) = cargado. */}
+      <div className="h-full bg-emerald-500" style={{ width: `${solido}%`, ...COLOR_EXACTO }} />
+      <div className="h-full" style={{ width: `${total - solido}%`, ...RAYADO("#4f46e5") }} />
       <div className="absolute inset-y-0 border-l border-dashed border-gray-900" style={{ left: `${umbral}%` }} />
     </div>
   );

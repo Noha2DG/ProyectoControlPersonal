@@ -386,7 +386,9 @@ router.put("/:id", requireAuth, requirePerm("etiquetado", "editar"), async (req:
     const { PiscinaId, Ciclo, BodegaCodigo, AreaCodigo, FechaProduccion, Color, Origen, Congelacion, CantidadMaster, Estatus } = req.body;
 
     const actuales: any[] = await prisma.$queryRaw`
-      SELECT oe.DetalleId, oe.CantidadMaster, dp.EsGranel, dp.Activo, dp.Anulada
+      SELECT oe.DetalleId, oe.CantidadMaster, dp.EsGranel, dp.Activo, dp.Anulada,
+             oe.PiscinaId, oe.Ciclo, DATE_FORMAT(oe.FechaProduccion, '%Y-%m-%d') AS FechaProduccion,
+             oe.Color, oe.Origen, oe.Congelacion, oe.AreaCodigo, oe.BodegaCodigo
       FROM OrdenEtiquetado oe JOIN DetallePedido dp ON oe.DetalleId = dp.DetalleId
       WHERE oe.OrdenId = ${id} LIMIT 1
     `;
@@ -457,6 +459,32 @@ router.put("/:id", requireAuth, requirePerm("etiquetado", "editar"), async (req:
     const lote = componerCodigoLote(String(piscina.Nombre), FechaProduccion, cicloEfectivo);
 
     const resumen = await calcularResumen(Number(actuales[0].DetalleId), id);
+
+    // Candado de lo impreso (27 nov 2026): las etiquetas y los master NO guardan su lote, lo leen en
+    // vivo de esta captura. Cambiar piscina, ciclo o fecha con etiquetas activas cambiaba el lote de
+    // cajas ya impresas, en tránsito, posicionadas y hasta despachadas, mientras la caja física seguía
+    // diciendo el viejo y el piso (MovimientoPiso.Lote) guardaba su propia copia. Producción tenía 57
+    // master así (capturas 5713, 5766, 7023 y 7042; dos con Q012↔Q013 cambiados, que es el corte de
+    // contenedores retenidos). Decisión del usuario: con etiquetas activas quedan fijos SOLO el lote
+    // (piscina + ciclo) y la fecha de producción; origen, congelación, color, área y cantidad se
+    // pueden corregir. Para corregir el lote se anulan las etiquetas que aún no entran a bodega y se
+    // captura de nuevo.
+    if (impresas > 0) {
+      const a = actuales[0];
+      const txt = (v: any) => (v === null || v === undefined ? "" : String(v).trim());
+      const cambios = [
+        Number(PiscinaId) !== Number(a.PiscinaId) && "piscina",
+        txt(cicloEfectivo) !== txt(a.Ciclo) && "ciclo",
+        txt(FechaProduccion).slice(0, 10) !== txt(a.FechaProduccion) && "fecha de producción",
+      ].filter(Boolean);
+      if (cambios.length) {
+        res.status(400).json({
+          error: `Esta captura ya tiene ${impresas} etiqueta${impresas === 1 ? "" : "s"} impresa${impresas === 1 ? "" : "s"}: no se puede cambiar ${cambios.join(", ")}. ` +
+            "El lote impreso en la caja quedaría distinto al del sistema. Anule las etiquetas que aún no entran a bodega y haga una captura nueva.",
+        });
+        return;
+      }
+    }
     const excede = resumen && excedeEscaneado(resumen, cantidad);
     if (excede) {
       res.status(400).json({ error: excede });
