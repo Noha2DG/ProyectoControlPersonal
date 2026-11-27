@@ -100,6 +100,44 @@ export function exportarMovimientos(registros, fecha) {
 
 // Los termos de cola (Descabezado) y los de materia prima bajada de las mesas van en las mismas
 // filas, con su destino.
+export function exportarReporteGeneral(porLote, porTalla, desde, hasta) {
+  const lotes = porLote.map(l => ({
+    "Lote":            l.Lote,
+    "Finca":           l.NombreFinca,
+    "Clase MP":        l.Clase,
+    "Descripción MP":  l.DescripcionClase,
+    "Fecha Ingreso":   l.Fecha?.slice(0, 10),
+    "Peso Ingreso":    l.PesoIngreso,
+    "UM":              l.UM,
+    "Procesado":       +l.Procesado.toFixed(2),
+    "Cola":            l.EsEntero ? +(l.Cola || 0).toFixed(2) : "",
+    "Bajado al piso":  +(l.Bajado || 0).toFixed(2),
+    "Descarte":        +(l.Descarte || 0).toFixed(2),
+    "Pendiente":       +l.Pendiente.toFixed(2),
+    "Rendimiento %":   l.SinCola ? "sin cola" : +l.Rendimiento.toFixed(1),
+    "Rend. total %":   l.EsEntero ? +l.RendimientoTotal.toFixed(1) : "",
+    "Transacciones":   l.NumTransacciones,
+  }));
+
+  const tallas = porTalla.map(t => ({
+    "Talla":         t.Talla,
+    "Descripción":   t.DescripcionTalla,
+    "Procesado":     +t.Procesado.toFixed(2),
+    "Pesajes":       t.NumPesajes,
+  }));
+
+  const wb = XLSX.utils.book_new();
+  const wsLotes = XLSX.utils.json_to_sheet(lotes);
+  autoWidth(wsLotes, lotes);
+  XLSX.utils.book_append_sheet(wb, wsLotes, "Por Lote");
+
+  const wsTallas = XLSX.utils.json_to_sheet(tallas);
+  autoWidth(wsTallas, tallas);
+  XLSX.utils.book_append_sheet(wb, wsTallas, "Por Talla");
+
+  XLSX.writeFile(wb, `ReporteGeneral_${desde}_a_${hasta}.xlsx`);
+}
+
 export function exportarReporteTermos(porTermo, desde, hasta, porTermoCola = [], porTermoBajado = []) {
   const termos = porTermo.map(t => ({
     "Termo":          t.NumeroTermo,
