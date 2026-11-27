@@ -10,7 +10,7 @@ const ESTATUS = ["Proceso", "Terminado"];
 
 const PEDIDOS_COL_DEFAULTS = { pedido: 130, descripcion: 220, estatus: 110, editar: 90 };
 const PEDIDOS_COLS = Object.keys(PEDIDOS_COL_DEFAULTS);
-const DETALLE_COL_DEFAULTS = { clase: 190, talla: 90, presentacion: 130, cajas: 90, kg: 90, acciones: 290 };
+const DETALLE_COL_DEFAULTS = { clase: 190, talla: 90, presentacion: 130, master: 90, kg: 90, acciones: 290 };
 const DETALLE_COLS = Object.keys(DETALLE_COL_DEFAULTS);
 // El avance va en su propia pestaña y no como columnas extra del detalle: el panel vive a media
 // pantalla, así que metidas junto a la proforma quedarían ilegibles. Compara solo lo escaneado que
@@ -23,11 +23,28 @@ const AVANCE_COLS = Object.keys(AVANCE_COL_DEFAULTS);
 
 // % de avance contra lo pedido; null cuando no hay pedido contra qué medir (pedido general o granel).
 const pctAvance = (enBodega, objetivo) => (objetivo ? (enBodega / objetivo) * 100 : null);
-const COLOR_PCT = pct => (pct >= 100 ? "bg-green-500" : pct >= 50 ? "bg-yellow-400" : "bg-red-500");
 // Desde aquí el pedido —o la línea— ya está por cerrarse, y el resumen y cada fila que lo alcance se
-// pintan de verde como aviso, con su barra también verde (pedido del usuario, 28 oct 2026). Debajo
-// del umbral las barras siguen con COLOR_PCT.
+// pintan de verde como aviso (pedido del usuario, 28 oct 2026). Las barras usan la paleta fija de
+// abajo.
 const UMBRAL_AVISO_AVANCE = 85;
+// Paleta fija del avance (usuario, 27 nov 2026): un color para lo que está en bodega y otro para lo
+// ya cargado en el contenedor, en la barra del resumen, en la de cada línea y en la columna Cargado.
+// El estado (bajo / por cerrarse) lo dicen el % y el fondo verde del aviso, no el color de la barra.
+const C_BODEGA = "bg-emerald-500";
+const C_CARGADO = "bg-indigo-500";
+const T_CARGADO = "text-indigo-700";
+
+// Barra de dos tramos: bodega + cargado, sobre un fondo gris que es lo que falta.
+function BarraAvance({ bodegaPct, totalPct, alta, fondo = "bg-gray-200" }) {
+  const total = Math.min(100, totalPct || 0);
+  const bodega = Math.min(total, bodegaPct || 0);
+  return (
+    <div className={`${alta ? "h-3" : "h-1.5"} rounded-full overflow-hidden flex ${fondo}`}>
+      <div className={`h-full ${C_BODEGA}`} style={{ width: `${bodega}%` }} />
+      <div className={`h-full ${C_CARGADO}`} style={{ width: `${total - bodega}%` }} />
+    </div>
+  );
+}
 
 // `new Date(v)` con getters locales daba la hora 6 h antes: el backend manda hora de Guatemala
 // etiquetada como UTC (ver utils/fecha.js). El helper lee los dígitos tal cual.
@@ -201,27 +218,41 @@ function PedidoModal({ item, clientes, onSave, onClose }) {
 }
 
 const round3 = n => Math.round(n * 1000) / 1000;
+// Master de una línea a partir de sus cajas guardadas; null si no se conoce cajas por master.
+const mastersDe = (cajas, cajasXMaster) => (Number(cajasXMaster) ? round3(Number(cajas) / Number(cajasXMaster)) : null);
+const fmtMaster = m => (m === null || m === undefined ? "—" : Number.isInteger(m) ? fmtEntero(m) : fmtNum(m));
 
 function DetalleModal({ item, codigoPedido, esGeneral, clases, tallas, presentaciones, empaquesMaster, empaquesIndividual, onSave, onClose }) {
   const isEdit = !!item;
-  const [form, setForm] = useState({
-    Clase: item?.Clase || "", Talla: item?.Talla || "", Presentacion: item?.Presentacion || "",
-    EmpaqueMaster: item?.EmpaqueMaster || "", EmpaqueAccesorio: item?.EmpaqueAccesorio || "",
-    CantidadCajas: item?.CantidadCajas || "", KgPedido: item?.KgPedido || "", LibrasPedido: item?.LibrasPedido || "",
-    EsGranel: item?.EsGranel || false,
+  // Se captura en MASTER (usuario, 27 nov 2026): las cajitas no se escanean, y las unidades las dan
+  // las básculas. Las cajas se calculan (master × cajas por master) y siguen siendo lo que se guarda,
+  // así que objetivo, techo de escaneo, Agrupación, avance e historial no cambian.
+  const cxmDe = codigo => Number(presentaciones.find(pr => pr.Codigo === codigo)?.CajasXMaster) || null;
+  const [form, setForm] = useState(() => {
+    const cxm = cxmDe(item?.Presentacion);
+    return {
+      Clase: item?.Clase || "", Talla: item?.Talla || "", Presentacion: item?.Presentacion || "",
+      EmpaqueMaster: item?.EmpaqueMaster || "", EmpaqueAccesorio: item?.EmpaqueAccesorio || "",
+      Masters: item?.CantidadCajas && cxm ? round3(item.CantidadCajas / cxm) : "",
+      CantidadCajas: item?.CantidadCajas || "", KgPedido: item?.KgPedido || "", LibrasPedido: item?.LibrasPedido || "",
+      EsGranel: item?.EsGranel || false,
+    };
   });
   const set = f => e => setForm(p => ({ ...p, [f]: e.target.value }));
   const setVal = f => val => setForm(p => ({ ...p, [f]: val }));
 
-  const setCantidadCajas = e => {
-    const val = e.target.value;
-    const cajas = parseFloat(val);
-    setForm(p => {
-      const pres = presentaciones.find(pr => pr.Codigo === p.Presentacion);
-      if (!pres || val === "" || isNaN(cajas)) return { ...p, CantidadCajas: val };
-      return { ...p, CantidadCajas: val, KgPedido: round3(cajas * pres.PesoKG), LibrasPedido: round3(cajas * pres.PesoLb) };
-    });
+  // Master → cajas, kg y lb.
+  const conMasters = (p, val, codigo = p.Presentacion) => {
+    const pres = presentaciones.find(pr => pr.Codigo === codigo);
+    const m = parseFloat(val);
+    if (!pres || !pres.CajasXMaster || val === "" || isNaN(m)) return { ...p, Presentacion: codigo, Masters: val };
+    const cajas = round3(m * pres.CajasXMaster);
+    return { ...p, Presentacion: codigo, Masters: val, CantidadCajas: cajas,
+             KgPedido: round3(cajas * pres.PesoKG), LibrasPedido: round3(cajas * pres.PesoLb) };
   };
+  const setMasters = e => { const val = e.target.value; setForm(p => conMasters(p, val)); };
+  // Kg o lb → cajas → master.
+  const mastersDe = (pres, cajas) => (pres?.CajasXMaster ? round3(cajas / pres.CajasXMaster) : "");
 
   const setKgPedido = e => {
     const val = e.target.value;
@@ -229,7 +260,8 @@ function DetalleModal({ item, codigoPedido, esGeneral, clases, tallas, presentac
     setForm(p => {
       const pres = presentaciones.find(pr => pr.Codigo === p.Presentacion);
       if (!pres || !pres.PesoKG || val === "" || isNaN(kg)) return { ...p, KgPedido: val };
-      return { ...p, KgPedido: val, CantidadCajas: round3(kg / pres.PesoKG), LibrasPedido: round3(kg * (pres.PesoLb / pres.PesoKG)) };
+      const cajas = round3(kg / pres.PesoKG);
+      return { ...p, KgPedido: val, CantidadCajas: cajas, Masters: mastersDe(pres, cajas), LibrasPedido: round3(kg * (pres.PesoLb / pres.PesoKG)) };
     });
   };
 
@@ -239,26 +271,21 @@ function DetalleModal({ item, codigoPedido, esGeneral, clases, tallas, presentac
     setForm(p => {
       const pres = presentaciones.find(pr => pr.Codigo === p.Presentacion);
       if (!pres || !pres.PesoLb || val === "" || isNaN(lb)) return { ...p, LibrasPedido: val };
-      return { ...p, LibrasPedido: val, CantidadCajas: round3(lb / pres.PesoLb), KgPedido: round3(lb * (pres.PesoKG / pres.PesoLb)) };
+      const cajas = round3(lb / pres.PesoLb);
+      return { ...p, LibrasPedido: val, CantidadCajas: cajas, Masters: mastersDe(pres, cajas), KgPedido: round3(lb * (pres.PesoKG / pres.PesoLb)) };
     });
   };
 
-  const setPresentacion = codigo => {
-    setForm(p => {
-      const pres = presentaciones.find(pr => pr.Codigo === codigo);
-      const cajas = parseFloat(p.CantidadCajas);
-      if (!pres || isNaN(cajas)) return { ...p, Presentacion: codigo };
-      return { ...p, Presentacion: codigo, KgPedido: round3(cajas * pres.PesoKG), LibrasPedido: round3(cajas * pres.PesoLb) };
-    });
-  };
+  const setPresentacion = codigo => setForm(p => conMasters(p, p.Masters, codigo));
 
-  const handleSubmit = e => { e.preventDefault(); onSave({ ...form, CodigoPedido: codigoPedido, DetalleId: item?.DetalleId }); };
+  const handleSubmit = e => {
+    e.preventDefault();
+    const { Masters, ...datos } = form; // el backend sigue recibiendo cajas, kg y lb
+    onSave({ ...datos, CodigoPedido: codigoPedido, DetalleId: item?.DetalleId });
+  };
 
   const presentacionSel = presentaciones.find(pr => pr.Codigo === form.Presentacion);
   const cajasNum = parseFloat(form.CantidadCajas);
-  const masters = presentacionSel && presentacionSel.CajasXMaster && !isNaN(cajasNum)
-    ? cajasNum / presentacionSel.CajasXMaster
-    : null;
 
   // EsGranel es inmutable después de creada la línea (el backend la lee de la fila y no del body:
   // cambiarla reinterpretaría retroactivamente el techo ya aplicado a lo declarado). Por eso solo se
@@ -360,9 +387,10 @@ function DetalleModal({ item, codigoPedido, esGeneral, clases, tallas, presentac
             <>
               <div className="grid grid-cols-3 gap-2">
                 <div>
-                  <label className="block text-xs font-medium text-gray-500 mb-1">Cajas *</label>
-                  <input required type="number" value={form.CantidadCajas} onChange={setCantidadCajas}
-                    className="w-full border border-gray-300 rounded-lg px-2 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Master *</label>
+                  <input required type="number" min="0" step="any" value={form.Masters} onChange={setMasters}
+                    disabled={!presentacionSel} placeholder={presentacionSel ? "" : "elija presentación"}
+                    className="w-full border border-blue-400 rounded-lg px-2 py-2 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-blue-400 disabled:bg-gray-50" />
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-gray-500 mb-1">Kg *</label>
@@ -378,12 +406,12 @@ function DetalleModal({ item, codigoPedido, esGeneral, clases, tallas, presentac
 
               {presentacionSel && (
                 <div className="bg-blue-50 border border-blue-200 rounded-lg px-3 py-2 text-sm text-blue-800">
-                  {masters === null ? (
-                    <span className="text-blue-400">Ingrese las cajas para calcular los masters</span>
+                  {isNaN(cajasNum) || form.Masters === "" ? (
+                    <span className="text-blue-400">Ingrese los master para calcular cajas, kg y lb</span>
                   ) : (
                     <>
-                      <span className="font-semibold">{fmtNum(masters)} master{masters !== 1 ? "s" : ""}</span>
-                      <span className="text-blue-500"> ({presentacionSel.CajasXMaster} cajas x master)</span>
+                      <span className="font-semibold">{fmtNum(cajasNum)} cajas</span>
+                      <span className="text-blue-500"> ({presentacionSel.CajasXMaster} cajas x master, calculadas)</span>
                     </>
                   )}
                 </div>
@@ -405,7 +433,9 @@ const ESTATUS_BADGE = { Proceso: "bg-yellow-100 text-yellow-700", Terminado: "bg
 
 // Cómo se ha movido una línea de la proforma. Cada fila del historial es una foto completa del
 // estado tras el cambio, así que el "de X a Y" se saca comparando con la fila anterior.
-function HistorialModal({ detalleId, tallaDesc, presentacionDesc, onClose }) {
+function HistorialModal({ detalleId, tallaDesc, presentacionDesc, cajasXMasterDe, onClose }) {
+  // Cada foto se lee con las cajas por master de SU presentación (la línea pudo cambiarla).
+  const cxmHist = f => cajasXMasterDe(f.Presentacion);
   const [filas, setFilas] = useState(null);
 
   useEffect(() => {
@@ -448,10 +478,10 @@ function HistorialModal({ detalleId, tallaDesc, presentacionDesc, onClose }) {
                     <div className="text-sm">
                       {cambioCajas ? (
                         <span className="font-semibold text-amber-700">
-                          {prev.CantidadCajas} → {f.CantidadCajas} cajas
+                          {fmtMaster(mastersDe(prev.CantidadCajas, cxmHist(prev)))} → {fmtMaster(mastersDe(f.CantidadCajas, cxmHist(f)))} master
                         </span>
                       ) : (
-                        <span className="text-gray-600">{f.CantidadCajas} cajas</span>
+                        <span className="text-gray-600">{fmtMaster(mastersDe(f.CantidadCajas, cxmHist(f)))} master</span>
                       )}
                       <span className="text-gray-400"> · {f.KgPedido} Kg</span>
                     </div>
@@ -652,10 +682,12 @@ export default function PedidosPage() {
     return desc && desc !== "(pendiente de definir)" ? desc : codigo;
   };
   const presentacionDesc = codigo => presentaciones.find(p => p.Codigo === codigo)?.Descripcion || codigo;
+  // La proforma se captura y se lee en master (27 nov 2026); en la base siguen las cajas.
+  const mastersDeLinea = d => mastersDe(d.CantidadCajas, presentaciones.find(p => p.Codigo === d.Presentacion)?.CajasXMaster);
 
   const VALORES_PED = { pedido: p => p.CodigoPedido, descripcion: p => p.Descripcion, estatus: p => p.Estatus };
   const VALORES_DET = { clase: d => productoDesc(d.Clase), talla: d => d.Talla, presentacion: d => d.Presentacion,
-                        cajas: d => d.CantidadCajas, kg: d => d.KgPedido };
+                        master: d => mastersDeLinea(d), kg: d => d.KgPedido };
   const VALORES_AV = { producto: a => productoDesc(a.Clase), talla: a => a.Talla,
                        presentacion: a => presentacionDesc(a.Presentacion),
                        objetivo: a => a.ObjetivoKg, bodega: a => a.EnBodegaKg, cargado: a => a.CargadoKg,
@@ -669,6 +701,10 @@ export default function PedidosPage() {
   const totalCargadoKg = avance.reduce((s, a) => s + (a.CargadoKg || 0), 0);
   const totalAvanceKg = totalBodegaKg + totalCargadoKg;
   const totalFaltanMaster = avance.reduce((s, a) => s + (a.FaltanMaster || 0), 0);
+  // Master que pide la proforma (cajas ÷ cajas por master, por línea). Va en el cuadro del % de
+  // avance, en lugar del aviso "ya lleva más del 85 %" (usuario, 27 nov 2026). El granel y los
+  // pedidos generales no tienen objetivo.
+  const totalObjetivoMaster = avance.reduce((s, a) => s + (a.ObjetivoMaster || 0), 0);
   const pctPedido = pctAvance(totalAvanceKg, totalPedidoKg);
 
   const q = busqueda.toLowerCase();
@@ -810,11 +846,9 @@ export default function PedidosPage() {
                 const aviso = pctPedido >= UMBRAL_AVISO_AVANCE;
                 return (
                   <div className={`rounded-xl shadow px-4 py-3 mb-3 ${aviso ? "bg-green-100 border border-green-300" : "bg-white"}`}>
-                    {aviso && (
-                      <p className="mb-2 text-sm font-semibold text-green-800">
-                        El pedido ya lleva más del {UMBRAL_AVISO_AVANCE} % de avance.
-                      </p>
-                    )}
+                    <p className={`mb-2 text-sm ${aviso ? "text-green-800" : "text-gray-600"}`}>
+                      Total pedido: <b className="tabular-nums">{fmtEntero(totalObjetivoMaster)}</b> master
+                    </p>
                     <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
                       <span className={`text-2xl font-bold tabular-nums ${aviso ? "text-green-800" : "text-gray-800"}`}>{fmtNum(pctPedido, 1)} %</span>
                       <span className={`text-sm ${aviso ? "text-green-700" : "text-gray-500"}`}>avance del pedido</span>
@@ -825,21 +859,11 @@ export default function PedidosPage() {
                         {" · "}faltan <b className={aviso ? "text-green-800" : "text-gray-700"}>{fmtEntero(totalFaltanMaster)}</b> master
                       </span>
                     </div>
-                    {/* En aviso la barra va verde aunque no llegue a 100: amarilla sobre fondo verde
-                        se leería como una alerta distinta. */}
-                    {/* Dos tonos: el tramo sólido es lo que está en bodega y el rayado lo ya cargado. */}
-                    <div className={`mt-2 h-2 rounded-full overflow-hidden flex ${aviso ? "bg-white" : "bg-gray-100"}`}>
-                      <div className={`h-full ${aviso ? "bg-green-500" : COLOR_PCT(pctPedido)}`}
-                        style={{ width: `${Math.min(100, pctAvance(totalBodegaKg, totalPedidoKg))}%` }} />
-                      <div className={`h-full ${aviso ? "bg-green-300" : "bg-sky-400"}`}
-                        style={{ width: `${Math.max(0, Math.min(100, pctPedido) - Math.min(100, pctAvance(totalBodegaKg, totalPedidoKg)))}%` }} />
+                    {/* Barra del resumen: solo lo trabajado en total (bodega + cargado), en un color
+                        (usuario, 27 nov 2026). El desglose queda en la columna Cargado y en las líneas. */}
+                    <div className={`mt-2 h-3 rounded-full overflow-hidden ${aviso ? "bg-white" : "bg-gray-200"}`}>
+                      <div className="h-full bg-green-600" style={{ width: `${Math.min(100, pctPedido)}%` }} />
                     </div>
-                    {totalCargadoKg > 0 && (
-                      <div className="mt-1.5 flex gap-4 text-xs text-gray-500">
-                        <span className="flex items-center gap-1.5"><span className={`inline-block w-3 h-2 rounded-sm ${aviso ? "bg-green-500" : COLOR_PCT(pctPedido)}`} />en bodega</span>
-                        <span className="flex items-center gap-1.5"><span className={`inline-block w-3 h-2 rounded-sm ${aviso ? "bg-green-300" : "bg-sky-400"}`} />cargado</span>
-                      </div>
-                    )}
                   </div>
                 );
               })()}
@@ -881,7 +905,7 @@ export default function PedidosPage() {
                           </td>
                           <td className="px-3 py-3 text-right text-gray-800 font-semibold">{fmtNum(a.EnBodegaKg)}</td>
                           <td className="px-3 py-3 text-right font-semibold">
-                            {a.CargadoKg > 0 ? <span className="text-sky-700">{fmtNum(a.CargadoKg)}</span> : <span className="text-gray-300">—</span>}
+                            {a.CargadoKg > 0 ? <span className={T_CARGADO}>{fmtNum(a.CargadoKg)}</span> : <span className="text-gray-300">—</span>}
                           </td>
                           <td className="px-3 py-3 text-right">
                             {a.DiferenciaKg === null ? (
@@ -909,8 +933,8 @@ export default function PedidosPage() {
                             ) : (
                               <>
                                 <div className={`tabular-nums font-semibold ${aviso ? "text-green-800" : "text-gray-700"}`}>{fmtNum(pct, 1)} %</div>
-                                <div className={`mt-1 h-1 rounded-full overflow-hidden ${aviso ? "bg-white" : "bg-gray-100"}`}>
-                                  <div className={`h-full ${aviso ? "bg-green-500" : COLOR_PCT(pct)}`} style={{ width: `${Math.min(100, pct)}%` }} />
+                                <div className="mt-1">
+                                  <BarraAvance bodegaPct={pctAvance(a.EnBodegaKg, a.ObjetivoKg)} totalPct={pct} fondo={aviso ? "bg-white" : "bg-gray-200"} />
                                 </div>
                               </>
                             )}
@@ -926,7 +950,7 @@ export default function PedidosPage() {
                         <td colSpan={3} className="px-3 py-3 text-right text-gray-600">Total</td>
                         <td className="px-3 py-3 text-right text-gray-800">{pctPedido === null ? <span className="text-gray-300">—</span> : fmtNum(totalPedidoKg)}</td>
                         <td className="px-3 py-3 text-right text-gray-800">{fmtNum(totalBodegaKg)}</td>
-                        <td className="px-3 py-3 text-right text-sky-700">{totalCargadoKg > 0 ? fmtNum(totalCargadoKg) : <span className="text-gray-300">—</span>}</td>
+                        <td className={`px-3 py-3 text-right ${T_CARGADO}`}>{totalCargadoKg > 0 ? fmtNum(totalCargadoKg) : <span className="text-gray-300">—</span>}</td>
                         <td className="px-3 py-3 text-right text-gray-600">{pctPedido === null ? "" : fmtNum(totalAvanceKg - totalPedidoKg)}</td>
                         <td className="px-3 py-3 text-right text-gray-800 tabular-nums">{pctPedido === null ? "" : fmtEntero(totalFaltanMaster)}</td>
                         <td className="px-3 py-3 text-right text-gray-800 tabular-nums">{pctPedido === null ? "" : `${fmtNum(pctPedido, 1)} %`}</td>
@@ -956,7 +980,7 @@ export default function PedidosPage() {
                   <Th width={widthsDetalle.clase} onResizeStart={startResizeDetalle("clase")} sortKey="clase" orden={ordenDet} onOrdenar={alternarOrdenDet} className="px-4 py-3 text-left whitespace-nowrap">Clase</Th>
                   <Th width={widthsDetalle.talla} onResizeStart={startResizeDetalle("talla")} sortKey="talla" orden={ordenDet} onOrdenar={alternarOrdenDet} className="px-4 py-3 text-left whitespace-nowrap">Talla</Th>
                   <Th width={widthsDetalle.presentacion} onResizeStart={startResizeDetalle("presentacion")} sortKey="presentacion" orden={ordenDet} onOrdenar={alternarOrdenDet} className="px-4 py-3 text-left whitespace-nowrap">Presentación</Th>
-                  <Th width={widthsDetalle.cajas} onResizeStart={startResizeDetalle("cajas")} sortKey="cajas" orden={ordenDet} onOrdenar={alternarOrdenDet} className="px-4 py-3 text-right whitespace-nowrap">Cajas</Th>
+                  <Th width={widthsDetalle.master} onResizeStart={startResizeDetalle("master")} sortKey="master" orden={ordenDet} onOrdenar={alternarOrdenDet} className="px-4 py-3 text-right whitespace-nowrap">Master</Th>
                   <Th width={widthsDetalle.kg} onResizeStart={startResizeDetalle("kg")} sortKey="kg" orden={ordenDet} onOrdenar={alternarOrdenDet} className="px-4 py-3 text-right whitespace-nowrap">Kg</Th>
                   <Th width={widthsDetalle.acciones} onResizeStart={startResizeDetalle("acciones")} className="px-4 py-3 text-center whitespace-nowrap">Acciones</Th>
                 </tr>
@@ -982,18 +1006,16 @@ export default function PedidosPage() {
                     </td>
                     <td className="px-4 py-3 text-gray-700 truncate" title={tallaDesc(d.Talla)}>{tallaDesc(d.Talla)}</td>
                     <td className="px-4 py-3 text-gray-700 truncate" title={presentacionDesc(d.Presentacion)}>{presentacionDesc(d.Presentacion)}</td>
-                    {/* El 1 de un pedido general es centinela, no un dato: mostrarlo invitaría a leerlo
-                        como cantidad planificada. */}
-                    <td className="px-4 py-3 text-right whitespace-nowrap">
-                      {pedidoSel.EsGeneral ? <span className="text-gray-300">—</span> : fmtEntero(d.CantidadCajas)}
+                    {/* El 1 de un pedido general (y del granel) es centinela, no un dato: mostrarlo
+                        invitaría a leerlo como cantidad planificada. */}
+                    <td className="px-4 py-3 text-right whitespace-nowrap" title={`${fmtNum(d.CantidadCajas)} cajas`}>
+                      {pedidoSel.EsGeneral || d.EsGranel ? <span className="text-gray-300">—</span> : fmtMaster(mastersDeLinea(d))}
                     </td>
                     <td className="px-4 py-3 text-right whitespace-nowrap">
                       {pedidoSel.EsGeneral ? <span className="text-gray-300">—</span> : fmtNum(d.KgPedido)}
                     </td>
                     <td className="px-4 py-3 text-center whitespace-nowrap">
                       <div className="flex justify-center gap-1">
-                        <button onClick={() => setHistorialId(d.DetalleId)} title="Cómo ha cambiado esta línea"
-                          className="text-gray-500 hover:text-gray-800 text-xs font-medium px-2 py-1 rounded hover:bg-gray-100 transition">Historial</button>
                         {esAdmin && d.EsGranel && (
                           <button onClick={() => handleToggleGranel(d)}
                             title={d.Activo ? "Desactivar — vuelve a bloquear la impresión" : "Activar — habilita imprimir etiquetas (solo emergencias)"}
@@ -1018,6 +1040,8 @@ export default function PedidosPage() {
                           <button onClick={() => handleDeleteDetalle(d)}
                             className="text-red-500 hover:text-red-700 text-xs font-medium px-2 py-1 rounded hover:bg-red-50 transition">Eliminar</button>
                         )}
+                        <button onClick={() => setHistorialId(d.DetalleId)} title="Cómo ha cambiado esta línea"
+                          className="text-gray-500 hover:text-gray-800 text-xs font-medium px-2 py-1 rounded hover:bg-gray-100 transition">Historial</button>
                       </div>
                     </td>
                   </tr>
@@ -1031,7 +1055,7 @@ export default function PedidosPage() {
                         compromiso de la proforma. Sumarlo aquí infla el total con algo que no se
                         pidió; se excluye igual que el candado de Objetivo lo excluye del techo. */}
                     {/* Las anuladas tampoco: el cliente ya no las pide. */}
-                    <td colSpan={4} className="px-4 py-3 text-gray-600 whitespace-nowrap">
+                    <td colSpan={3} className="px-4 py-3 text-gray-600 whitespace-nowrap">
                       <div className="flex items-center justify-between gap-3">
                         {detalles.some(d => d.Anulada) ? (
                           <label className="flex items-center gap-1.5 text-xs font-normal text-gray-500 cursor-pointer">
@@ -1042,8 +1066,12 @@ export default function PedidosPage() {
                         <span>Total proforma</span>
                       </div>
                     </td>
+                    {/* Total de master del pedido, con las mismas exclusiones que el Kg (granel y anuladas). */}
                     <td className="px-4 py-3 text-right text-gray-800 whitespace-nowrap">
-                      {Number(detalles.reduce((sum, d) => sum + (d.EsGranel || d.Anulada ? 0 : Number(d.KgPedido) || 0), 0).toFixed(3))}
+                      {fmtMaster(round3(detalles.reduce((sum, d) => sum + (d.EsGranel || d.Anulada ? 0 : mastersDeLinea(d) || 0), 0)))}
+                    </td>
+                    <td className="px-4 py-3 text-right text-gray-800 whitespace-nowrap">
+                      {fmtNum(detalles.reduce((sum, d) => sum + (d.EsGranel || d.Anulada ? 0 : Number(d.KgPedido) || 0), 0))}
                     </td>
                     <td></td>
                   </tr>
@@ -1067,6 +1095,7 @@ export default function PedidosPage() {
       )}
       {historialId && (
         <HistorialModal detalleId={historialId} tallaDesc={tallaDesc} presentacionDesc={presentacionDesc}
+          cajasXMasterDe={codigo => presentaciones.find(p => p.Codigo === codigo)?.CajasXMaster}
           onClose={() => setHistorialId(null)} />
       )}
       {modalDetalle.open && pedidoSel && (

@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { authHeader, usePuede } from "../context/AuthContext.jsx";
 import { componerCodigoLote, piscinaRequiereCiclo } from "../utils/codigoLote.js";
 import { useColWidths, useOrden, ordenarFilas, Th, Colgroup } from "../components/ResizableTh.jsx";
+import { fmtEntero, fmtNum } from "../utils/numero.js";
 
 // Zona explícita, igual que el resto de la app: el día que se propone para la orden es el de la
 // planta, no el del navegador.
@@ -29,6 +30,9 @@ export default function EtiquetadoPage() {
   const [busquedaLinea, setBusquedaLinea] = useState("");
   const [pedidoSel, setPedidoSel] = useState(null);
   const [detalles, setDetalles] = useState([]);
+  // Líneas que ya cumplen el 100 %: mismo criterio que la pestaña Avance de Pedidos (en bodega +
+  // cargado al cliente, GET /cuadre). Se pintan de verde en la lista (usuario, 27 nov 2026).
+  const [completas, setCompletas] = useState(() => new Set());
   const [detalleSel, setDetalleSel] = useState(null);
 
   const [clases, setClases] = useState([]);
@@ -109,9 +113,21 @@ export default function EtiquetadoPage() {
     setDetalleSel(null);
     setResumen(null);
     setCapturas([]);
+    setCompletas(new Set());
     const res = await fetch(`/api/detalle-pedido?pedido=${encodeURIComponent(p.CodigoPedido)}`, { headers: authHeader() });
     const data = await res.json();
     if (Array.isArray(data)) setDetalles(data);
+    cargarCompletas(p.CodigoPedido);
+  };
+
+  // Sin cuadre (falla de red o pedido general) simplemente no se pinta nada.
+  const cargarCompletas = async (codigo) => {
+    try {
+      const r = await fetch(`/api/detalle-pedido/cuadre?pedido=${encodeURIComponent(codigo)}`, { headers: authHeader() });
+      const filas = await r.json();
+      if (!Array.isArray(filas)) return;
+      setCompletas(new Set(filas.filter(f => f.ObjetivoMaster !== null && f.FaltanMaster === 0).map(f => f.DetalleId)));
+    } catch { /* sin color */ }
   };
 
   const cargarLinea = useCallback(async (detalleId) => {
@@ -128,6 +144,7 @@ export default function EtiquetadoPage() {
 
   const seleccionarLinea = (d) => {
     setDetalleSel(d);
+    if (pedidoSel) cargarCompletas(pedidoSel.CodigoPedido); // lo escaneado cambia mientras se trabaja
     setForm(FORM_VACIO);
     setEditando(null);
     cargarLinea(d.DetalleId);
@@ -196,6 +213,12 @@ export default function EtiquetadoPage() {
   // Fincas proveedoras externas y piscinas genéricas (sifones, "00-E00") no manejan ciclo — ver
   // piscinaRequiereCiclo. Antes de elegir Finca se asume requerido (por defecto más restrictivo).
   const requiereCiclo = form.Finca ? piscinaRequiereCiclo(piscinaSel?.Nombre, form.Finca) : true;
+  // Con etiquetas activas impresas, el lote (finca/piscina + ciclo) y la fecha de producción quedan
+  // fijos: el backend lo rechaza igual (PUT /orden-etiquetado/:id, 27 nov 2026). Aquí se muestran
+  // bloqueados para que no parezca un error al guardar. Lo demás sí se edita.
+  const capturaEditada = editando ? capturas.find(c => c.OrdenId === editando) : null;
+  const impresasEdicion = capturaEditada?.Impresas || 0;
+  const loteFijo = impresasEdicion > 0;
   const lotePreview = piscinaSel && (!requiereCiclo || form.Ciclo)
     ? componerCodigoLote(piscinaSel.Nombre, form.FechaProduccion, requiereCiclo ? form.Ciclo : "")
     : null;
@@ -274,16 +297,27 @@ export default function EtiquetadoPage() {
             <div className="overflow-y-auto">
               {detallesFiltrados.map(d => (
                 <button key={d.DetalleId} onClick={() => seleccionarLinea(d)}
-                  className={`w-full text-left px-3 py-2.5 border-b border-gray-100 transition ${detalleSel?.DetalleId === d.DetalleId ? "bg-blue-50" : "hover:bg-gray-50"}`}>
+                  title={completas.has(d.DetalleId) ? "Línea al 100 % (en bodega + cargado)" : undefined}
+                  className={`w-full text-left px-3 py-2.5 border-b border-gray-100 transition ${
+                    completas.has(d.DetalleId)
+                      // Verde claro con un borde delgado verde alrededor de toda la celda.
+                      ? `ring-1 ring-inset ring-green-500 ${detalleSel?.DetalleId === d.DetalleId ? "bg-green-100 ring-2 ring-blue-400" : "bg-green-50 hover:bg-green-100"}`
+                      : (detalleSel?.DetalleId === d.DetalleId ? "bg-blue-50" : "hover:bg-gray-50")}`}>
                   {/* La anulada sigue en la lista para poder ver sus capturas viejas; el backend ya no
                       deja capturar ni imprimir contra ella. */}
                   <div className={`text-sm font-semibold flex items-center gap-1.5 ${d.Anulada ? "text-gray-400" : "text-gray-800"}`}>
                     <span className={d.Anulada ? "line-through" : ""}>{descProcesoDeClase(d.Clase)} · {descTalla(d.Talla)}</span>
                     {d.Anulada && <span className="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-red-100 text-red-700" title={d.MotivoAnulacion || undefined}>Anulada</span>}
                   </div>
-                  {/* En un pedido general CantidadCajas es el centinela 1, no una cantidad pedida. */}
+                  {/* En un pedido general (y en el granel) CantidadCajas es el centinela 1, no una cantidad
+                      pedida. Se muestra en master, como se captura la proforma (27 nov 2026). */}
                   <div className="text-xs text-gray-500">
-                    {descPresentacion(d.Presentacion)}{pedidoSel?.EsGeneral ? "" : ` — ${d.CantidadCajas} cajas`}
+                    {descPresentacion(d.Presentacion)}{pedidoSel?.EsGeneral || d.EsGranel ? "" : (() => {
+                      const cxm = Number(presentaciones.find(x => x.Codigo === d.Presentacion)?.CajasXMaster);
+                      if (!cxm) return ` — ${d.CantidadCajas} cajas`;
+                      const m = Math.round((Number(d.CantidadCajas) / cxm) * 100) / 100;
+                      return ` — ${Number.isInteger(m) ? fmtEntero(m) : fmtNum(m)} master`;
+                    })()}
                   </div>
                 </button>
               ))}
@@ -361,22 +395,29 @@ export default function EtiquetadoPage() {
             {(editando ? puedeEditar : puedeCrear) && (
             <form onSubmit={handleSubmit} className="bg-white rounded-xl shadow px-4 py-4 mb-4 space-y-3">
               <h4 className="text-sm font-semibold text-gray-700">{editando ? "Editar captura" : "Nueva captura"}</h4>
+              {loteFijo && (
+                <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                  Esta captura ya tiene <b>{impresasEdicion}</b> etiqueta{impresasEdicion === 1 ? "" : "s"} impresa{impresasEdicion === 1 ? "" : "s"}:
+                  el lote y la fecha de producción no se pueden cambiar. Para corregir el lote,
+                  anule las etiquetas que aún no entran a bodega y haga una captura nueva.
+                </div>
+              )}
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-medium text-gray-500 mb-1">Finca *</label>
-                  <select required value={form.Finca}
+                  <select required value={form.Finca} disabled={loteFijo}
                     onChange={e => {
                       const necesitaCiclo = piscinaRequiereCiclo(undefined, e.target.value);
                       setForm(p => ({ ...p, Finca: e.target.value, PiscinaId: "", Ciclo: necesitaCiclo ? p.Ciclo : "" }));
                     }}
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400">
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 disabled:bg-gray-100 disabled:text-gray-500 disabled:cursor-not-allowed">
                     <option value="">Seleccione...</option>
                     {fincas.map(f => <option key={f.Codigo} value={f.Codigo}>{f.Descripcion}</option>)}
                   </select>
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-gray-500 mb-1">Piscina *</label>
-                  <select required disabled={!form.Finca} value={form.PiscinaId}
+                  <select required disabled={!form.Finca || loteFijo} value={form.PiscinaId}
                     onChange={e => {
                       const nueva = piscinas.find(p => String(p.PiscinaId) === String(e.target.value));
                       const necesitaCiclo = nueva ? piscinaRequiereCiclo(nueva.Nombre, nueva.CodigoFinca) : true;
@@ -389,32 +430,32 @@ export default function EtiquetadoPage() {
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-gray-500 mb-1">Ciclo{requiereCiclo ? " *" : ""}</label>
-                  <input required={requiereCiclo} disabled={!requiereCiclo} value={form.Ciclo} onChange={set("Ciclo")}
+                  <input required={requiereCiclo} disabled={!requiereCiclo || loteFijo} value={form.Ciclo} onChange={set("Ciclo")}
                     placeholder={requiereCiclo ? "ej. 8" : "No aplica"}
                     className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 disabled:bg-gray-100" />
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-gray-500 mb-1">Área *</label>
                   <select required value={form.BodegaCodigo} onChange={set("BodegaCodigo")}
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400">
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 disabled:bg-gray-100 disabled:text-gray-500 disabled:cursor-not-allowed">
                     <option value="">Seleccione...</option>
                     {bodegas.map(b => <option key={b.Codigo} value={b.Codigo}>{b.Nombre}</option>)}
                   </select>
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-gray-500 mb-1">Fecha Producción *</label>
-                  <input required type="date" value={form.FechaProduccion} onChange={set("FechaProduccion")}
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
+                  <input required type="date" value={form.FechaProduccion} onChange={set("FechaProduccion")} disabled={loteFijo}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 disabled:bg-gray-100 disabled:text-gray-500 disabled:cursor-not-allowed" />
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-gray-500 mb-1">Color</label>
                   <input value={form.Color} onChange={set("Color")} placeholder="ej. sc"
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 disabled:bg-gray-100 disabled:text-gray-500 disabled:cursor-not-allowed" />
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-gray-500 mb-1">Origen *</label>
                   <select required value={form.Origen} onChange={set("Origen")}
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400">
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 disabled:bg-gray-100 disabled:text-gray-500 disabled:cursor-not-allowed">
                     <option value="">Seleccione...</option>
                     {origenes.map(o => <option key={o.Codigo} value={o.Codigo}>{o.Descripcion}</option>)}
                   </select>
@@ -422,7 +463,7 @@ export default function EtiquetadoPage() {
                 <div>
                   <label className="block text-xs font-medium text-gray-500 mb-1">Congelación *</label>
                   <select required value={form.Congelacion} onChange={set("Congelacion")}
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400">
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 disabled:bg-gray-100 disabled:text-gray-500 disabled:cursor-not-allowed">
                     <option value="">Seleccione...</option>
                     {congelaciones.map(c => <option key={c.Codigo} value={c.Codigo}>{c.Descripcion}</option>)}
                   </select>
