@@ -18,7 +18,7 @@ const DETALLE_COLS = Object.keys(DETALLE_COL_DEFAULTS);
 // presentaciones y dan el % de todo el pedido, y en master faltantes, que es como se trabaja en
 // planta. Una fila por línea — ver GET /api/detalle-pedido/cuadre. Hasta el 28 oct 2026 eran dos
 // pestañas, Avance (master) y Cuadre (Kg); el usuario pidió juntarlas.
-const AVANCE_COL_DEFAULTS = { producto: 150, talla: 80, presentacion: 130, objetivo: 100, bodega: 100, dif: 100, faltan: 110, pct: 90 };
+const AVANCE_COL_DEFAULTS = { producto: 150, talla: 80, presentacion: 130, objetivo: 100, bodega: 100, cargado: 100, dif: 100, faltan: 110, pct: 90 };
 const AVANCE_COLS = Object.keys(AVANCE_COL_DEFAULTS);
 
 // % de avance contra lo pedido; null cuando no hay pedido contra qué medir (pedido general o granel).
@@ -658,14 +658,18 @@ export default function PedidosPage() {
                         cajas: d => d.CantidadCajas, kg: d => d.KgPedido };
   const VALORES_AV = { producto: a => productoDesc(a.Clase), talla: a => a.Talla,
                        presentacion: a => presentacionDesc(a.Presentacion),
-                       objetivo: a => a.ObjetivoKg, bodega: a => a.EnBodegaKg, dif: a => a.DiferenciaKg,
-                       faltan: a => a.FaltanMaster, pct: a => pctAvance(a.EnBodegaKg, a.ObjetivoKg) };
+                       objetivo: a => a.ObjetivoKg, bodega: a => a.EnBodegaKg, cargado: a => a.CargadoKg,
+                       dif: a => a.DiferenciaKg, faltan: a => a.FaltanMaster, pct: a => pctAvance(a.TotalKg, a.ObjetivoKg) };
   // Avance de todo el pedido: el granel suma kg en bodega aunque no tenga pedido propio, porque es
   // producto del pedido empacado distinto (se acabó el material).
   const totalPedidoKg = avance.reduce((s, a) => s + (a.ObjetivoKg || 0), 0);
   const totalBodegaKg = avance.reduce((s, a) => s + a.EnBodegaKg, 0);
+  // Lo cargado al cliente (remisión a Cliente, borrador o confirmada) también es avance: sin esto,
+  // cargar el contenedor mientras se sigue produciendo bajaba el % (27 nov 2026, 025-2026).
+  const totalCargadoKg = avance.reduce((s, a) => s + (a.CargadoKg || 0), 0);
+  const totalAvanceKg = totalBodegaKg + totalCargadoKg;
   const totalFaltanMaster = avance.reduce((s, a) => s + (a.FaltanMaster || 0), 0);
-  const pctPedido = pctAvance(totalBodegaKg, totalPedidoKg);
+  const pctPedido = pctAvance(totalAvanceKg, totalPedidoKg);
 
   const q = busqueda.toLowerCase();
   const pedidosFiltrados = pedidos.filter(p =>
@@ -815,15 +819,27 @@ export default function PedidosPage() {
                       <span className={`text-2xl font-bold tabular-nums ${aviso ? "text-green-800" : "text-gray-800"}`}>{fmtNum(pctPedido, 1)} %</span>
                       <span className={`text-sm ${aviso ? "text-green-700" : "text-gray-500"}`}>avance del pedido</span>
                       <span className={`text-sm tabular-nums ml-auto ${aviso ? "text-green-700" : "text-gray-500"}`}>
-                        {fmtNum(totalBodegaKg)} de {fmtNum(totalPedidoKg)} kg en bodega
+                        {fmtNum(totalBodegaKg)} kg en bodega
+                        {totalCargadoKg > 0 && <> + {fmtNum(totalCargadoKg)} cargados</>}
+                        {" "}de {fmtNum(totalPedidoKg)} kg
                         {" · "}faltan <b className={aviso ? "text-green-800" : "text-gray-700"}>{fmtEntero(totalFaltanMaster)}</b> master
                       </span>
                     </div>
                     {/* En aviso la barra va verde aunque no llegue a 100: amarilla sobre fondo verde
                         se leería como una alerta distinta. */}
-                    <div className={`mt-2 h-2 rounded-full overflow-hidden ${aviso ? "bg-white" : "bg-gray-100"}`}>
-                      <div className={`h-full ${aviso ? "bg-green-500" : COLOR_PCT(pctPedido)}`} style={{ width: `${Math.min(100, pctPedido)}%` }} />
+                    {/* Dos tonos: el tramo sólido es lo que está en bodega y el rayado lo ya cargado. */}
+                    <div className={`mt-2 h-2 rounded-full overflow-hidden flex ${aviso ? "bg-white" : "bg-gray-100"}`}>
+                      <div className={`h-full ${aviso ? "bg-green-500" : COLOR_PCT(pctPedido)}`}
+                        style={{ width: `${Math.min(100, pctAvance(totalBodegaKg, totalPedidoKg))}%` }} />
+                      <div className={`h-full ${aviso ? "bg-green-300" : "bg-sky-400"}`}
+                        style={{ width: `${Math.max(0, Math.min(100, pctPedido) - Math.min(100, pctAvance(totalBodegaKg, totalPedidoKg)))}%` }} />
                     </div>
+                    {totalCargadoKg > 0 && (
+                      <div className="mt-1.5 flex gap-4 text-xs text-gray-500">
+                        <span className="flex items-center gap-1.5"><span className={`inline-block w-3 h-2 rounded-sm ${aviso ? "bg-green-500" : COLOR_PCT(pctPedido)}`} />en bodega</span>
+                        <span className="flex items-center gap-1.5"><span className={`inline-block w-3 h-2 rounded-sm ${aviso ? "bg-green-300" : "bg-sky-400"}`} />cargado</span>
+                      </div>
+                    )}
                   </div>
                 );
               })()}
@@ -837,14 +853,15 @@ export default function PedidosPage() {
                       <Th width={widthsAvance.presentacion} onResizeStart={startResizeAvance("presentacion")} sortKey="presentacion" orden={ordenAv} onOrdenar={alternarOrdenAv} className="px-3 py-3 text-left">Present.</Th>
                       <Th width={widthsAvance.objetivo} onResizeStart={startResizeAvance("objetivo")} sortKey="objetivo" orden={ordenAv} onOrdenar={alternarOrdenAv} className="px-3 py-3 text-right" title="Kg que pide la proforma">Pedido Kg</Th>
                       <Th width={widthsAvance.bodega} onResizeStart={startResizeAvance("bodega")} sortKey="bodega" orden={ordenAv} onOrdenar={alternarOrdenAv} className="px-3 py-3 text-right" title="Kg escaneados que siguen en bodega">Bodega Kg</Th>
-                      <Th width={widthsAvance.dif} onResizeStart={startResizeAvance("dif")} sortKey="dif" orden={ordenAv} onOrdenar={alternarOrdenAv} className="px-3 py-3 text-right" title="Kg en bodega menos lo pedido">Dif. Kg</Th>
-                      <Th width={widthsAvance.faltan} onResizeStart={startResizeAvance("faltan")} sortKey="faltan" orden={ordenAv} onOrdenar={alternarOrdenAv} className="px-3 py-3 text-right" title="Master que faltan en bodega para completar la línea">Faltan master</Th>
-                      <Th width={widthsAvance.pct} onResizeStart={startResizeAvance("pct")} sortKey="pct" orden={ordenAv} onOrdenar={alternarOrdenAv} className="px-3 py-3 text-right" title="Kg en bodega ÷ kg pedidos">Avance</Th>
+                      <Th width={widthsAvance.cargado} onResizeStart={startResizeAvance("cargado")} sortKey="cargado" orden={ordenAv} onOrdenar={alternarOrdenAv} className="px-3 py-3 text-right" title="Kg escaneados en una remisión al cliente (borrador o confirmada)">Cargado Kg</Th>
+                      <Th width={widthsAvance.dif} onResizeStart={startResizeAvance("dif")} sortKey="dif" orden={ordenAv} onOrdenar={alternarOrdenAv} className="px-3 py-3 text-right" title="Kg en bodega + cargados, menos lo pedido">Dif. Kg</Th>
+                      <Th width={widthsAvance.faltan} onResizeStart={startResizeAvance("faltan")} sortKey="faltan" orden={ordenAv} onOrdenar={alternarOrdenAv} className="px-3 py-3 text-right" title="Master que faltan (en bodega o cargados) para completar la línea">Faltan master</Th>
+                      <Th width={widthsAvance.pct} onResizeStart={startResizeAvance("pct")} sortKey="pct" orden={ordenAv} onOrdenar={alternarOrdenAv} className="px-3 py-3 text-right" title="(Kg en bodega + cargados) ÷ kg pedidos">Avance</Th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
                     {ordenarFilas(avance, ordenAv, VALORES_AV).map(a => {
-                      const pct = pctAvance(a.EnBodegaKg, a.ObjetivoKg);
+                      const pct = pctAvance(a.TotalKg, a.ObjetivoKg);
                       const aviso = pct !== null && pct >= UMBRAL_AVISO_AVANCE;
                       return (
                         <tr key={a.DetalleId} className={`transition ${aviso ? "bg-green-100 hover:bg-green-200" : "hover:bg-gray-50"}`}
@@ -863,12 +880,15 @@ export default function PedidosPage() {
                             {a.ObjetivoKg === null ? <span className="text-gray-300">—</span> : fmtNum(a.ObjetivoKg)}
                           </td>
                           <td className="px-3 py-3 text-right text-gray-800 font-semibold">{fmtNum(a.EnBodegaKg)}</td>
+                          <td className="px-3 py-3 text-right font-semibold">
+                            {a.CargadoKg > 0 ? <span className="text-sky-700">{fmtNum(a.CargadoKg)}</span> : <span className="text-gray-300">—</span>}
+                          </td>
                           <td className="px-3 py-3 text-right">
                             {a.DiferenciaKg === null ? (
                               <span className="text-gray-300">—</span>
                             ) : a.DiferenciaKg > 0 ? (
                               <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-700"
-                                title="Hay en bodega más kg de los que pide la proforma">+{fmtNum(a.DiferenciaKg)}</span>
+                                title="Entre bodega y cargado hay más kg de los que pide la proforma">+{fmtNum(a.DiferenciaKg)}</span>
                             ) : a.DiferenciaKg === 0 ? (
                               <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-green-100 text-green-700">completo</span>
                             ) : (
@@ -876,7 +896,7 @@ export default function PedidosPage() {
                             )}
                           </td>
                           <td className="px-3 py-3 text-right tabular-nums"
-                            title={a.ObjetivoMaster === null ? undefined : `${fmtEntero(a.EnBodegaMaster)} de ${fmtEntero(a.ObjetivoMaster)} master en bodega`}>
+                            title={a.ObjetivoMaster === null ? undefined : `${fmtEntero(a.EnBodegaMaster)} en bodega + ${fmtEntero(a.CargadoMaster)} cargados de ${fmtEntero(a.ObjetivoMaster)} master`}>
                             {a.FaltanMaster === null ? (
                               <span className="text-gray-300">—</span>
                             ) : (
@@ -899,14 +919,15 @@ export default function PedidosPage() {
                       );
                     })}
                     {avance.length === 0 && (
-                      <tr><td colSpan={8} className="px-4 py-8 text-center text-gray-400">Sin líneas en este pedido</td></tr>
+                      <tr><td colSpan={9} className="px-4 py-8 text-center text-gray-400">Sin líneas en este pedido</td></tr>
                     )}
                     {avance.length > 0 && (
                       <tr className="bg-gray-50 font-semibold">
                         <td colSpan={3} className="px-3 py-3 text-right text-gray-600">Total</td>
                         <td className="px-3 py-3 text-right text-gray-800">{pctPedido === null ? <span className="text-gray-300">—</span> : fmtNum(totalPedidoKg)}</td>
                         <td className="px-3 py-3 text-right text-gray-800">{fmtNum(totalBodegaKg)}</td>
-                        <td className="px-3 py-3 text-right text-gray-600">{pctPedido === null ? "" : fmtNum(totalBodegaKg - totalPedidoKg)}</td>
+                        <td className="px-3 py-3 text-right text-sky-700">{totalCargadoKg > 0 ? fmtNum(totalCargadoKg) : <span className="text-gray-300">—</span>}</td>
+                        <td className="px-3 py-3 text-right text-gray-600">{pctPedido === null ? "" : fmtNum(totalAvanceKg - totalPedidoKg)}</td>
                         <td className="px-3 py-3 text-right text-gray-800 tabular-nums">{pctPedido === null ? "" : fmtEntero(totalFaltanMaster)}</td>
                         <td className="px-3 py-3 text-right text-gray-800 tabular-nums">{pctPedido === null ? "" : `${fmtNum(pctPedido, 1)} %`}</td>
                       </tr>
@@ -915,9 +936,11 @@ export default function PedidosPage() {
                 </table>
               </div>
               <p className="mt-2 text-xs text-gray-500 leading-relaxed">
-                Una fila por línea de la proforma. <b>Bodega Kg</b> = lo escaneado que sigue en bodega; lo que
-                ya salió (despachos y traslados) no cuenta. <b>Faltan master</b> = master pedidos (cajas ÷ cajas
-                por master) menos los que hay en bodega; una línea pasada no resta de las demás. El granel no
+                Una fila por línea de la proforma. <b>Bodega Kg</b> = lo escaneado que sigue en bodega.
+                <b> Cargado Kg</b> = lo escaneado en una remisión al cliente (Exportación, Venta local), en
+                borrador o confirmada. El avance suma los dos; los traslados internos (reetiquetado, reempaque,
+                reproceso) no cuentan. <b>Faltan master</b> = master pedidos (cajas ÷ cajas por master) menos
+                los que hay en bodega y cargados; una línea pasada no resta de las demás. El granel no
                 tiene pedido propio: sus kg suman al avance total del pedido, no al de una línea.
               </p>
             </>

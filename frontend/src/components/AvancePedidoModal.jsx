@@ -14,18 +14,25 @@ import { fmtNum } from "../utils/numero.js";
 //
 // Cada barra lleva marcado el umbral del aviso (85 %): en una impresión en blanco y negro el verde
 // de la pantalla se pierde, la marca no.
+//
+// Desde el 27 nov 2026 el avance = en bodega + cargado (remisión al cliente, borrador o confirmada),
+// y el papel los separa en dos columnas y dos tramos de barra (sólido = bodega, rayado = cargado),
+// para que se lea en blanco y negro.
 
-const pct = (bodega, pedido) => (pedido ? (bodega / pedido) * 100 : null);
+const pct = (kg, pedido) => (pedido ? (kg / pedido) * 100 : null);
 
 // Totales de un grupo de filas. El pedido solo suma las líneas que tienen pedido (el granel no).
 function sumar(filas) {
   return {
     pedidoKg: filas.reduce((s, f) => s + (f.ObjetivoKg || 0), 0),
     bodegaKg: filas.reduce((s, f) => s + f.EnBodegaKg, 0),
+    cargadoKg: filas.reduce((s, f) => s + (f.CargadoKg || 0), 0),
     conPedido: filas.some(f => f.ObjetivoKg !== null),
   };
 }
-const pctDe = t => (t.conPedido ? pct(t.bodegaKg, t.pedidoKg) : null);
+const totalDe = t => t.bodegaKg + t.cargadoKg;
+const pctDe = t => (t.conPedido ? pct(totalDe(t), t.pedidoKg) : null);
+const pctBodegaDe = t => (t.conPedido ? pct(t.bodegaKg, t.pedidoKg) : null);
 
 // Producto → presentación, en el orden en que aparecen las filas (el de la pantalla).
 function agrupar(filas) {
@@ -42,21 +49,28 @@ function agrupar(filas) {
 
 const COLOR_EXACTO = { WebkitPrintColorAdjust: "exact", printColorAdjust: "exact" };
 
-function Barra({ valor, umbral, alta }) {
+// Rayado para lo cargado: se distingue de lo sólido (bodega) aunque se imprima en blanco y negro.
+const RAYADO = (color) => ({ ...COLOR_EXACTO, backgroundImage: `repeating-linear-gradient(45deg, ${color} 0 2px, transparent 2px 4px)` });
+
+// valor = avance total (bodega + cargado); bodega = solo la parte en bodega (tramo sólido).
+function Barra({ valor, bodega = valor, umbral, alta }) {
+  const total = Math.min(100, valor), solido = Math.min(total, bodega);
+  const listo = valor >= umbral;
   return (
-    <div className={`relative ${alta ? "h-3" : "h-2"} border border-gray-800 bg-white`} style={COLOR_EXACTO}>
-      <div className={`h-full ${valor >= umbral ? "bg-green-600" : "bg-gray-500"}`} style={{ width: `${Math.min(100, valor)}%` }} />
+    <div className={`relative ${alta ? "h-3" : "h-2"} border border-gray-800 bg-white flex`} style={COLOR_EXACTO}>
+      <div className={`h-full ${listo ? "bg-green-600" : "bg-gray-500"}`} style={{ width: `${solido}%`, ...COLOR_EXACTO }} />
+      <div className="h-full" style={{ width: `${total - solido}%`, ...RAYADO(listo ? "#16a34a" : "#4b5563") }} />
       <div className="absolute inset-y-0 border-l border-dashed border-gray-900" style={{ left: `${umbral}%` }} />
     </div>
   );
 }
 
-function CeldaAvance({ valor, umbral }) {
+function CeldaAvance({ valor, bodega, umbral }) {
   if (valor === null) return <td className="py-1.5 text-right">—</td>;
   return (
     <td className="py-1.5">
       <div className="flex items-center gap-2">
-        <div className="flex-1"><Barra valor={valor} umbral={umbral} /></div>
+        <div className="flex-1"><Barra valor={valor} bodega={bodega} umbral={umbral} /></div>
         <span className={`tabular-nums w-12 text-right ${valor >= umbral ? "font-bold" : ""}`}>{fmtNum(valor, 1)} %</span>
       </div>
     </td>
@@ -68,9 +82,9 @@ function CeldaAvance({ valor, umbral }) {
 function Columnas() {
   return (
     <colgroup>
-      <col style={{ width: "22%" }} />
-      <col style={{ width: "14%" }} /><col style={{ width: "14%" }} /><col style={{ width: "14%" }} />
-      <col style={{ width: "36%" }} />
+      <col style={{ width: "20%" }} />
+      <col style={{ width: "13%" }} /><col style={{ width: "13%" }} /><col style={{ width: "13%" }} /><col style={{ width: "13%" }} />
+      <col style={{ width: "28%" }} />
     </colgroup>
   );
 }
@@ -81,8 +95,9 @@ function Totales({ etiqueta, t, umbral, total }) {
       <td className="py-1.5 pr-2 whitespace-nowrap">{etiqueta}</td>
       <td className="py-1.5 pr-2 text-right tabular-nums">{t.conPedido ? fmtNum(t.pedidoKg) : "—"}</td>
       <td className="py-1.5 pr-2 text-right tabular-nums">{fmtNum(t.bodegaKg)}</td>
-      <td className="py-1.5 pr-2 text-right tabular-nums">{t.conPedido ? fmtNum(t.bodegaKg - t.pedidoKg) : "—"}</td>
-      <CeldaAvance valor={pctDe(t)} umbral={umbral} />
+      <td className="py-1.5 pr-2 text-right tabular-nums">{t.cargadoKg ? fmtNum(t.cargadoKg) : "—"}</td>
+      <td className="py-1.5 pr-2 text-right tabular-nums">{t.conPedido ? fmtNum(totalDe(t) - t.pedidoKg) : "—"}</td>
+      <CeldaAvance valor={pctDe(t)} bodega={pctBodegaDe(t)} umbral={umbral} />
     </tr>
   );
 }
@@ -105,6 +120,7 @@ function RecuadroPresentacion({ producto, pr, umbral }) {
               <th className="py-1 pr-2 font-medium">Talla</th>
               <th className="py-1 pr-2 font-medium text-right">Pedido kg</th>
               <th className="py-1 pr-2 font-medium text-right">Bodega kg</th>
+              <th className="py-1 pr-2 font-medium text-right">Cargado kg</th>
               <th className="py-1 pr-2 font-medium text-right">Dif. kg</th>
               <th className="py-1 font-medium text-right">Avance</th>
             </tr>
@@ -115,8 +131,9 @@ function RecuadroPresentacion({ producto, pr, umbral }) {
                 <td className="py-1.5 pr-2">{f.TallaDesc}{f.EsGranel && <span className="text-gray-500"> (granel)</span>}</td>
                 <td className="py-1.5 pr-2 text-right tabular-nums">{f.ObjetivoKg === null ? "—" : fmtNum(f.ObjetivoKg)}</td>
                 <td className="py-1.5 pr-2 text-right tabular-nums font-semibold">{fmtNum(f.EnBodegaKg)}</td>
+                <td className="py-1.5 pr-2 text-right tabular-nums font-semibold">{f.CargadoKg ? fmtNum(f.CargadoKg) : "—"}</td>
                 <td className="py-1.5 pr-2 text-right tabular-nums">{f.DiferenciaKg === null ? "—" : fmtNum(f.DiferenciaKg)}</td>
-                <CeldaAvance valor={pct(f.EnBodegaKg, f.ObjetivoKg)} umbral={umbral} />
+                <CeldaAvance valor={pct(f.TotalKg, f.ObjetivoKg)} bodega={pct(f.EnBodegaKg, f.ObjetivoKg)} umbral={umbral} />
               </tr>
             ))}
             {pr.filas.length > 1 && <Totales etiqueta={`Total ${pr.nombre}`} t={t} umbral={umbral} />}
@@ -130,7 +147,7 @@ function RecuadroPresentacion({ producto, pr, umbral }) {
 function ContenidoAvance({ pedido, filas, umbral }) {
   const total = sumar(filas);
   const pctPedido = pctDe(total);
-  const listas = filas.filter(f => { const p = pct(f.EnBodegaKg, f.ObjetivoKg); return p !== null && p >= umbral; }).length;
+  const listas = filas.filter(f => { const p = pct(f.TotalKg, f.ObjetivoKg); return p !== null && p >= umbral; }).length;
   const conPedido = filas.filter(f => f.ObjetivoKg !== null).length;
   const productos = agrupar(filas);
 
@@ -139,7 +156,7 @@ function ContenidoAvance({ pedido, filas, umbral }) {
       <div className="flex items-start justify-between mb-4">
         <div>
           <h1 className="text-2xl font-bold">Avance del pedido</h1>
-          <p className="text-sm text-gray-500">Kilogramos escaneados que siguen en bodega contra lo que pide la proforma</p>
+          <p className="text-sm text-gray-500">Kilogramos en bodega y ya cargados al cliente contra lo que pide la proforma</p>
         </div>
         <div className="text-right">
           <p className="text-2xl font-bold font-mono">{pedido.CodigoPedido}</p>
@@ -152,13 +169,14 @@ function ContenidoAvance({ pedido, filas, umbral }) {
           <p className="text-[10px] font-bold uppercase tracking-wider text-gray-500 mb-1">Resumen del pedido</p>
           <div className="flex items-baseline gap-6 mb-2">
             <p className="text-3xl font-bold tabular-nums">{fmtNum(pctPedido, 1)} %</p>
-            <div className="grid grid-cols-3 gap-x-8 text-sm flex-1">
-              <div><span className="text-gray-500">Kg en bodega:</span> <b className="tabular-nums">{fmtNum(total.bodegaKg)}</b> <span className="text-gray-500">de {fmtNum(total.pedidoKg)}</span></div>
-              <div><span className="text-gray-500">Faltan:</span> <b className="tabular-nums">{fmtNum(Math.max(0, total.pedidoKg - total.bodegaKg))}</b> <span className="text-gray-500">kg</span></div>
+            <div className="grid grid-cols-4 gap-x-6 text-sm flex-1">
+              <div><span className="text-gray-500">En bodega:</span> <b className="tabular-nums">{fmtNum(total.bodegaKg)}</b> <span className="text-gray-500">kg</span></div>
+              <div><span className="text-gray-500">Cargado:</span> <b className="tabular-nums">{fmtNum(total.cargadoKg)}</b> <span className="text-gray-500">kg</span></div>
+              <div><span className="text-gray-500">Faltan:</span> <b className="tabular-nums">{fmtNum(Math.max(0, total.pedidoKg - totalDe(total)))}</b> <span className="text-gray-500">de {fmtNum(total.pedidoKg)} kg</span></div>
               <div><span className="text-gray-500">Líneas en {umbral} % o más:</span> <b className="tabular-nums">{listas}</b> <span className="text-gray-500">de {conPedido}</span></div>
             </div>
           </div>
-          <Barra valor={pctPedido} umbral={umbral} alta />
+          <Barra valor={pctPedido} bodega={pctBodegaDe(total)} umbral={umbral} alta />
           <p className="text-[10px] text-gray-500 mt-1 text-right" style={{ paddingRight: `${100 - umbral}%` }}>{umbral} %</p>
         </div>
       )}
@@ -188,7 +206,9 @@ function ContenidoAvance({ pedido, filas, umbral }) {
       </section>
 
       <p className="text-[10px] text-gray-500 mt-4 leading-relaxed">
-        Lo que ya salió de bodega (despachos y traslados) no cuenta. La línea punteada de cada barra marca el {umbral} %.
+        Avance = en bodega + cargado (escaneado en remisión al cliente, borrador o confirmada). En cada barra el tramo
+        sólido es lo que está en bodega y el rayado lo cargado. Los traslados internos (reetiquetado, reempaque, reproceso)
+        no cuentan. La línea punteada marca el {umbral} %.
         El granel no tiene pedido propio: sus kg suman al total del pedido.
       </p>
       <p className="text-[10px] text-gray-400 mt-2">
