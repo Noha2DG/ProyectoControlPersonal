@@ -75,7 +75,7 @@ function formatear(rows: any[]) {
 const SELECT_LOTES = `
   SELECT l.Lote, l.CicloId, l.PiscinaId, l.Clase, c.Descripcion AS DescripcionClase,
          l.TallaReferencia, t.Descripcion AS DescripcionTallaReferencia,
-         l.Fecha, COALESCE(l.FechaProduccion, l.Fecha) AS FechaProduccion, l.PesoIngreso, l.UM, l.AlmacenCodigo, l.Activo, l.RegistradoPor, l.Notas,
+         l.Fecha, COALESCE(l.FechaProduccion, l.Fecha) AS FechaProduccion, l.PesoIngreso, l.UM, l.Activo, l.RegistradoPor, l.Notas,
          l.Origen, ${sqlAjustesLote("l")},
          f.Codigo AS CodigoFinca, f.Descripcion AS NombreFinca, p.Nombre AS NombrePiscina,
          ci.Anio, ci.Ciclo,
