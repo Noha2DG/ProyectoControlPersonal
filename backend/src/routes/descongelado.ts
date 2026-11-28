@@ -941,13 +941,18 @@ router.post("/hojas", requireAuth, requirePerm("descongelado", "crear"), async (
       return;
     }
 
-    await prisma.$executeRaw`
-      INSERT INTO HojaProceso (BodegaCodigo, FechaProduccion, HoraInicio, Propiedad, Encargado, Personas, CreadoPor)
-      VALUES (${bodega}, ${fecha}, ${HoraInicio}, ${propiedad}, ${Encargado},
-              ${Personas === '' || Personas == null ? null : Number(Personas)}, ${getOperador(req)})
-    `;
-    const [r]: any[] = await prisma.$queryRaw`SELECT LAST_INSERT_ID() AS id`;
-    res.status(201).json({ ok: true, HojaId: Number(r.id) });
+    // INSERT y LAST_INSERT_ID() en la misma transacción, o sea en la misma conexión: sueltos, con el
+    // pool de 10, el segundo podía caer en otra conexión y devolver 0 o el id de otra cosa (27 nov 2026).
+    const hojaId = await prisma.$transaction(async tx => {
+      await tx.$executeRaw`
+        INSERT INTO HojaProceso (BodegaCodigo, FechaProduccion, HoraInicio, Propiedad, Encargado, Personas, CreadoPor)
+        VALUES (${bodega}, ${fecha}, ${HoraInicio}, ${propiedad}, ${Encargado},
+                ${Personas === '' || Personas == null ? null : Number(Personas)}, ${getOperador(req)})
+      `;
+      const [r]: any[] = await tx.$queryRaw`SELECT LAST_INSERT_ID() AS id`;
+      return Number(r.id);
+    });
+    res.status(201).json({ ok: true, HojaId: hojaId });
   } catch (err: any) {
     if (err.message?.includes("foreign key")) res.status(400).json({ error: "La bodega o el encargado no existen" });
     else res.status(500).json({ error: err.message });
