@@ -60,13 +60,15 @@ function Posiciones() {
   const [error, setError] = useState("");
   const [asignar, setAsignar] = useState(null);   // { mesa, posicion } o { persona }
   const [acciones, setAcciones] = useState(null); // la asignación sobre la que se hizo clic
+  const [sinPuesto, setSinPuesto] = useState(null); // { dias, personas } — pesaron sin banda ni puesto
   const esHoy = fecha === hoyGT();
 
   const cargar = async () => {
     setCargando(true); setError("");
     try {
-      const [m, p] = await Promise.all([pedir(`${API}/mesas`), pedir(`${API}/posiciones?fecha=${fecha}`)]);
-      setMesas(m.filter(x => x.Activa)); setPosiciones(p.posiciones);
+      const [m, p, s] = await Promise.all([pedir(`${API}/mesas`), pedir(`${API}/posiciones?fecha=${fecha}`),
+        pedir(`${API}/sin-posicion`).catch(() => null)]);
+      setMesas(m.filter(x => x.Activa)); setPosiciones(p.posiciones); setSinPuesto(s);
     } catch (e) { setError(e.message); } finally { setCargando(false); }
   };
   useEffect(() => { cargar(); }, [fecha]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -106,6 +108,36 @@ function Posiciones() {
       </div>
       {error && <div className="mb-3 rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">{error}</div>}
       {!esHoy && <p className="mb-3 text-xs text-gray-500">Vista de un día pasado: solo consulta. Los cambios se hacen sobre hoy.</p>}
+
+      {/* Quienes pesaron bandejas en los últimos días sin banda ni puesto: sus bandejas se guardan sin
+          posición. Como la "Banda temporal" de Pelado (usuario, 28 nov 2026). */}
+      {!cargando && sinPuesto && (
+        <div className={`mb-4 rounded-xl border ${sinPuesto.personas.length ? "border-amber-300 bg-amber-50" : "border-gray-200 bg-white"}`}>
+          <div className="px-4 py-2.5 flex items-center gap-2">
+            <span className="font-bold text-gray-800">Sin puesto</span>
+            <span className="text-xs text-gray-500">pesaron en Empanizado en los últimos {sinPuesto.dias} días y no tienen banda ni puesto</span>
+            <span className={`ml-auto text-xs font-semibold px-2 py-0.5 rounded-full ${sinPuesto.personas.length ? "bg-amber-200 text-amber-900" : "bg-gray-100 text-gray-500"}`}>{sinPuesto.personas.length}</span>
+          </div>
+          {sinPuesto.personas.length === 0 ? (
+            <p className="px-4 pb-3 text-sm text-gray-500">Todos los que pesaron tienen su puesto.</p>
+          ) : (
+            <ul className="divide-y divide-amber-100 border-t border-amber-200">
+              {sinPuesto.personas.map(p => (
+                <li key={p.Codigo} className="flex items-center gap-3 px-4 py-1.5 text-sm">
+                  <span className="min-w-0 flex-1 truncate text-gray-800">{titulo(p.Nombre)} <span className="text-xs text-gray-400 font-mono">{p.Codigo}</span></span>
+                  <span className="text-xs text-gray-500 whitespace-nowrap">
+                    {p.BandejasHoy ? <b className="text-amber-800">{p.BandejasHoy} hoy · </b> : null}{p.Bandejas} bandejas · último día {p.UltimoDia.split("-").reverse().join("/")}
+                  </span>
+                  {puedeEditar && esHoy && (
+                    <button onClick={() => setAsignar({ persona: { Codigo: p.Codigo, Nombre: p.Nombre, MesaCodigo: null } })}
+                      className="shrink-0 text-xs font-semibold px-3 py-1 rounded-lg bg-amber-500 text-white hover:bg-amber-600">Asignar</button>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
 
       {cargando ? (
         <div className="flex justify-center py-16"><div className="w-8 h-8 border-4 border-amber-500 border-t-transparent rounded-full animate-spin" /></div>
@@ -182,7 +214,7 @@ function AsignarModal({ inicial, mesas, ocupante, posiciones, numerosDe, onClose
   };
 
   return (
-    <Modal titulo={inicial.persona ? `Mover a ${titulo(inicial.persona.Nombre)}` : "Asignar persona a una posición"} onClose={onClose}>
+    <Modal titulo={inicial.persona ? `${inicial.persona.MesaCodigo ? "Mover a" : "Asignar a"} ${titulo(inicial.persona.Nombre)}` : "Asignar persona a una posición"} onClose={onClose}>
       <form onSubmit={guardar} className="space-y-4">
         {!elegida ? (
           <div>

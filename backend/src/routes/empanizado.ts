@@ -185,6 +185,29 @@ router.get("/posiciones", verMesas, async (req: AuthRequest, res: Response) => {
   } catch (err) { responder(res, err); }
 });
 
+// GET /api/empanizado/sin-posicion?dias=14 — activos que pesaron bandejas de Empanizado en los últimos
+// días y no tienen banda ni puesto vigente (usuario, 28 nov 2026). Es la contraparte de la "Banda
+// temporal" de Pelado (mesas.ts, /sin-mesa): sin puesto, sus bandejas se guardan sin posición.
+router.get("/sin-posicion", verMesas, async (req: AuthRequest, res: Response) => {
+  try {
+    const dias = Math.min(Math.max(Number(req.query.dias) || 14, 1), 60);
+    const hoy = hoyGT();
+    const rows: any[] = await prisma.$queryRawUnsafe(`
+      SELECT p.PersonaCodigo AS Codigo,
+             CONCAT_WS(' ', e.PrimerNombre, e.SegundoNombre, e.PrimerApellido, e.SegundoApellido) AS Nombre,
+             COUNT(*) AS Bandejas, DATE_FORMAT(MAX(p.FechaProduccion), '%Y-%m-%d') AS UltimoDia,
+             SUM(p.FechaProduccion = ?) AS BandejasHoy
+        FROM Pesada p
+        JOIN Empleados e ON e.Codigo = p.PersonaCodigo AND e.Estado = 'Activo'
+       WHERE p.Modo = 'EMPANIZADO' AND p.Anulada = 0
+         AND p.FechaProduccion >= DATE_SUB(?, INTERVAL ? DAY) AND p.FechaProduccion <= ?
+         AND NOT EXISTS (SELECT 1 FROM PosicionEmpanizado pe WHERE pe.Codigo = p.PersonaCodigo AND pe.FechaFin IS NULL)
+       GROUP BY p.PersonaCodigo, e.PrimerNombre, e.SegundoNombre, e.PrimerApellido, e.SegundoApellido
+       ORDER BY UltimoDia DESC, Bandejas DESC, p.PersonaCodigo`, hoy, hoy, dias - 1, hoy);
+    res.json({ dias, personas: rows.map(r => ({ ...r, Bandejas: Number(r.Bandejas), BandejasHoy: Number(r.BandejasHoy) })) });
+  } catch (err) { responder(res, err); }
+});
+
 // GET /api/empanizado/personas — activos con su posición vigente, para el buscador de "Asignar".
 router.get("/personas", requirePerm("mesas_empanizado", "ver"), async (_req: AuthRequest, res: Response) => {
   try {
