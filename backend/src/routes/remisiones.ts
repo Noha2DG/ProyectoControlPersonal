@@ -396,6 +396,33 @@ router.get("/exportar", requireAuth, requirePerm("remisiones", "ver"), async (re
 });
 
 // GET /api/remisiones/:id — cabecera + líneas con el detalle completo de cada master.
+// Una línea de la remisión con todo lo que muestra la pantalla. STRAIGHT_JOIN fija el orden de las
+// tablas como están escritas: sin él MariaDB arrancaba por Clientes y recorría todo Masters hacia
+// atrás (~0.7 s con 1,200 líneas); así parte de las líneas de la remisión y cada tabla se busca por
+// su llave. El filtro (la remisión entera o un solo master) lo pone quien la usa.
+const DETALLE_SELECT = `
+  SELECT STRAIGHT_JOIN rd.DetalleId AS RemisionDetalleId, rd.LineaContenedor, rd.AgregadoPor, rd.AgregadoEn,
+         DATE_FORMAT(rd.RecibidoEn, '%Y-%m-%d %H:%i') AS RecibidoEnArea, rd.RecibidoPor AS RecibidoPorArea,
+         DATE_FORMAT(rd.PorRegresarEn, '%Y-%m-%d %H:%i') AS PorRegresarEnArea, rd.PorRegresarPor AS PorRegresarPorArea, sub2.*
+  FROM RemisionDetalle rd
+  JOIN (${MASTER_SELECT}) sub2 ON rd.MasterId = sub2.MasterId`;
+
+function lineaDeDetalle(d: any, codigoClienteRemision: any) {
+  const m = formatearMaster(d);
+  return {
+    ...m,
+    RemisionDetalleId: Number(d.RemisionDetalleId),
+    LineaContenedor: d.LineaContenedor == null ? null : Number(d.LineaContenedor),
+    // Quién la recibió en el área y cuándo, si el área la recibió antes de que bodega confirmara.
+    RecibidoEnArea: d.RecibidoEnArea ?? null,
+    RecibidoPorArea: d.RecibidoPorArea ?? null,
+    // El área no la usó y la dejó por regresar: bodega la escanea de vuelta con Devolver master.
+    PorRegresarEnArea: d.PorRegresarEnArea ?? null,
+    PorRegresarPorArea: d.PorRegresarPorArea ?? null,
+    CalzaConDestino: codigoClienteRemision == null ? null : Number(codigoClienteRemision) === m.CodigoCliente,
+  };
+}
+
 router.get("/:id", requireAuth, requirePerm("remisiones", "ver"), async (req: Request, res: Response) => {
   try {
     const remisionId = Number(req.params.id);
@@ -417,35 +444,14 @@ router.get("/:id", requireAuth, requirePerm("remisiones", "ver"), async (req: Re
     if (!rows.length) { res.status(404).json({ error: "Remisión no encontrada" }); return; }
     const remision = rows[0];
 
-    const detalle: any[] = await prisma.$queryRawUnsafe(`
-      SELECT rd.DetalleId AS RemisionDetalleId, rd.LineaContenedor, rd.AgregadoPor, rd.AgregadoEn,
-             DATE_FORMAT(rd.RecibidoEn, '%Y-%m-%d %H:%i') AS RecibidoEnArea, rd.RecibidoPor AS RecibidoPorArea,
-             DATE_FORMAT(rd.PorRegresarEn, '%Y-%m-%d %H:%i') AS PorRegresarEnArea, rd.PorRegresarPor AS PorRegresarPorArea, sub2.*
-      FROM RemisionDetalle rd
-      JOIN (${MASTER_SELECT}) sub2 ON rd.MasterId = sub2.MasterId
-      WHERE rd.RemisionId = ? AND rd.Vigente = 1
-      ORDER BY rd.LineaContenedor ASC, rd.DetalleId ASC
-    `, remisionId);
+    const detalle: any[] = await prisma.$queryRawUnsafe(
+      `${DETALLE_SELECT} WHERE rd.RemisionId = ? AND rd.Vigente = 1 ORDER BY rd.LineaContenedor ASC, rd.DetalleId ASC`, remisionId);
 
     // "Calza" = el cliente real de ese master (el que dice su etiqueta, vía su pedido) coincide con
     // el destino de la remisión. Se calcula al vuelo y NO se guarda: es un aviso visual para quien
     // arma el documento, no una restricción — mandarle a un cliente lo que sobró de otro pedido, sin
     // cambiar la etiqueta, es un escenario real y válido de carga.
-    const lineas = detalle.map(d => {
-      const m = formatearMaster(d);
-      return {
-        ...m,
-        RemisionDetalleId: Number(d.RemisionDetalleId),
-        LineaContenedor: d.LineaContenedor == null ? null : Number(d.LineaContenedor),
-        // Quién la recibió en el área y cuándo, si el área la recibió antes de que bodega confirmara.
-        RecibidoEnArea: d.RecibidoEnArea ?? null,
-        RecibidoPorArea: d.RecibidoPorArea ?? null,
-        // El área no la usó y la dejó por regresar: bodega la escanea de vuelta con Devolver master.
-        PorRegresarEnArea: d.PorRegresarEnArea ?? null,
-        PorRegresarPorArea: d.PorRegresarPorArea ?? null,
-        CalzaConDestino: remision.CodigoCliente == null ? null : Number(remision.CodigoCliente) === m.CodigoCliente,
-      };
-    });
+    const lineas = detalle.map(d => lineaDeDetalle(d, remision.CodigoCliente));
 
     // Lo que la remisión dejó al piso del área: bodega ve qué sigue sin trabajar y, si el área dice
     // que no lo tiene, qué se quedó en bodega y hay que devolver.
@@ -1038,8 +1044,16 @@ router.post("/:id/agregar-master", requireAuth, requirePerm("remisiones", "edita
     const r = await prisma.$transaction(
       (tx) => agregarMaster(tx, remisionId, req.body ?? {}, operador), { timeout: 30_000 });
 
-    const filas: any[] = await prisma.$queryRawUnsafe(`${MASTER_SELECT} WHERE m.MasterId = ? LIMIT 1`, r.MasterId);
-    res.status(201).json({ ok: true, Master: formatearMaster(filas[0]), Linea: r.Linea });
+    // Se devuelve también la línea completa, con la forma que trae GET /:id, para que la pantalla la
+    // agregue a lo que ya tiene en vez de descargar la remisión entera tras cada escaneo (con 1,200
+    // líneas eran ~900 KB y casi un segundo por caja, y el modal no deja escanear hasta que termina).
+    const [fila]: any[] = await prisma.$queryRawUnsafe(
+      `${DETALLE_SELECT} WHERE rd.MasterId = ? AND rd.RemisionId = ? AND rd.Vigente = 1 LIMIT 1`, r.MasterId, remisionId);
+    const [cab]: any[] = await prisma.$queryRaw`SELECT CodigoCliente FROM Remisiones WHERE RemisionId = ${remisionId} LIMIT 1`;
+    res.status(201).json({
+      ok: true, Master: formatearMaster(fila), Linea: r.Linea,
+      Detalle: lineaDeDetalle(fila, cab?.CodigoCliente ?? null),
+    });
   } catch (err: any) {
     if (err instanceof ErrorNegocio) { res.status(err.status).json({ error: err.message }); return; }
     if (err.message?.includes("Duplicate")) { res.status(400).json({ error: "Este master ya está en otra remisión" }); return; }

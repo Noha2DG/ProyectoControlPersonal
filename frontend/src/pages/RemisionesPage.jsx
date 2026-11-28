@@ -478,6 +478,24 @@ function PanelRemision({ remisionId, onClose, onCambio }) {
 
   useEffect(() => { fetchDetalle(); }, [fetchDetalle]);
 
+  // Mismo orden que GET /:id (línea del contenedor y luego el id; sin línea va primero). Los totales
+  // se recalculan igual que allá: cuántas, y kg y lb.
+  const agregarLineaLocal = useCallback((linea) => {
+    setRemision(prev => {
+      if (!prev) return prev;
+      const previas = (prev.Lineas ?? []).filter(l => l.RemisionDetalleId !== linea.RemisionDetalleId);
+      const lineas = [...previas, linea].sort((a, b) =>
+        (a.LineaContenedor ?? -Infinity) - (b.LineaContenedor ?? -Infinity) || a.RemisionDetalleId - b.RemisionDetalleId);
+      return {
+        ...prev,
+        Lineas: lineas,
+        CantidadMasters: lineas.length,
+        PesoKg: lineas.reduce((acc, l) => acc + l.PesoMasterKG, 0),
+        PesoLb: lineas.reduce((acc, l) => acc + l.PesoMasterLb, 0),
+      };
+    });
+  }, []);
+
   const borrador = remision?.Estatus === "Borrador";
   const editable = borrador && puedeEditar;
 
@@ -491,8 +509,12 @@ function PanelRemision({ remisionId, onClose, onCambio }) {
     });
     const data = await leerJSON(res);
     if (!res.ok) throw new Error(data.error || "No se pudo agregar");
-    await fetchDetalle();
-    onCambio?.();
+    // El servidor ya devuelve la línea armada: se suma a la lista y a los totales en vez de descargar
+    // la remisión entera tras cada caja (con ~1,200 líneas eran ~900 KB y casi un segundo, y el modal
+    // no deja escanear la siguiente hasta que termina). La lista de remisiones se refresca al cerrar el
+    // panel. Un servidor sin este cambio no manda `Detalle`: ahí sí se recarga todo.
+    if (data.Detalle) agregarLineaLocal(data.Detalle);
+    else { await fetchDetalle(); onCambio?.(); }
     const m = data.Master;
     const sufijoLinea = data.Linea != null ? ` · línea ${data.Linea}` : "";
     return `${m.Correlativo} — ${m.CodigoPedido} · ${m.NombreCliente} · ${m.DescripcionProceso} ${m.DescripcionTalla}${sufijoLinea}`;
