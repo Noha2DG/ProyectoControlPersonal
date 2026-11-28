@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef, memo } from "react";
 import { authHeader } from "../context/AuthContext.jsx";
 
 // Dibujo de cómo se va llenando el contenedor de una remisión de exportación, fila por fila.
@@ -9,7 +9,9 @@ import { authHeader } from "../context/AuthContext.jsx";
 //
 // Lo que falta sale del avance de la proforma (GET /detalle-pedido/avance) y con eso se estiman las
 // filas que quedan y cuánto espacio sobra en la puerta. Se vuelve a pedir solo cada REFRESCO_MS para
-// que una pantalla en la oficina siga la carga sin que nadie toque nada.
+// que una pantalla en la oficina siga la carga sin que nadie toque nada. Pide GET /:id/estiba, que
+// trae solo lo que se dibuja, con la firma de lo que ya tiene: si no entró ni salió ninguna caja no
+// viaja nada y el dibujo no se vuelve a armar.
 //
 // PROVISIONAL (13 nov 2026): las medidas de caja y los masters por fila salen del modelo de estiba de
 // Peak One (020-2026) y van aquí fijos hasta que el menú de Exportaciones los tenga en catálogo. Una
@@ -63,6 +65,46 @@ function Rotulo({ x, y, texto, ancla = "middle" }) {
       <text x={rx + w / 2} y={y} textAnchor="middle" fontSize="11.5" fontWeight="600" fill="#0f172a">{texto}</text>
     </g>
   );
+}
+
+/**
+ * Parte las cajas de una fila en tramos: cajas seguidas de la misma presentación, cortadas por cama.
+ * Un tramo es la cola de una cama empezada, un bloque de camas completas o el comienzo de una cama.
+ * `k0..k1` es el lugar dentro de la cama (en el orden de escaneo) y `c0..c1` las camas que ocupa.
+ */
+function tramosDeFila(items) {
+  const tramos = [];
+  for (let i = 0; i < items.length;) {
+    const pres = items[i].Presentacion;
+    let j = i;
+    while (j + 1 < items.length && items[j + 1].Presentacion === pres) j++;
+    for (let s = i; s <= j;) {
+      const cama = Math.floor(s / POR_CAMA), finCama = cama * POR_CAMA + POR_CAMA - 1;
+      if (s % POR_CAMA === 0 && j >= finCama) {
+        const ultima = Math.floor((j + 1) / POR_CAMA) - 1;
+        tramos.push({ pres, c0: cama, c1: ultima, k0: 0, k1: POR_CAMA - 1 });
+        s = (ultima + 1) * POR_CAMA;
+      } else {
+        const e = Math.min(j, finCama);
+        tramos.push({ pres, c0: cama, c1: cama, k0: s % POR_CAMA, k1: e % POR_CAMA });
+        s = e + 1;
+      }
+    }
+    i = j + 1;
+  }
+  return tramos;
+}
+
+/** Las líneas que separan las cajas de un tramo en sus caras visibles: enfrente, arriba y la de la puerta. */
+function lineasDeCajas([x0, y0, z0, x1, y1, z1], { ancho, alto }) {
+  const d = [];
+  const linea = (a, b) => {
+    const [ax, ay] = P(...a), [bx, by] = P(...b);
+    d.push(`M${ax.toFixed(1)},${ay.toFixed(1)}L${bx.toFixed(1)},${by.toFixed(1)}`);
+  };
+  for (let z = z0 + alto; z < z1 - 0.01; z += alto) { linea([x0, y0, z], [x1, y0, z]); linea([x1, y0, z], [x1, y1, z]); }
+  for (let y = y0 + ancho; y < y1 - 0.01; y += ancho) { linea([x0, y, z1], [x1, y, z1]); linea([x1, y, z0], [x1, y, z1]); }
+  return d.join("");
 }
 
 /** Arma las filas (cargadas + estimadas) a partir de las líneas de la remisión y del avance. */
@@ -136,7 +178,9 @@ function armarEstiba(lineas = [], avance = []) {
   };
 }
 
-function DibujoContenedor({ estiba }) {
+// memo: con la firma, un refresco sin cajas nuevas deja `estiba` igual y el SVG no se vuelve a armar
+// (antes eran ~4,800 figuras cada 15 s con el contenedor a la mitad).
+const DibujoContenedor = memo(function DibujoContenedor({ estiba }) {
   const { filas, color } = estiba;
   const { largo: L, ancho: W, alto: H } = CONTENEDOR;
   const usado = estiba.largoUsado;
@@ -149,13 +193,23 @@ function DibujoContenedor({ estiba }) {
       const alto = Math.ceil(Math.min(f.plan, 12 * POR_CAMA) / POR_CAMA) * f.caja.alto;
       piezas.push(<Caja key={`g${f.n}`} b={[f.x0, off, 0, f.x0 + f.caja.fondo, off + POR_CAMA * f.caja.ancho, alto]} c={FANTASMA} punteada />);
     }
-    const cajas = f.items.map((it, i) => {
-      const cama = Math.floor(i / POR_CAMA), col = POR_CAMA - 1 - (i % POR_CAMA);
-      return { b: [f.x0, off + col * f.caja.ancho, cama * f.caja.alto, f.x0 + f.caja.fondo, off + (col + 1) * f.caja.ancho, (cama + 1) * f.caja.alto], c: color[it.Presentacion] ?? PALETA[0] };
-    });
-    // Pintor: primero lo del fondo y lo de abajo, para que lo de enfrente lo tape.
-    cajas.sort((a, b) => b.b[1] - a.b[1] || a.b[2] - b.b[2])
-      .forEach((c, i) => piezas.push(<Caja key={`${f.n}-${i}`} b={c.b} c={c.c} />));
+    // Por tramos y no caja por caja: cada caja eran 3 polígonos (una fila de 82, 246) y el contenedor
+    // lleno ~5,000 figuras. Un tramo es un prisma con las líneas de sus cajas encima: se ve igual y son
+    // unas pocas figuras por fila. La caja i de la fila va en la cama i / 7 y, dentro de la cama, del
+    // fondo hacia enfrente (columna 6 primero), igual que antes.
+    const { fondo, ancho, alto } = f.caja;
+    tramosDeFila(f.items)
+      .map(t => ({
+        b: [f.x0, off + (POR_CAMA - 1 - t.k1) * ancho, t.c0 * alto, f.x0 + fondo, off + (POR_CAMA - t.k0) * ancho, (t.c1 + 1) * alto],
+        c: color[t.pres] ?? PALETA[0],
+      }))
+      // Pintor: primero lo de abajo y, a la misma altura, lo del fondo, para que lo de enfrente lo tape.
+      .sort((a, b) => a.b[2] - b.b[2] || b.b[1] - a.b[1])
+      .forEach(({ b, c }, i) => {
+        piezas.push(<Caja key={`${f.n}-${i}`} b={b} c={c} />);
+        const lineas = lineasDeCajas(b, f.caja);
+        if (lineas) piezas.push(<path key={`${f.n}-${i}-l`} d={lineas} fill="none" stroke={c.st} strokeWidth="0.5" />);
+      });
   }
 
   const a = P(0, 0, 0), b = P(Math.min(usado, L + 60), 0, 0), c = P(L, 0, 0);
@@ -217,26 +271,43 @@ function DibujoContenedor({ estiba }) {
       <text x={(fx1 + fx2) / 2} y={(fy1 + fy2) / 2 - 12} textAnchor="middle" fontSize="11.5" fill="#475569">se carga del fondo hacia la puerta</text>
     </svg>
   );
-}
+});
 
 export default function EstibaContenedor({ remisionId, onCerrar }) {
   const [remision, setRemision] = useState(null);
   const [avance, setAvance] = useState([]);
   const [error, setError] = useState("");
   const [actualizado, setActualizado] = useState(null);
+  // Lo que ya se tiene, para no volver a pedirlo ni redibujarlo si no cambió.
+  const firmaRef = useRef("");
+  const avanceRef = useRef("");
 
   const cargar = useCallback(async () => {
     try {
-      const res = await fetch(`/api/remisiones/${remisionId}`, { headers: authHeader() });
+      const res = await fetch(`/api/remisiones/${remisionId}/estiba?firma=${encodeURIComponent(firmaRef.current)}`, { headers: authHeader() });
       if (!res.ok) throw new Error("No se pudo leer la remisión");
       const r = await res.json();
-      let av = [];
-      if (r.CodigoPedido) {
-        const ra = await fetch(`/api/detalle-pedido/avance?pedido=${encodeURIComponent(r.CodigoPedido)}`, { headers: authHeader() });
-        if (ra.ok) av = await ra.json();
+      if (!r.SinCambios) {
+        firmaRef.current = r.Firma;
+        // La descripción viene una vez por presentación; armarEstiba la busca en cada caja.
+        setRemision({
+          Folio: r.Folio,
+          Lineas: (r.Lineas ?? []).map(l => ({ ...l, DescripcionPresentacion: r.Presentaciones?.[l.Presentacion] ?? l.Presentacion })),
+        });
       }
-      setRemision(r);
-      setAvance(Array.isArray(av) ? av : []);
+      // El avance es chico y cambia también por otras remisiones de la proforma: se pide siempre, pero
+      // solo se reemplaza si cambió (si se reemplaza, el dibujo se arma de nuevo). Si falla se queda
+      // con el anterior.
+      let av = null;
+      if (!r.CodigoPedido) av = [];
+      else {
+        const ra = await fetch(`/api/detalle-pedido/avance?pedido=${encodeURIComponent(r.CodigoPedido)}`, { headers: authHeader() });
+        if (ra.ok) { const j = await ra.json(); av = Array.isArray(j) ? j : []; }
+      }
+      if (av) {
+        const texto = JSON.stringify(av);
+        if (texto !== avanceRef.current) { avanceRef.current = texto; setAvance(av); }
+      }
       setError("");
       setActualizado(new Date());
     } catch (e) {
@@ -257,7 +328,7 @@ export default function EstibaContenedor({ remisionId, onCerrar }) {
     return () => window.removeEventListener("keydown", esc);
   }, [onCerrar]);
 
-  const estiba = remision ? armarEstiba(remision.Lineas, avance) : null;
+  const estiba = useMemo(() => remision ? armarEstiba(remision.Lineas, avance) : null, [remision, avance]);
   const total = estiba ? estiba.cargados + estiba.faltaTotal : 0;
   const pct = total ? Math.round((estiba.cargados / total) * 100) : 0;
   const filasEst = estiba?.filas.length ?? 0;
@@ -305,7 +376,7 @@ export default function EstibaContenedor({ remisionId, onCerrar }) {
                   <div key={k.l} className="bg-white border border-gray-200 rounded-lg px-3 py-2 min-w-0">
                     <p className="text-xs text-gray-500 truncate">{k.l}</p>
                     <p className={`text-xl font-bold tabular-nums ${k.alerta ? "text-red-600" : "text-gray-900"}`}>{k.v}</p>
-                    <p className="text-xs text-gray-500 truncate" title={k.s}>{k.s || " "}</p>
+                    <p className="text-xs text-gray-500 truncate" title={k.s}>{k.s || " "}</p>
                     {k.p != null && <div className="mt-1 h-1.5 rounded bg-gray-100 overflow-hidden"><div className="h-full bg-teal-600" style={{ width: `${Math.min(100, k.p)}%` }} /></div>}
                   </div>
                 ))}

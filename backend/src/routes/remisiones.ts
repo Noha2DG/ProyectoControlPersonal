@@ -489,6 +489,54 @@ router.get("/:id", requireAuth, requirePerm("remisiones", "ver"), async (req: Re
   }
 });
 
+// GET /api/remisiones/:id/estiba?firma=...
+// Lo que necesita el dibujo del contenedor y nada más: fila, presentación, lote y kg de cada caja,
+// en orden de escaneo. GET /:id manda ~30 campos por línea (1.1 MB con 1,500 cajas) y la estiba se
+// refresca cada 15 s. La firma (cuántas líneas, la última y la suma de las filas) cambia con
+// cualquier caja que entre o salga —la fila de una línea no se edita después de escanearla—: si la
+// pantalla manda la que ya tiene, se contesta que no hubo cambios y no viaja ni se redibuja nada.
+router.get("/:id/estiba", requireAuth, requirePerm("remisiones", "ver"), async (req: Request, res: Response) => {
+  try {
+    const remisionId = Number(req.params.id);
+    const [cab]: any[] = await prisma.$queryRaw`
+      SELECT Folio, CodigoPedido FROM Remisiones WHERE RemisionId = ${remisionId} LIMIT 1`;
+    if (!cab) { res.status(404).json({ error: "Remisión no encontrada" }); return; }
+    const [f]: any[] = await prisma.$queryRaw`
+      SELECT COUNT(*) AS n, COALESCE(MAX(DetalleId), 0) AS ultima, COALESCE(SUM(LineaContenedor), 0) AS filas
+      FROM RemisionDetalle WHERE RemisionId = ${remisionId} AND Vigente = 1`;
+    const firma = `${Number(f.n)}-${Number(f.ultima)}-${Number(f.filas)}`;
+    const base = { Folio: cab.Folio, CodigoPedido: cab.CodigoPedido ?? null, Firma: firma };
+    if (req.query.firma === firma) { res.json({ ...base, SinCambios: true }); return; }
+
+    const cajas: any[] = await prisma.$queryRaw`
+      SELECT STRAIGHT_JOIN rd.LineaContenedor, dp.Presentacion, pr.Descripcion AS DescripcionPresentacion,
+             oe.Lote, pr.PesoKG * pr.CajasXMaster AS PesoMasterKG
+      FROM RemisionDetalle rd
+      JOIN Masters m ON m.MasterId = rd.MasterId
+      JOIN EtiquetaImpresa ei ON ei.EtiquetaId = m.EtiquetaId
+      JOIN OrdenEtiquetado oe ON oe.OrdenId = ei.OrdenId
+      JOIN DetallePedido dp ON dp.DetalleId = oe.DetalleId
+      JOIN Presentacion pr ON pr.Codigo = dp.Presentacion
+      WHERE rd.RemisionId = ${remisionId} AND rd.Vigente = 1
+      ORDER BY rd.LineaContenedor ASC, rd.DetalleId ASC`;
+    // La descripción va una vez por presentación y no repetida en cada caja.
+    const presentaciones: Record<string, string> = {};
+    for (const c of cajas) presentaciones[c.Presentacion] = c.DescripcionPresentacion;
+    res.json({
+      ...base,
+      Presentaciones: presentaciones,
+      Lineas: cajas.map(c => ({
+        LineaContenedor: c.LineaContenedor == null ? null : Number(c.LineaContenedor),
+        Presentacion: c.Presentacion,
+        Lote: c.Lote,
+        PesoMasterKG: Number(c.PesoMasterKG),
+      })),
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 // Cabecera
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
