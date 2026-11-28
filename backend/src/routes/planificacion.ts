@@ -19,19 +19,17 @@ router.get("/kiosco", requireAuth, async (_req: Request, res: Response) => {
         a.Nombre,
         a.GeneraPaga,
         COALESCE(p.Cantidad, 0) AS Cantidad,
-        COUNT(t.id)             AS ocupacion
+        COALESCE(o.n, 0)        AS ocupacion
       FROM Areas a
       LEFT JOIN PlanificacionAreas p
              ON p.CodigoArea = a.Codigo AND p.Fecha = ${hoy}
-      LEFT JOIN Transferencias t
-             ON t.CodigoArea = a.Codigo
-            -- Rango y no DATE(t.FechaHora) = hoy: la función sobre la columna obligaba a leer todas las
-            -- transferencias del área (177 ms, y cada kiosco lo pide cada 30 s). Así usa el índice
-            -- (CodigoArea, FechaHora) y lee solo las de hoy.
-            AND t.FechaHora >= ${hoy} AND t.FechaHora < ${hoy} + INTERVAL 1 DAY
-            AND t.FechaSalida IS NULL
+      -- La ocupación se cuenta una sola vez para el día y después se une por área (4 ms). Unir
+      -- Transferencias área por área leía todas las de cada área (~170 ms, y cada kiosco lo pide cada
+      -- 30 s): ni con DATE(FechaHora) = hoy ni con rango MariaDB usa la fecha dentro del LEFT JOIN.
+      LEFT JOIN (SELECT CodigoArea, COUNT(*) AS n FROM Transferencias
+                  WHERE FechaHora >= ${hoy} AND FechaHora < ${hoy} + INTERVAL 1 DAY AND FechaSalida IS NULL
+                  GROUP BY CodigoArea) o ON o.CodigoArea = a.Codigo
       WHERE a.Activa = 1
-      GROUP BY a.Codigo, a.Nombre, a.GeneraPaga, p.Cantidad
       ORDER BY a.Nombre ASC
     `;
     res.json(rows.map(r => {
@@ -67,16 +65,14 @@ router.get("/", requireAuth, requirePerm("planificacion", "ver"), async (req: Re
         a.GeneraPaga,
         a.Activa,
         COALESCE(p.Cantidad, 0) AS Cantidad,
-        COUNT(t.id)             AS ocupacion
+        COALESCE(o.n, 0)        AS ocupacion
       FROM Areas a
       LEFT JOIN PlanificacionAreas p
              ON p.CodigoArea = a.Codigo AND p.Fecha = ${fecha}
-      LEFT JOIN Transferencias t
-             ON t.CodigoArea = a.Codigo
-            AND t.FechaHora >= ${fecha} AND t.FechaHora < ${fecha} + INTERVAL 1 DAY
-            AND t.FechaSalida IS NULL
+      LEFT JOIN (SELECT CodigoArea, COUNT(*) AS n FROM Transferencias
+                  WHERE FechaHora >= ${fecha} AND FechaHora < ${fecha} + INTERVAL 1 DAY AND FechaSalida IS NULL
+                  GROUP BY CodigoArea) o ON o.CodigoArea = a.Codigo
       WHERE a.Activa = 1
-      GROUP BY a.Codigo, a.Nombre, a.Grupo, a.GeneraPaga, a.Activa, p.Cantidad
       ORDER BY a.Nombre ASC
     `;
     res.json(rows.map(r => ({
