@@ -30,7 +30,7 @@ function formatear(rows: any[]) {
 const SELECT_TRANS = `
   SELECT tp.TransaccionId, tp.Lote, tp.ClaseOrigen, tp.Proceso, pr.Descripcion AS DescripcionProceso,
          tp.ClasePT, cl.Descripcion AS DescripcionClasePT, tp.Talla, ta.Descripcion AS DescripcionTalla,
-         tp.AlmacenOrigen, tp.AlmacenDestino, tp.Estado, tp.FechaHora, tp.FechaProduccion, tp.RegistradoPor,
+         tp.Estado, tp.FechaHora, tp.FechaProduccion, tp.RegistradoPor,
          p.Nombre AS NombrePiscina,
          COALESCE((SELECT SUM(pd.Peso) FROM PesajeDetalle pd WHERE pd.TransaccionId = tp.TransaccionId), 0) AS Procesado,
          -- A dónde se trasladó lo producido al cerrarla (lib/destajoPiso.ts, cerrarTransaccion).

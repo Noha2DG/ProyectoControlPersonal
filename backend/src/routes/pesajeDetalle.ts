@@ -83,14 +83,14 @@ async function borrarTermoSiQuedoVacio(tx: any, termoId: number) {
        AND NOT EXISTS (SELECT 1 FROM MovimientoPiso m WHERE m.TransaccionId = t.TransaccionId AND m.NumeroTermo = t.NumeroTermo)`;
 }
 
-async function resolverTermo(tx: any, transaccionId: number, numeroTermo: string, almacenOrigen: string) {
+async function resolverTermo(tx: any, transaccionId: number, numeroTermo: string) {
   let termos: any[] = await tx.$queryRaw`
     SELECT TermoId FROM Termos WHERE TransaccionId = ${transaccionId} AND NumeroTermo = ${numeroTermo} LIMIT 1
   `;
   if (!termos.length) {
     try {
       await tx.$executeRaw`
-        INSERT INTO Termos (TransaccionId, NumeroTermo, AlmacenActual, Capacidad) VALUES (${transaccionId}, ${numeroTermo}, ${almacenOrigen}, 150)
+        INSERT INTO Termos (TransaccionId, NumeroTermo, Capacidad) VALUES (${transaccionId}, ${numeroTermo}, 150)
       `;
     } catch (err: any) {
       if (!err.message?.includes("Duplicate")) throw err; // creado en paralelo por otra estación justo ahora — se recupera abajo
@@ -126,7 +126,7 @@ export async function termoEnTratamiento(tx: any, transaccionId: number, numeroT
 // y evita leer un Estado que cambió justo después de leerlo afuera.
 async function bloquearTransaccionAbierta(tx: any, transaccionId: number) {
   const trans: any[] = await tx.$queryRaw`
-    SELECT Lote, ClaseOrigen, ClasePT, AlmacenOrigen, Estado FROM TransaccionesProduccion WHERE TransaccionId = ${transaccionId} LIMIT 1 FOR UPDATE
+    SELECT Lote, ClaseOrigen, ClasePT, Estado FROM TransaccionesProduccion WHERE TransaccionId = ${transaccionId} LIMIT 1 FOR UPDATE
   `;
   if (!trans.length) return { error: "Transacción no encontrada", status: 404 };
   if (trans[0].Estado !== "Abierta") return { error: "La transacción está cerrada", status: 400 };
@@ -406,7 +406,7 @@ router.post("/", requireAuth, requirePerm("destajo", "crear"), async (req: Reque
       const disponibilidad = await verificarDisponibilidad(tx, bloqueo.trans.Lote, bloqueo.trans.ClaseOrigen, Number(Peso));
       if (!disponibilidad.ok) return disponibilidad;
 
-      const termoId = await resolverTermo(tx, Number(TransaccionId), numeroTermo, bloqueo.trans.AlmacenOrigen);
+      const termoId = await resolverTermo(tx, Number(TransaccionId), numeroTermo);
 
       await tx.$executeRaw`
         INSERT INTO PesajeDetalle (TransaccionId, TermoId, Codigo, Peso, RegistradoPor)
@@ -454,7 +454,7 @@ router.put("/:id", requireAuth, requirePerm("destajo", "editar"), async (req: Re
       const disponibilidad = await verificarDisponibilidad(tx, bloqueo.trans.Lote, bloqueo.trans.ClaseOrigen, Number(Peso), id);
       if (!disponibilidad.ok) return disponibilidad;
 
-      const termoId = await resolverTermo(tx, transaccionId, numeroTermo, bloqueo.trans.AlmacenOrigen);
+      const termoId = await resolverTermo(tx, transaccionId, numeroTermo);
 
       await tx.$executeRaw`UPDATE PesajeDetalle SET TermoId = ${Number(termoId)}, Peso = ${Number(Peso)} WHERE PesajeId = ${id}`;
       // La pesada se fue a otro termo: el de antes puede haber quedado vacío.
