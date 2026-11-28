@@ -407,7 +407,7 @@ export default function PesajePage() {
           {termoActual && !termoEnTrat && (
             <div className="mt-2">
               {(() => {
-                const cap = termoActual.Capacidad ?? 150;
+                const cap = termoActual.Capacidad ?? 175;
                 const pct = (termoActual.PesoAcumulado / cap) * 100;
                 const falta = cap - termoActual.PesoAcumulado;
                 return (
