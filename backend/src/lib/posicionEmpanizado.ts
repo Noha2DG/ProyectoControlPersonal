@@ -54,6 +54,13 @@ export async function asignarPosicion(tx: any, d: {
       FROM PosicionEmpanizado pe JOIN Empleados em ON em.Codigo = pe.Codigo
      WHERE pe.MesaCodigo = ? AND pe.Posicion = ? AND pe.FechaFin IS NULL AND pe.Codigo <> ? FOR UPDATE`, mesa, posicion, codigo);
   if (ocupa) throw new ErrorPosicion(400, `La posición ${posicion} de ${m.Nombre} es de ${ocupa.Nombre} (${ocupa.Codigo}): muévala o quítela primero`);
+  // Los números van corridos en toda el área (Banda 1 del 1 al 27, Banda 2 del 28 al 55…): el mismo
+  // número no puede estar en dos mesas a la vez, aunque cada mesa acepte hasta su tope.
+  const [otraMesa]: any[] = await tx.$queryRawUnsafe(`
+    SELECT pe.Codigo, CONCAT_WS(' ', em.PrimerNombre, em.PrimerApellido) AS Nombre, me.Nombre AS Mesa
+      FROM PosicionEmpanizado pe JOIN Empleados em ON em.Codigo = pe.Codigo JOIN MesasEmpanizado me ON me.Codigo = pe.MesaCodigo
+     WHERE pe.MesaCodigo <> ? AND pe.Posicion = ? AND pe.FechaFin IS NULL AND pe.Codigo <> ? LIMIT 1 FOR UPDATE`, mesa, posicion, codigo);
+  if (otraMesa) throw new ErrorPosicion(400, `El puesto ${posicion} ya es de ${otraMesa.Nombre} (${otraMesa.Codigo}) en ${otraMesa.Mesa}: los números van corridos en toda el área`);
 
   const actual = await vigenteDe(tx, codigo);
   if (actual) {

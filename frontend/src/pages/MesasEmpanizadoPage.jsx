@@ -150,7 +150,7 @@ function Posiciones() {
         </div>
       )}
 
-      {asignar && <AsignarModal inicial={asignar} mesas={mesas} ocupante={ocupante} onClose={() => setAsignar(null)} onGuardado={() => { setAsignar(null); cargar(); }} />}
+      {asignar && <AsignarModal inicial={asignar} mesas={mesas} ocupante={ocupante} posiciones={posiciones} numerosDe={numerosDe} onClose={() => setAsignar(null)} onGuardado={() => { setAsignar(null); cargar(); }} />}
       {acciones && <AccionesModal a={acciones} onClose={() => setAcciones(null)}
         onMover={() => { setAsignar({ persona: acciones }); setAcciones(null); }}
         onListo={() => { setAcciones(null); cargar(); }} />}
@@ -158,7 +158,7 @@ function Posiciones() {
   );
 }
 
-function AsignarModal({ inicial, mesas, ocupante, onClose, onGuardado }) {
+function AsignarModal({ inicial, mesas, ocupante, posiciones, numerosDe, onClose, onGuardado }) {
   const [personas, setPersonas] = useState([]);
   const [busqueda, setBusqueda] = useState("");
   const [elegida, setElegida] = useState(inicial.persona ?? null);
@@ -218,10 +218,13 @@ function AsignarModal({ inicial, mesas, ocupante, onClose, onGuardado }) {
             <label className="block text-xs font-medium text-gray-500 mb-1">Posición</label>
             <select required value={form.Posicion} onChange={e => setForm(f => ({ ...f, Posicion: e.target.value }))} disabled={!mesa} className={inputCls + " disabled:bg-gray-100"}>
               <option value="">—</option>
-              {mesa && Array.from({ length: mesa.Posiciones }, (_, i) => i + 1).map(n => {
-                const o = ocupante.get(`${mesa.Codigo}#${n}`);
+              {/* Los mismos números que la tarjeta de la mesa (corridos en toda el área: la Banda 2 va del
+                  28 al 55, no del 1). Uno que ya ocupa alguien en otra mesa se ve, pero no se puede elegir. */}
+              {mesa && numerosDe(mesa).map(n => {
+                const o = ocupante.get(`${mesa.Codigo}#${n}`) ?? posiciones.find(p => Number(p.Posicion) === n);
                 const propia = o && elegida && o.Codigo === elegida.Codigo;
-                return <option key={n} value={n} disabled={!!o && !propia}>{n}{o ? ` · ${titulo(o.Nombre).split(" ")[0]}` : " · libre"}</option>;
+                const otraMesa = o && o.MesaCodigo !== mesa.Codigo ? ` (${nombreMesa(o.MesaCodigo)})` : "";
+                return <option key={n} value={n} disabled={!!o && !propia}>{n}{o ? ` · ${titulo(o.Nombre).split(" ")[0]}${otraMesa}` : " · libre"}</option>;
               })}
             </select>
           </div>
