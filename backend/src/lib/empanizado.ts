@@ -503,14 +503,20 @@ export async function tiemposProduccion(client: any, desde: string, hasta: strin
     client.$queryRawUnsafe(`
       SELECT PersonaCodigo AS c, DATE_FORMAT(CreadoEn, ${F}) AS t, PesoNetoG AS g, Destino AS d FROM Pesada
        WHERE Modo = 'EMPANIZADO' AND Anulada = 0 AND PersonaCodigo IS NOT NULL AND FechaProduccion BETWEEN ? AND ?`, desde, hasta),
+    // Desde las personas (unas decenas) hacia sus transferencias, por índice. Con `tr.Codigo IN (...)`
+    // MariaDB recorría las ~119 mil transferencias y comparaba cada una contra la lista (27 nov 2026).
     client.$queryRawUnsafe(`
-      SELECT tr.Codigo AS c, DATE_FORMAT(tr.FechaHora, ${F}) AS i, DATE_FORMAT(tr.FechaSalida, ${F}) AS s FROM Transferencias tr
-       WHERE tr.Codigo IN (${personas}) AND tr.FechaHora < DATE_ADD(?, INTERVAL 1 DAY)
+      SELECT STRAIGHT_JOIN tr.Codigo AS c, DATE_FORMAT(tr.FechaHora, ${F}) AS i, DATE_FORMAT(tr.FechaSalida, ${F}) AS s
+        FROM (${personas}) pp
+        JOIN Transferencias tr ON tr.Codigo = pp.PersonaCodigo
+       WHERE tr.FechaHora < DATE_ADD(?, INTERVAL 1 DAY)
          AND (tr.FechaSalida IS NULL OR tr.FechaSalida >= ?)`, desde, hasta, hasta, desde),
     client.$queryRawUnsafe(`
-      SELECT tr.Codigo AS c, DATE_FORMAT(tr.FechaHora, ${F}) AS i, DATE_FORMAT(tr.FechaSalida, ${F}) AS s FROM Transferencias tr
+      SELECT STRAIGHT_JOIN tr.Codigo AS c, DATE_FORMAT(tr.FechaHora, ${F}) AS i, DATE_FORMAT(tr.FechaSalida, ${F}) AS s
+        FROM (${personas}) pp
+        JOIN Transferencias tr ON tr.Codigo = pp.PersonaCodigo
         JOIN Areas a ON a.Codigo = tr.CodigoArea AND a.GeneraPaga = 0
-       WHERE tr.Codigo IN (${personas}) AND tr.FechaHora < DATE_ADD(?, INTERVAL 1 DAY)
+       WHERE tr.FechaHora < DATE_ADD(?, INTERVAL 1 DAY)
          AND (tr.FechaSalida IS NULL OR tr.FechaSalida >= ?)`, desde, hasta, hasta, desde),
   ]);
   return {

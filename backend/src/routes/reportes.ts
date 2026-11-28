@@ -185,20 +185,23 @@ router.get("/produccion", requireAuth, requirePerm("destajo", "ver"), async (req
     const pPersona = () => prisma.$queryRawUnsafe(`
       SELECT e.Codigo AS IdEmpleado,
              CONCAT_WS(' ', e.PrimerNombre, e.SegundoNombre, e.PrimerApellido, e.SegundoApellido) AS Nombre,
-             (SELECT a.Nombre FROM Transferencias tr
-              JOIN Areas a ON tr.CodigoArea = a.Codigo
-              WHERE tr.Codigo = pd.Codigo
-                AND tr.FechaHora <= pd.FechaHora
-                AND (tr.FechaSalida IS NULL OR tr.FechaSalida >= pd.FechaHora)
-              ORDER BY tr.FechaHora DESC LIMIT 1) AS Area,
-             (SELECT tr.FechaHora FROM Transferencias tr
-              WHERE tr.Codigo = pd.Codigo
-                AND tr.FechaHora <= pd.FechaHora
-                AND (tr.FechaSalida IS NULL OR tr.FechaSalida >= pd.FechaHora)
-              ORDER BY tr.FechaHora DESC LIMIT 1) AS EntradaArea,
+             a.Nombre AS Area, tra.FechaHora AS EntradaArea,
              tp.Lote, tp.ClaseOrigen, pd.FechaHora, tp.ClasePT, cl.Descripcion AS Producto, tp.Talla, ta.Descripcion AS DescripcionTalla,
              pd.Peso AS Kilos${colMesa}
-      FROM PesajeDetalle pd
+      -- La transferencia vigente de cada pesada se busca UNA vez (su id) y de ahí salen el área y la
+      -- hora de entrada; antes eran dos búsquedas iguales por pesada (27 nov 2026: 4.3 s → ~1 s con un
+      -- mes, junto con el índice idx_trans_codigo_cobertura). El desempate (id DESC) es el mismo orden
+      -- en que el índice las devolvía.
+      FROM (SELECT pd0.*,
+                   (SELECT tr.id FROM Transferencias tr
+                     WHERE tr.Codigo = pd0.Codigo
+                       AND tr.FechaHora <= pd0.FechaHora
+                       AND (tr.FechaSalida IS NULL OR tr.FechaSalida >= pd0.FechaHora)
+                     ORDER BY tr.FechaHora DESC, tr.id DESC LIMIT 1) AS TrId
+              FROM PesajeDetalle pd0
+             WHERE pd0.FechaHora >= ? AND pd0.FechaHora < DATE_ADD(?, INTERVAL 1 DAY)) pd
+      LEFT JOIN Transferencias tra ON tra.id = pd.TrId
+      LEFT JOIN Areas a ON a.Codigo = tra.CodigoArea
       JOIN Empleados e ON pd.Codigo = e.Codigo
       JOIN TransaccionesProduccion tp ON pd.TransaccionId = tp.TransaccionId
       JOIN Clase cl ON tp.ClasePT = cl.Clase
@@ -206,7 +209,7 @@ router.get("/produccion", requireAuth, requirePerm("destajo", "ver"), async (req
       JOIN Lotes l ON tp.Lote = l.Lote AND tp.ClaseOrigen = l.Clase
       JOIN Piscina p ON l.PiscinaId = p.PiscinaId
       JOIN Finca f ON p.CodigoFinca = f.Codigo${joinMesa}
-      WHERE pd.FechaHora >= ? AND pd.FechaHora < DATE_ADD(?, INTERVAL 1 DAY) ${filtroFinca}
+      WHERE 1 = 1 ${filtroFinca}
       ORDER BY pd.FechaHora DESC
     `, desde, hasta, ...argsFinca);
 

@@ -137,8 +137,10 @@ router.get("/pendientes", requireAuth, requirePerm("bodega", "ver"), async (_req
 // Estatus/Posición), el día que exista la salida por remisión esta vista se sigue actualizando sola.
 router.get("/existencias", requireAuth, requirePerm("bodega", "ver"), async (_req: Request, res: Response) => {
   try {
+    // STRAIGHT_JOIN desde los masters que siguen en bodega: MariaDB empezaba por Clientes y recorría
+    // todos los masters de todos los clientes hacia atrás.
     const rows: any[] = await prisma.$queryRaw`
-      SELECT ped.CodigoPedido AS Pedido, ped.Descripcion AS DescripcionPedido,
+      SELECT STRAIGHT_JOIN ped.CodigoPedido AS Pedido, ped.Descripcion AS DescripcionPedido,
              cli.RazonSocial AS Cliente, sub.RazonSocial AS Subcliente,
              dp.Clase AS CodigoClase, pc.Descripcion AS Clase, dp.Talla AS CodigoTalla, ta.Descripcion AS Talla,
              p.PalletId, p.Codigo AS Polin, p.Estatus, pr.Descripcion AS Presentacion,
@@ -148,8 +150,8 @@ router.get("/existencias", requireAuth, requirePerm("bodega", "ver"), async (_re
              SUM(pr.CajasXMaster) AS Cajas,
              SUM(pr.PesoKG * pr.CajasXMaster) AS KilosBrutos,
              SUM(pr.PesoLb * pr.CajasXMaster) AS Libras
-      FROM Pallets p
-      JOIN Masters m ON m.PalletId = p.PalletId AND m.Estatus <> 'Salido'
+      FROM Masters m
+      JOIN Pallets p ON p.PalletId = m.PalletId
       JOIN EtiquetaImpresa ei ON m.EtiquetaId = ei.EtiquetaId
       JOIN OrdenEtiquetado oe ON ei.OrdenId = oe.OrdenId
       JOIN DetallePedido dp ON oe.DetalleId = dp.DetalleId
@@ -162,6 +164,7 @@ router.get("/existencias", requireAuth, requirePerm("bodega", "ver"), async (_re
       LEFT JOIN Subcliente sub ON ped.CodigoCliente = sub.CodigoCliente AND ped.CodigoSubcliente = sub.CodigoSubcliente
       LEFT JOIN Areas ar ON oe.AreaCodigo = ar.Codigo
       LEFT JOIN Posiciones pos ON p.PosicionId = pos.PosicionId
+      WHERE m.Estatus <> 'Salido'
       GROUP BY ped.CodigoPedido, ped.Descripcion, cli.RazonSocial, sub.RazonSocial, dp.Clase, pc.Descripcion, dp.Talla, ta.Descripcion,
                p.PalletId, p.Codigo, p.Estatus, pr.Descripcion, oe.FechaProduccion, oe.Lote, oe.AreaCodigo, ar.Nombre,
                p.PosicionId, pos.Codigo
@@ -203,7 +206,9 @@ router.get("/sueltos", requireAuth, requirePerm("bodega", "ver"), async (_req: R
     const rows: any[] = await prisma.$queryRaw`
       SELECT t.*, TIMESTAMPDIFF(DAY, t.UltimoCambio, NOW()) AS Dias
       FROM (
-      SELECT p.PalletId, p.Codigo AS PalletCodigo, p.Estatus AS PalletEstatus,
+      -- STRAIGHT_JOIN desde los polines abiertos (unos pocos): MariaDB empezaba por Clientes y recorría
+      -- todos los masters para quedarse con los de polines abiertos (~190 ms cada 20 s con el mapa abierto).
+      SELECT STRAIGHT_JOIN p.PalletId, p.Codigo AS PalletCodigo, p.Estatus AS PalletEstatus,
              bv.Nombre AS NombreBodegaVirtual,
              COUNT(m.MasterId) AS Masters,
              COALESCE(SUM(pr.PesoKG * pr.CajasXMaster), 0) AS PesoKg,
@@ -217,8 +222,8 @@ router.get("/sueltos", requireAuth, requirePerm("bodega", "ver"), async (_req: R
              GROUP_CONCAT(DISTINCT cli.RazonSocial ORDER BY cli.RazonSocial SEPARATOR ', ') AS Clientes,
              GROUP_CONCAT(DISTINCT ped.CodigoPedido ORDER BY ped.CodigoPedido SEPARATOR ', ') AS Pedidos,
              GROUP_CONCAT(DISTINCT CONCAT(pc.Descripcion, ' ', ta.Descripcion) SEPARATOR ' · ') AS Productos
-      FROM Masters m
-      JOIN Pallets p ON m.PalletId = p.PalletId AND p.Estatus = 'Abierto'
+      FROM Pallets p
+      JOIN Masters m ON m.PalletId = p.PalletId
       JOIN EtiquetaImpresa ei ON m.EtiquetaId = ei.EtiquetaId
       JOIN OrdenEtiquetado oe ON ei.OrdenId = oe.OrdenId
       JOIN DetallePedido dp ON oe.DetalleId = dp.DetalleId
@@ -229,7 +234,7 @@ router.get("/sueltos", requireAuth, requirePerm("bodega", "ver"), async (_req: R
       JOIN Pedidos ped ON dp.CodigoPedido = ped.CodigoPedido
       JOIN Clientes cli ON ped.CodigoCliente = cli.Codigo
       LEFT JOIN BodegaVirtual bv ON p.BodegaVirtualCodigo = bv.Codigo
-      WHERE m.Estatus <> 'Salido'
+      WHERE p.Estatus = 'Abierto' AND m.Estatus <> 'Salido'
       GROUP BY p.PalletId, p.Codigo, p.Estatus, bv.Nombre, p.CreadoEn
       ) t
       ORDER BY t.UltimoCambio ASC
@@ -355,8 +360,11 @@ router.post("/desubicar", requireAuth, requirePerm("bodega", "editar"), async (r
 router.get("/movimientos", requireAuth, requirePerm("bodega", "ver"), async (req: Request, res: Response) => {
   try {
     const limit = Math.min(Math.max(Number(req.query.limit) || 30, 1), 200);
+    // STRAIGHT_JOIN: se leen los últimos movimientos por su llave y se detiene en `limit`. Sin él MariaDB
+    // empezaba por Pallets, juntaba el kardex entero (49k) y ordenaba para quedarse con 12 (~300 ms cada
+    // 20 s con el mapa abierto).
     const rows: any[] = await prisma.$queryRawUnsafe(`
-      SELECT mb.MovimientoId, mb.Tipo, mb.Fecha, mb.Usuario, mb.Motivo,
+      SELECT STRAIGHT_JOIN mb.MovimientoId, mb.Tipo, mb.Fecha, mb.Usuario, mb.Motivo,
              p.Codigo AS PalletCodigo, bv.Nombre AS NombreBodegaVirtual,
              poO.Codigo AS PosicionOrigen, poD.Codigo AS PosicionDestino,
              CONCAT('E', m.EtiquetaId) AS Correlativo, r.Folio AS RemisionFolio

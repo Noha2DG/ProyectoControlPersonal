@@ -259,8 +259,9 @@ router.get("/", requireAuth, requirePerm("remisiones", "ver"), async (req: Reque
 // vigente — un polín se agrega entero o no se agrega.
 router.get("/disponibles/pallets", requireAuth, requirePerm("remisiones", "ver"), async (_req: Request, res: Response) => {
   try {
+    // STRAIGHT_JOIN desde los polines cerrados: MariaDB empezaba por Clientes y recorría todos los masters.
     const rows: any[] = await prisma.$queryRaw`
-      SELECT p.PalletId, p.Codigo, p.CerradoEn, po.Codigo AS PosicionCodigo,
+      SELECT STRAIGHT_JOIN p.PalletId, p.Codigo, p.CerradoEn, po.Codigo AS PosicionCodigo,
              bv.Nombre AS NombreBodegaVirtual, org.Descripcion AS DescripcionOrigen,
              COUNT(m.MasterId) AS CantidadMasters,
              COALESCE(SUM(pr.PesoKG * pr.CajasXMaster), 0) AS PesoKg,
@@ -315,8 +316,10 @@ router.get("/disponibles/masters", requireAuth, requirePerm("remisiones", "ver")
     const like = `%${q}%`;
     const params = q ? [like, like, like, like, like, like] : [];
 
+    // STRAIGHT_JOIN: recorre Masters en el orden del LIMIT y para a los 300. Sin él MariaDB empezaba por
+    // Clientes y juntaba todos los masters de todos los clientes antes de ordenar.
     const rows: any[] = await prisma.$queryRawUnsafe(`
-      ${MASTER_SELECT}
+      ${MASTER_SELECT.replace(/SELECT/, "SELECT STRAIGHT_JOIN")}
       WHERE m.Estatus <> 'Salido'
         AND NOT EXISTS (SELECT 1 FROM RemisionDetalle rd WHERE rd.MasterId = m.MasterId AND rd.Vigente = 1)
         ${filtro}
@@ -373,8 +376,10 @@ router.get("/exportar", requireAuth, requirePerm("remisiones", "ver"), async (re
        ORDER BY r.Fecha, r.Folio`, ...params);
 
     const ids = cabeceras.map(c => Number(c.RemisionId));
+    // STRAIGHT_JOIN desde las líneas de esas remisiones, como DETALLE_SELECT: sin él MariaDB empezaba
+    // por Clientes (1.3 s para un mes).
     const lineas: any[] = ids.length ? await prisma.$queryRawUnsafe(`
-      SELECT rd.RemisionId, rd.LineaContenedor, rd.AgregadoPor, DATE_FORMAT(rd.AgregadoEn, '%Y-%m-%d %H:%i') AS AgregadoEn,
+      SELECT STRAIGHT_JOIN rd.RemisionId, rd.LineaContenedor, rd.AgregadoPor, DATE_FORMAT(rd.AgregadoEn, '%Y-%m-%d %H:%i') AS AgregadoEn,
              DATE_FORMAT(rd.RecibidoEn, '%Y-%m-%d %H:%i') AS RecibidoEnArea, rd.RecibidoPor AS RecibidoPorArea, sub2.*
         FROM RemisionDetalle rd
         JOIN (${MASTER_SELECT}) sub2 ON rd.MasterId = sub2.MasterId
