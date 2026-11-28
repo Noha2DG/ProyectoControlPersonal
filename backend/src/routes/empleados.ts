@@ -4,6 +4,7 @@ import prisma from "../lib/prisma.ts";
 import { requirePerm } from "../middleware/auth.ts";
 import { cerrarMesaPorBaja } from "../lib/mesaAsignacion.ts";
 import { cerrarPosicionPorBaja } from "../lib/posicionEmpanizado.ts";
+import { cerrarTransferenciasPorBaja } from "../lib/transferenciasReglas.ts";
 
 function getOperador(req: Request): string {
   try {
@@ -254,6 +255,7 @@ router.delete("/:codigo", requirePerm("empleados", "baja"), async (req: Request,
     // vuelve sola a ninguna mesa: la supervisora la asigna de nuevo.
     await cerrarMesaPorBaja(prisma, codigo, fechaBaja);
     await cerrarPosicionPorBaja(prisma, codigo, fechaBaja); // y su posición en Empanizado
+    await cerrarTransferenciasPorBaja(prisma, codigo);      // y su área abierta, si quedó alguna
     res.json({ ok: true });
   } catch (err: any) {
     res.status(500).json({ error: err.message });

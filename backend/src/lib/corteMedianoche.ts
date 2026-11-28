@@ -1,5 +1,6 @@
 import prisma from "./prisma.ts";
 import { nowGT, hoyInicioGT, diaSemanaDe } from "./dateGT.ts";
+import { bloquearEmpleado } from "./transferenciasReglas.ts";
 
 const OPERADOR_SISTEMA = "Sistema";
 export const LIMITE_HORAS_JORNADA = 15; // más allá de esto, se asume olvido de marcar salida, no turno real
@@ -44,6 +45,9 @@ export async function aplicarCorteMedianoche(codigo: string): Promise<void> {
   // una sola transacción: si la conexión se cae a medio camino, no debe quedar
   // un empleado con Salida insertada pero sin su Entrada correspondiente.
   await prisma.$transaction(async (tx) => {
+    // La persona primero, igual que el kiosco y las correcciones (lib/transferenciasReglas.ts): así el
+    // corte y un marcaje simultáneo se esperan en vez de cruzarse.
+    await bloquearEmpleado(tx, codigo);
     const salidaInsertada = await tx.$executeRaw`
       INSERT IGNORE INTO Movimientos (Codigo, NombreEmpleado, Tipo, FechaHora, DiaSemana, Operador)
       VALUES (${codigo}, ${entrada.NombreEmpleado}, 'Salida', ${salidaAuto}, ${diaSemanaDe(entrada.Fecha)}, ${OPERADOR_SISTEMA})

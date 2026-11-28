@@ -140,7 +140,13 @@ export default function TransferenciasAdminPage() {
       headers: { "Content-Type": "application/json", ...authHeader() },
       body: JSON.stringify(form),
     });
-    if (res.ok) { setModal({ open: false, registro: null }); fetchData(); }
+    if (res.ok) {
+      setModal({ open: false, registro: null }); fetchData();
+      // Si la corrección se cruzaba con otra transferencia de la persona, el servidor recortó la otra
+      // (una persona no puede estar en dos áreas a la vez): se avisa qué cambió.
+      const d = await res.json().catch(() => ({}));
+      if (d.Ajustes?.length) alert("Se ajustó también:\n\n• " + d.Ajustes.join("\n• "));
+    }
     else { const e = await res.json(); alert("Error: " + e.error); }
   };
 

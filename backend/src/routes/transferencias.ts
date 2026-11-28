@@ -5,6 +5,7 @@ import { nowGT, hoyInicioGT } from "../lib/dateGT.ts";
 import { requireAuth, requirePerm } from "../middleware/auth.ts";
 import { aplicarCorteMedianoche } from "../lib/corteMedianoche.ts";
 import { leerMarcaje, registrarBitacora, listarBitacora } from "../lib/bitacoraMarcaje.ts";
+import { bloquearEmpleado, acomodarVecinas, esSegundaAbierta, ErrorTraslape } from "../lib/transferenciasReglas.ts";
 
 const router = Router();
 
@@ -100,30 +101,35 @@ router.post("/", async (req: Request, res: Response) => {
       }
     }
 
-    const ahora    = nowGT();
     const operador = getOperador(req);
 
-    // Cerrar automáticamente el área anterior
-    await prisma.$executeRaw`
-      UPDATE Transferencias SET FechaSalida = ${ahora}
-      WHERE Codigo = ${Codigo} AND FechaSalida IS NULL
-    `;
-
-    // Registrar entrada al nuevo área
-    await prisma.$executeRaw`
-      INSERT INTO Transferencias (Codigo, CodigoArea, FechaHora, RegistradoPor)
-      VALUES (${Codigo}, ${CodigoArea}, ${ahora}, ${operador})
-    `;
+    // Cerrar el área anterior y abrir la nueva en una sola transacción, con la persona bloqueada: en dos
+    // pasos sueltos, dos kioscos (o un doble escaneo) a la vez no cerraban nada los dos y dejaban dos
+    // áreas abiertas (27 nov 2026).
+    await prisma.$transaction(async tx => {
+      await bloquearEmpleado(tx, Codigo);
+      const ahora = nowGT();
+      await tx.$executeRaw`
+        UPDATE Transferencias SET FechaSalida = ${ahora}
+        WHERE Codigo = ${Codigo} AND FechaSalida IS NULL
+      `;
+      await tx.$executeRaw`
+        INSERT INTO Transferencias (Codigo, CodigoArea, FechaHora, RegistradoPor)
+        VALUES (${Codigo}, ${CodigoArea}, ${ahora}, ${operador})
+      `;
+    }, { timeout: 15_000, maxWait: 5_000 });
 
     res.json({ ok: true, area: areas[0], empleado: empleados[0], ultimaArea });
   } catch (err: any) {
+    if (esSegundaAbierta(err)) { res.status(409).json({ error: "Ya tiene otra área abierta en este momento. Intenta de nuevo." }); return; }
     res.status(500).json({ error: err.message });
   }
 });
 
 // POST /api/transferencias/manual  { Codigo, CodigoArea, FechaHora, FechaSalida? }
 // Alta manual de admin — corrección por falta de gafete, sin las validaciones de cupo/turno del
-// flujo de kiosco (POST /) ni el cierre automático del área abierta actual.
+// flujo de kiosco (POST /). Desde el 27 nov 2026 sí acomoda las demás transferencias de la persona que
+// se cruzan con esta (ver acomodarVecinas): antes quedaban dos áreas abiertas a la vez.
 router.post("/manual", requireAuth, requirePerm("transferencias", "editar"), async (req: Request, res: Response) => {
   try {
     const { Codigo, CodigoArea, FechaHora, FechaSalida } = req.body;
@@ -148,7 +154,9 @@ router.post("/manual", requireAuth, requirePerm("transferencias", "editar"), asy
     if (fhs && fhs < fh) { res.status(400).json({ error: "La hora de salida no puede ser anterior a la de entrada" }); return; }
 
     const operador = getOperador(req);
-    await prisma.$transaction(async tx => {
+    const ajustes = await prisma.$transaction(async tx => {
+      await bloquearEmpleado(tx, Codigo);
+      const ajustes = await acomodarVecinas(tx, { id: null, codigo: Codigo, fh, fhs, usuario: operador });
       await tx.$executeRaw`
         INSERT INTO Transferencias (Codigo, CodigoArea, FechaHora, FechaSalida, RegistradoPor)
         VALUES (${Codigo}, ${CodigoArea}, ${fh}, ${fhs}, ${operador})
@@ -156,9 +164,12 @@ router.post("/manual", requireAuth, requirePerm("transferencias", "editar"), asy
       const [{ id }]: any[] = await tx.$queryRawUnsafe(`SELECT LAST_INSERT_ID() AS id`);
       await registrarBitacora(tx, { tabla: "Transferencias", id: Number(id), accion: "CREAR", antes: null,
         despues: await leerMarcaje(tx, "Transferencias", Number(id)), usuario: operador });
-    });
-    res.status(201).json({ ok: true });
+      return ajustes;
+    }, { timeout: 15_000, maxWait: 5_000 });
+    res.status(201).json({ ok: true, Ajustes: ajustes.map(a => a.cambio) });
   } catch (err: any) {
+    if (err instanceof ErrorTraslape) { res.status(err.status).json({ error: err.message }); return; }
+    if (esSegundaAbierta(err)) { res.status(409).json({ error: "La persona ya tiene otra área abierta." }); return; }
     res.status(500).json({ error: err.message });
   }
 });
@@ -254,21 +265,33 @@ router.put("/:id", requireAuth, requirePerm("transferencias", "editar"), async (
       : null;
     if (fhs && fhs < fh) { res.status(400).json({ error: "La hora de salida no puede ser anterior a la de entrada" }); return; }
 
-    // Quién corrigió y lo que había antes van a la bitácora, en la misma transacción.
-    const existe = await prisma.$transaction(async tx => {
+    // Quién corrigió y lo que había antes van a la bitácora, en la misma transacción. Las vecinas que
+    // se cruzan con el nuevo horario se acomodan primero (ver acomodarVecinas): 125 de las 146
+    // correcciones que dejaron cruces hasta nov 2026 eran una vecina que quedaba igual.
+    const usuario = getOperador(req);
+    const resultado = await prisma.$transaction(async tx => {
+      const [actual]: any[] = await tx.$queryRaw`SELECT Codigo FROM Transferencias WHERE id = ${id}`;
+      if (!actual) return null;
+      // Primero las personas (en orden fijo) y después la fila: el mismo orden que el kiosco.
+      for (const c of [...new Set([String(actual.Codigo), String(Codigo)])].sort()) await bloquearEmpleado(tx, c);
       const antes = await leerMarcaje(tx, "Transferencias", id);
-      if (!antes) return false;
+      if (!antes) return null;
+      const ajustes = await acomodarVecinas(tx, { id, codigo: Codigo, fh, fhs, usuario });
       await tx.$executeRaw`
         UPDATE Transferencias SET Codigo = ${Codigo}, CodigoArea = ${CodigoArea}, FechaHora = ${fh}, FechaSalida = ${fhs} WHERE id = ${id}
       `;
       const despues = await leerMarcaje(tx, "Transferencias", id);
       if (JSON.stringify(antes) !== JSON.stringify(despues))
-        await registrarBitacora(tx, { tabla: "Transferencias", id, accion: "EDITAR", antes, despues, usuario: getOperador(req) });
-      return true;
-    });
-    if (!existe) { res.status(404).json({ error: "La transferencia ya no existe" }); return; }
-    res.json({ ok: true });
-  } catch (err: any) { res.status(500).json({ error: err.message }); }
+        await registrarBitacora(tx, { tabla: "Transferencias", id, accion: "EDITAR", antes, despues, usuario });
+      return ajustes;
+    }, { timeout: 15_000, maxWait: 5_000 });
+    if (!resultado) { res.status(404).json({ error: "La transferencia ya no existe" }); return; }
+    res.json({ ok: true, Ajustes: resultado.map(a => a.cambio) });
+  } catch (err: any) {
+    if (err instanceof ErrorTraslape) { res.status(err.status).json({ error: err.message }); return; }
+    if (esSegundaAbierta(err)) { res.status(409).json({ error: "La persona ya tiene otra área abierta." }); return; }
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // DELETE /api/transferencias/:id
