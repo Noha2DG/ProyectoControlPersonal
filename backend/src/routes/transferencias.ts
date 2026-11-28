@@ -64,7 +64,8 @@ router.post("/", async (req: Request, res: Response) => {
       necesitaPlan
         ? prisma.$queryRaw`
             SELECT COUNT(*) AS cnt FROM Transferencias
-            WHERE CodigoArea = ${CodigoArea} AND DATE(FechaHora) = ${hoyFecha} AND FechaSalida IS NULL
+            WHERE CodigoArea = ${CodigoArea} AND FechaHora >= ${hoyFecha} AND FechaHora < ${hoyFecha} + INTERVAL 1 DAY
+              AND FechaSalida IS NULL
           `
         : Promise.resolve([]),
     ]) as any[][];

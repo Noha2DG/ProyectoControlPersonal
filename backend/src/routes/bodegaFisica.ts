@@ -195,7 +195,7 @@ router.get("/existencias", requireAuth, requirePerm("bodega", "ver"), async (_re
 //     el cambio más común),
 //   - cualquier movimiento del kardex donde sea destino O origen: traslado que entra o sale,
 //     retiro de una caja, devolución.
-// Cada subconsulta es por índice (fk_master_pallet; idx_movbodega_pallet ∪ fk_movbodega_palletorigen)
+// Cada subconsulta es por índice (fk_master_pallet; idx_movbodega_pallet; fk_movbodega_palletorigen)
 // y corre una vez por polín abierto, no por master.
 // Reabrir un polín cerrado no deja fecha en ningún lado, así que no cuenta como cambio.
 router.get("/sueltos", requireAuth, requirePerm("bodega", "ver"), async (_req: Request, res: Response) => {
@@ -209,8 +209,10 @@ router.get("/sueltos", requireAuth, requirePerm("bodega", "ver"), async (_req: R
              COALESCE(SUM(pr.PesoKG * pr.CajasXMaster), 0) AS PesoKg,
              GREATEST(p.CreadoEn,
                COALESCE((SELECT MAX(mx.FechaIngreso) FROM Masters mx WHERE mx.PalletId = p.PalletId), p.CreadoEn),
-               COALESCE((SELECT MAX(mb.Fecha) FROM MovimientosBodega mb
-                         WHERE mb.PalletId = p.PalletId OR mb.PalletOrigenId = p.PalletId), p.CreadoEn)
+               -- Destino y origen en dos subconsultas y no con OR en una: con el OR MariaDB no usaba
+               -- ningún índice y recorría el kardex entero por cada polín abierto.
+               COALESCE((SELECT MAX(mb.Fecha) FROM MovimientosBodega mb WHERE mb.PalletId = p.PalletId), p.CreadoEn),
+               COALESCE((SELECT MAX(mb.Fecha) FROM MovimientosBodega mb WHERE mb.PalletOrigenId = p.PalletId), p.CreadoEn)
              ) AS UltimoCambio,
              GROUP_CONCAT(DISTINCT cli.RazonSocial ORDER BY cli.RazonSocial SEPARATOR ', ') AS Clientes,
              GROUP_CONCAT(DISTINCT ped.CodigoPedido ORDER BY ped.CodigoPedido SEPARATOR ', ') AS Pedidos,

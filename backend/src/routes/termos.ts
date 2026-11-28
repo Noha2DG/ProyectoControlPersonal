@@ -31,7 +31,7 @@ router.get("/", requireAuth, requirePerm("destajo", "ver"), async (req: Request,
                FROM PesajeDetalle pd2
                JOIN Termos t2 ON pd2.TermoId = t2.TermoId
                WHERE t2.NumeroTermo = t.NumeroTermo
-                 AND DATE(pd2.FechaHora) = CURDATE()
+                 AND pd2.FechaHora >= CURDATE() AND pd2.FechaHora < CURDATE() + INTERVAL 1 DAY
              ), 0) AS PesoAcumulado,
              COALESCE((SELECT SUM(pd3.Peso) FROM PesajeDetalle pd3 WHERE pd3.TermoId = t.TermoId), 0) AS KgTermo,
              (SELECT DATE_FORMAT(p.FechaHora, '%H:%i') FROM MovimientoPiso p

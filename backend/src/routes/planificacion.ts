@@ -25,7 +25,10 @@ router.get("/kiosco", requireAuth, async (_req: Request, res: Response) => {
              ON p.CodigoArea = a.Codigo AND p.Fecha = ${hoy}
       LEFT JOIN Transferencias t
              ON t.CodigoArea = a.Codigo
-            AND DATE(t.FechaHora) = ${hoy}
+            -- Rango y no DATE(t.FechaHora) = hoy: la función sobre la columna obligaba a leer todas las
+            -- transferencias del área (177 ms, y cada kiosco lo pide cada 30 s). Así usa el índice
+            -- (CodigoArea, FechaHora) y lee solo las de hoy.
+            AND t.FechaHora >= ${hoy} AND t.FechaHora < ${hoy} + INTERVAL 1 DAY
             AND t.FechaSalida IS NULL
       WHERE a.Activa = 1
       GROUP BY a.Codigo, a.Nombre, a.GeneraPaga, p.Cantidad
@@ -70,7 +73,7 @@ router.get("/", requireAuth, requirePerm("planificacion", "ver"), async (req: Re
              ON p.CodigoArea = a.Codigo AND p.Fecha = ${fecha}
       LEFT JOIN Transferencias t
              ON t.CodigoArea = a.Codigo
-            AND DATE(t.FechaHora) = ${fecha}
+            AND t.FechaHora >= ${fecha} AND t.FechaHora < ${fecha} + INTERVAL 1 DAY
             AND t.FechaSalida IS NULL
       WHERE a.Activa = 1
       GROUP BY a.Codigo, a.Nombre, a.Grupo, a.GeneraPaga, a.Activa, p.Cantidad
